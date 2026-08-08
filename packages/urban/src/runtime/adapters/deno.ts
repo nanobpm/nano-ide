@@ -6,7 +6,9 @@
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
+  AsyncStore,
   HostContext,
   HttpHandler,
   HttpRequest,
@@ -134,6 +136,10 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
       };
     },
     now: () => Date.now(),
+    createAsyncStore<T>(): AsyncStore<T> {
+      const als = new AsyncLocalStorage<T>();
+      return { run: <R>(value: T, fn: () => R): R => als.run(value, fn), current: () => als.getStore() };
+    },
     log,
   };
 }

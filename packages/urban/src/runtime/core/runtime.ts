@@ -12,6 +12,7 @@ import { makeRouter, type Route } from "./router.ts";
 import { deployModels } from "./modules/deploy.ts";
 import type { TemplateSource } from "./modules/templates.ts";
 import { provisionData, DataLayer } from "./modules/datasource.ts";
+import { installExecStore, type JobExecContext } from "./execContext.ts";
 import { mountWorkers } from "./modules/workers.ts";
 import { mountConnectors } from "./modules/connectors.ts";
 import { mountSurfaces } from "./modules/surfaces.ts";
@@ -106,6 +107,11 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     security: opts.mount?.security ?? true,
   };
   const ctx = { manifest, host, engine, root, templates: opts.templates };
+
+  // Install the ambient job-execution store once per process (idempotent) so worker dispatch can
+  // stamp write-provenance onto DataLayer inserts. Absent-safe: a host without `createAsyncStore`
+  // leaves provenance capture disabled.
+  installExecStore(() => host.createAsyncStore?.<JobExecContext>());
 
   let data: DataLayer | undefined;
   let security: SecurityPolicy | undefined;

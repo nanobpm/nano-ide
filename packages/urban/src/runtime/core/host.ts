@@ -35,6 +35,17 @@ export interface WatchHandle {
   close(): void;
 }
 
+/** A minimal ambient async-scoped store — the subset of `AsyncLocalStorage` the runtime needs
+ *  to thread a job's execution context to DataLayer writes for write-provenance capture. Backed
+ *  by `node:async_hooks` in both the Node and Deno adapters (both provide it); core depends only
+ *  on this interface, never on `node:*`. */
+export interface AsyncStore<T> {
+  /** Run `fn` with `value` as the current store value, restoring the prior value afterwards. */
+  run<R>(value: T, fn: () => R): R;
+  /** The current store value, or undefined outside any `run`. */
+  current(): T | undefined;
+}
+
 /** A tiny synchronous SQLite handle — the subset the runtime needs. */
 export interface SqliteDb {
   /** Execute one or more statements with no result (DDL, PRAGMA, migrations). */
@@ -89,6 +100,12 @@ export interface HostContext {
   watch?(onChange: (path: string) => void): WatchHandle;
   /** Current wall-clock time in ms since epoch (seam for tests). */
   now(): number;
+  /**
+   * Create an ambient async-scoped store (backed by `AsyncLocalStorage`). Used to thread the
+   * active job's execution context to DataLayer writes for write-provenance capture. Optional:
+   * a host that cannot provide one leaves provenance capture disabled (absent-safe).
+   */
+  createAsyncStore?<T>(): AsyncStore<T>;
   /** Structured log sink. */
   log(level: "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>): void;
 }

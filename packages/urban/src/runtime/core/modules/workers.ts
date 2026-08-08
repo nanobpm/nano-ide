@@ -7,6 +7,7 @@ import { isRecord } from "../guards.ts";
 import type { EngineJob, JobHandler, WorkerSubscription } from "../host.ts";
 import { workerJobType, type Worker } from "../manifest.ts";
 import { type DecisionEvaluator, type LlmRuntime, runLlmJob } from "./llm.ts";
+import { runInJobContext } from "../execContext.ts";
 
 /** The subset of the engine SDK the LLM decision-rails need: evaluate a DMN decision,
  *  whose `output` comes back as a JSON string (the orchestration-cluster contract). */
@@ -142,7 +143,11 @@ export async function mountWorkers(ctx: RuntimeContext, app: AppApi): Promise<Wo
         env: (n) => app.env(n),
         evaluateDecision: app.sdk ? sdkDecisionEvaluator(app.sdk) : undefined,
       };
-      const wrapped: JobHandler = (job) => runLlmJob(job.variables, binding, rt);
+      const wrapped: JobHandler = (job) =>
+        runInJobContext(
+          { instanceKey: job.processInstanceKey, elementId: job.elementId, jobType },
+          () => runLlmJob(job.variables, binding, rt),
+        );
       const sub = await ctx.engine.registerWorker(jobType, wrapped, {
         workerName: `${ctx.manifest.id}:${jobType}`,
       });
@@ -159,7 +164,11 @@ export async function mountWorkers(ctx: RuntimeContext, app: AppApi): Promise<Wo
           `(expected handlers["${jobType}"], a named export, or a default function)`,
       );
     }
-    const wrapped: JobHandler = (job) => handler(job, app);
+    const wrapped: JobHandler = (job) =>
+      runInJobContext(
+        { instanceKey: job.processInstanceKey, elementId: job.elementId, jobType },
+        () => handler(job, app),
+      );
     const sub = await ctx.engine.registerWorker(jobType, wrapped, {
       workerName: `${ctx.manifest.id}:${jobType}`,
     });

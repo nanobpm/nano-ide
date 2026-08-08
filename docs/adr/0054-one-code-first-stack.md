@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-08-01
 Extends: ADR 0053 (derivation is a shared library), ADR 0052 (decoupled Urban runtime)
-Repo: jwulf/nano-ide (`packages/workflow`, `packages/urban-*`, `packages/create-urban-app`)
+Repo: nanobpm/nano-ide (`packages/workflow`, `packages/urban-*`, `packages/create-urban-app`)
 
 ## Context
 

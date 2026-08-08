@@ -2,7 +2,7 @@
 
 **TypeScript types for the `nano-ide.ext.json` extension manifest** (ADR 0007).
 
-This is the shared type contract for authoring [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm)
+This is the shared type contract for authoring [Nano RAD IDE](https://nanobpm.io)
 extension packs. Import it in a pack's tooling to get a typed, checked
 `nano-ide.ext.json` — the same manifest shape the host parser
 (`server/src/console/extensions.rs`) validates at load time.

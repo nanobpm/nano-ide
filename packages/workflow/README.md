@@ -1,6 +1,6 @@
 # @nanobpm/workflow
 
-Code-first durable orchestration for [nanobpmn](https://github.com/Magikcraft/nano-bpm)
+Code-first durable orchestration for [nanobpmn](https://nanobpm.io)
 (**ADR 0044**). Author durable workflows as ordinary async code; the SDK derives
 the executable BPMN model, the job types, and the message/correlation wiring, and
 hosts a generic worker. No diagram, no task-type wiring, no correlation plumbing

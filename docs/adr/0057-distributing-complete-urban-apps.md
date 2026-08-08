@@ -10,7 +10,7 @@ ADR 0027 (nano-bpm; `nano.app.json` manifest spec), ADR 0056 (worker stubs are
 scaffolded, not derived); nano-ide **#520** (the first-class *New Urban App* pack,
 delivered) and its follow-up **#539** (this issue); nano-bpm epic **#514** (dry out the
 Nano host over `@nanobpm/urban`).
-Repo: jwulf/nano-ide (packs, `packages/urban`) + the nano-bpm host repo **nanobpmn**
+Repo: nanobpm/nano-ide (packs, `packages/urban`) + the nano-bpm host repo **nanobpmn**
 (all bare `projects.rs` / `extensions.rs` / `node_loader.mjs` file:line citations below
 refer to `server/src/console/{extensions,projects}.rs` in that host repo, not to nano-ide).
 

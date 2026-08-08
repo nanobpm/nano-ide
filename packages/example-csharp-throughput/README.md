@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-example-csharp-throughput
 
-A distributable **C# throughput demo** for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+A distributable **C# throughput demo** for the [Nano RAD IDE](https://nanobpm.io).
 
 A parallel producer flood plus a `JobWorker`, built on the official
 [`Camunda.Orchestration.Sdk`](https://www.nuget.org/packages/Camunda.Orchestration.Sdk).

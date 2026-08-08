@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-lang-python
 
-Python language pack for the [Nano RAD IDE](https://github.com/jwulf/nano-ide).
+Python language pack for the [Nano RAD IDE](https://github.com/nanobpm/nano-ide).
 
 - **Grammar**: `.py` → Monaco `python`.
 - **Toolchain**: [`uv`](https://docs.astral.sh/uv/) — `uv run main.py` provisions a

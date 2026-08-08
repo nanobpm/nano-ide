@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-app-embedded-jvm
 
-An **Embedded Nano (JVM)** app pack for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+An **Embedded Nano (JVM)** app pack for the [Nano RAD IDE](https://nanobpm.io).
 
 It scaffolds an app that runs the **Nano BPMN engine in-process inside the JVM**
 via [`io.github.jwulf:nano-bernd`](https://central.sonatype.com/artifact/io.github.jwulf/nano-bernd),

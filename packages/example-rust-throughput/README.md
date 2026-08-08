@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-example-rust-throughput
 
-A distributable **native Rust throughput demo** for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+A distributable **native Rust throughput demo** for the [Nano RAD IDE](https://nanobpm.io).
 
 A native, **pipelined** producer plus a `JobWorker`, built on the official
 [`camunda-orchestration-sdk`](https://crates.io/crates/camunda-orchestration-sdk).

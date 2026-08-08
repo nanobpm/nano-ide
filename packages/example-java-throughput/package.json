@@ -5,6 +5,6 @@
   "license": "Apache-2.0",
   "keywords": ["nano-ide-ext", "nano-ide-example", "nanobpm", "camunda", "java", "falcon", "throughput"],
   "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/jwulf/nano-ide.git", "directory": "packages/example-java-throughput" },
+  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/example-java-throughput" },
   "files": ["nano-ide.ext.json", "app", "README.md"]
 }

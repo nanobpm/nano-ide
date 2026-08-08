@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-app-workflow
 
-A **code-first durable workflow** app pack for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+A **code-first durable workflow** app pack for the [Nano RAD IDE](https://nanobpm.io).
 
 It scaffolds durable workflow apps built on [`@nanobpm/workflow`](https://www.npmjs.com/package/@nanobpm/workflow),
 where the **executable BPMN model is derived from ordinary async code** (ADR

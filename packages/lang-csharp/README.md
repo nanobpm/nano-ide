@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-lang-csharp
 
-C# / .NET language pack for the [Nano RAD IDE](https://github.com/jwulf/nano-ide).
+C# / .NET language pack for the [Nano RAD IDE](https://github.com/nanobpm/nano-ide).
 
 - **Grammar**: `.cs` → Monaco `csharp`, `.csproj` → `xml`.
 - **Toolchain**: `dotnet` — in the Nano IDE, press **▶ Run** (which runs

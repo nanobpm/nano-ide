@@ -5,6 +5,6 @@
   "license": "Apache-2.0",
   "keywords": ["nano-ide-ext", "nano-ide-app", "nanobpm", "embedded"],
   "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/jwulf/nano-ide.git", "directory": "packages/app-embedded-nano" },
+  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/app-embedded-nano" },
   "files": ["nano-ide.ext.json", "templates", "README.md"]
 }

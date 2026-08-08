@@ -6,7 +6,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jwulf/nano-ide.git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
     "directory": "packages/workflow"
   },
   "main": "./dist/index.js",

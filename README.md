@@ -73,7 +73,7 @@ An extension pack is a plain **npm package** with two contract files:
 
 1. **`nano-ide.ext.json`** at the package root — the manifest the console reads
    (see [`packages/ext-types`](packages/ext-types) for the typed schema, or the
-   authoritative source in [`nano-bpm/server/src/console/extensions.rs`](https://github.com/jwulf/nano-bpm/blob/main/server/src/console/extensions.rs)).
+   [Nano BPM website](https://nanobpm.io) for published docs).
 2. **`package.json`** with:
    - `keywords` including `"nano-ide-ext"` (marketplace discovery).
    - `files` shipping at least `nano-ide.ext.json` plus your `templates/` or `app/` dir.

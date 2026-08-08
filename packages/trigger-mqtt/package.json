@@ -6,7 +6,7 @@
   "type": "module",
   "keywords": ["nano-ide-ext", "nano-ide-trigger", "nanobpm", "mqtt", "iot", "home-automation"],
   "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/jwulf/nano-ide.git", "directory": "packages/trigger-mqtt" },
+  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/trigger-mqtt" },
   "files": ["nano-ide.ext.json", "driver.ts", "README.md"],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"

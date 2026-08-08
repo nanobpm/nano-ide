@@ -1,6 +1,6 @@
 # __APP_NAME__
 
-An [Urban](https://github.com/jwulf/nano-ide) app. Urban is a local‑first RAD toolkit
+An [Urban](https://github.com/nanobpm/nano-ide) app. Urban is a local‑first RAD toolkit
 that turns a declarative manifest (`nano.app.json`) into a running application on top of the
 [Nano](https://nanobpm.io) process engine — Borland Delphi for BPMN.
 
@@ -68,4 +68,4 @@ your current sources without rewriting them.
 - Add a domain type to `types` in the manifest and a migration under `db/migrations/`.
 - Enable more surfaces (task inbox, chat) or triggers in the manifest.
 
-See the [Urban runtime docs](https://github.com/jwulf/nano-ide/tree/main/packages/urban).
+See the [Urban runtime docs](https://github.com/nanobpm/nano-ide/tree/main/packages/urban).

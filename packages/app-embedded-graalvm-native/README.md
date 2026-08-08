@@ -1,7 +1,7 @@
 # @nanobpm/nano-ide-app-embedded-graalvm-native
 
 A **GraalVM Native Image** variant of the [Embedded Nano (JVM)](https://www.npmjs.com/package/@nanobpm/nano-ide-app-embedded-jvm)
-app pack for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+app pack for the [Nano RAD IDE](https://nanobpm.io).
 
 Same Bernd-in-JVM code (ADR 0005) — the Nano BPMN engine embedded in-process,
 driven by an outer stock Camunda REST job worker — but compiled with **GraalVM

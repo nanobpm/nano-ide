@@ -7,7 +7,7 @@
   "publishConfig": { "access": "public" },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jwulf/nano-ide.git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
     "directory": "packages/app-workflow"
   },
   "files": ["nano-ide.ext.json", "templates", "README.md"]

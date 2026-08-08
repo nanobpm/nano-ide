@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-app-embedded-nano
 
-An **Embedded μ-nano** app pack for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+An **Embedded μ-nano** app pack for the [Nano RAD IDE](https://nanobpm.io).
 
 It scaffolds a **self-contained Deno binary with the Nano BPMN engine running
 in-process** (ADR 0005) — no gateway, no broker, no network. The engine *is*

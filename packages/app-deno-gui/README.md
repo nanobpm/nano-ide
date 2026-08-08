@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-app-deno-gui
 
-A **Deno GUI** app pack for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+A **Deno GUI** app pack for the [Nano RAD IDE](https://nanobpm.io).
 
 It scaffolds a process application that **serves its own UI** — a single Deno
 binary that stands up an HTTP server (`Deno.serve`) and hands out a browser

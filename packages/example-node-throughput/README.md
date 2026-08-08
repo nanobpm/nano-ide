@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-example-node-throughput
 
-A distributable **Node / TypeScript throughput demo** for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+A distributable **Node / TypeScript throughput demo** for the [Nano RAD IDE](https://nanobpm.io).
 
 An async producer flood plus a `JobWorker`, built on
 [`@nanobpm/nano-sdk`](https://www.npmjs.com/package/@nanobpm/nano-sdk) (a drop-in

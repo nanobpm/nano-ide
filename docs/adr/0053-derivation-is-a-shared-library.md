@@ -3,7 +3,7 @@
 Status: Accepted
 Date: 2026-07-31
 Extends: nano-bpm ADR 0052 (decoupled manifest interpreter / Urban runtime)
-Repo: jwulf/nano-ide (`packages/urban-toolkit`, `packages/urban-runtime`, `packages/urban-cli`, `packages/create-urban-app`)
+Repo: nanobpm/nano-ide (`packages/urban-toolkit`, `packages/urban-runtime`, `packages/urban-cli`, `packages/create-urban-app`)
 
 ## Context
 

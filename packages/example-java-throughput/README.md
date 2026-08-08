@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-example-java-throughput
 
-A distributable **Java + Maven throughput demo** for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+A distributable **Java + Maven throughput demo** for the [Nano RAD IDE](https://nanobpm.io).
 
 A producer plus a `JobWorker` that maxes out create / complete throughput. The
 **same code** runs against **Camunda 8** or **Nano** over four transport combos.

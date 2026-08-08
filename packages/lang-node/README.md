@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-lang-node
 
-A **Node.js / TypeScript** language pack for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+A **Node.js / TypeScript** language pack for the [Nano RAD IDE](https://nanobpm.io).
 
 It adds a first-class TypeScript/JavaScript authoring experience that runs on the
 **local Node runtime** — no Deno required. This matters on hosts where Deno has

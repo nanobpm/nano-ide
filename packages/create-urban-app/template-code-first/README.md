@@ -1,6 +1,6 @@
 # __APP_NAME__
 
-A **code-first** [Urban](https://github.com/jwulf/nano-ide) app. Urban is a local‑first
+A **code-first** [Urban](https://github.com/nanobpm/nano-ide) app. Urban is a local‑first
 RAD toolkit that runs applications on top of the [Nano](https://nanobpm.io) process
 engine — Borland Delphi for BPMN. Here the process is authored in TypeScript with
 `defineFlow`, and `@nanobpm/urban` derives the executable BPMN model from it.
@@ -70,5 +70,5 @@ on-disk artifacts are stale versus your current sources without rewriting them.
   `Worker({ workflows: [...] })` list.
 - Add a domain type to `types` in the manifest and a migration under `db/migrations/`.
 
-See the [Urban runtime docs](https://github.com/jwulf/nano-ide/tree/main/packages/urban)
-and the [code-first workflow surface](https://github.com/jwulf/nano-ide/tree/main/packages/workflow).
+See the [Urban runtime docs](https://github.com/nanobpm/nano-ide/tree/main/packages/urban)
+and the [code-first workflow surface](https://github.com/nanobpm/nano-ide/tree/main/packages/workflow).

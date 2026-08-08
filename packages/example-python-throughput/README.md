@@ -1,6 +1,6 @@
 # @nanobpm/nano-ide-example-python-throughput
 
-A distributable **Python throughput demo** for the [Nano RAD IDE](https://github.com/Magikcraft/nano-bpm).
+A distributable **Python throughput demo** for the [Nano RAD IDE](https://nanobpm.io).
 
 An async producer flood plus a `JobWorker`, built on the official
 [`camunda-orchestration-sdk`](https://pypi.org/project/camunda-orchestration-sdk/).

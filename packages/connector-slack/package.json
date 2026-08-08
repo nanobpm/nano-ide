@@ -6,7 +6,7 @@
   "type": "module",
   "keywords": ["nano-ide-ext", "nano-ide-connector", "nano-ide-trigger", "nanobpm", "slack", "chatops", "connector"],
   "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/jwulf/nano-ide.git", "directory": "packages/connector-slack" },
+  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/connector-slack" },
   "files": ["nano-ide.ext.json", "worker.ts", "driver.ts", "components", "types", "tsconfig.json", "README.md"],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",

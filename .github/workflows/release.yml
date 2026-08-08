@@ -49,6 +49,6 @@ jobs:
       # Auth is via GitHub Actions OIDC — the workflow's id-token is exchanged
       # for a short-lived npm publish token per package, so no long-lived
       # NPM_TOKEN secret is needed. Each target package on npm must have the
-      # matching Trusted Publisher configured (repo: jwulf/nano-ide, workflow:
+      # matching Trusted Publisher configured (repo: nanobpm/nano-ide, workflow:
       # release.yml). Provenance is signed automatically.
       - run: node scripts/publish.mjs

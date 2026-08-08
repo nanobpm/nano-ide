@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: 📚 Documentation
-    url: https://github.com/Magikcraft/nano-bpm
+    url: https://nanobpm.io
     about: Read the Nano engine, console, and SDK documentation.

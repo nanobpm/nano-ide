@@ -65,12 +65,14 @@ function build(dbOverrides: Partial<PagesDataSource> = {}) {
   const db = fakeDb(dbOverrides);
   const readPage = async (path: string) => {
     if (path === "pages/home.page.json") return JSON.stringify({ title: "Home", nodes: [] });
+    if (path === "pages/epic.page.json") return JSON.stringify({ title: "Epic Coordination", nodes: [] });
     throw new Error("not found");
   };
   const routes = createPagesRoutes({ pagesDir: "pages", homePage: "home", sourceName: "app" }, {
     db,
     engine,
     readPage,
+    listPages: async () => ["home", "epic"],
   });
   const router = makeRouter(routes);
   return { router, calls };
@@ -212,8 +214,9 @@ test("renderer makes collapsible nodes persist their state across sessions", asy
   assert.match(js, /if \(!props\.collapsible\) return card;/);
   // Seed from defaultCollapsed the first time, then from persisted state.
   assert.match(js, /readCollapsed\(storageKey, !!props\.defaultCollapsed\)/);
-  // Namespaced, per-node storage key.
-  assert.match(js, /"pc:collapsed:" \+ HOME \+ ":" \+ \(node\.id/);
+  // Namespaced, per-node storage key — keyed by the *current* page id so two
+  // pages that reuse a node id don't share collapse state across navigation.
+  assert.match(js, /"pc:collapsed:" \+ CURRENT \+ ":" \+ \(node\.id/);
   // Persist on toggle.
   assert.match(js, /writeCollapsed\(storageKey, collapsed\)/);
   // Every storage access is wrapped so a throwing localStorage can't break the UI.
@@ -237,6 +240,77 @@ test("GET /app/pages/<id> returns the page json, 404 for unknown", async () => {
   assert.deepEqual(JSON.parse(ok.body ?? "{}").title, "Home");
   const miss = await dispatch("GET", "/app/pages/nope");
   assert.equal(miss.status, 404);
+});
+
+test("GET /app/pages indexes the available pages with titles + home flag", async () => {
+  const res = await dispatch("GET", "/app/pages");
+  assert.equal(res.status, 200);
+  const body = JSON.parse(res.body ?? "{}");
+  assert.equal(body.home, "home");
+  const byId = Object.fromEntries((body.pages ?? []).map((p: { id: string }) => [p.id, p]));
+  assert.deepEqual(byId.home, { id: "home", title: "Home", home: true });
+  assert.deepEqual(byId.epic, { id: "epic", title: "Epic Coordination", home: false });
+  // The exact index path must not be shadowed by the /app/pages/<id> prefix route.
+  assert.equal((await dispatch("GET", "/app/pages/epic")).status, 200);
+});
+
+test("GET /app/pages is empty (not an error) when listing is unavailable", async () => {
+  // listPages is optional — without it the index is an empty list, not a 500.
+  const routes = createPagesRoutes({ pagesDir: "pages", homePage: "home", sourceName: "app" }, {
+    db: fakeDb(),
+    engine: fakeEngine().engine,
+    readPage: async () => "{}",
+  });
+  const res = await makeRouter(routes)(req("GET", "/app/pages"));
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(res.body ?? "{}"), { pages: [], home: "home" });
+});
+
+test("the renderer routes between pages by hash and tears down grid polls", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A page is chosen by the URL fragment (#/<page>), validated to a safe id, and
+  // re-rendered on hashchange — proxy-safe because the hash never hits the server.
+  assert.match(js, /const PAGE_ID = \/\^\[A-Za-z0-9_-/);
+  assert.match(js, /function safePageId\(value\)/);
+  assert.match(js, /function currentPage\(\)/);
+  assert.match(js, /try \{\s*const raw = decodeURIComponent/s);
+  assert.match(js, /catch \(e\) \{\s*return HOME;/s);
+  assert.match(js, /location\.hash/);
+  assert.match(js, /window\.addEventListener\("hashchange", renderPage\)/);
+  assert.match(js, /async function renderPage\(\)/);
+  // Navigation runs every registered disposer first, so a switched-away grid's
+  // poll interval + pc:refresh listener are removed rather than leaking forever.
+  assert.match(js, /const disposers = \[\]/);
+  assert.match(js, /function teardown\(\)/);
+  assert.match(js, /disposers\.push\(\(\) => document\.removeEventListener\("pc:refresh", refresh\)\)/);
+  assert.match(js, /disposers\.push\(\(\) => clearInterval\(timer\)\)/);
+});
+
+test("the renderer ships a nav node (menu bar / rail) with in-app + external links", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // nav is a first-class node type.
+  assert.match(js, /nav: renderNav/);
+  assert.match(js, /function renderNav\(node\)/);
+  // "rail" variant renders a side rail; anything else is a horizontal bar.
+  assert.match(js, /p\.variant === "rail"/);
+  assert.match(js, /"pc-nav pc-rail"/);
+  assert.match(js, /"pc-nav pc-bar"/);
+  // A page item becomes an in-app hash link, active-highlighted on the current page.
+  assert.match(js, /const isPage = safePageId\(item\.page\)/);
+  assert.match(js, /attrs\.href = "#\/" \+ encodeURIComponent\(item\.page\)/);
+  assert.match(js, /item\.page === CURRENT/);
+  assert.match(js, /aria-current/);
+  // An external item is an http(s)-only, hardened new-tab link.
+  assert.match(js, /\^https\?:\\\/\\\//);
+  assert.match(js, /attrs\.rel = "noopener noreferrer"/);
+  // items:"auto" (or omitted) enumerates every page from the index endpoint.
+  assert.match(js, /getJSON\("\/app\/pages"\)/);
+  // A rail is lifted into a left <aside>; the rest flow into a content column.
+  assert.match(js, /pc-rail-wrap/);
+  assert.match(js, /pc-layout/);
+  assert.match(js, /pc-main-col/);
 });
 
 test("GET /app/data/<source>/<table> returns rows", async () => {

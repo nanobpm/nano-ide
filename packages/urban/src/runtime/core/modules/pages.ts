@@ -354,8 +354,8 @@ function rendererShell(homePage: string): string {
 }
 
 // The app's stylesheet resolves every colour through the Nano console's
-// semantic `--nano-*` token contract (see nanobpmn console/src/theme/tokens.css
-// — MIRROR: keep the palettes below in sync). When the app is embedded in the
+// semantic `--nano-*` token contract (see the Magikcraft/nano-bpm repo's
+// `console/src/theme/tokens.css` — MIRROR: keep the palettes below in sync). When the app is embedded in the
 // console it inherits nothing across the iframe boundary, so the console
 // postMessages its resolved tokens + appearance and the runtime lays them onto
 // this document's :root (see RENDERER_JS). Standalone (CLI on :3000) there is no
@@ -463,8 +463,11 @@ function applyTheme(msg) {
 }
 if (window.parent && window.parent !== window) {
   window.addEventListener("message", (ev) => {
-    // Same-origin proxy (posture A): only trust the framing parent.
-    if (ev.source === window.parent) applyTheme(ev.data);
+    // Same-origin proxy (posture A): only trust a message from the framing
+    // parent AND from our own origin. ev.source alone is insufficient — a
+    // cross-origin page that frames a standalone run becomes window.parent, so
+    // an origin check is what actually pins the trust boundary.
+    if (ev.origin === window.location.origin && ev.source === window.parent) applyTheme(ev.data);
   });
   window.parent.postMessage({ type: "nano-app-ready" }, window.location.origin);
 }

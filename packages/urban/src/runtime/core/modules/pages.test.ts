@@ -125,6 +125,8 @@ test("the renderer bridges the console theme over postMessage", async () => {
   assert.match(js, /postMessage\(\{ type: "nano-app-ready" \}, window\.location\.origin\)/);
   // Only trusts the framing parent, and only accepts nano-theme messages.
   assert.match(js, /ev\.source === window\.parent/);
+  // Same-origin posture A: a cross-origin framer is rejected before applyTheme.
+  assert.match(js, /ev\.origin === window\.location\.origin/);
   assert.match(js, /msg\.type !== "nano-theme"/);
   // Mirrors the console appearance + lays --nano-* tokens onto :root; ignores
   // any property outside the shared token namespace.

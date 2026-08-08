@@ -353,46 +353,82 @@ function rendererShell(homePage: string): string {
 </html>`;
 }
 
+// The app's stylesheet resolves every colour through the Nano console's
+// semantic `--nano-*` token contract (see nanobpmn console/src/theme/tokens.css
+// — MIRROR: keep the palettes below in sync). When the app is embedded in the
+// console it inherits nothing across the iframe boundary, so the console
+// postMessages its resolved tokens + appearance and the runtime lays them onto
+// this document's :root (see RENDERER_JS). Standalone (CLI on :3000) there is no
+// console, so the defaults below stand on their own: dark by default, light when
+// the OS asks for it and nothing has themed us. `--pc-*` are kept as thin
+// aliases so existing class rules re-resolve through the shared tokens.
 const RENDERER_CSS = `
-:root { color-scheme: light dark; --pc-edge:#d0d0d8; --pc-accent:#3b5bdb; }
+:root {
+  color-scheme: dark;
+  --nano-app:#0b0b10; --nano-panel:#10101a; --nano-raised:#16161f; --nano-inset:#08080c; --nano-hover:#1e1e2a;
+  --nano-edge:#24242f; --nano-edge-strong:#383848;
+  --nano-text:#f2f2f7; --nano-text-muted:#a3a3b2; --nano-text-faint:#6e6e80;
+  --nano-accent:#8b5cf6; --nano-accent-strong:#a78bfa; --nano-accent-2:#22d3ee; --nano-on-accent:#ffffff;
+  --nano-ok:#34d399; --nano-warn:#fbbf24; --nano-danger:#fb7185; --nano-info:#38bdf8;
+}
+:root[data-appearance="light"], .pc-light-palette {
+  color-scheme: light;
+  --nano-app:#f5f5f9; --nano-panel:#fdfdfe; --nano-raised:#ffffff; --nano-inset:#ededf3; --nano-hover:#e8e8f0;
+  --nano-edge:#e2e2ea; --nano-edge-strong:#c5c5d4;
+  --nano-text:#1a1a22; --nano-text-muted:#565664; --nano-text-faint:#8c8c9c;
+  --nano-accent:#7c3aed; --nano-accent-strong:#6d28d9; --nano-accent-2:#0891b2; --nano-on-accent:#ffffff;
+  --nano-ok:#059669; --nano-warn:#b45309; --nano-danger:#e11d48; --nano-info:#0369a1;
+}
+@media (prefers-color-scheme: light) {
+  /* Standalone only: follow the OS until the console (which sets data-appearance) themes us. */
+  :root:not([data-appearance]) {
+    color-scheme: light;
+    --nano-app:#f5f5f9; --nano-panel:#fdfdfe; --nano-raised:#ffffff; --nano-inset:#ededf3; --nano-hover:#e8e8f0;
+    --nano-edge:#e2e2ea; --nano-edge-strong:#c5c5d4;
+    --nano-text:#1a1a22; --nano-text-muted:#565664; --nano-text-faint:#8c8c9c;
+    --nano-accent:#7c3aed; --nano-accent-strong:#6d28d9; --nano-accent-2:#0891b2; --nano-on-accent:#ffffff;
+    --nano-ok:#059669; --nano-warn:#b45309; --nano-danger:#e11d48; --nano-info:#0369a1;
+  }
+}
+:root { --pc-edge:var(--nano-edge); --pc-accent:var(--nano-accent); }
 * { box-sizing: border-box; }
-body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64rem; margin-inline:auto; }
-.pc-empty { opacity:.6; }
+body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64rem; margin-inline:auto; background:var(--nano-app); color:var(--nano-text); }
+.pc-empty { color:var(--nano-text-faint); }
 .pc-heading { font-size:1.6rem; font-weight:650; margin:0 0 .25rem; }
-.pc-sub { opacity:.7; margin:.25rem 0 1rem; }
+.pc-sub { color:var(--nano-text-muted); margin:.25rem 0 1rem; }
 .pc-body { margin:.5rem 0; }
-.pc-card { border:1px solid var(--pc-edge); border-radius:.6rem; padding:1rem 1.15rem; margin:1rem 0; }
+.pc-card { border:1px solid var(--nano-edge); border-radius:.6rem; padding:1rem 1.15rem; margin:1rem 0; background:var(--nano-panel); }
 .pc-card h2 { font-size:1rem; margin:0 0 .75rem; }
 .pc-field { display:flex; flex-direction:column; gap:.25rem; margin-bottom:.6rem; }
-.pc-field label { font-size:.8rem; opacity:.75; }
-.pc-field input { padding:.5rem .6rem; border:1px solid var(--pc-edge); border-radius:.4rem; font:inherit; }
-.pc-btn { padding:.5rem .9rem; border:0; border-radius:.4rem; background:var(--pc-accent); color:#fff; font:inherit; cursor:pointer; }
+.pc-field label { font-size:.8rem; color:var(--nano-text-muted); }
+.pc-field input { padding:.5rem .6rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); }
+.pc-btn { padding:.5rem .9rem; border:0; border-radius:.4rem; background:var(--nano-accent); color:var(--nano-on-accent); font:inherit; cursor:pointer; }
 .pc-btn:disabled { opacity:.5; cursor:default; }
 .pc-msg { font-size:.85rem; margin-top:.5rem; min-height:1.2em; }
-.pc-msg.err { color:#c0392b; }
-.pc-msg.ok { color:#2b8a3e; }
+.pc-msg.err { color:var(--nano-danger); }
+.pc-msg.ok { color:var(--nano-ok); }
 table.pc-grid { width:100%; border-collapse:collapse; font-size:.9rem; }
-table.pc-grid th, table.pc-grid td { text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--pc-edge); }
-table.pc-grid th { font-weight:600; opacity:.75; }
+table.pc-grid th, table.pc-grid td { text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--nano-edge); }
+table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-tabs { display:flex; gap:.5rem; margin-bottom:.75rem; }
-.pc-tab { padding:.35rem .8rem; border:1px solid var(--pc-edge); border-radius:.4rem; background:transparent; color:inherit; font:inherit; cursor:pointer; }
-.pc-tab.active { background:var(--pc-accent); color:#fff; border-color:var(--pc-accent); }
+.pc-tab { padding:.35rem .8rem; border:1px solid var(--nano-edge); border-radius:.4rem; background:transparent; color:inherit; font:inherit; cursor:pointer; }
+.pc-tab.active { background:var(--nano-accent); color:var(--nano-on-accent); border-color:var(--nano-accent); }
 .pc-btn-sm { padding:.25rem .55rem; font-size:.8rem; margin-right:.3rem; }
-.pc-chevron { background:transparent; color:inherit; border:1px solid var(--pc-edge); }
+.pc-chevron { background:transparent; color:inherit; border:1px solid var(--nano-edge); }
 .pc-row-actions { white-space:nowrap; text-align:right; }
 .pc-detail { padding:.75rem .25rem; }
 .pc-detail-field { display:flex; gap:.5rem; font-size:.85rem; margin:.15rem 0; }
-.pc-detail-label { opacity:.7; min-width:8rem; }
-.pc-link { color:var(--pc-accent); }
+.pc-detail-label { color:var(--nano-text-muted); min-width:8rem; }
+.pc-link { color:var(--nano-accent); }
 .pc-child { margin:.6rem 0; }
-.pc-child-title { font-size:.8rem; font-weight:600; opacity:.7; margin-bottom:.25rem; }
-.pc-transcript { white-space:pre-wrap; max-height:22rem; overflow:auto; background:rgba(120,120,160,.08); padding:.5rem; border-radius:.4rem; font-size:.8rem; margin-top:.4rem; }
-.pc-subform { margin-top:.75rem; padding:.6rem; border:1px dashed var(--pc-edge); border-radius:.5rem; }
+.pc-child-title { font-size:.8rem; font-weight:600; color:var(--nano-text-muted); margin-bottom:.25rem; }
+.pc-transcript { white-space:pre-wrap; max-height:22rem; overflow:auto; background:var(--nano-inset); padding:.5rem; border-radius:.4rem; font-size:.8rem; margin-top:.4rem; }
+.pc-subform { margin-top:.75rem; padding:.6rem; border:1px dashed var(--nano-edge); border-radius:.5rem; }
 .pc-subform-title { font-weight:600; font-size:.85rem; margin-bottom:.4rem; }
-.pc-prompt { font-size:.85rem; opacity:.8; margin-bottom:.4rem; white-space:pre-wrap; }
-.pc-textarea { width:100%; min-height:4rem; padding:.5rem; border:1px solid var(--pc-edge); border-radius:.4rem; font:inherit; }
+.pc-prompt { font-size:.85rem; color:var(--nano-text-muted); margin-bottom:.4rem; white-space:pre-wrap; }
+.pc-textarea { width:100%; min-height:4rem; padding:.5rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); }
 .pc-collapse-header { display:flex; align-items:center; gap:.5rem; width:100%; margin:0 0 .75rem; padding:0; background:transparent; border:0; color:inherit; font:inherit; font-size:1rem; font-weight:600; cursor:pointer; text-align:left; }
-.pc-chevron-inline { opacity:.6; font-size:.75rem; width:1em; }
+.pc-chevron-inline { color:var(--nano-text-faint); font-size:.75rem; width:1em; }
 .pc-card-body[hidden] { display:none; }
 `;
 
@@ -403,6 +439,35 @@ table.pc-grid th { font-weight:600; opacity:.75; }
 const RENDERER_JS = String.raw`
 const root = document.getElementById("page");
 const HOME = root.dataset.home || "home";
+
+// Theme bridge for the Nano console embed. The app runs in a sandboxed,
+// same-origin iframe, so the console's --nano-* custom properties and its
+// data-appearance never cascade in. Instead the console postMessages its
+// resolved tokens; we lay them onto this document's :root and mirror the
+// appearance. Standalone (no console parent) nothing is posted, so the CSS
+// defaults stand. We announce readiness so the console can push the theme even
+// if its first message raced our listener install.
+function applyTheme(msg) {
+  if (!msg || msg.type !== "nano-theme") return;
+  const el = document.documentElement;
+  if (msg.appearance === "light" || msg.appearance === "dark") el.dataset.appearance = msg.appearance;
+  const vars = msg.vars;
+  if (vars && typeof vars === "object") {
+    for (const [k, v] of Object.entries(vars)) {
+      // Only accept the shared token namespace; ignore anything else.
+      if (typeof k === "string" && k.startsWith("--nano-") && typeof v === "string") {
+        el.style.setProperty(k, v);
+      }
+    }
+  }
+}
+if (window.parent && window.parent !== window) {
+  window.addEventListener("message", (ev) => {
+    // Same-origin proxy (posture A): only trust the framing parent.
+    if (ev.source === window.parent) applyTheme(ev.data);
+  });
+  window.parent.postMessage({ type: "nano-app-ready" }, window.location.origin);
+}
 
 // Resolve every app endpoint against where THIS module was actually served from,
 // so absolute-looking "/app/…" paths work both at the origin root (direct run,

@@ -9,7 +9,9 @@ import { register } from "node:module";
 import { isAbsolute, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type {
+  AsyncStore,
   HostContext,
   HttpHandler,
   HttpRequest,
@@ -176,6 +178,10 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
       return { close: () => w.close() } satisfies WatchHandle;
     },
     now: () => Date.now(),
+    createAsyncStore<T>(): AsyncStore<T> {
+      const als = new AsyncLocalStorage<T>();
+      return { run: <R>(value: T, fn: () => R): R => als.run(value, fn), current: () => als.getStore() };
+    },
     log,
   };
 }

@@ -6,7 +6,13 @@
 import type { RuntimeContext } from "../context.ts";
 import type { HostContext, SqliteDb } from "../host.ts";
 import type { AppManifest, DataSource, DomainType } from "../manifest.ts";
-import { makeGateway, Table, type DataSource as GatewayDataSource } from "./gateway.ts";
+import {
+  makeGateway,
+  Table,
+  type DataSource as GatewayDataSource,
+  type InsertObserver,
+} from "./gateway.ts";
+import { currentJobContext } from "../execContext.ts";
 
 export function sqlitePathFromUrl(url: string): string {
   // Accept "file:./x.db", "file:x.db", "sqlite:./x.db" or a bare path.
@@ -50,6 +56,65 @@ export function resolveAppPath(root: string, p: string): string {
  * for this identifier: `applyMigrations` writes it and `dataops`' `migrations` op reads it, so
  * both import this constant and the ledger name can never drift between application and listing. */
 export const MIGRATIONS_TABLE = "_urban_migrations";
+
+/** Name of the urban-owned write-provenance sidecar table (ProcessOS domain-signal plane, D0).
+ *  One append per app `Table.insert` performed inside a job, linking the written row —
+ *  `(source, table_name, pk_value)` — to the process instance/element that wrote it. Follows the
+ *  `_urban_` convention so it is automatically excluded from domain-model introspection,
+ *  DB Manager, and forms (see `gateway.ts` `schema()`), and never collides with an app table. */
+export const WRITE_PROVENANCE_TABLE = "_urban_write_provenance";
+
+/** Provision the write-provenance sidecar on a source (idempotent). Domain-free: it records only
+ *  the join key + timestamps, never any row content. */
+export function ensureProvenanceTable(db: SqliteDb): void {
+  db.exec(
+    `CREATE TABLE IF NOT EXISTS ${WRITE_PROVENANCE_TABLE} (` +
+      "seq INTEGER PRIMARY KEY AUTOINCREMENT, " +
+      "source TEXT NOT NULL, " +
+      "table_name TEXT NOT NULL, " +
+      "pk_value TEXT NOT NULL, " +
+      "instance_key TEXT, " +
+      "element_id TEXT, " +
+      "job_type TEXT, " +
+      "op TEXT NOT NULL DEFAULT 'insert', " +
+      "at TEXT NOT NULL)",
+  );
+}
+
+/** Build the {@link InsertObserver} that captures write-provenance for one source. Best-effort:
+ *  it records a row only when a job execution context with an instance key is active (a worker
+ *  handler is running) — writes outside a job (e.g. HTTP actions) record nothing, degrading
+ *  gracefully. It skips urban/engine-internal tables so the provenance table never records
+ *  itself. It runs on the same connection as the insert, so inside a `tx` the provenance row is
+ *  committed/rolled back atomically with the app write. `Table.insert` wraps this defensively, so
+ *  a throw here can never break the app insert. */
+export function makeProvenanceRecorder(
+  host: HostContext,
+  db: SqliteDb,
+  source: string,
+): InsertObserver {
+  return (table, pk) => {
+    if (table.startsWith("_urban_") || table.startsWith("_nano_") || table.startsWith("sqlite_")) {
+      return;
+    }
+    const ctx = currentJobContext();
+    if (!ctx || ctx.instanceKey == null) return;
+    db.run(
+      `INSERT INTO ${WRITE_PROVENANCE_TABLE} ` +
+        "(source, table_name, pk_value, instance_key, element_id, job_type, op, at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, 'insert', ?)",
+      [
+        source,
+        table,
+        String(pk),
+        ctx.instanceKey,
+        ctx.elementId ?? null,
+        ctx.jobType ?? null,
+        new Date(host.now()).toISOString(),
+      ],
+    );
+  };
+}
 
 /** Resolve a datasource `url` to its on-disk SQLite path against `root`. The result is absolute
  * when the resolved path is absolute (either because `url` names an absolute path or `root` is
@@ -320,6 +385,11 @@ async function provisionSqlite(
   const migrationsApplied = src.migrations
     ? await applyMigrations(ctx.host, db, ctx.root, src.migrations)
     : [];
+  // Provision the write-provenance sidecar and wire the gateway's insert observer to it, so
+  // every app `Table.insert` performed inside a job is linked to its process instance/element
+  // (ProcessOS domain-signal capture, D0). Domain-free and non-invasive — the sidecar lives
+  // outside the domain model.
+  ensureProvenanceTable(db);
   ctx.host.log("info", `datasource: provisioned "${name}"`, {
     driver: "sqlite",
     path: resolveSqlitePath(ctx.root, src.url),
@@ -329,7 +399,7 @@ async function provisionSqlite(
     name,
     driver: "sqlite",
     db,
-    source: makeGateway(db),
+    source: makeGateway(db, makeProvenanceRecorder(ctx.host, db, name)),
     migrationsApplied,
     close: () => db.close(),
   };

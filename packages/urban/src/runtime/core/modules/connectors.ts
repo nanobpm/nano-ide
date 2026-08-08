@@ -24,6 +24,7 @@ import {
   type ConnectorWorkerJob,
   type DefinedConnectorWorker,
 } from "../../connector-worker-sdk.ts";
+import { runInJobContext } from "../execContext.ts";
 
 /** A config field a pack declares (subset of ext-types `ConfigField`): an env
  *  pointer with an optional default. */
@@ -244,7 +245,12 @@ export async function mountConnectors(ctx: RuntimeContext, app: AppApi): Promise
       );
     }
 
-    const wrapped = adaptConnectorHandler(worker);
+    const inner = adaptConnectorHandler(worker);
+    const wrapped: JobHandler = (job) =>
+      runInJobContext(
+        { instanceKey: job.processInstanceKey, elementId: job.elementId, jobType },
+        () => inner(job),
+      );
     const sub = await ctx.engine.registerWorker(jobType, wrapped, {
       workerName: `${ctx.manifest.id}:${jobType}`,
       // The pack's `defineWorker({ maxParallelJobs })` is the authoritative runtime

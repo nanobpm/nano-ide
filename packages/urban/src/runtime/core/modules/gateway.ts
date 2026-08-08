@@ -16,6 +16,12 @@ import type { SqliteDb } from "../host.ts";
 
 export type Row = Record<string, unknown>;
 
+/** Best-effort observer invoked after a successful {@link Table.insert}, with the table name and
+ *  the new primary-key value. The DataLayer uses it to capture write-provenance. It MUST NOT
+ *  throw — an app insert must never fail because provenance capture did — but {@link Table.insert}
+ *  also wraps it defensively. */
+export type InsertObserver = (table: string, pk: number | bigint) => void;
+
 export interface ExecResult {
   /** Rows changed by an INSERT/UPDATE/DELETE. */
   changed: number;
@@ -92,11 +98,13 @@ export class Table<T extends object = Row> {
   readonly name: string;
   readonly pk: string;
   readonly #src: DataSource;
+  readonly #onInsert?: InsertObserver;
 
-  constructor(src: DataSource, name: string, pk = "id") {
+  constructor(src: DataSource, name: string, pk = "id", onInsert?: InsertObserver) {
     this.#src = src;
     this.name = name;
     this.pk = pk;
+    this.#onInsert = onInsert;
   }
 
   /** Insert one row; returns the new primary-key value (the inserted rowid for an INTEGER
@@ -123,6 +131,15 @@ export class Table<T extends object = Row> {
       // The driver reported no rowid — treat as a failed/ambiguous insert rather than
       // silently returning 0, which a caller could mistake for a real primary key.
       throw new Error(`Table(${this.name}).insert: driver reported no lastInsertId`);
+    }
+    if (this.#onInsert) {
+      // Provenance capture is strictly observational: never let it break the app insert, which
+      // has already committed above. The recorder is expected not to throw, but guard anyway.
+      try {
+        this.#onInsert(this.name, r.lastInsertId);
+      } catch {
+        // swallow — an insert must never fail because provenance capture did
+      }
     }
     return r.lastInsertId;
   }
@@ -202,8 +219,10 @@ export class Table<T extends object = Row> {
  * are async to hold the app-facing contract; the work underneath is synchronous. */
 class SqliteGateway implements DataSource {
   readonly #db: SqliteDb;
-  constructor(db: SqliteDb) {
+  readonly #onInsert?: InsertObserver;
+  constructor(db: SqliteDb, onInsert?: InsertObserver) {
     this.#db = db;
+    this.#onInsert = onInsert;
   }
 
   async query<T extends object = Row>(sql: string, params: unknown[] = []): Promise<T[]> {
@@ -272,11 +291,13 @@ class SqliteGateway implements DataSource {
   }
 
   table<T extends object = Row>(name: string, pk = "id"): Table<T> {
-    return new Table<T>(this, name, pk);
+    return new Table<T>(this, name, pk, this.#onInsert);
   }
 }
 
-/** Wrap a provisioned `SqliteDb` as the record-oriented `DataSource` gateway. */
-export function makeGateway(db: SqliteDb): DataSource {
-  return new SqliteGateway(db);
+/** Wrap a provisioned `SqliteDb` as the record-oriented `DataSource` gateway. An optional
+ *  `onInsert` observer is invoked after every successful `Table.insert` (used for
+ *  write-provenance capture); it is threaded to each `Table` this gateway creates. */
+export function makeGateway(db: SqliteDb, onInsert?: InsertObserver): DataSource {
+  return new SqliteGateway(db, onInsert);
 }

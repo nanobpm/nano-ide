@@ -271,7 +271,11 @@ test("the renderer routes between pages by hash and tears down grid polls", asyn
   const js = res.body ?? "";
   // A page is chosen by the URL fragment (#/<page>), validated to a safe id, and
   // re-rendered on hashchange — proxy-safe because the hash never hits the server.
+  assert.match(js, /const PAGE_ID = \/\^\[A-Za-z0-9_-/);
+  assert.match(js, /function safePageId\(value\)/);
   assert.match(js, /function currentPage\(\)/);
+  assert.match(js, /try \{\s*const raw = decodeURIComponent/s);
+  assert.match(js, /catch \(e\) \{\s*return HOME;/s);
   assert.match(js, /location\.hash/);
   assert.match(js, /window\.addEventListener\("hashchange", renderPage\)/);
   assert.match(js, /async function renderPage\(\)/);
@@ -294,11 +298,12 @@ test("the renderer ships a nav node (menu bar / rail) with in-app + external lin
   assert.match(js, /"pc-nav pc-rail"/);
   assert.match(js, /"pc-nav pc-bar"/);
   // A page item becomes an in-app hash link, active-highlighted on the current page.
+  assert.match(js, /const isPage = safePageId\(item\.page\)/);
   assert.match(js, /attrs\.href = "#\/" \+ encodeURIComponent\(item\.page\)/);
   assert.match(js, /item\.page === CURRENT/);
   assert.match(js, /aria-current/);
   // An external item is an http(s)-only, hardened new-tab link.
-  assert.match(js, /\^https\?:/);
+  assert.match(js, /\^https\?:\\\/\\\//);
   assert.match(js, /attrs\.rel = "noopener noreferrer"/);
   // items:"auto" (or omitted) enumerates every page from the index endpoint.
   assert.match(js, /getJSON\("\/app\/pages"\)/);

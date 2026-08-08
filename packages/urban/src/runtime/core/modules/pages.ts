@@ -503,9 +503,17 @@ const HOME = root.dataset.home || "home";
 // console's /console/app-view/<name>/ path-prefixed proxy (the hash is never
 // sent upstream). An empty/invalid hash falls back to the home page. Only a
 // safe id charset is accepted so the fragment can't smuggle a path/URL.
+const PAGE_ID = /^[A-Za-z0-9_-]+$/;
+function safePageId(value) {
+  return typeof value === "string" && PAGE_ID.test(value);
+}
 function currentPage() {
-  const raw = decodeURIComponent((location.hash || "").replace(/^#\/?/, ""));
-  return /^[A-Za-z0-9_-]+$/.test(raw) ? raw : HOME;
+  try {
+    const raw = decodeURIComponent((location.hash || "").replace(/^#\/?/, ""));
+    return safePageId(raw) ? raw : HOME;
+  } catch (e) {
+    return HOME;
+  }
 }
 let CURRENT = currentPage();
 
@@ -988,8 +996,8 @@ function renderDataGrid(node) {
 // link; only http(s) is honoured). With items:"auto" (or omitted) the nav
 // lists every page from the /app/pages index, using each page's title.
 function navLink(item) {
-  const isPage = typeof item.page === "string";
-  const isExt = !isPage && typeof item.href === "string" && /^https?:/i.test(item.href);
+  const isPage = safePageId(item.page);
+  const isExt = !isPage && typeof item.href === "string" && /^https?:\/\//i.test(item.href);
   if (!isPage && !isExt) return null;
   const attrs = { class: "pc-nav-link" };
   if (isPage) {

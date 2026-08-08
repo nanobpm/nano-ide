@@ -43,6 +43,12 @@ export interface PagesDeps {
   engine: EngineClient;
   /** Read a page file; injectable for tests. */
   readPage(path: string): Promise<string>;
+  /**
+   * List the available page ids (the `*.page.json` basenames under `pagesDir`),
+   * powering the `/app/pages` index endpoint and a `nav` node's `items: "auto"`.
+   * Optional; when absent the index is empty. Injectable for tests.
+   */
+  listPages?(): Promise<string[]>;
 }
 
 /** A JavaScript-body response (the renderer module served at /app/runtime.js). */
@@ -64,7 +70,7 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   const rowLimitRaw = opts.rowLimit ?? 200;
   const rowLimit = Number.isFinite(rowLimitRaw) ? Math.max(0, Math.floor(rowLimitRaw)) : 200;
   const sourceName = opts.sourceName ?? "app";
-  const { db, engine, readPage } = deps;
+  const { db, engine, readPage, listPages } = deps;
 
   // The table-name whitelist is memoised: an Urban app runs its migrations at boot
   // (before serving), so the schema is stable for the process lifetime, and the renderer
@@ -111,6 +117,34 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
     path: "/app/runtime.js",
     source: "surface:pages",
     handler: () => javascript(RENDERER_JS),
+  });
+
+  // ── GET /app/pages (index of available pages) ───────────────────────────
+  // Powers multi-page navigation: a `nav` node with `items: "auto"` lists every
+  // page here, and it lets any client enumerate the app's screens. Each entry
+  // carries the page's own `title` (best-effort — an unreadable/!JSON page still
+  // appears by id) and a `home` flag. Registered as an exact path so it never
+  // shadows the `/app/pages/<id>` prefix route below.
+  routes.push({
+    method: "GET",
+    path: "/app/pages",
+    source: "surface:pages",
+    handler: async () => {
+      const ids = listPages ? await listPages().catch(() => []) : [];
+      const pages: { id: string; title: string; home: boolean }[] = [];
+      for (const id of ids) {
+        if (!/^[A-Za-z0-9_-]+$/.test(id)) continue;
+        let title = id;
+        try {
+          const doc = JSON.parse(await readPage(`${pagesDir}/${id}.page.json`));
+          if (isRecord(doc) && typeof doc.title === "string" && doc.title) title = doc.title;
+        } catch {
+          // Unreadable or non-JSON page: still list it by id.
+        }
+        pages.push({ id, title, home: id === homePage });
+      }
+      return json({ pages, home: homePage });
+    },
   });
 
   // ── GET /app/pages/<id> ─────────────────────────────────────────────────
@@ -324,6 +358,13 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
     db: app.data.open(sourceName),
     engine: app.engine,
     readPage: (p) => ctx.host.readTextFile(p),
+    listPages: async () => {
+      const dir = opts.pagesDir ?? "pages";
+      const names = await ctx.host.listDir(dir).catch(() => []);
+      return names
+        .filter((n) => n.endsWith(".page.json"))
+        .map((n) => n.slice(0, -".page.json".length));
+    },
   });
   ctx.host.log("info", "pages surface mounted", { source: sourceName, home: opts.homePage ?? "home" });
   return {
@@ -430,6 +471,22 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-collapse-header { display:flex; align-items:center; gap:.5rem; width:100%; margin:0 0 .75rem; padding:0; background:transparent; border:0; color:inherit; font:inherit; font-size:1rem; font-weight:600; cursor:pointer; text-align:left; }
 .pc-chevron-inline { color:var(--nano-text-faint); font-size:.75rem; width:1em; }
 .pc-card-body[hidden] { display:none; }
+/* Multi-page navigation: a horizontal menu bar or a vertical side rail. */
+.pc-layout { display:flex; gap:1.5rem; align-items:flex-start; }
+.pc-rail-wrap { flex:0 0 12rem; position:sticky; top:1rem; align-self:flex-start; }
+.pc-main-col { flex:1 1 auto; min-width:0; }
+.pc-nav-title { font-weight:650; }
+.pc-bar { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; border-bottom:1px solid var(--nano-edge); padding-bottom:.6rem; margin-bottom:1.25rem; }
+.pc-bar .pc-nav-title { margin-right:.5rem; }
+.pc-bar .pc-nav-items { display:flex; gap:.25rem; flex-wrap:wrap; }
+.pc-rail { display:flex; flex-direction:column; gap:.5rem; }
+.pc-rail .pc-nav-title { margin-bottom:.25rem; padding:0 .7rem; }
+.pc-rail .pc-nav-items { display:flex; flex-direction:column; gap:.15rem; }
+.pc-nav-link { display:flex; align-items:center; gap:.4rem; padding:.4rem .7rem; border-radius:.4rem; color:var(--nano-text-muted); text-decoration:none; font-size:.9rem; }
+.pc-nav-link:hover { background:var(--nano-hover); color:var(--nano-text); }
+.pc-nav-link.active { background:var(--nano-accent); color:var(--nano-on-accent); }
+.pc-nav-icon { line-height:1; }
+.pc-nav-empty { color:var(--nano-text-faint); font-size:.85rem; padding:.4rem .7rem; }
 `;
 
 // The schema-driven browser renderer (ADR 0042 §3). Plain ES module string served at
@@ -439,6 +496,29 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 const RENDERER_JS = String.raw`
 const root = document.getElementById("page");
 const HOME = root.dataset.home || "home";
+
+// ── Multi-page routing (hash-based, reverse-proxy safe) ──────────────────
+// Pages are selected by the URL fragment (#/<page>) so navigation never hits
+// the server and works identically at the origin root and under the Nano
+// console's /console/app-view/<name>/ path-prefixed proxy (the hash is never
+// sent upstream). An empty/invalid hash falls back to the home page. Only a
+// safe id charset is accepted so the fragment can't smuggle a path/URL.
+function currentPage() {
+  const raw = decodeURIComponent((location.hash || "").replace(/^#\/?/, ""));
+  return /^[A-Za-z0-9_-]+$/.test(raw) ? raw : HOME;
+}
+let CURRENT = currentPage();
+
+// Per-render teardown. Each dataGrid registers its poll interval + pc:refresh
+// listener here; navigating to another page runs every disposer before the new
+// page renders, so a switched-away grid stops polling (otherwise every visited
+// page would leave a live setInterval fetching forever).
+const disposers = [];
+function teardown() {
+  while (disposers.length) {
+    try { disposers.pop()(); } catch (e) { /* best-effort cleanup */ }
+  }
+}
 
 // Theme bridge for the Nano console embed. The app runs in a sandboxed,
 // same-origin iframe, so the console's --nano-* custom properties and its
@@ -888,15 +968,71 @@ function renderDataGrid(node) {
     }
   }
   document.addEventListener("pc:refresh", refresh);
+  disposers.push(() => document.removeEventListener("pc:refresh", refresh));
   // Skip the automatic poll while the user is typing in the grid — an explicit pc:refresh
   // (e.g. after submitting an answer) still runs — so rows never shift under an in-progress
-  // answer and the detail input keeps focus across ticks.
-  if (p.refreshMs && p.refreshMs > 0) setInterval(() => { if (!editingInGrid()) refresh(); }, p.refreshMs);
+  // answer and the detail input keeps focus across ticks. The interval is registered as a
+  // disposer so a page switch (hashchange → renderPage → teardown) stops it.
+  if (p.refreshMs && p.refreshMs > 0) {
+    const timer = setInterval(() => { if (!editingInGrid()) refresh(); }, p.refreshMs);
+    disposers.push(() => clearInterval(timer));
+  }
   refresh();
   return card;
 }
 
-const RENDERERS = { text: renderText, actionForm: renderActionForm, dataGrid: renderDataGrid };
+// A navigation node — a horizontal menu bar (variant "bar", default) or a
+// vertical side rail (variant "rail"). Each item links either to another page
+// ({ label, page } -> an in-app #/<page> hash link, highlighted when it's the
+// current page) or to an external URL ({ label, href } -> a hardened new-tab
+// link; only http(s) is honoured). With items:"auto" (or omitted) the nav
+// lists every page from the /app/pages index, using each page's title.
+function navLink(item) {
+  const isPage = typeof item.page === "string";
+  const isExt = !isPage && typeof item.href === "string" && /^https?:/i.test(item.href);
+  if (!isPage && !isExt) return null;
+  const attrs = { class: "pc-nav-link" };
+  if (isPage) {
+    attrs.href = "#/" + encodeURIComponent(item.page);
+    if (item.page === CURRENT) { attrs.class += " active"; attrs["aria-current"] = "page"; }
+  } else {
+    attrs.href = item.href; attrs.target = "_blank"; attrs.rel = "noopener noreferrer";
+  }
+  const kids = [];
+  if (item.icon != null) kids.push(el("span", { class: "pc-nav-icon" }, String(item.icon)));
+  kids.push(el("span", { class: "pc-nav-label" }, String(item.label != null ? item.label : (item.page || item.href))));
+  return el("a", attrs, ...kids);
+}
+function fillNav(list, items) {
+  list.replaceChildren();
+  let n = 0;
+  for (const item of items || []) {
+    if (!item || typeof item !== "object") continue;
+    const a = navLink(item);
+    if (a) { list.append(a); n++; }
+  }
+  if (!n) list.append(el("span", { class: "pc-nav-empty" }, "No pages"));
+}
+function renderNav(node) {
+  const p = node.props || {};
+  const rail = p.variant === "rail";
+  const nav = el("nav", { class: rail ? "pc-nav pc-rail" : "pc-nav pc-bar" });
+  if (p.title != null) nav.append(el("div", { class: "pc-nav-title" }, String(p.title)));
+  const list = el("div", { class: "pc-nav-items" });
+  nav.append(list);
+  const items = p.items;
+  if (Array.isArray(items)) {
+    fillNav(list, items);
+  } else {
+    // "auto" (or unspecified): enumerate every page and link to each.
+    getJSON("/app/pages")
+      .then((res) => fillNav(list, (res.pages || []).map((pg) => ({ label: pg.title || pg.id, page: pg.id }))))
+      .catch(() => list.append(el("span", { class: "pc-nav-empty" }, "No pages")));
+  }
+  return nav;
+}
+
+const RENDERERS = { text: renderText, actionForm: renderActionForm, dataGrid: renderDataGrid, nav: renderNav };
 
 // Durable per-node UI state. localStorage is keyed by the home page id + node
 // id so two grids on the same page (or the same grid across pages) don't clash,
@@ -951,7 +1087,7 @@ function makeCollapsible(node, card) {
     chevron,
     el("span", { class: "pc-collapse-title" }, titleText),
   );
-  const storageKey = "pc:collapsed:" + HOME + ":" + (node.id || titleText);
+  const storageKey = "pc:collapsed:" + CURRENT + ":" + (node.id || titleText);
   let collapsed = readCollapsed(storageKey, !!props.defaultCollapsed);
   function apply() {
     body.hidden = collapsed;
@@ -968,16 +1104,30 @@ function makeCollapsible(node, card) {
   return container;
 }
 
-async function main() {
+// Render the page named by the current hash route. A rail nav is lifted into a
+// left <aside> and the rest of the nodes flow into a content column; otherwise
+// (bar nav or none) nodes render in document order. Re-runs on every hashchange,
+// tearing down the previous page's grid polls first.
+async function renderPage() {
+  teardown();
+  CURRENT = currentPage();
   try {
-    const doc = await getJSON("/app/pages/" + encodeURIComponent(HOME));
-    if (doc.title) document.title = doc.title;
-    root.replaceChildren(
-      ...(doc.nodes || []).map((n) => makeCollapsible(n, (RENDERERS[n.type] || (() => el("div")))(n))),
-    );
+    const doc = await getJSON("/app/pages/" + encodeURIComponent(CURRENT));
+    document.title = (doc && doc.title) || "Urban App";
+    const nodes = (doc && doc.nodes) || [];
+    const built = nodes.map((n) => ({ n, node: makeCollapsible(n, (RENDERERS[n.type] || (() => el("div")))(n)) }));
+    const rail = built.find((b) => b.n.type === "nav" && b.n.props && b.n.props.variant === "rail");
+    if (rail) {
+      const col = el("div", { class: "pc-main-col" });
+      for (const b of built) if (b !== rail) col.append(b.node);
+      root.replaceChildren(el("div", { class: "pc-layout" }, el("aside", { class: "pc-rail-wrap" }, rail.node), col));
+    } else {
+      root.replaceChildren(...built.map((b) => b.node));
+    }
   } catch (e) {
-    root.replaceChildren(el("p", { class: "pc-msg err" }, "Failed to load page: " + String(e.message || e)));
+    root.replaceChildren(el("p", { class: "pc-msg err" }, "Failed to load page: " + String((e && e.message) || e)));
   }
 }
-main();
+window.addEventListener("hashchange", renderPage);
+renderPage();
 `;

@@ -371,7 +371,7 @@ const RENDERER_CSS = `
   --nano-accent:#8b5cf6; --nano-accent-strong:#a78bfa; --nano-accent-2:#22d3ee; --nano-on-accent:#ffffff;
   --nano-ok:#34d399; --nano-warn:#fbbf24; --nano-danger:#fb7185; --nano-info:#38bdf8;
 }
-:root[data-appearance="light"], .pc-light-palette {
+:root[data-appearance="light"] {
   color-scheme: light;
   --nano-app:#f5f5f9; --nano-panel:#fdfdfe; --nano-raised:#ffffff; --nano-inset:#ededf3; --nano-hover:#e8e8f0;
   --nano-edge:#e2e2ea; --nano-edge-strong:#c5c5d4;

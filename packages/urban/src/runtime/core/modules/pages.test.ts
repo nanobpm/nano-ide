@@ -94,6 +94,20 @@ test("GET / serves the renderer shell with the home marker", async () => {
   assert.doesNotMatch(res.body ?? "", /src="\/app\/runtime\.js"/);
 });
 
+test("the shell styles the app through the shared --nano-* token contract", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  // Body colours resolve through the console's token vocabulary, not hardcoded hex.
+  assert.match(html, /background:var\(--nano-app\)/);
+  assert.match(html, /color:var\(--nano-text\)/);
+  assert.match(html, /--pc-accent:var\(--nano-accent\)/);
+  // Self-contained defaults for standalone (CLI) runs: dark base + a light
+  // palette gated on data-appearance, and prefers-color-scheme only until themed.
+  assert.match(html, /--nano-accent:#8b5cf6/);
+  assert.match(html, /\[data-appearance="light"\]/);
+  assert.match(html, /:root:not\(\[data-appearance\]\)/);
+});
+
 test("GET /app/runtime.js serves the renderer module", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   assert.match(res.headers?.["content-type"] ?? "", /javascript/);
@@ -103,6 +117,24 @@ test("GET /app/runtime.js serves the renderer module", async () => {
   assert.match(res.body ?? "", /new URL\("\.\.\/", import\.meta\.url\)/);
   assert.match(res.body ?? "", /function apiUrl\(u\)/);
 });
+
+test("the renderer bridges the console theme over postMessage", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Announces readiness to the framing console (same-origin, posture A).
+  assert.match(js, /postMessage\(\{ type: "nano-app-ready" \}, window\.location\.origin\)/);
+  // Only trusts the framing parent, and only accepts nano-theme messages.
+  assert.match(js, /ev\.source === window\.parent/);
+  // Same-origin posture A: a cross-origin framer is rejected before applyTheme.
+  assert.match(js, /ev\.origin === window\.location\.origin/);
+  assert.match(js, /msg\.type !== "nano-theme"/);
+  // Mirrors the console appearance + lays --nano-* tokens onto :root; ignores
+  // any property outside the shared token namespace.
+  assert.match(js, /el\.dataset\.appearance = msg\.appearance/);
+  assert.match(js, /k\.startsWith\("--nano-"\)/);
+  assert.match(js, /el\.style\.setProperty\(k, v\)/);
+});
+
 
 test("renderer preserves grid row-detail expansion across refreshes", async () => {
   // Regression: the 5s poll rebuilds the whole tbody, which used to collapse an open

@@ -165,3 +165,17 @@ test("installExecStore is idempotent — the first install wins", async () => {
     });
   });
 });
+
+test("installExecStore can install after an incapable host returns no store", async () => {
+  __resetExecStoreForTests();
+  await withSource(async (host, db) => {
+    void db;
+    installExecStore(() => undefined);
+    assert.equal(currentJobContext(), undefined);
+
+    installExecStore(() => host.createAsyncStore?.<JobExecContext>());
+    runInJobContext({ instanceKey: "inst-3" }, () => {
+      assert.equal(currentJobContext()?.instanceKey, "inst-3");
+    });
+  });
+});

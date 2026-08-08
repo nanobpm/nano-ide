@@ -24,19 +24,18 @@ export interface JobExecContext {
 }
 
 let store: AsyncStore<JobExecContext> | undefined;
-let installed = false;
 
 /**
- * Install the host-backed ambient store ONCE per process. Idempotent — the first installation
+ * Install the host-backed ambient store once per process. Idempotent — the first store created
  * wins: every Node/Deno store is an equivalent `AsyncLocalStorage` instance, and a process that
  * hosts several apps shares one async store safely (values are keyed by async execution context,
  * not by app). A `factory` that returns undefined (a host without the capability) leaves capture
- * disabled.
+ * disabled, but a later capable host may still install the process store.
  */
 export function installExecStore(factory: () => AsyncStore<JobExecContext> | undefined): void {
-  if (installed) return;
-  installed = true;
-  store = factory();
+  if (store) return;
+  const next = factory();
+  if (next) store = next;
 }
 
 /** Run `fn` with `ctx` as the ambient job context. A transparent pass-through when no store is
@@ -54,5 +53,4 @@ export function currentJobContext(): JobExecContext | undefined {
 /** Test seam: drop the installed store so a subsequent {@link installExecStore} re-installs. */
 export function __resetExecStoreForTests(): void {
   store = undefined;
-  installed = false;
 }

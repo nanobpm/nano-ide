@@ -134,7 +134,8 @@ export class Table<T extends object = Row> {
     }
     if (this.#onInsert) {
       // Provenance capture is strictly observational: never let it break the app insert, which
-      // has already committed above. The recorder is expected not to throw, but guard anyway.
+      // executed successfully above. If this insert runs inside a transaction, commit/rollback
+      // semantics still belong to that surrounding transaction.
       try {
         this.#onInsert(this.name, r.lastInsertId);
       } catch {

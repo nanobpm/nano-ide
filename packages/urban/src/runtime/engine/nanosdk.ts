@@ -300,9 +300,9 @@ export class SdkEngineClient implements EngineClient {
           elementId: job.elementId,
           variables: job.variables ?? {},
         };
+        let out: Record<string, unknown> | void;
         try {
-          const out = await handler(engineJob);
-          return await job.complete(out ?? {});
+          out = await handler(engineJob);
         } catch (err) {
           // A handler-raised BPMN error is a modelled, non-retryable outcome:
           // report it as a BPMN error (routed to an error boundary/event) rather
@@ -330,15 +330,47 @@ export class SdkEngineClient implements EngineClient {
             }
           }
           const message = err instanceof Error ? err.message : String(err);
-          this.log("error", `handler ${jobType} threw`, { err: message });
+          this.log("error", `handler ${jobType} threw`, {
+            err: message,
+            jobKey: engineJob.jobKey,
+            processInstanceKey: engineJob.processInstanceKey,
+            elementId: engineJob.elementId,
+          });
           try {
-            // Best-effort failure report; the engine redelivers after the lock
-            // times out (at-least-once → handlers must be idempotent). Await +
-            // swallow so a rejected `fail` cannot escape as an unhandled rejection.
-            return await job.fail({ errorMessage: message.slice(0, 500), retries: 0 });
+            // A generic handler failure omits the retry count so the SDK decrements the job's
+            // remaining retries (`job.retries - 1`): a transient failure (e.g. a fleeting store
+            // error) self-heals on redelivery and only parks as an incident once the budget is
+            // exhausted. A `BpmnError` reaching here (no `job.error()` transport, or the error
+            // report itself threw) is the exception: it is a modelled, DETERMINISTIC outcome, so
+            // retrying would re-throw the same error and burn the budget for nothing — pin
+            // `retries: 0` to keep it non-retryable. Await + swallow so a rejected `fail` cannot
+            // escape as an unhandled rejection.
+            const body: { errorMessage: string; retries?: number } = {
+              errorMessage: message.slice(0, 500),
+            };
+            if (isBpmnError(err)) body.retries = 0;
+            return await job.fail(body);
           } catch {
             return undefined;
           }
+        }
+        // The handler resolved: its work is done. Reporting that result to the engine
+        // (`complete`) is a SEPARATE concern — a failure here is a transport/engine problem
+        // (e.g. a transient store error), NOT a handler bug. Failing it (even with a decrementing
+        // retry) would burn the job's retry budget for a completion we can't confirm didn't land.
+        // Instead, log and leave the job locked so the engine redelivers it on lock timeout;
+        // handlers are idempotent (at-least-once), so a redelivery re-completes cleanly.
+        try {
+          return await job.complete(out ?? {});
+        } catch (completeErr) {
+          const message = completeErr instanceof Error ? completeErr.message : String(completeErr);
+          this.log("error", `complete ${jobType} failed; leaving job for engine redelivery`, {
+            err: message,
+            jobKey: engineJob.jobKey,
+            processInstanceKey: engineJob.processInstanceKey,
+            elementId: engineJob.elementId,
+          });
+          return undefined;
         }
       },
     });

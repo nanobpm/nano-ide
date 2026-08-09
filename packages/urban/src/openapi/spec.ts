@@ -164,18 +164,22 @@ function firstJsonSchema(
   if (!content) return undefined;
   const pick = (media: unknown): OpenApiSchema | undefined =>
     isRecord(media) && isSchema(media.schema) ? media.schema : undefined;
-  const json = pick(content["application/json"]);
-  if (json) return json;
-  for (const media of Object.values(content)) {
-    const s = pick(media);
-    if (s) return s;
+  // JSON-only: the runtime always JSON.parses the body and responds application/json, so derive
+  // types/validation only from JSON media types (application/json, its charset variants, and any
+  // `+json` structured suffix). A non-JSON media type is ignored rather than typed as if JSON.
+  for (const [type, media] of Object.entries(content)) {
+    const base = type.split(";", 1)[0].trim().toLowerCase();
+    if (base === "application/json" || base.endsWith("+json")) {
+      const s = pick(media);
+      if (s) return s;
+    }
   }
   return undefined;
 }
 
 /** Walk the document's paths and return every operation that carries an operationId, in a stable
- *  (path, method) order. Operations without an operationId are skipped here; the runtime mount and
- *  `urban check` report them as errors — this keeps the pure collector total. */
+ *  (path, method) order. Operations without an operationId are skipped here; the runtime mount logs
+ *  them at `warn` and skips them too — this keeps the pure collector total. */
 export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
   const out: OperationInfo[] = [];
   const paths = doc.paths ?? {};
@@ -360,11 +364,22 @@ export function validateValue(
   }
 
   if ((schema.type === "number" || schema.type === "integer") && typeof value === "number") {
-    if (schema.minimum !== undefined && value < schema.minimum) {
-      issues.push({ path: at, message: `less than minimum ${schema.minimum}` });
+    // OpenAPI 3.0 uses the boolean form (`exclusiveMinimum: true` makes `minimum` exclusive);
+    // JSON Schema 2020-12 (OpenAPI 3.1) uses the numeric form (`exclusiveMinimum: <number>`).
+    // Support both so specs in either dialect are validated, not silently under-checked.
+    const minExclusive = schema.exclusiveMinimum === true;
+    const maxExclusive = schema.exclusiveMaximum === true;
+    if (schema.minimum !== undefined && (minExclusive ? value <= schema.minimum : value < schema.minimum)) {
+      issues.push({
+        path: at,
+        message: minExclusive ? `must be > ${schema.minimum}` : `less than minimum ${schema.minimum}`,
+      });
     }
-    if (schema.maximum !== undefined && value > schema.maximum) {
-      issues.push({ path: at, message: `greater than maximum ${schema.maximum}` });
+    if (schema.maximum !== undefined && (maxExclusive ? value >= schema.maximum : value > schema.maximum)) {
+      issues.push({
+        path: at,
+        message: maxExclusive ? `must be < ${schema.maximum}` : `greater than maximum ${schema.maximum}`,
+      });
     }
     if (typeof schema.exclusiveMinimum === "number" && value <= schema.exclusiveMinimum) {
       issues.push({ path: at, message: `must be > ${schema.exclusiveMinimum}` });

@@ -135,3 +135,15 @@ test("a typeless object schema rejects non-object values (42, [])", () => {
   assert.equal(validateValue(doc, schema, [], "body").length, 1);
   assert.equal(validateValue(doc, schema, { id: "x" }, "body").length, 0);
 });
+
+test("validateValue supports OpenAPI 3.0 boolean exclusiveMinimum/Maximum and 3.1 numeric form", () => {
+  // 3.0 boolean form: exclusiveMinimum: true makes `minimum` exclusive
+  assert.equal(validateValue(doc, { type: "integer", minimum: 1, exclusiveMinimum: true }, 1).length, 1);
+  assert.equal(validateValue(doc, { type: "integer", minimum: 1, exclusiveMinimum: true }, 2).length, 0);
+  assert.equal(validateValue(doc, { type: "integer", maximum: 10, exclusiveMaximum: true }, 10).length, 1);
+  // inclusive by default
+  assert.equal(validateValue(doc, { type: "integer", minimum: 1 }, 1).length, 0);
+  // 3.1 numeric form still works
+  assert.equal(validateValue(doc, { type: "integer", exclusiveMinimum: 1 }, 1).length, 1);
+  assert.equal(validateValue(doc, { type: "integer", exclusiveMinimum: 1 }, 2).length, 0);
+});

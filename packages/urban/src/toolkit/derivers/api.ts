@@ -143,7 +143,13 @@ export function emitApiBindings(doc: OpenApiDoc): string {
   const opDecls = ops
     .map((op) => {
       const stem = typeStem(op.operationId);
-      const bodyType = op.requestBodySchema ? schemaToTs(op.requestBodySchema) : "undefined";
+      // With a schema → the typed body. Required but no JSON schema → `unknown` (a body IS
+      // required at runtime, just of an unknown shape). Otherwise (optional, absent) → `undefined`.
+      const bodyType = op.requestBodySchema
+        ? schemaToTs(op.requestBodySchema)
+        : op.requestBodyRequired
+          ? "unknown"
+          : "undefined";
       // An optional (or absent) request body is passed to the delegate as `undefined` at runtime,
       // so mark it optional in the type rather than forcing handlers to treat it as always-present.
       const bodyOpt = op.requestBodyRequired ? "" : "?";

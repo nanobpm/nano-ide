@@ -147,3 +147,44 @@ test("typed additionalProperties alongside declared props falls back to unknown 
     /\[key: string\]: number/,
   );
 });
+
+test("a required body with no JSON schema is typed `unknown`, not `undefined`", () => {
+  const mk = (required: boolean): OpenApiDoc => ({
+    openapi: "3.0.0",
+    paths: {
+      "/n": {
+        post: {
+          operationId: "op",
+          // requestBody with no parseable JSON schema (e.g. unsupported content)
+          requestBody: { required, content: { "text/plain": {} } },
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  assert.match(emitApiBindings(mk(true)), /\n {2}body: unknown;/); // required → body IS present
+  assert.match(emitApiBindings(mk(false)), /body\?: undefined;/); // optional/absent
+});
+
+test("request body types derive only from JSON media types (JSON-only surface)", () => {
+  const doc2: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/n": {
+        post: {
+          operationId: "op",
+          requestBody: {
+            required: true,
+            content: {
+              "application/xml": { schema: { type: "string" } }, // ignored
+              "application/vnd.acme+json": { schema: { type: "object", properties: { a: { type: "string" } } } },
+            },
+          },
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(doc2);
+  assert.match(out, /body: \{ "a"\?: string/); // picked the +json schema, not the xml string
+});

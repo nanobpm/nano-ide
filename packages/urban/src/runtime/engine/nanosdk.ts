@@ -332,18 +332,20 @@ export class SdkEngineClient implements EngineClient {
           const message = err instanceof Error ? err.message : String(err);
           this.log("error", `handler ${jobType} threw`, { err: message });
           try {
-            // Best-effort failure report; the engine redelivers after the lock
-            // times out (at-least-once → handlers must be idempotent). Await +
-            // swallow so a rejected `fail` cannot escape as an unhandled rejection.
-            return await job.fail({ errorMessage: message.slice(0, 500), retries: 0 });
+            // Fail WITHOUT pinning a retry count: the SDK decrements the job's remaining
+            // retries (`job.retries - 1`), so a transient handler failure (e.g. a fleeting
+            // store error) self-heals on redelivery and only parks as an incident once the
+            // budget is exhausted. Await + swallow so a rejected `fail` cannot escape as an
+            // unhandled rejection.
+            return await job.fail({ errorMessage: message.slice(0, 500) });
           } catch {
             return undefined;
           }
         }
         // The handler resolved: its work is done. Reporting that result to the engine
         // (`complete`) is a SEPARATE concern — a failure here is a transport/engine problem
-        // (e.g. a transient store error), NOT a handler bug. Parking such a job at `retries: 0`
-        // would strand a job whose work actually SUCCEEDED, and no restart could recover it.
+        // (e.g. a transient store error), NOT a handler bug. Failing it (even with a decrementing
+        // retry) would burn the job's retry budget for a completion we can't confirm didn't land.
         // Instead, log and leave the job locked so the engine redelivers it on lock timeout;
         // handlers are idempotent (at-least-once), so a redelivery re-completes cleanly.
         try {

@@ -339,7 +339,11 @@ test("registerWorker fails the job when the handler throws", async () => {
   };
   await rec.dispatch(job);
   assert.equal(failBody?.errorMessage, "boom");
-  assert.equal(failBody?.retries, 0);
+  // No retry count is pinned: the SDK decrements the job's remaining retries
+  // (`job.retries - 1`), so a transient handler failure self-heals on redelivery and
+  // only parks as an incident once the budget is exhausted.
+  assert.equal(failBody?.retries, undefined);
+  assert.equal("retries" in (failBody ?? {}), false);
 });
 
 test("registerWorker leaves a job for redelivery when complete() fails (transport error, not a handler bug)", async () => {

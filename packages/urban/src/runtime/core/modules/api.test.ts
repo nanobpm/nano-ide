@@ -386,3 +386,26 @@ test("an op declaring no requestBody gets body:undefined at runtime (matches der
   assert.equal(res.status, 200);
   assert.equal(seenBody, undefined);
 });
+
+test("readApiBinding trims whitespace on base/dir/spec so benign formatting can't break resolution", async () => {
+  let got: Record<string, string> | undefined;
+  const { router, imported } = build(
+    { spec: "  openapi.json  ", base: "  app/api  ", dir: "  operations  " },
+    { "/app/operations/getInvoice": { default: (i: { params: Record<string, string> }) => { got = i.params; return { body: { ok: true } }; } } },
+  );
+  const res = await router(req("GET", "/app/api/invoices/42"));
+  assert.equal(res.status, 200);
+  assert.deepEqual(got, { id: "42" });
+  // dir was trimmed → the delegate resolved at the clean path, not "operations  /getInvoice".
+  assert.ok(imported.includes("/app/operations/getInvoice"));
+});
+
+test("loadModule strips a trailing backslash from api.dir (Windows-style path)", async () => {
+  const { router, imported } = build(
+    { spec: "openapi.json", dir: "operations\\" },
+    { "/app/operations/getInvoice": { default: () => ({ body: { ok: true } }) } },
+  );
+  const res = await router(req("GET", "/app/api/invoices/42"));
+  assert.equal(res.status, 200);
+  assert.ok(imported.includes("/app/operations/getInvoice"));
+});

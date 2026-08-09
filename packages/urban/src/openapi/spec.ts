@@ -216,8 +216,8 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
   return out;
 }
 
-/** Every operationId declared on an operation whose operationId is missing — the mount + check
- *  surface these as fail-closed errors (ADR 0027 §4). Returns "method path" pointers. */
+/** "method path" pointers for every operation that declares no `operationId`. Such operations are
+ *  unroutable (no delegate to bind), so the runtime mount logs them at `warn` and skips them. */
 export function operationsWithoutId(doc: OpenApiDoc): string[] {
   const missing: string[] = [];
   const paths = doc.paths ?? {};
@@ -233,6 +233,21 @@ export function operationsWithoutId(doc: OpenApiDoc): string[] {
     }
   }
   return missing;
+}
+
+/** "METHOD path {param}" pointers for every path-template parameter that no declared `in: "path"`
+ *  parameter covers. Such params are still captured and passed to the delegate at runtime, but are
+ *  neither typed (the deriver only emits declared params) nor validated — a type/runtime drift the
+ *  runtime mount surfaces at `warn`. */
+export function undeclaredPathParams(doc: OpenApiDoc): string[] {
+  const out: string[] = [];
+  for (const op of collectOperations(doc)) {
+    const declared = new Set(op.parameters.filter((p) => p.in === "path").map((p) => p.name));
+    for (const m of op.path.matchAll(/\{([^}]+)\}/g)) {
+      if (!declared.has(m[1])) out.push(`${op.method.toUpperCase()} ${op.path} {${m[1]}}`);
+    }
+  }
+  return out;
 }
 
 function normalizeParameters(raw: unknown[]): OpenApiParameter[] {
@@ -358,6 +373,22 @@ export function validateValue(
   }
   if (schema.const !== undefined && !deepEqual(schema.const, value)) {
     issues.push({ path: at, message: `must equal ${JSON.stringify(schema.const)}` });
+  }
+
+  // Composition keywords — kept in lockstep with schemaToTs, which emits `allOf` as an intersection
+  // and `anyOf`/`oneOf` as unions. Runs before the `type` early-return since a composed schema may
+  // omit a top-level `type` and carry it on the sub-schemas instead.
+  if (schema.allOf) {
+    for (const sub of schema.allOf) issues.push(...validateValue(doc, sub, value, path));
+  }
+  if (schema.anyOf && !schema.anyOf.some((sub) => validateValue(doc, sub, value, path).length === 0)) {
+    issues.push({ path: at, message: "does not match any schema in anyOf" });
+  }
+  if (schema.oneOf) {
+    const matched = schema.oneOf.filter((sub) => validateValue(doc, sub, value, path).length === 0).length;
+    if (matched !== 1) {
+      issues.push({ path: at, message: `must match exactly one schema in oneOf (matched ${matched})` });
+    }
   }
 
   if (schema.type && !matchesType(schema.type, value)) {

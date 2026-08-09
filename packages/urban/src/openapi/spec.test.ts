@@ -4,10 +4,12 @@ import {
   collectOperations,
   isObjectSchema,
   type OpenApiDoc,
+  type OpenApiSchema,
   operationsWithoutId,
   parseSpec,
   resolveSchema,
   toRouteMatcher,
+  undeclaredPathParams,
   validateValue,
 } from "./spec.ts";
 
@@ -169,4 +171,39 @@ test("toRouteMatcher escapes RegExp metacharacters in the base (literal path pre
   const { pattern: p2 } = toRouteMatcher("/v1.0", "/ping");
   assert.equal(p2.test("/v1.0/ping"), true);
   assert.equal(p2.test("/v1x0/ping"), false);
+});
+
+test("validateValue enforces allOf (intersection), anyOf/oneOf (union) — matching schemaToTs", () => {
+  // allOf: value must satisfy every subschema (intersection).
+  const all: OpenApiSchema = { allOf: [{ type: "object", properties: { a: { type: "string" } }, required: ["a"] }, { type: "object", properties: { b: { type: "integer" } }, required: ["b"] }] };
+  assert.equal(validateValue(doc, all, { a: "x", b: 1 }).length, 0);
+  assert.ok(validateValue(doc, all, { a: "x" }).length > 0); // missing b
+  // anyOf: at least one subschema must match.
+  const any: OpenApiSchema = { anyOf: [{ type: "string" }, { type: "integer" }] };
+  assert.equal(validateValue(doc, any, "x").length, 0);
+  assert.equal(validateValue(doc, any, 5).length, 0);
+  assert.ok(validateValue(doc, any, true).length > 0);
+  // oneOf: exactly one subschema must match.
+  const one: OpenApiSchema = { oneOf: [{ type: "integer" }, { type: "integer", minimum: 10 }] };
+  assert.equal(validateValue(doc, one, 5).length, 0); // integer but <10 → matches only the first
+  assert.ok(validateValue(doc, one, 20).length > 0); // matches BOTH → not exactly one
+  assert.ok(validateValue(doc, one, "x").length > 0); // matches NEITHER
+});
+
+test("undeclaredPathParams flags path-template params with no declared parameter", () => {
+  const drift: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/users/{userId}/posts/{postId}": {
+        get: {
+          operationId: "getUserPost",
+          parameters: [{ name: "userId", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  assert.deepEqual(undeclaredPathParams(drift), ["GET /users/{userId}/posts/{postId} {postId}"]);
+  // A fully-declared spec reports nothing.
+  assert.deepEqual(undeclaredPathParams(doc), []);
 });

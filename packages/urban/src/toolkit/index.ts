@@ -117,6 +117,7 @@ export {
   refName,
   resolveSchema,
   toRouteMatcher,
+  undeclaredPathParams,
   validateValue,
 } from "../openapi/spec.ts";
 export type {

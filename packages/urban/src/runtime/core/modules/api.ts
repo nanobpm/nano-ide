@@ -26,6 +26,7 @@ import {
   parseSpec,
   resolveSchema,
   toRouteMatcher,
+  undeclaredPathParams,
   validateValue,
   type ValidationIssue,
 } from "../../../openapi/spec.ts";
@@ -104,15 +105,16 @@ function readApiBinding(manifest: unknown): ApiBinding | undefined {
   const raw = manifest && typeof manifest === "object" ? Reflect.get(manifest, "api") : undefined;
   if (!raw || typeof raw !== "object") return undefined;
   const spec = Reflect.get(raw, "spec");
-  if (typeof spec !== "string" || spec.length === 0) return undefined;
+  if (typeof spec !== "string" || spec.trim().length === 0) return undefined;
   const dir = Reflect.get(raw, "dir");
   const base = Reflect.get(raw, "base");
   const validateResponses = Reflect.get(raw, "validateResponses");
   const eject = Reflect.get(raw, "eject");
+  // Trim benign manifest whitespace so it can't produce hard-to-diagnose path/import failures.
   return {
-    spec,
-    dir: typeof dir === "string" && dir.trim().length > 0 ? dir : undefined,
-    base: typeof base === "string" ? base : undefined,
+    spec: spec.trim(),
+    dir: typeof dir === "string" && dir.trim().length > 0 ? dir.trim() : undefined,
+    base: typeof base === "string" && base.trim().length > 0 ? base.trim() : undefined,
     validateResponses:
       validateResponses === "dev" || validateResponses === "always" || validateResponses === "never"
         ? validateResponses
@@ -186,7 +188,7 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   // Lazily import + cache each delegate module, mirroring mountActions.
   const moduleCache = new Map<string, Promise<Record<string, unknown>>>();
   const loadModule = (operationId: string): Promise<Record<string, unknown>> => {
-    const key = resolveAppPath(ctx.root, `${dir.replace(/\/+$/, "")}/${operationId}`);
+    const key = resolveAppPath(ctx.root, `${dir.replace(/[/\\]+$/, "")}/${operationId}`);
     let pending = moduleCache.get(key);
     if (!pending) {
       pending = ctx.host.importModule(key).catch((err) => {
@@ -209,6 +211,14 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
             ctx.host.log("warn", "OpenAPI operations without operationId are skipped (ADR 0058)", {
               missing,
             });
+          }
+          const undeclared = undeclaredPathParams(d);
+          if (undeclared.length > 0) {
+            ctx.host.log(
+              "warn",
+              "OpenAPI path-template params are not declared as parameters — captured at runtime but neither typed nor validated (ADR 0058)",
+              { undeclared },
+            );
           }
           return collectOperations(d).map((op) => {
             const { pattern, paramNames } = toRouteMatcher(base, op.path);

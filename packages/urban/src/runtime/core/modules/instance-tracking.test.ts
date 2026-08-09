@@ -314,7 +314,26 @@ test("clamps a pollMs beyond setTimeout's 32-bit range instead of firing immedia
   await h.close();
 });
 
-/** Set the bindings on the harness manifest and mount the reconciler with the fake scheduler. */
+// A binding mounted without validation (or with a hand-built binding) must not become a
+// 0-delay hot loop when pollMs is non-positive/NaN — it falls back to the default interval.
+for (const bad of [0, -1000, Number.NaN]) {
+  test(`falls back to the default interval for a non-positive/NaN pollMs (${bad})`, async () => {
+    const { engine, queries } = fakeEngine({ pi1: "ACTIVE" });
+    const h = await withHarness(engine, PLANS_DDL, async (t) => {
+      await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+    });
+    const sched = fakeScheduler();
+    const handle = mount(h, [planBinding({ pollMs: bad })], sched);
+    await sched.advance(DEFAULT_INSTANCE_TRACKING_POLL_MS - 1);
+    assert.equal(queries.length, 0); // did NOT hot-loop at ~0 …
+    await sched.advance(1);
+    assert.equal(queries.length, 1); // … it fired at the default interval instead
+    await handle.stop();
+    await h.close();
+  });
+}
+
+
 function mount(h: Harness, bindings: InstanceTracking[], sched: SchedulerDeps) {
   h.api.manifest.instanceTracking = bindings;
   return mountInstanceTracking(

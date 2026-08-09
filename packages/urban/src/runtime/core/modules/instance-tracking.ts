@@ -104,7 +104,14 @@ export function mountInstanceTracking(
   let stopped = false;
 
   for (const binding of bindings) {
-    const pollMs = binding.pollMs ?? DEFAULT_INSTANCE_TRACKING_POLL_MS;
+    // `pollMs` feeds a self-rescheduling timer, so a non-number/NaN/zero/negative value would
+    // clamp to a 0-delay hot loop. `??` only guards null/undefined; sanitize to a finite positive
+    // number and otherwise fall back to the default. (Manifest validation rejects bad values up
+    // front; this is belt-and-suspenders for a binding mounted without validation.)
+    const rawPoll = binding.pollMs;
+    const pollMs = typeof rawPoll === "number" && Number.isFinite(rawPoll) && rawPoll > 0
+      ? rawPoll
+      : DEFAULT_INSTANCE_TRACKING_POLL_MS;
     // A single setTimeout delay overflows its 32-bit signed range (~24.8 days) and fires
     // immediately — which for a self-rescheduling poll would become a hot loop. Clamp through
     // the one shared constant the cron trigger loop uses (derive-don't-duplicate).

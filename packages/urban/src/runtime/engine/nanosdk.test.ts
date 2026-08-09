@@ -410,14 +410,14 @@ test("registerWorker falls back to fail() for a BpmnError when the SDK has no er
     throw new BpmnError("NOT_FOUND", "no such record");
   });
   const rec = client.workers[0];
-  let failBody: { errorMessage: string } | undefined;
+  let failBody: { errorMessage: string; retries?: number } | undefined;
   const job: NanoSdkActivatedJob = {
     jobKey: "j1",
     variables: {},
     async complete() {
       throw new Error("should not complete");
     },
-    async fail(body: { errorMessage: string }) {
+    async fail(body: { errorMessage: string; retries?: number }) {
       failBody = body;
       return "failed";
     },
@@ -425,6 +425,9 @@ test("registerWorker falls back to fail() for a BpmnError when the SDK has no er
   };
   await rec.dispatch(job);
   assert.equal(failBody?.errorMessage, "no such record");
+  // A BpmnError is a modelled, deterministic outcome: pin retries:0 so it does NOT consume the
+  // retry budget (unlike a generic handler failure, which omits retries to self-heal).
+  assert.equal(failBody?.retries, 0);
 });
 
 test("registerWorker falls back to fail() when the BPMN error report itself throws", async () => {
@@ -434,7 +437,7 @@ test("registerWorker falls back to fail() when the BPMN error report itself thro
     throw new BpmnError("NOT_FOUND", "no such record");
   });
   const rec = client.workers[0];
-  let failBody: { errorMessage: string } | undefined;
+  let failBody: { errorMessage: string; retries?: number } | undefined;
   const job: NanoSdkActivatedJob = {
     jobKey: "j1",
     variables: {},
@@ -444,7 +447,7 @@ test("registerWorker falls back to fail() when the BPMN error report itself thro
     async error() {
       throw new Error("transport down");
     },
-    async fail(body: { errorMessage: string }) {
+    async fail(body: { errorMessage: string; retries?: number }) {
       failBody = body;
       return "failed";
     },
@@ -452,6 +455,9 @@ test("registerWorker falls back to fail() when the BPMN error report itself thro
   await rec.dispatch(job);
   // The job must still be acknowledged via fail() rather than silently dropped.
   assert.equal(failBody?.errorMessage, "no such record");
+  // A BpmnError is a modelled, deterministic outcome: pin retries:0 so it does NOT consume the
+  // retry budget (unlike a generic handler failure, which omits retries to self-heal).
+  assert.equal(failBody?.retries, 0);
 });
 
 test("close stops every worker and closes the SDK client", async () => {

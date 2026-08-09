@@ -337,12 +337,19 @@ export class SdkEngineClient implements EngineClient {
             elementId: engineJob.elementId,
           });
           try {
-            // Fail WITHOUT pinning a retry count: the SDK decrements the job's remaining
-            // retries (`job.retries - 1`), so a transient handler failure (e.g. a fleeting
-            // store error) self-heals on redelivery and only parks as an incident once the
-            // budget is exhausted. Await + swallow so a rejected `fail` cannot escape as an
-            // unhandled rejection.
-            return await job.fail({ errorMessage: message.slice(0, 500) });
+            // A generic handler failure omits the retry count so the SDK decrements the job's
+            // remaining retries (`job.retries - 1`): a transient failure (e.g. a fleeting store
+            // error) self-heals on redelivery and only parks as an incident once the budget is
+            // exhausted. A `BpmnError` reaching here (no `job.error()` transport, or the error
+            // report itself threw) is the exception: it is a modelled, DETERMINISTIC outcome, so
+            // retrying would re-throw the same error and burn the budget for nothing — pin
+            // `retries: 0` to keep it non-retryable. Await + swallow so a rejected `fail` cannot
+            // escape as an unhandled rejection.
+            const body: { errorMessage: string; retries?: number } = {
+              errorMessage: message.slice(0, 500),
+            };
+            if (isBpmnError(err)) body.retries = 0;
+            return await job.fail(body);
           } catch {
             return undefined;
           }

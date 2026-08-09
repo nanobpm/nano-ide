@@ -19,6 +19,7 @@ import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage, isRecord } from "../guards.ts";
 import type { EngineClient } from "../host.ts";
 import { html, json, type Route } from "../router.ts";
+import { cancelInstanceReconciling, type CancelInstanceResult } from "./cancel.ts";
 import { quoteIdent } from "./gateway.ts";
 
 /** The subset of the datasource gateway the page runtime needs. */
@@ -49,6 +50,13 @@ export interface PagesDeps {
    * Optional; when absent the index is empty. Injectable for tests.
    */
   listPages?(): Promise<string[]>;
+  /**
+   * Cancel a process instance honestly: terminate it, verify it is actually gone, and reconcile
+   * any `instanceTracking` row bound to its key. Injected by `mountPages` (bound to the app's
+   * engine, datasource, and instanceTracking bindings). When absent, the `/app/actions/cancel`
+   * route falls back to a bare `engine.cancelInstance` (used by tests that inject no cancel dep).
+   */
+  cancel?(processInstanceKey: string): Promise<CancelInstanceResult>;
 }
 
 /** A JavaScript-body response (the renderer module served at /app/runtime.js). */
@@ -70,7 +78,7 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   const rowLimitRaw = opts.rowLimit ?? 200;
   const rowLimit = Number.isFinite(rowLimitRaw) ? Math.max(0, Math.floor(rowLimitRaw)) : 200;
   const sourceName = opts.sourceName ?? "app";
-  const { db, engine, readPage, listPages } = deps;
+  const { db, engine, readPage, listPages, cancel } = deps;
 
   // The table-name whitelist is memoised: an Urban app runs its migrations at boot
   // (before serving), so the schema is stable for the process lifetime, and the renderer
@@ -285,6 +293,18 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
         return json({ error: "body must be JSON" }, 400);
       }
       if (key === undefined || key === "") return json({ error: "processInstanceKey is required" }, 400);
+      // The reconcile-aware primitive verifies the real post-cancel state and flips the tracked
+      // row immediately; a !ok result means the engine did NOT stop the instance, so surface 502.
+      if (cancel) {
+        try {
+          const result = await cancel(String(key));
+          return json(result, result.ok ? 200 : 502);
+        } catch (e) {
+          // Defensive: the primitive is designed not to throw, but if it ever does, mirror the
+          // fallback path's honest 502 rather than letting the request reject as a 500.
+          return json({ ok: false, processInstanceKey: String(key), error: errorMessage(e) }, 502);
+        }
+      }
       try {
         await engine.cancelInstance({ processInstanceKey: String(key) });
         return json({ ok: true });
@@ -354,9 +374,11 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
     sourceName: typeof decl.sourceName === "string" ? decl.sourceName : undefined,
   };
   const sourceName = opts.sourceName ?? "app";
+  const bindings = ctx.manifest.instanceTracking ?? [];
   const routes = createPagesRoutes(opts, {
     db: app.data.open(sourceName),
     engine: app.engine,
+    cancel: (key) => cancelInstanceReconciling(app, bindings, key),
     readPage: (p) => ctx.host.readTextFile(p),
     listPages: async () => {
       const dir = opts.pagesDir ?? "pages";

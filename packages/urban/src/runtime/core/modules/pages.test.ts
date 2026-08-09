@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { EngineClient, HttpRequest, HttpResponse } from "../host.ts";
 import { makeRouter } from "../router.ts";
-import { createPagesRoutes, type PagesDataSource } from "./pages.ts";
+import { createPagesRoutes, type PagesDataSource, type PagesDeps } from "./pages.ts";
 
 function req(
   method: string,
@@ -61,7 +61,7 @@ function fakeDb(overrides: Partial<PagesDataSource> = {}): PagesDataSource {
   };
 }
 
-function build(dbOverrides: Partial<PagesDataSource> = {}) {
+function build(dbOverrides: Partial<PagesDataSource> = {}, deps: Partial<PagesDeps> = {}) {
   const { engine, calls } = fakeEngine();
   const db = fakeDb(dbOverrides);
   const readPage = async (path: string) => {
@@ -74,6 +74,7 @@ function build(dbOverrides: Partial<PagesDataSource> = {}) {
     engine,
     readPage,
     listPages: async () => ["home", "epic"],
+    ...deps,
   });
   const router = makeRouter(routes);
   return { router, calls };
@@ -354,6 +355,49 @@ test("POST /app/actions/cancel cancels, 400 without a key", async () => {
   assert.deepEqual(calls.canceled, ["pi-9"]);
   const bad = await router(req("POST", "/app/actions/cancel", { body: {} }));
   assert.equal(bad.status, 400);
+});
+
+test("POST /app/actions/cancel uses the injected cancel primitive and returns its result", async () => {
+  const seen: string[] = [];
+  const cancel: PagesDeps["cancel"] = async (key) => {
+    seen.push(key);
+    return { ok: true, processInstanceKey: key, state: "TERMINATED", reconciled: 1 };
+  };
+  const { router } = build({}, { cancel });
+  const res = await router(req("POST", "/app/actions/cancel", { body: { processInstanceKey: "pi-7" } }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(seen, ["pi-7"]);
+  assert.deepEqual(JSON.parse(res.body ?? "{}"), {
+    ok: true,
+    processInstanceKey: "pi-7",
+    state: "TERMINATED",
+    reconciled: 1,
+  });
+});
+
+test("POST /app/actions/cancel surfaces a 502 when the cancel primitive reports failure", async () => {
+  const cancel: PagesDeps["cancel"] = async (key) => ({
+    ok: false,
+    processInstanceKey: key,
+    state: "ACTIVE",
+    reconciled: 0,
+    error: "engine rejected the cancellation",
+  });
+  const { router } = build({}, { cancel });
+  const res = await router(req("POST", "/app/actions/cancel", { body: { processInstanceKey: "pi-8" } }));
+  assert.equal(res.status, 502);
+  assert.equal(JSON.parse(res.body ?? "{}").ok, false);
+  assert.match(JSON.parse(res.body ?? "{}").error, /engine rejected/);
+});
+
+test("POST /app/actions/cancel maps a throwing cancel primitive to a 502", async () => {
+  const cancel: PagesDeps["cancel"] = async () => {
+    throw new Error("boom");
+  };
+  const { router } = build({}, { cancel });
+  const res = await router(req("POST", "/app/actions/cancel", { body: { processInstanceKey: "pi-x" } }));
+  assert.equal(res.status, 502);
+  assert.equal(JSON.parse(res.body ?? "{}").ok, false);
 });
 
 test("POST /app/actions/message publishes, 400 on missing fields", async () => {

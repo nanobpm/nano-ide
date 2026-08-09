@@ -40,9 +40,10 @@ async function reconcileOnce(
   // active status are candidates (a row already terminal is skipped); otherwise every row
   // is a candidate. Terminal rows are never re-touched, keeping the reconcile idempotent.
   let candidates: Row[];
-  if (binding.statusField && binding.activeStatuses && binding.activeStatuses.length > 0) {
+  const statusField = binding.statusField;
+  if (statusField && binding.activeStatuses && binding.activeStatuses.length > 0) {
     const perStatus = await Promise.all(
-      binding.activeStatuses.map((s) => table.find({ [binding.statusField as string]: s } as Partial<Row>)),
+      binding.activeStatuses.map((s): Promise<Row[]> => table.find({ [statusField]: s })),
     );
     candidates = perStatus.flat();
   } else {
@@ -68,7 +69,7 @@ async function reconcileOnce(
     state: "TERMINATED",
   });
 
-  const patch = binding.onTerminated.set as Partial<Row>;
+  const patch: Partial<Row> = binding.onTerminated.set;
   let reconciled = 0;
   for (const snap of snapshots) {
     if (snap.state !== "TERMINATED") continue; // defensive; we asked for TERMINATED only

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeHost } from "../../adapters/node.ts";
 import { makeGateway } from "./gateway.ts";
+import type { Table } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import type { AppApi } from "../context.ts";
 import type { EngineClient, ProcessInstanceSnapshot } from "../host.ts";
@@ -305,8 +306,9 @@ test("clamps a pollMs beyond setTimeout's 32-bit range instead of firing immedia
 
 /** Set the bindings on the harness manifest and mount the reconciler with the fake scheduler. */
 function mount(h: Harness, bindings: InstanceTracking[], sched: SchedulerDeps) {
-  (h.api.manifest as { instanceTracking?: InstanceTracking[] }).instanceTracking = bindings;
+  h.api.manifest.instanceTracking = bindings;
   return mountInstanceTracking(
+    // biome-ignore lint/plugin: RuntimeContext test double — mountInstanceTracking reads only manifest/engine/root; host is unused here.
     { manifest: h.api.manifest, host: {} as never, engine: h.api.engine, root: "." },
     h.api,
     sched,

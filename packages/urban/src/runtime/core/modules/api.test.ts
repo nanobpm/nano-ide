@@ -409,3 +409,37 @@ test("loadModule strips a trailing backslash from api.dir (Windows-style path)",
   assert.equal(res.status, 200);
   assert.ok(imported.includes("/app/operations/getInvoice"));
 });
+
+test("a static route is not shadowed by a templated one regardless of spec order", async () => {
+  // Lexicographically "/items/{id}" sorts before "/items/active"; specificity ordering must still
+  // route the static path to its own delegate.
+  const specText = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/items/{id}": { get: { operationId: "getItem", parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }], responses: { "200": {} } } },
+      "/items/active": { get: { operationId: "listActive", responses: { "200": {} } } },
+    },
+  });
+  const { router } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/operations/getItem": { default: () => ({ body: { which: "template" } }) },
+      "/app/operations/listActive": { default: () => ({ body: { which: "static" } }) },
+    },
+    specText,
+  );
+  const res = await router(req("GET", "/app/api/items/active"));
+  assert.equal(res.status, 200);
+  assert.equal(JSON.parse(res.body ?? "{}").which, "static");
+});
+
+test("an unsafe operationId never mounts (skipped) — a crafted spec can't import outside operations", async () => {
+  const specText = JSON.stringify({
+    openapi: "3.0.0",
+    paths: { "/x": { get: { operationId: "../../evil", responses: { "200": {} } } } },
+  });
+  const { router, imported } = build({ spec: "openapi.json" }, {}, specText);
+  const res = await router(req("GET", "/app/api/x"));
+  assert.equal(res.status, 404); // no route mounted for the skipped op
+  assert.equal(imported.some((p) => p.includes("evil")), false);
+});

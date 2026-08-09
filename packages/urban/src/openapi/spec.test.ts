@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import {
   collectOperations,
   isObjectSchema,
+  isSafeOperationId,
   type OpenApiDoc,
   type OpenApiSchema,
   operationsWithoutId,
+  operationsWithUnsafeId,
   parseSpec,
   resolveSchema,
   toRouteMatcher,
@@ -206,4 +208,22 @@ test("undeclaredPathParams flags path-template params with no declared parameter
   assert.deepEqual(undeclaredPathParams(drift), ["GET /users/{userId}/posts/{postId} {postId}"]);
   // A fully-declared spec reports nothing.
   assert.deepEqual(undeclaredPathParams(doc), []);
+});
+
+test("isSafeOperationId rejects path separators and traversal; collectOperations skips them", () => {
+  assert.equal(isSafeOperationId("getInvoice"), true);
+  assert.equal(isSafeOperationId("get.invoice-v2"), true);
+  assert.equal(isSafeOperationId("../secret"), false);
+  assert.equal(isSafeOperationId("a/b"), false);
+  assert.equal(isSafeOperationId("a\\b"), false);
+  assert.equal(isSafeOperationId(".."), false);
+  const evil: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/x": { get: { operationId: "../../etc/passwd", responses: { "200": {} } } },
+      "/y": { get: { operationId: "safeOp", responses: { "200": {} } } },
+    },
+  };
+  assert.deepEqual(collectOperations(evil).map((o) => o.operationId), ["safeOp"]);
+  assert.deepEqual(operationsWithUnsafeId(evil), ["GET /x (../../etc/passwd)"]);
 });

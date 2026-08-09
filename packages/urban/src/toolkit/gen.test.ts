@@ -165,3 +165,16 @@ test("the sweep never touches an authored (un-stamped) .bpmn", async () => {
   await runGen({ root: "/cf", io });
   assert.ok(io.files["/cf/processes/authored.bpmn"], "authored .bpmn must survive the sweep");
 });
+
+test("collectArtifacts trims api.spec whitespace so gen matches the runtime (no gen/runtime drift)", async () => {
+  const manifest = JSON.stringify({ id: "demo", data: { default: "app" }, api: { spec: "  openapi.json  " } });
+  const openapi = JSON.stringify({
+    openapi: "3.0.0",
+    paths: { "/ping": { get: { operationId: "ping", responses: { "200": {} } } } },
+  });
+  const io = memIO({ "/app/nano.app.json": manifest, "/app/openapi.json": openapi });
+  const res = await collectArtifacts({ root: "/app", io });
+  const paths = res.map((a) => a.path);
+  // The whitespace-padded spec path still resolved and derived the endpoint contracts.
+  assert.ok(paths.includes("nano-generated/api-io.d.ts"));
+});

@@ -19,10 +19,12 @@ import { json, normalizeRoutePath, type Route } from "../router.ts";
 import { resolveAppPath } from "./datasource.ts";
 import {
   collectOperations,
+  isSafeOperationId,
   type OpenApiDoc,
   type OpenApiSchema,
   type OperationInfo,
   operationsWithoutId,
+  operationsWithUnsafeId,
   parseSpec,
   resolveSchema,
   toRouteMatcher,
@@ -188,6 +190,11 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   // Lazily import + cache each delegate module, mirroring mountActions.
   const moduleCache = new Map<string, Promise<Record<string, unknown>>>();
   const loadModule = (operationId: string): Promise<Record<string, unknown>> => {
+    // Defense-in-depth at the import sink: collectOperations already skips unsafe ids, but never
+    // build an import path from an operationId that isn't a single safe segment.
+    if (!isSafeOperationId(operationId)) {
+      return Promise.reject(new Error(`unsafe operationId (not a single path segment): ${operationId}`));
+    }
     const key = resolveAppPath(ctx.root, `${dir.replace(/[/\\]+$/, "")}/${operationId}`);
     let pending = moduleCache.get(key);
     if (!pending) {
@@ -220,10 +227,28 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
               { undeclared },
             );
           }
-          return collectOperations(d).map((op) => {
+          const unsafe = operationsWithUnsafeId(d);
+          if (unsafe.length > 0) {
+            ctx.host.log(
+              "warn",
+              "OpenAPI operationIds that are not a safe path segment are skipped (ADR 0058)",
+              { unsafe },
+            );
+          }
+          const mounted = collectOperations(d).map((op) => {
             const { pattern, paramNames } = toRouteMatcher(base, op.path);
             return { op, pattern, paramNames };
           });
+          // Dispatch matches the first route in order, so sort most-specific first: fewer path-template
+          // params (a static segment beats a `{param}` capture), then longer path. This keeps a static
+          // route (e.g. /x/active) from being shadowed by a templated one (e.g. /x/{id}).
+          mounted.sort((a, b) => {
+            if (a.paramNames.length !== b.paramNames.length) {
+              return a.paramNames.length - b.paramNames.length;
+            }
+            return b.op.path.length - a.op.path.length;
+          });
+          return mounted;
         })
         .catch((e) => {
           opsPromise = undefined; // don't cache the rejection — let a later request retry (mirrors loadDoc)

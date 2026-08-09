@@ -146,9 +146,11 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
   }
 
   // 4. OpenAPI `api` binding → typed endpoint contracts (ADR 0058). Fail-closed: a declared spec
-  //    that is missing or malformed throws here so `urban gen`/`urban check` surfaces it.
-  if (!opts.modelsOnly && typeof manifest.api?.spec === "string" && manifest.api.spec.length > 0) {
-    const specText = await io.readText(join(root, manifest.api.spec));
+  //    that is missing or malformed throws here so `urban gen`/`urban check` surfaces it. Trim the
+  //    spec path so benign whitespace matches the runtime's readApiBinding (no gen/runtime drift).
+  const specRef = typeof manifest.api?.spec === "string" ? manifest.api.spec.trim() : "";
+  if (!opts.modelsOnly && specRef.length > 0) {
+    const specText = await io.readText(join(root, specRef));
     artifacts.push(...deriveApi(parseSpec(specText)));
   }
 

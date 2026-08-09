@@ -192,7 +192,7 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
       const opRaw = item[method];
       if (!isRecord(opRaw)) continue;
       const operationId = typeof opRaw.operationId === "string" ? opRaw.operationId : undefined;
-      if (!operationId) continue;
+      if (!operationId || !isSafeOperationId(operationId)) continue;
       const opParams = Array.isArray(opRaw.parameters) ? opRaw.parameters : [];
       const parameters = normalizeParameters([...pathParams, ...opParams]);
       const requestBody = isRecord(opRaw.requestBody) ? opRaw.requestBody : undefined;
@@ -245,6 +245,35 @@ export function undeclaredPathParams(doc: OpenApiDoc): string[] {
     const declared = new Set(op.parameters.filter((p) => p.in === "path").map((p) => p.name));
     for (const m of op.path.matchAll(/\{([^}]+)\}/g)) {
       if (!declared.has(m[1])) out.push(`${op.method.toUpperCase()} ${op.path} {${m[1]}}`);
+    }
+  }
+  return out;
+}
+
+/** An operationId names the delegate module file (`<dir>/<operationId>`), so it must be a single
+ *  safe path segment. Rejects separators and parent-dir traversal so a crafted spec can't import a
+ *  file outside the operations directory. Single source of truth for the rule (used by the pure
+ *  collector, the diagnostic collector, and the runtime import sink). */
+export function isSafeOperationId(id: string): boolean {
+  return id.length > 0 && !id.includes("/") && !id.includes("\\") && !id.includes("..") && id !== ".";
+}
+
+/** "METHOD path (operationId)" pointers for operations whose operationId is present but not a safe
+ *  path segment. collectOperations skips these (they never mount or drive an import); the runtime
+ *  surfaces them at `warn`. */
+export function operationsWithUnsafeId(doc: OpenApiDoc): string[] {
+  const out: string[] = [];
+  const paths = doc.paths ?? {};
+  for (const path of Object.keys(paths).sort()) {
+    const item = paths[path];
+    if (!isRecord(item)) continue;
+    for (const method of HTTP_METHODS) {
+      const opRaw = item[method];
+      if (!isRecord(opRaw)) continue;
+      const id = opRaw.operationId;
+      if (typeof id === "string" && id.length > 0 && !isSafeOperationId(id)) {
+        out.push(`${method.toUpperCase()} ${path} (${id})`);
+      }
     }
   }
   return out;

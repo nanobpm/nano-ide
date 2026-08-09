@@ -112,7 +112,9 @@ export {
 export {
   collectOperations,
   HTTP_METHODS,
+  isSafeOperationId,
   operationsWithoutId,
+  operationsWithUnsafeId,
   parseSpec,
   refName,
   resolveSchema,

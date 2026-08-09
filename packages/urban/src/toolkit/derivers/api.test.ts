@@ -208,3 +208,12 @@ test("emitApiBindings fails closed on component schema names that collapse to th
   };
   assert.throws(() => emitApiBindings(clash), /duplicate TypeScript type "FooBar"/);
 });
+
+test("apiDeriver is registered in the DERIVERS discovery registry", async () => {
+  const { DERIVERS, apiDeriver } = await import("../index.ts");
+  assert.ok(DERIVERS.includes(apiDeriver), "apiDeriver must be in DERIVERS");
+  assert.ok(DERIVERS.some((d) => d.id === "openapi->api-io"));
+  // Registry hygiene: no deriver is registered twice and every id is unique.
+  const ids = DERIVERS.map((d) => d.id);
+  assert.equal(new Set(ids).size, ids.length);
+});

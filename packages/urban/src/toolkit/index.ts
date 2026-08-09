@@ -136,7 +136,15 @@ import { domainDeriver } from "./derivers/domain.ts";
 import { workerIoDeriver } from "./derivers/worker-io.ts";
 import { metaDeriver } from "./derivers/meta.ts";
 import { messagesDeriver } from "./derivers/messages.ts";
-export const DERIVERS = [migrationsDeriver, domainDeriver, workerIoDeriver, metaDeriver, messagesDeriver] as const;
+import { apiDeriver } from "./derivers/api.ts";
+export const DERIVERS = [
+  migrationsDeriver,
+  domainDeriver,
+  workerIoDeriver,
+  metaDeriver,
+  messagesDeriver,
+  apiDeriver,
+] as const;
 
 // Gen orchestrator + IO
 export { collectArtifacts, runGen, joinPath, readModels, expandPattern, previewModels } from "./gen.ts";

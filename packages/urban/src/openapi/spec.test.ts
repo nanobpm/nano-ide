@@ -128,3 +128,10 @@ test("validateValue surfaces a malformed pattern as a controlled throw, not an o
     /invalid pattern/,
   );
 });
+
+test("a typeless object schema rejects non-object values (42, [])", () => {
+  const schema = { properties: { id: { type: "string" } }, required: ["id"] };
+  assert.equal(validateValue(doc, schema, 42, "body").length, 1);
+  assert.equal(validateValue(doc, schema, [], "body").length, 1);
+  assert.equal(validateValue(doc, schema, { id: "x" }, "body").length, 0);
+});

@@ -138,14 +138,17 @@ export function emitApiBindings(doc: OpenApiDoc): string {
   const opDecls = ops
     .map((op) => {
       const stem = typeStem(op.operationId);
-      const body = op.requestBodySchema ? schemaToTs(op.requestBodySchema) : "undefined";
+      const bodyType = op.requestBodySchema ? schemaToTs(op.requestBodySchema) : "undefined";
+      // An optional (or absent) request body is passed to the delegate as `undefined` at runtime,
+      // so mark it optional in the type rather than forcing handlers to treat it as always-present.
+      const bodyOpt = op.requestBodyRequired ? "" : "?";
       const resp = op.responseSchema ? schemaToTs(op.responseSchema) : "unknown";
       const summary = op.summary ? `/** ${op.summary.replace(/\*\//g, "*\\/")} */\n` : "";
       return (
         `${summary}export interface ${stem}Request {\n` +
         `  params: ${paramsTs(op, "path")};\n` +
         `  query: ${paramsTs(op, "query")};\n` +
-        `  body: ${body};\n` +
+        `  body${bodyOpt}: ${bodyType};\n` +
         `}\n` +
         `export type ${stem}Response = ${resp};`
       );

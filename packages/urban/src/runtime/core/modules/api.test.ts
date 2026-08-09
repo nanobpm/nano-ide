@@ -261,3 +261,15 @@ test("a malformed spec pattern surfaces as a controlled 500, not a crash", async
   assert.equal(res.status, 500);
   assert.match(JSON.parse(res.body!).error, /invalid pattern/);
 });
+
+test("an empty api.dir falls back to the default operations dir, not an absolute path", async () => {
+  let called = false;
+  const { router, imported } = build(
+    { spec: "openapi.json", dir: "" }, // misconfigured empty dir
+    { "/app/operations/getInvoice": { default: () => { called = true; return { body: { ok: true } }; } } },
+  );
+  const res = await router(req("GET", "/app/api/invoices/42"));
+  assert.equal(res.status, 200);
+  assert.equal(called, true);
+  assert.deepEqual(imported, ["/app/operations/getInvoice"]);
+});

@@ -388,7 +388,13 @@ export function validateValue(
     }
   }
 
-  if (isObjectSchema(schema) && isRecord(value)) {
+  if (isObjectSchema(schema)) {
+    if (!isRecord(value)) {
+      // A typeless object schema (properties/required imply object, but `type` is omitted) skips
+      // the type check above, so guard here — otherwise a non-object like `42` or `[]` would pass.
+      issues.push({ path: at, message: `expected object, got ${typeOfValue(value)}` });
+      return issues;
+    }
     for (const req of schema.required ?? []) {
       if (!(req in value)) issues.push({ path: `${path}/${req}`, message: "is required" });
     }

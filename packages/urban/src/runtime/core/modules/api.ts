@@ -111,7 +111,7 @@ function readApiBinding(manifest: unknown): ApiBinding | undefined {
   const eject = Reflect.get(raw, "eject");
   return {
     spec,
-    dir: typeof dir === "string" ? dir : undefined,
+    dir: typeof dir === "string" && dir.trim().length > 0 ? dir : undefined,
     base: typeof base === "string" ? base : undefined,
     validateResponses:
       validateResponses === "dev" || validateResponses === "always" || validateResponses === "never"
@@ -256,8 +256,8 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
       query[key] = all.length > 1 ? all : all[0];
     }
 
-    // Parse the JSON body (empty → {}). Invalid JSON is a 400 unless the op is ejected (then the
-    // delegate reads the raw request itself).
+    // Parse the JSON body (empty body → undefined). Invalid JSON is a 400 unless the op is ejected
+    // (then the delegate reads the raw request itself).
     const raw = await req.text();
     let body: unknown = {};
     let bodyParseFailed = false;

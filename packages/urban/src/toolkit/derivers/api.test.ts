@@ -106,3 +106,25 @@ test("required query params aren't undefined-widened; optional ones use the ? mo
   assert.doesNotMatch(out, /"q": string \| string\[\] \| undefined/); // not undefined-widened
   assert.match(out, /"page"\?: string \| string\[\]/); // optional → ? modifier
 });
+
+test("request body optionality follows requestBody.required (runtime passes undefined when absent)", () => {
+  const mk = (required: boolean): OpenApiDoc => ({
+    openapi: "3.0.0",
+    paths: {
+      "/n": {
+        post: {
+          operationId: "op",
+          requestBody: {
+            required,
+            content: { "application/json": { schema: { type: "object", properties: { text: { type: "string" } } } } },
+          },
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  assert.match(emitApiBindings(mk(false)), /body\?: \{/); // optional body → `?`
+  const req = emitApiBindings(mk(true));
+  assert.match(req, /\n {2}body: \{/); // required body → no `?`
+  assert.doesNotMatch(req, /body\?:/);
+});

@@ -497,20 +497,20 @@ export function validateValue(
       return issues;
     }
     for (const req of schema.required ?? []) {
-      if (!(req in value)) issues.push({ path: `${path}/${req}`, message: "is required" });
+      if (!Object.hasOwn(value, req)) issues.push({ path: `${path}/${req}`, message: "is required" });
     }
     const props = schema.properties ?? {};
     for (const [key, propSchema] of Object.entries(props)) {
-      if (key in value) issues.push(...validateValue(doc, propSchema, value[key], `${path}/${key}`));
+      if (Object.hasOwn(value, key)) issues.push(...validateValue(doc, propSchema, value[key], `${path}/${key}`));
     }
     const extra = schema.additionalProperties;
     if (extra === false) {
       for (const key of Object.keys(value)) {
-        if (!(key in props)) issues.push({ path: `${path}/${key}`, message: "is not an allowed property" });
+        if (!Object.hasOwn(props, key)) issues.push({ path: `${path}/${key}`, message: "is not an allowed property" });
       }
     } else if (isRecord(extra)) {
       for (const key of Object.keys(value)) {
-        if (!(key in props)) issues.push(...validateValue(doc, extra, value[key], `${path}/${key}`));
+        if (!Object.hasOwn(props, key)) issues.push(...validateValue(doc, extra, value[key], `${path}/${key}`));
       }
     }
   }

@@ -227,3 +227,14 @@ test("isSafeOperationId rejects path separators and traversal; collectOperations
   assert.deepEqual(collectOperations(evil).map((o) => o.operationId), ["safeOp"]);
   assert.deepEqual(operationsWithUnsafeId(evil), ["GET /x (../../etc/passwd)"]);
 });
+
+test("object validation uses own-property checks (prototype keys don't satisfy required or bypass additionalProperties)", () => {
+  // A prototype key must NOT satisfy `required` (own-property semantics).
+  const req = { type: "object", properties: { toString: { type: "string" } }, required: ["toString"] };
+  assert.equal(validateValue(doc, req, {}).length, 1); // `toString` inherited, not provided
+  assert.equal(validateValue(doc, req, { toString: "x" }).length, 0);
+  // A prototype-named key in the payload must be rejected under additionalProperties:false.
+  const closed = { type: "object", properties: { id: { type: "string" } }, additionalProperties: false };
+  const issues = validateValue(doc, closed, { id: "x", toString: "evil" });
+  assert.ok(issues.some((i) => i.message === "is not an allowed property"));
+});

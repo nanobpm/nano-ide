@@ -85,6 +85,16 @@ export { createPagesRoutes, mountPages } from "./core/modules/pages.ts";
 export type { PagesDataSource, PagesDeps, PagesHandle, PagesOptions } from "./core/modules/pages.ts";
 export { mountActions, resolveActionHandler } from "./core/modules/actions.ts";
 export type { ActionHandler, ActionRequest, ActionResult, ActionsHandle } from "./core/modules/actions.ts";
+export { defineOperation, mountApi, resolveOperationHandler } from "./core/modules/api.ts";
+export type {
+  ApiBinding,
+  ApiHandle,
+  DefaultContract,
+  OperationContract,
+  OperationHandler,
+  OperationInput,
+  OperationResult,
+} from "./core/modules/api.ts";
 export type { AppJobHandler } from "./core/modules/workers.ts";
 export { resolveHandler, sdkDecisionEvaluator } from "./core/modules/workers.ts";
 export {

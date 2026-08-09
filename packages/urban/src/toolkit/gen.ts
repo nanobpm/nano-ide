@@ -4,12 +4,14 @@
 // pure; all IO is confined here behind a tiny FS port so the same code runs on Node and Deno.
 
 import type { DerivedArtifact } from "./artifact.ts";
-import { sortArtifacts } from "./artifact.ts";
+import { isAbsolutePath, sortArtifacts } from "./artifact.ts";
 import { deriveMigrations, type ToolkitManifest } from "./derivers/migrations.ts";
 import { deriveDomain } from "./derivers/domain.ts";
 import { deriveWorkerBindings, type ModelSource } from "./derivers/worker-io.ts";
 import { deriveMeta } from "./derivers/meta.ts";
 import { deriveMessageBindings } from "./derivers/messages.ts";
+import { deriveApi } from "./derivers/api.ts";
+import { parseSpec } from "../openapi/spec.ts";
 import { deriveModels, type DerivedModels, type ModelError, MODEL_PROVENANCE } from "./models.ts";
 
 /** Minimal filesystem port. Node/Deno impls live in `fsio.ts`. */
@@ -56,9 +58,17 @@ export interface GenResult {
 }
 
 function join(root: string, rel: string): string {
-  // Trim either separator so callers may pass Windows-style paths; GenIO
-  // implementations accept forward slashes on all platforms.
-  return `${root.replace(/[/\\]+$/, "")}/${rel.replace(/^[/\\]+/, "")}`;
+  // Normalize Windows-style separators to forward slashes (GenIO uses forward slashes on all
+  // platforms — matching the runtime's resolveAppPath) and trim edge separators, so callers may
+  // pass either style without gen/runtime drift over where a file resolves.
+  const norm = (s: string): string => s.replace(/\\/g, "/");
+  // An absolute `rel` resolves to itself — never prefixed with `root` — mirroring the runtime's
+  // resolveAppPath (isAbsolutePath is the shared SoT in artifact.ts). Without this an absolute
+  // manifest path (e.g. "/abs/openapi.json") would be stripped to root-relative and gen would
+  // read/derive a different file than the runtime resolves. Trailing edge separators are still
+  // trimmed for stable, comparable artifact keys.
+  if (isAbsolutePath(rel)) return norm(rel).replace(/\/+$/, "");
+  return `${norm(root).replace(/\/+$/, "")}/${norm(rel).replace(/^\/+/, "")}`;
 }
 
 function dirOf(p: string): string {
@@ -112,6 +122,7 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
   const manifestPath = join(root, opts.manifestFile ?? "nano.app.json");
   const manifest: ToolkitManifest & {
     models?: { processes?: string[]; workflows?: string[] };
+    api?: { spec?: string };
   } = JSON.parse(await io.readText(manifestPath));
 
   const artifacts: DerivedArtifact[] = [];
@@ -140,6 +151,15 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
       artifacts.push(...deriveMeta(models));
       artifacts.push(...deriveMessageBindings(models, declaredTypeIds));
     }
+  }
+
+  // 4. OpenAPI `api` binding → typed endpoint contracts (ADR 0058). Fail-closed: a declared spec
+  //    that is missing or malformed throws here so `urban gen`/`urban check` surfaces it. Trim the
+  //    spec path so benign whitespace matches the runtime's readApiBinding (no gen/runtime drift).
+  const specRef = typeof manifest.api?.spec === "string" ? manifest.api.spec.trim() : "";
+  if (!opts.modelsOnly && specRef.length > 0) {
+    const specText = await io.readText(join(root, specRef));
+    artifacts.push(...deriveApi(parseSpec(specText)));
   }
 
   return { artifacts: sortArtifacts(artifacts), derived };

@@ -165,3 +165,42 @@ test("the sweep never touches an authored (un-stamped) .bpmn", async () => {
   await runGen({ root: "/cf", io });
   assert.ok(io.files["/cf/processes/authored.bpmn"], "authored .bpmn must survive the sweep");
 });
+
+test("collectArtifacts trims api.spec whitespace so gen matches the runtime (no gen/runtime drift)", async () => {
+  const manifest = JSON.stringify({ id: "demo", data: { default: "app" }, api: { spec: "  openapi.json  " } });
+  const openapi = JSON.stringify({
+    openapi: "3.0.0",
+    paths: { "/ping": { get: { operationId: "ping", responses: { "200": {} } } } },
+  });
+  const io = memIO({ "/app/nano.app.json": manifest, "/app/openapi.json": openapi });
+  const res = await collectArtifacts({ root: "/app", io });
+  const paths = res.map((a) => a.path);
+  // The whitespace-padded spec path still resolved and derived the endpoint contracts.
+  assert.ok(paths.includes("nano-generated/api-io.d.ts"));
+});
+
+test("collectArtifacts resolves an api.spec with Windows-style separators (no gen/runtime drift)", async () => {
+  const manifest = JSON.stringify({ id: "demo", data: { default: "app" }, api: { spec: "specs\\openapi.json" } });
+  const openapi = JSON.stringify({
+    openapi: "3.0.0",
+    paths: { "/ping": { get: { operationId: "ping", responses: { "200": {} } } } },
+  });
+  const io = memIO({ "/app/nano.app.json": manifest, "/app/specs/openapi.json": openapi });
+  const res = await collectArtifacts({ root: "/app", io });
+  assert.ok(res.map((a) => a.path).includes("nano-generated/api-io.d.ts"));
+});
+
+test("collectArtifacts resolves an ABSOLUTE api.spec at its own path, not root-relative (no gen/runtime drift)", async () => {
+  // An absolute manifest spec path must resolve to itself — mirroring the runtime's resolveAppPath
+  // — not be stripped to a root-relative "/app/abs/openapi.json". Otherwise gen would read/derive a
+  // different file than the runtime dispatches against.
+  const manifest = JSON.stringify({ id: "demo", data: { default: "app" }, api: { spec: "/abs/openapi.json" } });
+  const openapi = JSON.stringify({
+    openapi: "3.0.0",
+    paths: { "/ping": { get: { operationId: "ping", responses: { "200": {} } } } },
+  });
+  // Only the absolute location holds the spec; a root-relative read would ENOENT.
+  const io = memIO({ "/app/nano.app.json": manifest, "/abs/openapi.json": openapi });
+  const res = await collectArtifacts({ root: "/app", io });
+  assert.ok(res.map((a) => a.path).includes("nano-generated/api-io.d.ts"));
+});

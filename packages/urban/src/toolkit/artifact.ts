@@ -27,3 +27,11 @@ export const GENERATED_DIR = "nano-generated";
 export function sortArtifacts(a: DerivedArtifact[]): DerivedArtifact[] {
   return [...a].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));
 }
+
+/** True when `p` is an absolute path — POSIX root (`/`), a drive-letter root (`C:\` or `C:/`), or a
+ *  Windows UNC/drive-root backslash (`\`). The single source of truth for the absolute-path rule,
+ *  shared by the toolkit's path join (gen.ts) and the runtime's resolveAppPath so both agree on
+ *  whether a manifest path is app-root-relative or absolute (no gen/runtime drift). */
+export function isAbsolutePath(p: string): boolean {
+  return /^(\/|\\|[A-Za-z]:[/\\])/.test(p);
+}

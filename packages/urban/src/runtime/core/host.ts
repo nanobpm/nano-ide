@@ -164,6 +164,21 @@ export interface WorkerSubscription {
 }
 
 /**
+ * A process instance's terminal-relevant lifecycle state, as the engine reports it.
+ * `ACTIVE` (still running), `COMPLETED` (ended normally at an end event), or
+ * `TERMINATED` (cancelled/terminated — via a row-cancel, an operator, or a crash).
+ * Deliberately the small set the instance-tracking reconciler keys on, not the richer
+ * element-instance state set (which adds SKIPPED/CANCELED/FAILED for tokens).
+ */
+export type ProcessInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED";
+
+/** A single process instance's lifecycle snapshot returned by {@link EngineClient.searchProcessInstances}. */
+export interface ProcessInstanceSnapshot {
+  readonly processInstanceKey: string;
+  readonly state: ProcessInstanceState;
+}
+
+/**
  * EngineClient is the seam onto a Nano engine. The SDK/REST-backed adapter implements
  * it against a live engine; tests implement it in-memory. Core modules depend only on this.
  */
@@ -194,6 +209,18 @@ export interface EngineClient {
   }): Promise<{ userTaskKey: string; elementId?: string; variables?: Record<string, unknown> }[]>;
   /** Complete a user task. */
   completeUserTask(userTaskKey: string, variables?: Record<string, unknown>): Promise<void>;
+  /**
+   * Search process instances by key and/or lifecycle state. The instance-tracking
+   * reconciler uses this to detect a tracked instance reaching a terminal state
+   * (`TERMINATED`/`COMPLETED`) even though no completion worker ran for it — the
+   * read-model row it backs would otherwise stay "active" forever. An eventually
+   * consistent read (zero-wait); pass the keys currently marked active in the
+   * read model and, optionally, a `state` to narrow the result.
+   */
+  searchProcessInstances(filter?: {
+    processInstanceKeys?: string[];
+    state?: ProcessInstanceState;
+  }): Promise<ProcessInstanceSnapshot[]>;
   /** Register a push worker for a job type. Draining is handled by the adapter. */
   registerWorker(
     jobType: string,

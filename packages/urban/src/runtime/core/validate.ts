@@ -150,6 +150,37 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
     });
   }
 
+  // instanceTracking: each binding must name the table + key column it tracks and a
+  // non-empty `onTerminated.set` patch — a reconciler with nothing to write is inert
+  // and almost certainly a mistake. `activeStatuses` without `statusField` is incoherent
+  // (no column to read the statuses from), so the runtime would silently poll every row.
+  const tracking = Array.isArray(obj.instanceTracking) ? obj.instanceTracking : undefined;
+  if (tracking) {
+    tracking.forEach((t, i) => {
+      const b = isRecord(t) ? t : undefined;
+      if (typeof b?.table !== "string" || b.table.length === 0) {
+        issues.push({ path: `instanceTracking[${i}].table`, message: "missing table" });
+      }
+      if (typeof b?.keyField !== "string" || b.keyField.length === 0) {
+        issues.push({ path: `instanceTracking[${i}].keyField`, message: "missing keyField" });
+      }
+      const onTerminated = isRecord(b?.onTerminated) ? b.onTerminated : undefined;
+      const set = isRecord(onTerminated?.set) ? onTerminated.set : undefined;
+      if (!set || Object.keys(set).length === 0) {
+        issues.push({
+          path: `instanceTracking[${i}].onTerminated.set`,
+          message: "missing onTerminated.set patch (a non-empty column → value map)",
+        });
+      }
+      if (Array.isArray(b?.activeStatuses) && typeof b?.statusField !== "string") {
+        issues.push({
+          path: `instanceTracking[${i}].activeStatuses`,
+          message: "activeStatuses requires statusField",
+        });
+      }
+    });
+  }
+
   return issues;
 }
 

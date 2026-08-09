@@ -21,6 +21,7 @@ export type {
   DataSource,
   DomainField,
   DomainType,
+  InstanceTracking,
   LlmBinding,
   Models,
   PagesSurface,

@@ -111,3 +111,44 @@ test("validateManifest throws ManifestValidationError with issues", () => {
     return true;
   });
 });
+
+test("a well-formed instanceTracking binding has no issues", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        activeStatuses: ["planning"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("an instanceTracking binding missing table/keyField/onTerminated.set is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [{ onTerminated: { set: {} } }],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].table"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].keyField"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].onTerminated.set"));
+});
+
+test("instanceTracking activeStatuses without statusField is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        activeStatuses: ["planning"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].activeStatuses"));
+});

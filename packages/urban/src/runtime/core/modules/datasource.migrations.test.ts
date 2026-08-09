@@ -17,6 +17,7 @@ const noEngine: EngineClient = {
   publishMessage: async () => {},
   searchUserTasks: async () => [],
   completeUserTask: async () => {},
+  searchProcessInstances: async () => [],
   registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
   close: async () => {},
 };

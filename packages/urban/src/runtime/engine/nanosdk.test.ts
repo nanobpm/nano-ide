@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   createNanoSdkEngineClient,
+  normalizeProcessInstanceState,
   requireProcessInstanceKey,
   SdkEngineClient,
   type NanoSdkActivatedJob,
@@ -64,6 +65,10 @@ function fakeSdkClient(overrides: Partial<NanoSdkClient> = {}): NanoSdkClient & 
     },
     async searchUserTasks() {
       calls.push("searchUserTasks");
+      return { items: [] };
+    },
+    async searchProcessInstances() {
+      calls.push("searchProcessInstances");
       return { items: [] };
     },
     async completeUserTask() {
@@ -200,6 +205,74 @@ test("completeUserTask routes through the SDK", async () => {
   const engine = new SdkEngineClient(client);
   await engine.completeUserTask("utk", { done: true });
   assert.deepEqual(seen, { userTaskKey: "utk", variables: { done: true } });
+});
+
+test("searchProcessInstances filters by keys ($in) + state with a matching page cap", async () => {
+  let seenInput: unknown;
+  let seenConsistency: unknown;
+  const client = fakeSdkClient({
+    searchProcessInstances: async (input, c) => {
+      seenInput = input;
+      seenConsistency = c;
+      return {
+        items: [
+          { processInstanceKey: 7, state: "TERMINATED" },
+          { processInstanceKey: "8", state: "ACTIVE" },
+        ],
+      };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchProcessInstances({
+    processInstanceKeys: ["7", "8", ""], // empty key dropped from the $in
+    state: "TERMINATED",
+  });
+  assert.deepEqual(seenInput, {
+    filter: { state: "TERMINATED", processInstanceKey: { $in: ["7", "8"] } },
+    page: { limit: 2 },
+  });
+  assert.deepEqual(seenConsistency, { consistency: { waitUpToMs: 0 } });
+  assert.deepEqual(out, [
+    { processInstanceKey: "7", state: "TERMINATED" },
+    { processInstanceKey: "8", state: "ACTIVE" },
+  ]);
+});
+
+test("searchProcessInstances with no keys sends no key filter and no page cap", async () => {
+  let seenInput: unknown;
+  const client = fakeSdkClient({
+    searchProcessInstances: async (input) => {
+      seenInput = input;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  await engine.searchProcessInstances();
+  assert.deepEqual(seenInput, { filter: {} });
+});
+
+test("searchProcessInstances skips keyless and unrecognized-state rows", async () => {
+  const client = fakeSdkClient({
+    searchProcessInstances: async () => ({
+      items: [
+        { processInstanceKey: "", state: "TERMINATED" }, // keyless → skipped
+        { processInstanceKey: 9, state: "SUSPENDED" }, // unknown state → skipped
+        { processInstanceKey: 10, state: "completed" }, // case-insensitive → mapped
+      ],
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchProcessInstances();
+  assert.deepEqual(out, [{ processInstanceKey: "10", state: "COMPLETED" }]);
+});
+
+test("normalizeProcessInstanceState maps the terminal set and rejects others", () => {
+  assert.equal(normalizeProcessInstanceState("ACTIVE"), "ACTIVE");
+  assert.equal(normalizeProcessInstanceState("completed"), "COMPLETED");
+  assert.equal(normalizeProcessInstanceState("Terminated"), "TERMINATED");
+  assert.equal(normalizeProcessInstanceState("SUSPENDED"), undefined);
+  assert.equal(normalizeProcessInstanceState(42), undefined);
+  assert.equal(normalizeProcessInstanceState(undefined), undefined);
 });
 
 test("registerWorker creates a worker the SDK auto-starts, and dispatches + completes", async () => {

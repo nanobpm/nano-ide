@@ -280,7 +280,13 @@ export function operationsWithUnsafeId(doc: OpenApiDoc): string[] {
 }
 
 function normalizeParameters(raw: unknown[]): OpenApiParameter[] {
-  const params: OpenApiParameter[] = [];
+  // OpenAPI: parameters are uniquely identified by (name, in). A path-level parameter can be
+  // overridden by an operation-level one with the same (name, in) — never duplicated. Callers pass
+  // [...pathParams, ...opParams], so dedup later-wins (op overrides path) while preserving the
+  // first-seen position, so the emitted binding never carries two `path`/`query` fields with the
+  // same name (which would collide in the generated params/query types and in runtime extraction).
+  const byKey = new Map<string, OpenApiParameter>();
+  const order: string[] = [];
   for (const p of raw) {
     if (!isRecord(p)) continue;
     const name = typeof p.name === "string" ? p.name : undefined;
@@ -290,9 +296,11 @@ function normalizeParameters(raw: unknown[]): OpenApiParameter[] {
       continue;
     }
     const schema = isRecord(p.schema) ? p.schema : undefined;
-    params.push({ name, in: location, required: p.required === true, schema });
+    const key = `${location}\u0000${name}`;
+    if (!byKey.has(key)) order.push(key);
+    byKey.set(key, { name, in: location, required: p.required === true, schema });
   }
-  return params;
+  return order.map((k) => byKey.get(k)!);
 }
 
 function firstSuccessSchema(responses: Record<string, unknown>): OpenApiSchema | undefined {

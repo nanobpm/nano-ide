@@ -13,6 +13,7 @@ import {
   type InsertObserver,
 } from "./gateway.ts";
 import { currentJobContext } from "../execContext.ts";
+import { isAbsolutePath } from "../../../toolkit/artifact.ts";
 
 export function sqlitePathFromUrl(url: string): string {
   // Accept "file:./x.db", "file:x.db", "sqlite:./x.db" or a bare path.
@@ -25,10 +26,10 @@ export function sqlitePathFromUrl(url: string): string {
  * that starts with a single backslash ("\data\app.db") and a Windows UNC path
  * ("\\\\server\\share"). A single leading backslash covers both the drive-root and UNC cases,
  * matching Node's `path.win32.isAbsolute`. Used by `resolveAppPath` so a caller-supplied absolute
- * path is never incorrectly prefixed with the app root. */
-export function isAbsolutePath(p: string): boolean {
-  return /^(\/|\\|[A-Za-z]:[/\\])/.test(p);
-}
+ * path is never incorrectly prefixed with the app root. Defined once in `toolkit/artifact.ts` (the
+ * shared, dependency-free layer) and re-exported here so the toolkit's gen path-join and this
+ * runtime resolver apply the identical rule (no gen/runtime drift). */
+export { isAbsolutePath };
 
 /** Resolve `p` against the app `root`: an absolute `p` (see `isAbsolutePath`) is returned as-is;
  * a relative `p` is joined onto `root`. Trims a trailing separator of either kind off `root` so

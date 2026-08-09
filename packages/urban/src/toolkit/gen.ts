@@ -4,7 +4,7 @@
 // pure; all IO is confined here behind a tiny FS port so the same code runs on Node and Deno.
 
 import type { DerivedArtifact } from "./artifact.ts";
-import { sortArtifacts } from "./artifact.ts";
+import { isAbsolutePath, sortArtifacts } from "./artifact.ts";
 import { deriveMigrations, type ToolkitManifest } from "./derivers/migrations.ts";
 import { deriveDomain } from "./derivers/domain.ts";
 import { deriveWorkerBindings, type ModelSource } from "./derivers/worker-io.ts";
@@ -62,6 +62,12 @@ function join(root: string, rel: string): string {
   // platforms — matching the runtime's resolveAppPath) and trim edge separators, so callers may
   // pass either style without gen/runtime drift over where a file resolves.
   const norm = (s: string): string => s.replace(/\\/g, "/");
+  // An absolute `rel` resolves to itself — never prefixed with `root` — mirroring the runtime's
+  // resolveAppPath (isAbsolutePath is the shared SoT in artifact.ts). Without this an absolute
+  // manifest path (e.g. "/abs/openapi.json") would be stripped to root-relative and gen would
+  // read/derive a different file than the runtime resolves. Trailing edge separators are still
+  // trimmed for stable, comparable artifact keys.
+  if (isAbsolutePath(rel)) return norm(rel).replace(/\/+$/, "");
   return `${norm(root).replace(/\/+$/, "")}/${norm(rel).replace(/^\/+/, "")}`;
 }
 

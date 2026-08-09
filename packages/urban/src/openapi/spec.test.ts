@@ -74,6 +74,41 @@ test("operationsWithoutId reports the delete with no operationId", () => {
   assert.deepEqual(operationsWithoutId(doc), ["DELETE /invoices/{id}"]);
 });
 
+test("collectOperations dedups path- and op-level params by (name, in), op-level winning", () => {
+  // OpenAPI: a param is identified by (name, in); an op-level param overrides the path-level one of
+  // the same identity — it must never appear twice, or the emitted params/query binding would carry
+  // two colliding fields and runtime extraction would be ambiguous.
+  const dedupDoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/items/{id}": {
+        // Path-level: id is (loosely) optional here; op-level tightens it to required.
+        parameters: [
+          { name: "id", in: "path", required: false, schema: { type: "string" } },
+          { name: "trace", in: "query", schema: { type: "string" } },
+        ],
+        get: {
+          operationId: "getItem",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  const op = collectOperations(dedupDoc).find((o) => o.operationId === "getItem");
+  assert.ok(op);
+  const ids = op.parameters.filter((p) => p.in === "path" && p.name === "id");
+  assert.equal(ids.length, 1, "the (id, path) param must collapse to one");
+  // Op-level wins: required + integer schema, not the path-level optional string.
+  assert.equal(ids[0]?.required, true);
+  assert.equal(ids[0]?.schema?.type, "integer");
+  // First-seen position is preserved: id (from path-level) before the query param.
+  assert.deepEqual(
+    op.parameters.map((p) => `${p.in}:${p.name}`),
+    ["path:id", "query:trace"],
+  );
+});
+
 test("resolveSchema follows a local $ref and guards cycles", () => {
   const resolved = resolveSchema(doc, { $ref: "#/components/schemas/Invoice" });
   assert.equal(resolved?.type, "object");

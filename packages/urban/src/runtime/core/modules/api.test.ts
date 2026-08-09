@@ -23,6 +23,7 @@ const engine: EngineClient = {
   cancelInstance: async () => {},
   publishMessage: async () => {},
   searchUserTasks: async () => [],
+  searchProcessInstances: async () => [],
   completeUserTask: async () => {},
   registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
   close: async () => {},

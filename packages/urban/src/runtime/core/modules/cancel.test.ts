@@ -243,6 +243,32 @@ test("a TERMINATED instance with no matching binding row reconciles nothing", as
   }
 });
 
+test("a reconcile write failure does not fail the cancel (the engine already terminated it)", async () => {
+  const { engine } = cancelEngine({
+    states: { "100": "ACTIVE" },
+    onCancel: (key, states) => {
+      states[key] = "TERMINATED";
+    },
+  });
+  const h = await withHarness(engine);
+  try {
+    // A binding pointing at a table that does not exist makes the reconcile UPDATE throw.
+    const badBinding: InstanceTracking = {
+      table: "does_not_exist",
+      keyField: "process_key",
+      onTerminated: { set: { status: "abandoned" } },
+    };
+    const r = await cancelInstanceReconciling(h.api, [badBinding], "100");
+    assert.equal(r.ok, true); // engine termination succeeded — the cancel is a success
+    assert.equal(r.state, "TERMINATED");
+    assert.equal(r.reconciled, 0);
+    assert.ok(r.error); // the reconcile failure is surfaced, not swallowed
+    assert.ok(h.logs.some((l) => l.level === "error"));
+  } finally {
+    await h.close();
+  }
+});
+
 test("an accepted cancel whose verify read fails is trusted (gone) — the 204 committed", async () => {
   const { engine } = cancelEngine({
     states: { "100": "ACTIVE" },

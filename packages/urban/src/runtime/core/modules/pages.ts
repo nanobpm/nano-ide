@@ -296,8 +296,14 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
       // The reconcile-aware primitive verifies the real post-cancel state and flips the tracked
       // row immediately; a !ok result means the engine did NOT stop the instance, so surface 502.
       if (cancel) {
-        const result = await cancel(String(key));
-        return json(result, result.ok ? 200 : 502);
+        try {
+          const result = await cancel(String(key));
+          return json(result, result.ok ? 200 : 502);
+        } catch (e) {
+          // Defensive: the primitive is designed not to throw, but if it ever does, mirror the
+          // fallback path's honest 502 rather than letting the request reject as a 500.
+          return json({ ok: false, processInstanceKey: String(key), error: errorMessage(e) }, 502);
+        }
       }
       try {
         await engine.cancelInstance({ processInstanceKey: String(key) });

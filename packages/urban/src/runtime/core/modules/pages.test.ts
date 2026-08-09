@@ -390,6 +390,16 @@ test("POST /app/actions/cancel surfaces a 502 when the cancel primitive reports 
   assert.match(JSON.parse(res.body ?? "{}").error, /engine rejected/);
 });
 
+test("POST /app/actions/cancel maps a throwing cancel primitive to a 502", async () => {
+  const cancel: PagesDeps["cancel"] = async () => {
+    throw new Error("boom");
+  };
+  const { router } = build({}, { cancel });
+  const res = await router(req("POST", "/app/actions/cancel", { body: { processInstanceKey: "pi-x" } }));
+  assert.equal(res.status, 502);
+  assert.equal(JSON.parse(res.body ?? "{}").ok, false);
+});
+
 test("POST /app/actions/message publishes, 400 on missing fields", async () => {
   const { router, calls } = build();
   const ok = await router(req("POST", "/app/actions/message", {

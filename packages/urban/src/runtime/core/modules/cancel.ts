@@ -79,7 +79,18 @@ export async function cancelInstanceReconciling(
 
   let reconciled = 0;
   if (state === "TERMINATED") {
-    reconciled = await reconcileTerminatedKey(api, bindings, key);
+    try {
+      reconciled = await reconcileTerminatedKey(api, bindings, key);
+    } catch (error) {
+      // The engine termination itself succeeded — a reconcile *write* failure (bad binding,
+      // transient DB error) must not turn that into an unhandled 500. Log it and let the
+      // instanceTracking poll reconciler catch the row up on its next tick.
+      api.log("error", "cancel: instance terminated but row reconcile failed", {
+        processInstanceKey: key,
+        error: errorMessage(error),
+      });
+      return { ok: true, processInstanceKey: key, state, reconciled: 0, error: errorMessage(error) };
+    }
   }
 
   return { ok: true, processInstanceKey: key, state, reconciled };

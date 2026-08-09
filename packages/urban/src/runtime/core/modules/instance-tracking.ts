@@ -29,8 +29,10 @@ type Row = Record<string, unknown>;
 
 /** Apply a binding's `onTerminated.set` patch to the single row keyed by `processInstanceKey`.
  *  Only the binding whose table owns that key has a matching row, so callers can fan this over
- *  every binding and let the no-match ones be no-ops. Returns rows changed. Shared by the poll
- *  reconciler and the cancel primitive so both write the exact same terminal patch (no drift). */
+ *  every binding and let the no-match ones be no-ops. Returns rows changed. The single place that
+ *  writes the terminal patch (and logs the reconcile): both the poll reconciler below (`reconcileOnce`,
+ *  once per TERMINATED key it discovers) and the cancel primitive (immediately when it terminates an
+ *  instance) route through here, so the two can never drift on the patch or the log. */
 export async function reconcileTerminatedKey(
   api: Pick<AppApi, "data" | "log">,
   bindings: InstanceTracking[],
@@ -97,21 +99,14 @@ async function reconcileOnce(
     state: "TERMINATED",
   });
 
-  const patch: Partial<Row> = binding.onTerminated.set;
+  // Apply the terminal patch through the shared `reconcileTerminatedKey` — the one place that
+  // writes `onTerminated.set` and logs the reconcile — so the poll path and the cancel primitive
+  // can never drift on the patch or its logging (No Drift Surfaces).
   let reconciled = 0;
   for (const snap of snapshots) {
     if (snap.state !== "TERMINATED") continue; // defensive; we asked for TERMINATED only
     if (!keyToRows.has(snap.processInstanceKey)) continue; // not one we were tracking
-    const changed = await table.update(snap.processInstanceKey, patch);
-    if (changed > 0) {
-      reconciled += changed;
-      api.log("info", "instanceTracking: reconciled terminated instance", {
-        table: binding.table,
-        keyField: binding.keyField,
-        processInstanceKey: snap.processInstanceKey,
-        rowsChanged: changed,
-      });
-    }
+    reconciled += await reconcileTerminatedKey(api, [binding], snap.processInstanceKey);
   }
   return { scanned: keys.length, reconciled };
 }

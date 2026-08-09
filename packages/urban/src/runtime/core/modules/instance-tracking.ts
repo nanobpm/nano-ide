@@ -37,8 +37,9 @@ async function reconcileOnce(
   const table = api.data.table<Row>(binding.table, binding.keyField);
 
   // Select the rows worth polling. With a statusField + activeStatuses, only rows in an
-  // active status are candidates (a row already terminal is skipped); otherwise every row
-  // is a candidate. Terminal rows are never re-touched, keeping the reconcile idempotent.
+  // active status are candidates, so a row already in a terminal status is skipped; without
+  // them every row is polled and a terminal instance's row is idempotently re-patched (the
+  // engine query returns only TERMINATED instances and the patch is a no-op once applied).
   let candidates: Row[];
   const statusField = binding.statusField;
   if (statusField && binding.activeStatuses && binding.activeStatuses.length > 0) {

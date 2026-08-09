@@ -81,9 +81,10 @@ export type OperationHandler<Req extends OperationContract = DefaultContract, Re
 
 /**
  * Typed-identity helper the generated `operations.ts` wrapper re-types per operationId. Authoring:
- * `export default defineOperation("createInvoice", async (req, app) => { ... })`. The runtime
- * resolves a delegate by its module path (`<dir>/<operationId>`), so the id here is a documentation
- * + typing aid; it is returned unchanged.
+ * `export default defineOperation("createInvoice", async ({ params, query, body }, app) => { ... })`
+ * — the handler's first argument is the validated `OperationInput` (params/query/body/req), not the
+ * raw request. The runtime resolves a delegate by its module path (`<dir>/<operationId>`), so the id
+ * here is a documentation + typing aid; it is returned unchanged.
  */
 export function defineOperation<Req extends OperationContract = DefaultContract, Res = unknown>(
   _id: string,

@@ -178,3 +178,14 @@ test("collectArtifacts trims api.spec whitespace so gen matches the runtime (no 
   // The whitespace-padded spec path still resolved and derived the endpoint contracts.
   assert.ok(paths.includes("nano-generated/api-io.d.ts"));
 });
+
+test("collectArtifacts resolves an api.spec with Windows-style separators (no gen/runtime drift)", async () => {
+  const manifest = JSON.stringify({ id: "demo", data: { default: "app" }, api: { spec: "specs\\openapi.json" } });
+  const openapi = JSON.stringify({
+    openapi: "3.0.0",
+    paths: { "/ping": { get: { operationId: "ping", responses: { "200": {} } } } },
+  });
+  const io = memIO({ "/app/nano.app.json": manifest, "/app/specs/openapi.json": openapi });
+  const res = await collectArtifacts({ root: "/app", io });
+  assert.ok(res.map((a) => a.path).includes("nano-generated/api-io.d.ts"));
+});

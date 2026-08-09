@@ -58,9 +58,11 @@ export interface GenResult {
 }
 
 function join(root: string, rel: string): string {
-  // Trim either separator so callers may pass Windows-style paths; GenIO
-  // implementations accept forward slashes on all platforms.
-  return `${root.replace(/[/\\]+$/, "")}/${rel.replace(/^[/\\]+/, "")}`;
+  // Normalize Windows-style separators to forward slashes (GenIO uses forward slashes on all
+  // platforms — matching the runtime's resolveAppPath) and trim edge separators, so callers may
+  // pass either style without gen/runtime drift over where a file resolves.
+  const norm = (s: string): string => s.replace(/\\/g, "/");
+  return `${norm(root).replace(/\/+$/, "")}/${norm(rel).replace(/^\/+/, "")}`;
 }
 
 function dirOf(p: string): string {

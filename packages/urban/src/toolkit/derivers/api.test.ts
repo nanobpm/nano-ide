@@ -188,3 +188,23 @@ test("request body types derive only from JSON media types (JSON-only surface)",
   const out = emitApiBindings(doc2);
   assert.match(out, /body: \{ "a"\?: string/); // picked the +json schema, not the xml string
 });
+
+test("emitApiBindings fails closed on operationIds that collapse to the same TS type name", () => {
+  const clash: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/a": { get: { operationId: "get-invoice", responses: { "200": {} } } },
+      "/b": { get: { operationId: "get_invoice", responses: { "200": {} } } },
+    },
+  };
+  assert.throws(() => emitApiBindings(clash), /duplicate TypeScript type "GetInvoiceRequest"/);
+});
+
+test("emitApiBindings fails closed on component schema names that collapse to the same TS type name", () => {
+  const clash: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: { schemas: { "Foo-Bar": { type: "object" }, "Foo_Bar": { type: "object" } } },
+    paths: {},
+  };
+  assert.throws(() => emitApiBindings(clash), /duplicate TypeScript type "FooBar"/);
+});

@@ -238,3 +238,20 @@ test("object validation uses own-property checks (prototype keys don't satisfy r
   const issues = validateValue(doc, closed, { id: "x", toString: "evil" });
   assert.ok(issues.some((i) => i.message === "is not an allowed property"));
 });
+
+test("validateValue handles null: typeless object rejects it; nullable/type-null/enum-null/const-null allow it", () => {
+  // A typeless object schema (properties/required imply object) must reject null.
+  const objSchema: OpenApiSchema = { properties: { id: { type: "string" } }, required: ["id"] };
+  assert.equal(validateValue(doc, objSchema, null).length, 1);
+  // A typed schema rejects null unless nullable / type: "null".
+  assert.equal(validateValue(doc, { type: "string" }, null).length, 1);
+  assert.equal(validateValue(doc, { type: "string", nullable: true }, null).length, 0);
+  assert.equal(validateValue(doc, { type: "null" }, null).length, 0);
+  // enum/const gate null explicitly.
+  assert.equal(validateValue(doc, { enum: [null, "a"] }, null).length, 0);
+  assert.equal(validateValue(doc, { enum: ["a", "b"] }, null).length, 1);
+  assert.equal(validateValue(doc, { const: null }, null).length, 0);
+  assert.equal(validateValue(doc, { const: "a" }, null).length, 1);
+  // A truly empty schema allows anything, including null.
+  assert.equal(validateValue(doc, {}, null).length, 0);
+});

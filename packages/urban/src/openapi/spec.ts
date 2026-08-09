@@ -393,7 +393,20 @@ export function validateValue(
 
   if (value === null) {
     if (schema.nullable === true || schema.type === "null") return issues;
-    if (schema.type) issues.push({ path: at, message: `expected ${schema.type}, got null` });
+    // enum/const may explicitly permit null even without `nullable`.
+    if (schema.enum && schema.enum.some((e) => e === null)) return issues;
+    if (schema.const === null) return issues;
+    // Otherwise null is invalid for a typed schema, an object schema (properties/required imply
+    // object), or an enum/const that doesn't list null. A truly empty schema ({}) allows anything.
+    if (schema.enum) {
+      issues.push({ path: at, message: `must be one of ${JSON.stringify(schema.enum)}` });
+    } else if (schema.const !== undefined) {
+      issues.push({ path: at, message: `must equal ${JSON.stringify(schema.const)}` });
+    } else if (schema.type) {
+      issues.push({ path: at, message: `expected ${schema.type}, got null` });
+    } else if (isObjectSchema(schema)) {
+      issues.push({ path: at, message: "expected object, got null" });
+    }
     return issues;
   }
 

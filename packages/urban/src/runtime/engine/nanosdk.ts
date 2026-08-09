@@ -330,7 +330,12 @@ export class SdkEngineClient implements EngineClient {
             }
           }
           const message = err instanceof Error ? err.message : String(err);
-          this.log("error", `handler ${jobType} threw`, { err: message });
+          this.log("error", `handler ${jobType} threw`, {
+            err: message,
+            jobKey: engineJob.jobKey,
+            processInstanceKey: engineJob.processInstanceKey,
+            elementId: engineJob.elementId,
+          });
           try {
             // Fail WITHOUT pinning a retry count: the SDK decrements the job's remaining
             // retries (`job.retries - 1`), so a transient handler failure (e.g. a fleeting
@@ -354,6 +359,9 @@ export class SdkEngineClient implements EngineClient {
           const message = completeErr instanceof Error ? completeErr.message : String(completeErr);
           this.log("error", `complete ${jobType} failed; leaving job for engine redelivery`, {
             err: message,
+            jobKey: engineJob.jobKey,
+            processInstanceKey: engineJob.processInstanceKey,
+            elementId: engineJob.elementId,
           });
           return undefined;
         }

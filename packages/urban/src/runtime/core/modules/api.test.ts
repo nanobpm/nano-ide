@@ -220,3 +220,44 @@ test("a malformed spec surfaces as a 500, not a boot failure", async () => {
   assert.equal(res.status, 500);
   assert.match(JSON.parse(res.body!).error, /failed to load/);
 });
+
+test("a manifest api.base without a leading slash is normalized so routes still match", async () => {
+  let got: Record<string, string> | undefined;
+  const { router } = build(
+    { spec: "openapi.json", base: "app/api" }, // no leading slash
+    { "/app/operations/getInvoice": { default: (i: { params: Record<string, string> }) => { got = i.params; return { body: { ok: true } }; } } },
+  );
+  const res = await router(req("GET", "/app/api/invoices/42"));
+  assert.equal(res.status, 200);
+  assert.deepEqual(got, { id: "42" });
+});
+
+test("a malformed spec pattern surfaces as a controlled 500, not a crash", async () => {
+  const badPatternSpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/things": {
+        post: {
+          operationId: "createThing",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: { type: "object", properties: { name: { type: "string", pattern: "([" } }, required: ["name"] },
+              },
+            },
+          },
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  const { router } = build(
+    { spec: "openapi.json" },
+    { "/app/operations/createThing": { default: () => ({ body: {} }) } },
+    badPatternSpec,
+  );
+  const res = await router(req("POST", "/app/api/things", { body: JSON.stringify({ name: "x" }) }));
+  assert.equal(res.status, 500);
+  assert.match(JSON.parse(res.body!).error, /invalid pattern/);
+});

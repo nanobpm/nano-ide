@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   collectOperations,
+  isObjectSchema,
   type OpenApiDoc,
   operationsWithoutId,
   parseSpec,
@@ -98,4 +99,32 @@ test("toRouteMatcher captures path params positionally and boundary-matches", ()
   assert.equal(m?.[1], "42");
   assert.equal(pattern.test("/app/api/invoices/42/extra"), false);
   assert.equal(pattern.test("/app/api/invoices/42/"), true); // optional trailing slash
+});
+
+test("isObjectSchema treats typeless property/required/additionalProperties schemas as objects", () => {
+  assert.equal(isObjectSchema({ type: "object" }), true);
+  assert.equal(isObjectSchema({ properties: { a: { type: "string" } } }), true);
+  assert.equal(isObjectSchema({ required: ["a"] }), true);
+  assert.equal(isObjectSchema({ additionalProperties: false }), true);
+  assert.equal(isObjectSchema({ type: "string" }), false); // explicit non-object type wins
+  assert.equal(isObjectSchema({}), false); // no shape keywords → not an object
+});
+
+test("validateValue shape-checks typeless object schemas (no type/runtime drift)", () => {
+  // A schema with properties/required but no explicit `type: "object"` is emitted as an object
+  // by schemaToTs, so the validator must shape-check it too — otherwise invalid bodies pass.
+  const schema = { properties: { id: { type: "string" } }, required: ["id"] };
+  assert.deepEqual(validateValue(doc, schema, { id: "ok" }, "body"), []);
+  const issues = validateValue(doc, schema, {}, "body");
+  assert.deepEqual(
+    issues.map((i) => i.path),
+    ["body/id"],
+  );
+});
+
+test("validateValue surfaces a malformed pattern as a controlled throw, not an opaque RegExp error", () => {
+  assert.throws(
+    () => validateValue(doc, { type: "string", pattern: "([" }, "abc", "body"),
+    /invalid pattern/,
+  );
 });

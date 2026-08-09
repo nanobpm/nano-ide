@@ -15,7 +15,7 @@
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage } from "../guards.ts";
 import type { HttpRequest, HttpResponse } from "../host.ts";
-import { json, type Route } from "../router.ts";
+import { json, normalizeRoutePath, type Route } from "../router.ts";
 import { resolveAppPath } from "./datasource.ts";
 import {
   collectOperations,
@@ -159,7 +159,10 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   const binding = readApiBinding(ctx.manifest);
   if (!binding) return { name: "api", routes: [], describe: () => ({ api: "disabled" }) };
 
-  const base = (binding.base ?? "/app/api").replace(/\/+$/, "") || "/app/api";
+  // Normalize the manifest base the same way actions[] routes do (shared normalizeRoutePath):
+  // ensure a leading "/", strip trailing slashes, and fall back when empty — otherwise a base
+  // like "app/api" would never match request paths, which always start with "/".
+  const base = normalizeRoutePath(binding.base, "/app/api");
   const dir = binding.dir ?? "operations";
   const surfaceEject = binding.eject === true;
 
@@ -215,7 +218,7 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     return opsPromise;
   };
 
-  const dispatch = async (req: HttpRequest): Promise<HttpResponse> => {
+  const dispatchInner = async (req: HttpRequest): Promise<HttpResponse> => {
     let d: OpenApiDoc;
     let ops: MountedOp[];
     try {
@@ -343,6 +346,17 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
         headers: { "content-type": "application/json", ...(result.headers ?? {}) },
         body: result.body === undefined ? undefined : JSON.stringify(result.body),
       };
+    } catch (e) {
+      return json({ error: errorMessage(e) }, 500);
+    }
+  };
+
+  // Categorical safety net: any unexpected throw during dispatch — e.g. a malformed spec
+  // `pattern` surfacing from validation — becomes a controlled 500 rather than escaping into
+  // the host request handler, which has no top-level catch of its own.
+  const dispatch = async (req: HttpRequest): Promise<HttpResponse> => {
+    try {
+      return await dispatchInner(req);
     } catch (e) {
       return json({ error: errorMessage(e) }, 500);
     }

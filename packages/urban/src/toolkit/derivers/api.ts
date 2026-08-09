@@ -10,6 +10,7 @@ import type { DerivedArtifact, Deriver } from "../artifact.ts";
 import { GENERATED_DIR } from "../artifact.ts";
 import {
   collectOperations,
+  isObjectSchema,
   type OpenApiDoc,
   type OpenApiSchema,
   type OperationInfo,
@@ -71,8 +72,9 @@ export function schemaToTs(schema: OpenApiSchema | undefined, depth = 0): string
     case "object":
       return wrap(objectToTs(schema, depth));
     default:
-      // No `type`: an object with properties is still an object; otherwise unknown.
-      if (schema.properties) return wrap(objectToTs(schema, depth));
+      // No `type`: infer object-ness from object-only keywords (shared with the runtime
+      // validator via isObjectSchema so types and validation agree); otherwise unknown.
+      if (isObjectSchema(schema)) return wrap(objectToTs(schema, depth));
       return "unknown";
   }
 }
@@ -86,10 +88,19 @@ function objectToTs(schema: OpenApiSchema, depth: number): string {
     const jsdoc = doc ? `/** ${doc} */ ` : "";
     return `${jsdoc}${JSON.stringify(key)}${opt}: ${schemaToTs(ps, depth + 1)}`;
   });
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    entries.push(`[key: string]: ${schemaToTs(schema.additionalProperties, depth + 1)}`);
+  const extra = schema.additionalProperties;
+  if (extra && typeof extra === "object") {
+    entries.push(`[key: string]: ${schemaToTs(extra, depth + 1)}`);
+  } else if (extra !== false) {
+    // OpenAPI/JSON-Schema default: additional properties are allowed. Emit an index
+    // signature so the emitted type isn't stricter than the runtime validator, which only
+    // rejects extras when additionalProperties === false (otherwise excess-property errors
+    // on object literals would reject bodies the runtime accepts).
+    entries.push("[key: string]: unknown");
   }
-  return entries.length > 0 ? `{ ${entries.join("; ")} }` : "Record<string, unknown>";
+  if (entries.length > 0) return `{ ${entries.join("; ")} }`;
+  // No declared properties and additionalProperties: false → a closed, empty object.
+  return "Record<string, never>";
 }
 
 /** The `params`/`query` object type for an operation, from its parameters (strings on the wire). */
@@ -98,8 +109,10 @@ function paramsTs(op: OperationInfo, where: "path" | "query"): string {
   if (ps.length === 0) return "{}";
   const fields = ps.map((p) => {
     const opt = p.required ? "" : "?";
-    // Query values arrive as strings (or string[] for repeated keys); path params are single strings.
-    const t = where === "query" ? "string | string[] | undefined" : "string";
+    // Query values arrive as strings (or string[] for repeated keys); path params are single
+    // strings. Optionality is carried by the `?` modifier — don't fold `undefined` into the
+    // value type, or required query params would still accept undefined.
+    const t = where === "query" ? "string | string[]" : "string";
     return `${JSON.stringify(p.name)}${opt}: ${t}`;
   });
   return `{ ${fields.join("; ")} }`;

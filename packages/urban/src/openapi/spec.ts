@@ -42,6 +42,23 @@ export interface OpenApiSchema {
   description?: string;
 }
 
+/**
+ * Whether a schema describes an object shape. OpenAPI/JSON-Schema let the `type`
+ * keyword be omitted when `properties`/`required`/`additionalProperties` already imply
+ * an object. The type emitter (`schemaToTs`) and the runtime validator (`validateValue`)
+ * both route object detection through this single predicate so they never drift — a body
+ * the emitted type calls an object is the same body the validator shape-checks.
+ */
+export function isObjectSchema(schema: OpenApiSchema): boolean {
+  if (schema.type === "object") return true;
+  if (schema.type !== undefined) return false;
+  return (
+    schema.properties !== undefined ||
+    schema.required !== undefined ||
+    schema.additionalProperties !== undefined
+  );
+}
+
 export interface OpenApiParameter {
   name: string;
   in: "path" | "query" | "header" | "cookie";
@@ -325,8 +342,20 @@ export function validateValue(
     if (schema.maxLength !== undefined && value.length > schema.maxLength) {
       issues.push({ path: at, message: `longer than maxLength ${schema.maxLength}` });
     }
-    if (schema.pattern && !new RegExp(schema.pattern).test(value)) {
-      issues.push({ path: at, message: `does not match pattern ${schema.pattern}` });
+    if (schema.pattern) {
+      let re: RegExp | undefined;
+      try {
+        re = new RegExp(schema.pattern);
+      } catch {
+        // A malformed pattern is a spec-author error, not client input. Surface it as a
+        // controlled failure (the dispatcher's outer catch maps it to a 500 with this
+        // message) instead of letting `new RegExp` throw an opaque error deep in
+        // validation and crash the host request handler.
+        throw new Error(`schema at ${at}: invalid pattern ${JSON.stringify(schema.pattern)}`);
+      }
+      if (!re.test(value)) {
+        issues.push({ path: at, message: `does not match pattern ${schema.pattern}` });
+      }
     }
   }
 
@@ -359,7 +388,7 @@ export function validateValue(
     }
   }
 
-  if (schema.type === "object" && isRecord(value)) {
+  if (isObjectSchema(schema) && isRecord(value)) {
     for (const req of schema.required ?? []) {
       if (!(req in value)) issues.push({ path: `${path}/${req}`, message: "is required" });
     }

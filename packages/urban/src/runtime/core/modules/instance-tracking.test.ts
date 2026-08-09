@@ -104,16 +104,26 @@ function fakeEngine(states: Record<string, ProcessInstanceSnapshot["state"]>): {
 
 interface Harness {
   api: AppApi;
-  table: ReturnType<DataLayer["table"]>;
+  table: Table<PlanRow>;
   dir: string;
   close: () => Promise<void>;
   logs: { level: string; msg: string }[];
 }
 
+// The row shape every test seeds (matches PLANS_DDL); typing the harness table with it lets
+// `table.get(...)` return a typed row instead of the generic `object` constraint that
+// `ReturnType<DataLayer["table"]>` collapses to.
+interface PlanRow {
+  plan_key: string;
+  process_key: string | null;
+  status: string;
+  note: string | null;
+}
+
 async function withHarness(
   engine: EngineClient,
   ddl: string,
-  seed: (t: ReturnType<DataLayer["table"]>) => Promise<void>,
+  seed: (t: Table<PlanRow>) => Promise<void>,
   keyField = "process_key",
   table = "plans",
 ): Promise<Harness> {
@@ -130,7 +140,7 @@ async function withHarness(
     close: () => db.close(),
   };
   const data = new DataLayer(new Map([["app", source]]), "app", {});
-  const tbl = data.table(table, keyField);
+  const tbl = data.table<PlanRow>(table, keyField);
   await seed(tbl);
   const logs: { level: string; msg: string }[] = [];
   const api: AppApi = {

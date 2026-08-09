@@ -62,7 +62,7 @@
     "test:deno": "deno test -A --no-check src/"
   },
   "dependencies": {
-    "@nanobpm/nano-app-schema": "^0.3.0",
+    "@nanobpm/nano-app-schema": "^0.4.0",
     "@nanobpm/nano-sdk": "^1.2.3",
     "@nanobpm/workflow": "^0.8.0",
     "bpmn-auto-layout": "^2.0.0-alpha.2",

@@ -41,6 +41,7 @@ function fakeEngine(): { engine: EngineClient; calls: FakeEngineCalls } {
     },
     async searchUserTasks() { return []; },
     async completeUserTask() {},
+    async searchProcessInstances() { return []; },
     async registerWorker(jobType) { return { jobType, unsubscribe: async () => {} }; },
     async close() {},
   };

@@ -111,3 +111,99 @@ test("validateManifest throws ManifestValidationError with issues", () => {
     return true;
   });
 });
+
+test("a well-formed instanceTracking binding has no issues", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        activeStatuses: ["planning"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("an instanceTracking binding missing table/keyField/onTerminated.set is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [{ onTerminated: { set: {} } }],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].table"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].keyField"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].onTerminated.set"));
+});
+
+test("instanceTracking activeStatuses without statusField is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        activeStatuses: ["planning"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].activeStatuses"));
+});
+
+test("instanceTracking activeStatuses with an empty-string statusField is flagged (silently polls every row otherwise)", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "",
+        activeStatuses: ["planning"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].activeStatuses"));
+});
+
+test("instanceTracking pollMs that is non-positive/NaN/non-number is flagged (would hot-loop the poll timer)", () => {
+  for (const badPollMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "5000"]) {
+    const issues = collectManifestIssues({
+      ...valid,
+      instanceTracking: [
+        {
+          table: "plans",
+          keyField: "process_key",
+          statusField: "status",
+          activeStatuses: ["planning"],
+          onTerminated: { set: { status: "abandoned" } },
+          pollMs: badPollMs,
+        },
+      ],
+    });
+    assert.ok(
+      issues.some((i) => i.path === "instanceTracking[0].pollMs"),
+      `expected pollMs=${String(badPollMs)} to be flagged`,
+    );
+  }
+});
+
+test("instanceTracking with a valid positive pollMs has no pollMs issue", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        activeStatuses: ["planning"],
+        onTerminated: { set: { status: "abandoned" } },
+        pollMs: 5000,
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});

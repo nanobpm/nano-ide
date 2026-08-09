@@ -15,6 +15,8 @@ import type {
   EngineClient,
   EngineJob,
   JobHandler,
+  ProcessInstanceSnapshot,
+  ProcessInstanceState,
   WorkerSubscription,
 } from "../core/host.ts";
 import { isBpmnError } from "../core/host.ts";
@@ -28,6 +30,26 @@ export function requireProcessInstanceKey(key: string | number | null | undefine
     throw new Error("engine response missing processInstanceKey/key");
   }
   return String(key);
+}
+
+/** Map the engine's process-instance `state` onto the transport-agnostic
+ *  {@link ProcessInstanceState} union, or `undefined` for an unrecognized value
+ *  (which the caller skips rather than mis-reconciling). Case-insensitive so a
+ *  future casing tweak on the engine side doesn't silently drop instances. */
+export function normalizeProcessInstanceState(
+  raw: unknown,
+): ProcessInstanceState | undefined {
+  if (typeof raw !== "string") return undefined;
+  switch (raw.toUpperCase()) {
+    case "ACTIVE":
+      return "ACTIVE";
+    case "COMPLETED":
+      return "COMPLETED";
+    case "TERMINATED":
+      return "TERMINATED";
+    default:
+      return undefined;
+  }
 }
 
 /** A job as delivered to a nano-sdk job handler: the frame fields plus the
@@ -103,6 +125,11 @@ export interface NanoSdkClient {
     input: { userTaskKey: string; variables?: Record<string, unknown> },
     options?: unknown,
   ): Promise<unknown>;
+  searchProcessInstances(
+    input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
   createJobWorker(cfg: NanoSdkJobWorkerConfig): NanoSdkJobWorker;
   /** Stop every worker created on this client. Used on teardown to also drain a
    * REST-fallback worker, whose handle the `createJobWorker` proxy starts internally
@@ -211,6 +238,42 @@ export class SdkEngineClient implements EngineClient {
 
   async completeUserTask(userTaskKey: string, variables?: Record<string, unknown>): Promise<void> {
     await this.client.completeUserTask({ userTaskKey, variables: variables ?? {} });
+  }
+
+  async searchProcessInstances(filter?: {
+    processInstanceKeys?: string[];
+    state?: ProcessInstanceState;
+  }): Promise<ProcessInstanceSnapshot[]> {
+    const f: Record<string, unknown> = {};
+    if (filter?.state) f.state = filter.state;
+    const keys = filter?.processInstanceKeys?.filter((k) => k != null && k !== "");
+    if (keys && keys.length > 0) f.processInstanceKey = { $in: keys };
+    // A process-instance search is an eventually consistent read; ask for zero-wait
+    // consistency so it reflects what is currently visible without blocking. Cap the page
+    // to the number of keys asked for (each key matches at most one instance), so a bounded
+    // reconcile query never silently truncates on the API's default page size.
+    const page = keys && keys.length > 0 ? { limit: keys.length } : undefined;
+    const body = await this.client.searchProcessInstances(
+      { filter: f, ...(page ? { page } : {}) },
+      { consistency: { waitUpToMs: 0 } },
+    );
+    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+    return items.flatMap((it) => {
+      const key = it.processInstanceKey;
+      if (key == null || key === "") {
+        this.log("warn", "skipping process instance with no key in engine response");
+        return [];
+      }
+      const state = normalizeProcessInstanceState(it.state);
+      if (!state) {
+        this.log("warn", "skipping process instance with unrecognized state", {
+          processInstanceKey: String(key),
+          state: String(it.state),
+        });
+        return [];
+      }
+      return [{ processInstanceKey: String(key), state }];
+    });
   }
 
   async registerWorker(

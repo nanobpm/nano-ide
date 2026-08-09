@@ -15,7 +15,7 @@
 
 import type { AppApi, Mounted, RuntimeContext } from "../context.ts";
 import type { InstanceTracking } from "../manifest.ts";
-import { defaultScheduler, type SchedulerDeps } from "./scheduler.ts";
+import { defaultScheduler, MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
 
 /** Default poll interval when a binding does not set `pollMs`. */
 export const DEFAULT_INSTANCE_TRACKING_POLL_MS = 15_000;
@@ -27,9 +27,9 @@ export interface InstanceTrackingHandle extends Mounted {
 
 type Row = Record<string, unknown>;
 
-/** The set of process instance keys currently marked active in the read model, plus the
- *  patch to apply to each row that turns out terminated. Returns `undefined` for a binding
- *  that selects no active rows this tick (nothing to poll). */
+/** Poll one binding's instances once. Selects the active rows, asks the engine which of their
+ *  instances are TERMINATED, and applies `onTerminated.set` to each. Returns how many keys were
+ *  scanned and how many rows were reconciled this tick. */
 async function reconcileOnce(
   api: AppApi,
   binding: InstanceTracking,
@@ -104,6 +104,10 @@ export function mountInstanceTracking(
 
   for (const binding of bindings) {
     const pollMs = binding.pollMs ?? DEFAULT_INSTANCE_TRACKING_POLL_MS;
+    // A single setTimeout delay overflows its 32-bit signed range (~24.8 days) and fires
+    // immediately — which for a self-rescheduling poll would become a hot loop. Clamp through
+    // the one shared constant the cron trigger loop uses (derive-don't-duplicate).
+    const delayMs = Math.min(pollMs, MAX_TIMER_DELAY_MS);
     const label = `${binding.table}.${binding.keyField}`;
     armed.push(label);
 
@@ -124,7 +128,7 @@ export function mountInstanceTracking(
             arm(); // reschedule regardless of outcome (at-least-once, idempotent)
           }
         })();
-      }, pollMs);
+      }, delayMs);
       timers.add(handle);
     };
     arm();

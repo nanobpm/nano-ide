@@ -152,3 +152,19 @@ test("instanceTracking activeStatuses without statusField is flagged", () => {
   });
   assert.ok(issues.some((i) => i.path === "instanceTracking[0].activeStatuses"));
 });
+
+test("instanceTracking activeStatuses with an empty-string statusField is flagged (silently polls every row otherwise)", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "",
+        activeStatuses: ["planning"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].activeStatuses"));
+});

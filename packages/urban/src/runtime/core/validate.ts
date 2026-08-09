@@ -172,7 +172,7 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           message: "missing onTerminated.set patch (a non-empty column → value map)",
         });
       }
-      if (Array.isArray(b?.activeStatuses) && typeof b?.statusField !== "string") {
+      if (Array.isArray(b?.activeStatuses) && (typeof b?.statusField !== "string" || b.statusField.length === 0)) {
         issues.push({
           path: `instanceTracking[${i}].activeStatuses`,
           message: "activeStatuses requires statusField",

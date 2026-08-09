@@ -13,7 +13,7 @@ import {
   DEFAULT_INSTANCE_TRACKING_POLL_MS,
   mountInstanceTracking,
 } from "./instance-tracking.ts";
-import type { SchedulerDeps } from "./scheduler.ts";
+import { MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
 
 // A real-timer flush drains the entire pending microtask chain (find → engine → update)
 // each time a fake timer fires — deeper than a fixed number of `await Promise.resolve()`s.
@@ -68,7 +68,12 @@ function fakeEngine(states: Record<string, ProcessInstanceSnapshot["state"]>): {
   queries: string[][];
 } {
   const queries: string[][] = [];
-  const engine = {
+  const notUsed = (m: string) => (): never => {
+    throw new Error(`fakeEngine.${m} is not exercised by this test`);
+  };
+  // Typed as EngineClient (not `as unknown as`) so the compiler enforces the full contract:
+  // if EngineClient gains/changes a method, this fake fails to compile instead of drifting.
+  const engine: EngineClient = {
     async searchProcessInstances(filter?: {
       processInstanceKeys?: string[];
       state?: ProcessInstanceSnapshot["state"];
@@ -84,7 +89,15 @@ function fakeEngine(states: Record<string, ProcessInstanceSnapshot["state"]>): {
       }
       return out;
     },
-  } as unknown as EngineClient;
+    deployResources: notUsed("deployResources"),
+    createInstance: notUsed("createInstance"),
+    cancelInstance: notUsed("cancelInstance"),
+    publishMessage: notUsed("publishMessage"),
+    searchUserTasks: notUsed("searchUserTasks"),
+    completeUserTask: notUsed("completeUserTask"),
+    registerWorker: notUsed("registerWorker"),
+    close: notUsed("close"),
+  };
   return { engine, queries };
 }
 
@@ -270,6 +283,22 @@ test("defaults pollMs when the binding omits it", async () => {
   assert.equal(queries.length, 0); // not yet
   await sched.advance(1);
   assert.equal(queries.length, 1); // fired at the default interval
+  await handle.stop();
+  await h.close();
+});
+
+test("clamps a pollMs beyond setTimeout's 32-bit range instead of firing immediately", async () => {
+  const { engine, queries } = fakeEngine({ pi1: "ACTIVE" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  // A pollMs past the 32-bit signed range would overflow setTimeout and fire at ~0 (a hot loop).
+  const handle = mount(h, [planBinding({ pollMs: MAX_TIMER_DELAY_MS * 3 })], sched);
+  await sched.advance(1000);
+  assert.equal(queries.length, 0); // did NOT fire immediately …
+  await sched.advance(MAX_TIMER_DELAY_MS);
+  assert.equal(queries.length, 1); // … it fired at the clamped delay
   await handle.stop();
   await h.close();
 });

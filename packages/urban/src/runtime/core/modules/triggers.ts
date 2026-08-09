@@ -9,18 +9,14 @@ import type { HttpRequest } from "../host.ts";
 import { json, normalizeRoutePath, type Route } from "../router.ts";
 import type { Trigger } from "../manifest.ts";
 import { nextCronFire, parseCron } from "./cron.ts";
+import { defaultScheduler, MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
+
+export type { SchedulerDeps };
 
 export interface TriggersHandle extends Mounted {
   routes: Route[];
 }
 
-/** Injectable timer + clock seam so cron scheduling is deterministic under test. */
-export interface SchedulerDeps {
-  setTimer: (fn: () => void, delayMs: number) => unknown;
-  clearTimer: (handle: unknown) => void;
-  /** Current wall-clock time in ms since epoch. */
-  now: () => number;
-}
 
 type Scope = { body: unknown; headers: Record<string, string>; query: Record<string, string> };
 
@@ -148,24 +144,6 @@ export async function runTriggerAction(
 }
 
 const emptyScope: Scope = { body: {}, headers: {}, query: {} };
-
-/** Max delay a single `setTimeout` honours before its 32-bit signed overflow (~24.8 days). */
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
-
-/** Default (live) scheduler seam, backed by the global timer functions. */
-function defaultScheduler(): SchedulerDeps {
-  return {
-    setTimer: (fn, ms) => globalThis.setTimeout(fn, ms),
-    clearTimer: (h) => {
-      if (isTimerHandle(h)) globalThis.clearTimeout(h);
-    },
-    now: () => Date.now(),
-  };
-}
-
-function isTimerHandle(handle: unknown): handle is ReturnType<typeof setTimeout> {
-  return typeof handle === "number" || (typeof handle === "object" && handle !== null);
-}
 
 /** Mount webhook + cron triggers. Webhooks contribute HTTP routes; cron triggers arm
  *  background timers that fire their action on schedule. `stop()` clears every timer. */

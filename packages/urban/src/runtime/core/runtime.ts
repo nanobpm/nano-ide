@@ -17,6 +17,7 @@ import { mountWorkers } from "./modules/workers.ts";
 import { mountConnectors } from "./modules/connectors.ts";
 import { mountSurfaces } from "./modules/surfaces.ts";
 import { mountTriggers } from "./modules/triggers.ts";
+import { mountInstanceTracking } from "./modules/instance-tracking.ts";
 import { mountSecurity, type SecurityPolicy } from "./modules/security.ts";
 
 /** Resolve the HTTP port: explicit option, else $PORT, else 8090. Throws a clear
@@ -53,6 +54,9 @@ export interface MountFlags {
   surfaces?: boolean;
   triggers?: boolean;
   security?: boolean;
+  /** The `instanceTracking` reconciler poll loop. Shares no HTTP surface; safe to disable
+   *  in hosts that only render surfaces (e.g. the console preview). */
+  instanceTracking?: boolean;
 }
 
 export interface CreateUrbanAppOptions {
@@ -105,6 +109,7 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     surfaces: opts.mount?.surfaces ?? true,
     triggers: opts.mount?.triggers ?? true,
     security: opts.mount?.security ?? true,
+    instanceTracking: opts.mount?.instanceTracking ?? true,
   };
   const ctx = { manifest, host, engine, root, templates: opts.templates };
 
@@ -209,6 +214,11 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
           routes.push(...t.routes);
           mounted.push(t);
           describe.triggers = t.describe?.();
+        }
+        if (flags.instanceTracking && (manifest.instanceTracking?.length ?? 0) > 0) {
+          const it = mountInstanceTracking(ctx, api);
+          mounted.push(it);
+          describe.instanceTracking = it.describe?.();
         }
         if (security) describe.security = security.describe();
         if (data) describe.data = data.describe();

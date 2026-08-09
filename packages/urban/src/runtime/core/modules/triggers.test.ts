@@ -30,6 +30,7 @@ class MiniEngine implements EngineClient {
   }
   async searchUserTasks(): Promise<[]> { return []; }
   async completeUserTask(): Promise<void> {}
+  async searchProcessInstances(): Promise<[]> { return []; }
   async registerWorker(jobType: string): Promise<{ jobType: string; unsubscribe(): Promise<void> }> {
     return { jobType, unsubscribe: async () => {} };
   }

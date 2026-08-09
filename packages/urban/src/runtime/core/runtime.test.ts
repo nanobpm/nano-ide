@@ -42,6 +42,9 @@ class FakeEngine implements EngineClient {
   async completeUserTask(key: string, variables?: Record<string, unknown>) {
     this.completedTasks.push({ key, variables });
   }
+  async searchProcessInstances() {
+    return [];
+  }
   async registerWorker(jobType: string, handler: JobHandler): Promise<WorkerSubscription> {
     this.workers.set(jobType, handler);
     return { jobType, unsubscribe: async () => void this.workers.delete(jobType) };

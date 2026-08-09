@@ -202,18 +202,23 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   let opsPromise: Promise<MountedOp[]> | undefined;
   const loadOps = (): Promise<MountedOp[]> => {
     if (!opsPromise) {
-      opsPromise = loadDoc().then((d) => {
-        const missing = operationsWithoutId(d);
-        if (missing.length > 0) {
-          ctx.host.log("warn", "OpenAPI operations without operationId are skipped (ADR 0058)", {
-            missing,
+      opsPromise = loadDoc()
+        .then((d) => {
+          const missing = operationsWithoutId(d);
+          if (missing.length > 0) {
+            ctx.host.log("warn", "OpenAPI operations without operationId are skipped (ADR 0058)", {
+              missing,
+            });
+          }
+          return collectOperations(d).map((op) => {
+            const { pattern, paramNames } = toRouteMatcher(base, op.path);
+            return { op, pattern, paramNames };
           });
-        }
-        return collectOperations(d).map((op) => {
-          const { pattern, paramNames } = toRouteMatcher(base, op.path);
-          return { op, pattern, paramNames };
+        })
+        .catch((e) => {
+          opsPromise = undefined; // don't cache the rejection — let a later request retry (mirrors loadDoc)
+          throw e;
         });
-      });
     }
     return opsPromise;
   };
@@ -246,10 +251,15 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     // Path params from the capture groups; query as a single-or-array map.
     const captures = match.pattern.exec(req.path) ?? [];
     const params: Record<string, string> = {};
-    match.paramNames.forEach((name, i) => {
-      const v = captures[i + 1];
-      if (v !== undefined) params[name] = decodeURIComponent(v);
-    });
+    try {
+      match.paramNames.forEach((name, i) => {
+        const v = captures[i + 1];
+        if (v !== undefined) params[name] = decodeURIComponent(v);
+      });
+    } catch {
+      // Malformed percent-encoding is client input, not a server fault — a clear 400 beats a 500.
+      return json({ error: "malformed path parameter encoding" }, 400);
+    }
     const query: Record<string, string | string[] | undefined> = {};
     for (const key of new Set(req.query.keys())) {
       const all = req.query.getAll(key);
@@ -291,8 +301,21 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
             if (p.required) issues.push({ path: `query/${p.name}`, message: "is required" });
             continue;
           }
-          const one = Array.isArray(val) ? val[0] : val;
-          issues.push(...validateValue(d, p.schema, coerceParam(d, p.schema, one ?? ""), `query/${p.name}`));
+          const values = Array.isArray(val) ? val : [val];
+          const ps = resolveSchema(d, p.schema);
+          if (ps?.type === "array") {
+            // Repeated keys (?tag=a&tag=b) form the array; coerce + validate each item, then the
+            // whole array against the schema's array constraints (minItems, items, ...).
+            const items = ps.items ? values.map((v) => coerceParam(d, ps.items, v)) : values;
+            issues.push(...validateValue(d, ps, items, `query/${p.name}`));
+          } else {
+            // Scalar param: validate EVERY provided value, not just the first, so extra repeated
+            // values can't bypass validation.
+            values.forEach((v, i) => {
+              const at = values.length > 1 ? `query/${p.name}[${i}]` : `query/${p.name}`;
+              issues.push(...validateValue(d, p.schema, coerceParam(d, p.schema, v), at));
+            });
+          }
         }
       }
       if (op.requestBodyRequired && (raw === "" || body === undefined)) {

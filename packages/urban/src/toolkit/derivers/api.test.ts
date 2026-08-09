@@ -128,3 +128,22 @@ test("request body optionality follows requestBody.required (runtime passes unde
   assert.match(req, /\n {2}body: \{/); // required body → no `?`
   assert.doesNotMatch(req, /body\?:/);
 });
+
+test("typed additionalProperties alongside declared props falls back to unknown (valid TS, no TS2411)", () => {
+  // A narrow index type (number) would make `{ "a": string; [key: string]: number }` invalid TS,
+  // so with declared properties the index signature widens to unknown; a pure map keeps its type.
+  const withProps = schemaToTs({
+    type: "object",
+    properties: { a: { type: "string" } },
+    required: ["a"],
+    additionalProperties: { type: "number" },
+  });
+  assert.match(withProps, /"a": string/);
+  assert.match(withProps, /\[key: string\]: unknown/);
+  assert.doesNotMatch(withProps, /\[key: string\]: number/);
+  // No declared properties → precise map type is safe.
+  assert.match(
+    schemaToTs({ type: "object", additionalProperties: { type: "number" } }),
+    /\[key: string\]: number/,
+  );
+});

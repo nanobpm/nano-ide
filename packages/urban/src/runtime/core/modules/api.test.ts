@@ -273,3 +273,93 @@ test("an empty api.dir falls back to the default operations dir, not an absolute
   assert.equal(called, true);
   assert.deepEqual(imported, ["/app/operations/getInvoice"]);
 });
+
+test("malformed percent-encoding in a path param is a 400, not a 500", async () => {
+  const { router } = build(
+    { spec: "openapi.json" },
+    { "/app/operations/getInvoice": { default: () => ({ body: { ok: true } }) } },
+  );
+  const res = await router(req("GET", "/app/api/invoices/%E0%A4%A")); // invalid UTF-8 escape
+  assert.equal(res.status, 400);
+  assert.match(JSON.parse(res.body!).error, /malformed path parameter encoding/);
+});
+
+test("repeated query keys are all validated (extra values don't bypass validation)", async () => {
+  const arraySpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/items": {
+        get: {
+          operationId: "listItems",
+          parameters: [{ name: "n", in: "query", schema: { type: "integer", minimum: 1 } }],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  const { router } = build(
+    { spec: "openapi.json" },
+    { "/app/operations/listItems": { default: () => ({ body: { ok: true } }) } },
+    arraySpec,
+  );
+  // First value valid, second (0) violates minimum:1 — must still be caught.
+  const res = await router(req("GET", "/app/api/items", { query: "n=5&n=0" }));
+  assert.equal(res.status, 400);
+  assert.match(JSON.parse(res.body!).error, /validation failed/);
+});
+
+test("array-typed query params validate the whole array (items + array constraints)", async () => {
+  const arraySpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/items": {
+        get: {
+          operationId: "listItems",
+          parameters: [
+            { name: "tag", in: "query", schema: { type: "array", minItems: 2, items: { type: "string", enum: ["a", "b"] } } },
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  const build2 = (q: string) =>
+    build(
+      { spec: "openapi.json" },
+      { "/app/operations/listItems": { default: () => ({ body: { ok: true } }) } },
+      arraySpec,
+    ).router(req("GET", "/app/api/items", { query: q }));
+  assert.equal((await build2("tag=a&tag=b")).status, 200); // valid array
+  assert.equal((await build2("tag=a")).status, 400); // fewer than minItems
+  assert.equal((await build2("tag=a&tag=c")).status, 400); // "c" not in enum
+});
+
+test("a failed initial spec load is retried, not cached as a permanent 500", async () => {
+  let attempts = 0;
+  const host: HostContext = {
+    runtime: "node",
+    env: () => undefined,
+    readTextFile: async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("ENOENT: spec missing");
+      return spec;
+    },
+    listDir: async () => [],
+    exists: async () => false,
+    openSqlite: () => {
+      throw new Error("sqlite not used in this test");
+    },
+    importModule: () => Promise.resolve({ default: () => ({ body: { ok: true } }) }),
+    serveHttp: async () => ({ port: 0, stop: async () => {} }),
+    now: () => 0,
+    log: () => {},
+  };
+  const manifest: AppManifest = { schemaVersion: 1, id: "t", name: "T" };
+  Reflect.set(manifest, "api", { spec: "openapi.json" });
+  const ctx: RuntimeContext = { root: "/app", manifest, engine, host };
+  const router = makeRouter(mountApi(ctx, appFixture()).routes);
+  const first = await Promise.resolve(router(req("GET", "/app/api/invoices/42")));
+  assert.equal(first.status, 500); // initial read fails
+  const second = await Promise.resolve(router(req("GET", "/app/api/invoices/42")));
+  assert.equal(second.status, 200); // retried (opsPromise not cached as a rejection)
+});

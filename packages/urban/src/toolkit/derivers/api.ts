@@ -90,7 +90,12 @@ function objectToTs(schema: OpenApiSchema, depth: number): string {
   });
   const extra = schema.additionalProperties;
   if (extra && typeof extra === "object") {
-    entries.push(`[key: string]: ${schemaToTs(extra, depth + 1)}`);
+    // TS requires every named property type to be assignable to the index signature. When the
+    // schema also declares properties, a narrow index type (e.g. `number`) would make the emitted
+    // type invalid (TS2411), so fall back to `unknown`; with no declared properties we can use the
+    // precise additionalProperties type (the common "map" case).
+    const hasProps = Object.keys(props).length > 0;
+    entries.push(`[key: string]: ${hasProps ? "unknown" : schemaToTs(extra, depth + 1)}`);
   } else if (extra !== false) {
     // OpenAPI/JSON-Schema default: additional properties are allowed. Emit an index
     // signature so the emitted type isn't stricter than the runtime validator, which only

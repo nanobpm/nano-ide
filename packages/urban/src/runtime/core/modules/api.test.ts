@@ -364,3 +364,25 @@ test("a failed initial spec load is retried, not cached as a permanent 500", asy
   const second = await Promise.resolve(router(req("GET", "/app/api/invoices/42")));
   assert.equal(second.status, 200); // retried (opsPromise not cached as a rejection)
 });
+
+test("an op declaring no requestBody gets body:undefined at runtime (matches derived body-less type)", async () => {
+  // The deriver types `body` as `undefined` for an op with no requestBody, so the runtime must not
+  // leak a parsed JSON value into such a body-less handler.
+  const noBodySpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/ping": {
+        post: { operationId: "ping", responses: { "200": {} } },
+      },
+    },
+  });
+  let seenBody: unknown = "unset";
+  const { router } = build(
+    { spec: "openapi.json" },
+    { "/app/operations/ping": { default: (i: { body: unknown }) => { seenBody = i.body; return { body: { ok: true } }; } } },
+    noBodySpec,
+  );
+  const res = await router(req("POST", "/app/api/ping", { body: JSON.stringify({ sneaky: true }) }));
+  assert.equal(res.status, 200);
+  assert.equal(seenBody, undefined);
+});

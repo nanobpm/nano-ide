@@ -265,6 +265,11 @@ function firstSuccessSchema(responses: Record<string, unknown>): OpenApiSchema |
 /** Turn an OpenAPI path template ("/invoices/{id}") into a matcher under `base` ("/app/api"):
  *  a RegExp that captures each `{param}` positionally, plus the ordered path-parameter names. The
  *  runtime matches concrete request paths, so a templated segment becomes a single-segment capture. */
+/** Escape RegExp metacharacters so a string is matched literally inside a `new RegExp(...)`. */
+export function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export function toRouteMatcher(
   base: string,
   path: string,
@@ -278,10 +283,12 @@ export function toRouteMatcher(
       paramNames.push(m[1]);
       return "([^/]+)";
     }
-    return seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return escapeRegex(seg);
   });
   const body = regexParts.length > 0 ? `/${regexParts.join("/")}` : "";
-  const pattern = new RegExp(`^${cleanBase}${body}/?$`);
+  // `base` is a literal path prefix (e.g. "/app/api(v2)"), not a pattern — escape its metacharacters
+  // just like the static template segments so it can't alter or break the matcher.
+  const pattern = new RegExp(`^${escapeRegex(cleanBase)}${body}/?$`);
   const sample = `${cleanBase}${segments.length > 0 ? `/${segments.join("/")}` : ""}`;
   return { pattern, paramNames, sample };
 }
@@ -294,8 +301,27 @@ export interface ValidationIssue {
   message: string;
 }
 
+/** Structural (deep) equality for JSON values — enum/const members can be objects or arrays, which
+ *  a parsed request will never be `===` to. Compares by shape so those comparisons are correct. */
+function deepEqual(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== typeof b || a === null || b === null) return false;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((x, i) => deepEqual(x, b[i]));
+  }
+  if (isRecord(a) && isRecord(b)) {
+    const ak = Object.keys(a);
+    const bk = Object.keys(b);
+    if (ak.length !== bk.length) return false;
+    return ak.every(
+      (k) => Object.prototype.hasOwnProperty.call(b, k) && deepEqual(a[k], b[k]),
+    );
+  }
+  return false;
+}
+
 function typeOfValue(v: unknown): string {
-  if (v === null) return "null";
   if (Array.isArray(v)) return "array";
   if (typeof v === "number" && Number.isInteger(v)) return "integer";
   return typeof v;
@@ -327,10 +353,10 @@ export function validateValue(
     return issues;
   }
 
-  if (schema.enum && !schema.enum.some((e) => e === value)) {
+  if (schema.enum && !schema.enum.some((e) => deepEqual(e, value))) {
     issues.push({ path: at, message: `must be one of ${JSON.stringify(schema.enum)}` });
   }
-  if (schema.const !== undefined && schema.const !== value) {
+  if (schema.const !== undefined && !deepEqual(schema.const, value)) {
     issues.push({ path: at, message: `must equal ${JSON.stringify(schema.const)}` });
   }
 

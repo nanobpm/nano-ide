@@ -147,3 +147,26 @@ test("validateValue supports OpenAPI 3.0 boolean exclusiveMinimum/Maximum and 3.
   assert.equal(validateValue(doc, { type: "integer", exclusiveMinimum: 1 }, 1).length, 1);
   assert.equal(validateValue(doc, { type: "integer", exclusiveMinimum: 1 }, 2).length, 0);
 });
+test("validateValue compares enum/const structurally (object/array members, not by reference)", () => {
+  // Parsed request values are never `===` to the schema's object/array members, so `===` would
+  // reject even a structurally-identical value. Deep equality is required for correctness.
+  const objEnum = { type: "object", enum: [{ kind: "a", n: 1 }] };
+  assert.equal(validateValue(doc, objEnum, { kind: "a", n: 1 }).length, 0);
+  assert.equal(validateValue(doc, objEnum, { kind: "b", n: 1 }).length, 1);
+  const arrConst = { const: [1, 2, 3] };
+  assert.equal(validateValue(doc, arrConst, [1, 2, 3]).length, 0);
+  assert.equal(validateValue(doc, arrConst, [1, 2]).length, 1);
+  // primitives still work
+  assert.equal(validateValue(doc, { type: "string", enum: ["a", "b"] }, "a").length, 0);
+});
+
+test("toRouteMatcher escapes RegExp metacharacters in the base (literal path prefix)", () => {
+  const { pattern } = toRouteMatcher("/app/api(v2)", "/invoices/{id}");
+  // The parentheses in the base must match literally, not act as a regex group.
+  assert.equal(pattern.test("/app/api(v2)/invoices/42"), true);
+  assert.equal(pattern.test("/app/apiv2/invoices/42"), false);
+  // A dot in the base must not match an arbitrary character.
+  const { pattern: p2 } = toRouteMatcher("/v1.0", "/ping");
+  assert.equal(p2.test("/v1.0/ping"), true);
+  assert.equal(p2.test("/v1x0/ping"), false);
+});

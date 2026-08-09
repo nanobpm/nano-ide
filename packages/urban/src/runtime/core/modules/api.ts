@@ -348,8 +348,13 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
       );
     }
 
+    // Keep the runtime body in lockstep with the derived type: the deriver types `body` as
+    // `undefined` exactly when the op declares no usable request body (no JSON schema and not
+    // required), so pass `undefined` to those handlers rather than leaking a parsed value through
+    // a body-less type.
+    const handlerBody = op.requestBodySchema !== undefined || op.requestBodyRequired ? body : undefined;
     try {
-      const result = await handler({ req, params, query, body }, app);
+      const result = await handler({ req, params, query, body: handlerBody }, app);
       if (!result) return { status: 204 };
       // Optional response validation (dev by default): warn-only, never blocks the response.
       const mode = binding.validateResponses ?? "dev";

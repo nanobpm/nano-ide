@@ -342,6 +342,36 @@ test("registerWorker fails the job when the handler throws", async () => {
   assert.equal(failBody?.retries, 0);
 });
 
+test("registerWorker leaves a job for redelivery when complete() fails (transport error, not a handler bug)", async () => {
+  const client = fakeSdkClient();
+  const engine = new SdkEngineClient(client);
+  let handlerRan = false;
+  await engine.registerWorker("svc", () => {
+    handlerRan = true;
+    return { ok: true };
+  });
+  const rec = client.workers[0];
+  let failCalled = false;
+  const job: NanoSdkActivatedJob = {
+    jobKey: "j1",
+    variables: {},
+    // The handler succeeded, but reporting the result to the engine fails transiently.
+    async complete() {
+      throw new Error("FOREIGN KEY constraint failed");
+    },
+    async fail() {
+      failCalled = true;
+      throw new Error("must not hard-park a job whose handler succeeded");
+    },
+  };
+  // Must not throw, and must NOT call fail(retries:0) — the job is left locked for the
+  // engine to redeliver on lock timeout.
+  const result = await rec.dispatch(job);
+  assert.equal(handlerRan, true);
+  assert.equal(failCalled, false);
+  assert.equal(result, undefined);
+});
+
 test("registerWorker routes a thrown BpmnError to the engine's error()", async () => {
   const client = fakeSdkClient();
   const engine = new SdkEngineClient(client);

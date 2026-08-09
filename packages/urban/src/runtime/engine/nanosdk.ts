@@ -300,9 +300,9 @@ export class SdkEngineClient implements EngineClient {
           elementId: job.elementId,
           variables: job.variables ?? {},
         };
+        let out: Record<string, unknown> | void;
         try {
-          const out = await handler(engineJob);
-          return await job.complete(out ?? {});
+          out = await handler(engineJob);
         } catch (err) {
           // A handler-raised BPMN error is a modelled, non-retryable outcome:
           // report it as a BPMN error (routed to an error boundary/event) rather
@@ -339,6 +339,21 @@ export class SdkEngineClient implements EngineClient {
           } catch {
             return undefined;
           }
+        }
+        // The handler resolved: its work is done. Reporting that result to the engine
+        // (`complete`) is a SEPARATE concern — a failure here is a transport/engine problem
+        // (e.g. a transient store error), NOT a handler bug. Parking such a job at `retries: 0`
+        // would strand a job whose work actually SUCCEEDED, and no restart could recover it.
+        // Instead, log and leave the job locked so the engine redelivers it on lock timeout;
+        // handlers are idempotent (at-least-once), so a redelivery re-completes cleanly.
+        try {
+          return await job.complete(out ?? {});
+        } catch (completeErr) {
+          const message = completeErr instanceof Error ? completeErr.message : String(completeErr);
+          this.log("error", `complete ${jobType} failed; leaving job for engine redelivery`, {
+            err: message,
+          });
+          return undefined;
         }
       },
     });

@@ -621,17 +621,35 @@ function renderText(node) {
   return el(v === "heading" ? "h1" : "p", { class: cls }, node.props.text || "");
 }
 
-// A grid td cell. When the column declares linkField, the cell text (the
-// column's own value) becomes a link to the URL held in that other field,
-// opened in a new tab. Only http(s) hrefs are linked — anything else (e.g. a
-// javascript: URL smuggled through row data) falls back to plain text — and
-// external links get rel=noopener noreferrer so the opened page can't reach
-// window.opener. Shared by the top-level grid and child grids.
+// A grid td cell. Two column-declared linking modes, checked in order:
+//   1. linkField — the cell text becomes a link to the URL held in that other
+//      field. Only http(s) hrefs are linked (a javascript:/other-scheme URL
+//      smuggled through row data falls back to plain text).
+//   2. link: { kind: "processExplorer", keyField } — a structured, engine-aware
+//      link: the cell text links to the Nano console's explorer view for the
+//      process instance whose key is held in the row's keyField. The console
+//      path is constructed HERE (never taken from row data) and the key is
+//      URL-encoded, so row data can't smuggle a path or scheme; only a
+//      non-empty key produces a link. Unknown link kinds fall back to plain
+//      text so an unrecognised schema can't render a broken anchor.
+// Both open in a new tab with rel=noopener noreferrer so the opened page can't
+// reach window.opener. Shared by the top-level grid and child grids.
 function gridCell(col, row) {
   const text = row[col.field] == null ? "" : String(row[col.field]);
   if (col.linkField) {
     const href = row[col.linkField] == null ? "" : String(row[col.linkField]);
     if (text !== "" && /^https?:\/\//i.test(href)) {
+      return el(
+        "td",
+        {},
+        el("a", { class: "pc-link", href, target: "_blank", rel: "noopener noreferrer" }, text),
+      );
+    }
+  }
+  if (col.link && col.link.kind === "processExplorer" && col.link.keyField) {
+    const key = row[col.link.keyField];
+    if (text !== "" && key != null && String(key) !== "") {
+      const href = "/console/explorer?instance=" + encodeURIComponent(String(key));
       return el(
         "td",
         {},

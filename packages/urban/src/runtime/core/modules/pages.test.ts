@@ -195,13 +195,15 @@ test("renderer wires a column's processExplorer link to the console explorer", a
   // A column declaring `link: { kind: "processExplorer", keyField }` renders its
   // text as a link to the Nano console's explorer for the process instance whose
   // key is held in that field. Guard the whole shape so the primitive can't
-  // silently regress: the discriminant + keyField are read, the console path is
-  // constructed here (not from row data), the key is URL-encoded, and the anchor
+  // silently regress: the discriminant + keyField are read, the key is trimmed
+  // (whitespace-only keys don't produce a link), the console path is constructed
+  // here (not from row data), the trimmed key is URL-encoded, and the anchor
   // opens in a new tab with a hardened rel.
   assert.match(js, /col\.link && col\.link\.kind === "processExplorer" && col\.link\.keyField/);
-  assert.match(js, /"\/console\/explorer\?instance=" \+ encodeURIComponent\(String\(key\)\)/);
-  assert.match(js, /target: "_blank"/);
-  assert.match(js, /rel: "noopener noreferrer"/);
+  assert.match(js, /String\(key\)\.trim\(\)/);
+  assert.match(js, /"\/console\/explorer\?instance="\s*\+\s*encodeURIComponent\(keyStr\)/);
+  assert.match(js, /target:\s*"_blank"/);
+  assert.match(js, /rel:\s*"noopener noreferrer"/);
 });
 
 test("the renderer honours numeric actionForm fields", async () => {

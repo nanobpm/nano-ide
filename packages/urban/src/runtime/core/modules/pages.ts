@@ -630,8 +630,9 @@ function renderText(node) {
 //      process instance whose key is held in the row's keyField. The console
 //      path is constructed HERE (never taken from row data) and the key is
 //      URL-encoded, so row data can't smuggle a path or scheme; only a
-//      non-empty key produces a link. Unknown link kinds fall back to plain
-//      text so an unrecognised schema can't render a broken anchor.
+//      non-empty key (after trimming surrounding whitespace) produces a link.
+//      Unknown link kinds fall back to plain text so an unrecognised schema
+//      can't render a broken anchor.
 // Both open in a new tab with rel=noopener noreferrer so the opened page can't
 // reach window.opener. Shared by the top-level grid and child grids.
 function gridCell(col, row) {
@@ -648,8 +649,9 @@ function gridCell(col, row) {
   }
   if (col.link && col.link.kind === "processExplorer" && col.link.keyField) {
     const key = row[col.link.keyField];
-    if (text !== "" && key != null && String(key) !== "") {
-      const href = "/console/explorer?instance=" + encodeURIComponent(String(key));
+    const keyStr = key == null ? "" : String(key).trim();
+    if (text !== "" && keyStr !== "") {
+      const href = "/console/explorer?instance=" + encodeURIComponent(keyStr);
       return el(
         "td",
         {},

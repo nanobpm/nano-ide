@@ -27,6 +27,33 @@ export interface InstanceTrackingHandle extends Mounted {
 
 type Row = Record<string, unknown>;
 
+/** Apply a binding's `onTerminated.set` patch to the single row keyed by `processInstanceKey`.
+ *  Only the binding whose table owns that key has a matching row, so callers can fan this over
+ *  every binding and let the no-match ones be no-ops. Returns rows changed. Shared by the poll
+ *  reconciler and the cancel primitive so both write the exact same terminal patch (no drift). */
+export async function reconcileTerminatedKey(
+  api: Pick<AppApi, "data" | "log">,
+  bindings: InstanceTracking[],
+  processInstanceKey: string,
+): Promise<number> {
+  const key = String(processInstanceKey);
+  let reconciled = 0;
+  for (const binding of bindings) {
+    const table = api.data.table<Row>(binding.table, binding.keyField);
+    const changed = await table.update(key, binding.onTerminated.set);
+    if (changed > 0) {
+      reconciled += changed;
+      api.log("info", "instanceTracking: reconciled terminated instance", {
+        table: binding.table,
+        keyField: binding.keyField,
+        processInstanceKey: key,
+        rowsChanged: changed,
+      });
+    }
+  }
+  return reconciled;
+}
+
 /** Poll one binding's instances once. Selects the active rows, asks the engine which of their
  *  instances are TERMINATED, and applies `onTerminated.set` to each. Returns how many keys were
  *  scanned and how many rows were reconciled this tick. */

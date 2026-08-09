@@ -11,10 +11,11 @@
 //      seconds of the instance terminating. When *we* are the one terminating it, we can apply
 //      that same declared patch right away instead of waiting for the next poll tick.
 //
-// This primitive verifies the post-cancel state against the engine's read model and only claims
-// success when the instance is genuinely no longer active. It reuses the instanceTracking
-// bindings' `onTerminated.set` patch, so the immediate reconcile can never drift from the poll
-// reconciler's.
+// This primitive keys success on the engine's response, then reconciles off the read model: a
+// non-throwing `cancelInstance` is a committed termination (trusted even if the read model still
+// lags at ACTIVE), while a throw whose instance reads back still-ACTIVE is an honest failure. It
+// reuses the instanceTracking bindings' `onTerminated.set` patch, so the immediate reconcile can
+// never drift from the poll reconciler's.
 
 import type { AppApi } from "../context.ts";
 import type { InstanceTracking } from "../manifest.ts";

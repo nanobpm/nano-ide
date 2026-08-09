@@ -98,6 +98,35 @@ export {
 } from "./derivers/messages.ts";
 export type { MessageIo, MessageBindingDecl } from "./derivers/messages.ts";
 
+export {
+  apiDeriver,
+  deriveApi,
+  emitApiBindings,
+  emitApiBindingsRuntime,
+  schemaToTs,
+  API_BINDINGS_DTS,
+  API_BINDINGS_TS,
+} from "./derivers/api.ts";
+
+// The OpenAPI machinery the deriver + runtime share (ADR 0058).
+export {
+  collectOperations,
+  HTTP_METHODS,
+  operationsWithoutId,
+  parseSpec,
+  refName,
+  resolveSchema,
+  toRouteMatcher,
+  validateValue,
+} from "../openapi/spec.ts";
+export type {
+  HttpMethodLower,
+  OpenApiDoc,
+  OpenApiParameter,
+  OpenApiSchema,
+  OperationInfo,
+} from "../openapi/spec.ts";
+
 // The registry of all derivers (for discovery / IDE migration).
 import { migrationsDeriver } from "./derivers/migrations.ts";
 import { domainDeriver } from "./derivers/domain.ts";

@@ -6,6 +6,7 @@
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { html, json, normalizeRoutePath, type Route } from "../router.ts";
 import { mountActions } from "./actions.ts";
+import { mountApi } from "./api.ts";
 import { mountPages } from "./pages.ts";
 
 /** Escape HTML-significant characters before embedding a value in markup. */
@@ -107,6 +108,15 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
   if (actions.routes.length > 0) {
     routes.push(...actions.routes);
     enabled.push(`actions(${actions.routes.length})`);
+  }
+
+  // The OpenAPI endpoint surface (ADR 0058) mounts AFTER actions (so an exact `actions[]` route
+  // still shadows an operation) and BEFORE the generic pages routes. It owns the `api.base`
+  // namespace via a regex dispatcher, so it only contributes routes when the app declares `api`.
+  const api = mountApi(ctx, app);
+  if (api.routes.length > 0) {
+    routes.push(...api.routes);
+    enabled.push("api");
   }
 
   // The pages surface (the schema-driven page runtime) mounts its own routes.

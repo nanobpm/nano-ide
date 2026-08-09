@@ -10,6 +10,8 @@ import { deriveDomain } from "./derivers/domain.ts";
 import { deriveWorkerBindings, type ModelSource } from "./derivers/worker-io.ts";
 import { deriveMeta } from "./derivers/meta.ts";
 import { deriveMessageBindings } from "./derivers/messages.ts";
+import { deriveApi } from "./derivers/api.ts";
+import { parseSpec } from "../openapi/spec.ts";
 import { deriveModels, type DerivedModels, type ModelError, MODEL_PROVENANCE } from "./models.ts";
 
 /** Minimal filesystem port. Node/Deno impls live in `fsio.ts`. */
@@ -112,6 +114,7 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
   const manifestPath = join(root, opts.manifestFile ?? "nano.app.json");
   const manifest: ToolkitManifest & {
     models?: { processes?: string[]; workflows?: string[] };
+    api?: { spec?: string };
   } = JSON.parse(await io.readText(manifestPath));
 
   const artifacts: DerivedArtifact[] = [];
@@ -140,6 +143,13 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
       artifacts.push(...deriveMeta(models));
       artifacts.push(...deriveMessageBindings(models, declaredTypeIds));
     }
+  }
+
+  // 4. OpenAPI `api` binding → typed endpoint contracts (ADR 0058). Fail-closed: a declared spec
+  //    that is missing or malformed throws here so `urban gen`/`urban check` surfaces it.
+  if (!opts.modelsOnly && typeof manifest.api?.spec === "string" && manifest.api.spec.length > 0) {
+    const specText = await io.readText(join(root, manifest.api.spec));
+    artifacts.push(...deriveApi(parseSpec(specText)));
   }
 
   return { artifacts: sortArtifacts(artifacts), derived };

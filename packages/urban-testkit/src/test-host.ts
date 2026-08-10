@@ -27,7 +27,7 @@ export interface TestHost {
    *  directly to drive routes in-process — no socket is ever opened. */
   handler(): HttpHandler | undefined;
   /** Log lines the app emitted, in order (when capture is enabled). */
-  logs: { level: "info" | "warn" | "error"; msg: string; fields?: Record<string, unknown> }[];
+  logs: { level: "debug" | "info" | "warn" | "error"; msg: string; fields?: Record<string, unknown> }[];
 }
 
 export interface CreateTestHostOptions {

@@ -57,14 +57,14 @@ test("child() bindings are merged into every record", () => {
   const log = createLogger(sink).child({ jobType: "charge", jobKey: "7" });
   log.info("started");
   log.warn("retrying", { attempt: 2 });
-  assert.deepEqual(records[0].fields, { jobType: "charge", jobKey: "7" });
-  assert.deepEqual(records[1].fields, { jobType: "charge", jobKey: "7", attempt: 2 });
+  assert.deepEqual({ ...records[0].fields }, { jobType: "charge", jobKey: "7" });
+  assert.deepEqual({ ...records[1].fields }, { jobType: "charge", jobKey: "7", attempt: 2 });
 });
 
 test("per-call fields win over bound context on key clash", () => {
   const { records, sink } = recorder();
   createLogger(sink).child({ attempt: 1 }).info("x", { attempt: 9 });
-  assert.deepEqual(records[0].fields, { attempt: 9 });
+  assert.deepEqual({ ...records[0].fields }, { attempt: 9 });
 });
 
 test("child() accumulates bindings down a chain and does not mutate the parent", () => {
@@ -73,8 +73,8 @@ test("child() accumulates bindings down a chain and does not mutate the parent",
   const child = base.child({ jobKey: "1" });
   base.info("base");
   child.info("child");
-  assert.deepEqual(records[0].fields, { app: "demo" });
-  assert.deepEqual(records[1].fields, { app: "demo", jobKey: "1" });
+  assert.deepEqual({ ...records[0].fields }, { app: "demo" });
+  assert.deepEqual({ ...records[1].fields }, { app: "demo", jobKey: "1" });
 });
 
 test("parseLogLevel is case-insensitive and falls back for unknown/absent input", () => {
@@ -123,4 +123,35 @@ test("formatLogRecord never throws on an unserializable (circular) field", () =>
   circular.self = circular;
   const rec = JSON.parse(formatLogRecord("info", "loop", { circular }, 7));
   assert.deepEqual(rec, { ts: 7, level: "info", msg: "loop", fieldsError: "unserializable log fields" });
+});
+
+test("formatLogRecord never throws when enumerating a field throws (getter/proxy trap)", () => {
+  const hostile = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error("trap");
+      },
+    },
+  );
+  const rec = JSON.parse(formatLogRecord("warn", "boom", hostile, 8));
+  assert.deepEqual(rec, { ts: 8, level: "warn", msg: "boom", fieldsError: "unserializable log fields" });
+});
+
+test("formatLogRecord writes an untrusted __proto__ field key as a plain own property", () => {
+  // JSON.parse builds a genuine own "__proto__" property (unlike the `{ __proto__: … }` literal,
+  // which sets the prototype) — the untrusted-key case the null-prototype record must survive.
+  const fields: LogFields = JSON.parse('{"__proto__":{"polluted":true}}');
+  const rec = JSON.parse(formatLogRecord("info", "hardened", fields, 3));
+  assert.equal(rec.ts, 3);
+  assert.equal(rec.msg, "hardened");
+  assert.deepEqual(Object.getOwnPropertyDescriptor(rec, "__proto__")?.value, { polluted: true });
+});
+
+test("child() with an untrusted __proto__ binding key does not pollute Object.prototype", () => {
+  const { records, sink } = recorder();
+  const bindings: LogFields = JSON.parse('{"__proto__":{"polluted":true}}');
+  createLogger(sink).child(bindings).info("x");
+  const fields = records[0].fields ?? {};
+  assert.deepEqual(Object.getOwnPropertyDescriptor(fields, "__proto__")?.value, { polluted: true });
 });

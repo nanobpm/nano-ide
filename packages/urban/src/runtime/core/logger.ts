@@ -71,12 +71,15 @@ export function levelEnabled(level: LogLevel, min: LogLevel): boolean {
 }
 
 /** Merge bound context with per-call fields (per-call wins), omitting the `fields` key entirely when
- *  the result is empty so a context-free line stays `{ level, msg }` clean. */
+ *  the result is empty so a context-free line stays `{ level, msg }` clean. Merges into a
+ *  null-prototype object: log field keys are user-controlled, so an untrusted key like `__proto__`
+ *  must set a plain own property rather than trip the magic prototype setter a normal `{}` inherits
+ *  from `Object.prototype` (same treatment as untrusted-key dictionaries elsewhere in this repo). */
 function mergeFields(bindings: LogFields, fields?: LogFields): LogFields | undefined {
   const boundKeys = Object.keys(bindings);
   if (boundKeys.length === 0) return fields;
-  if (!fields || Object.keys(fields).length === 0) return { ...bindings };
-  return { ...bindings, ...fields };
+  if (!fields || Object.keys(fields).length === 0) return Object.assign(Object.create(null), bindings);
+  return Object.assign(Object.create(null), bindings, fields);
 }
 
 /** A single structured log record, as serialized to NDJSON. Reserved keys (`ts`, `level`, `msg`)
@@ -94,20 +97,27 @@ export interface LogRecord {
  * Encode one structured log record as a single-line JSON string (no trailing newline). The reserved
  * `ts`/`level`/`msg` keys are written first and cannot be overwritten by a same-named field. Values
  * that don't survive `JSON.stringify` (a `bigint`, a circular object) are coerced so a bad field
- * never throws in the logging hot path or corrupts the stream.
+ * never throws in the logging hot path or corrupts the stream. The whole build+encode path is
+ * guarded (not just `JSON.stringify`), so a field whose enumeration itself throws (e.g. a getter or
+ * Proxy trap) still yields a clean fallback line. The record is a null-prototype object so an
+ * untrusted field key like `__proto__` sets a plain own property rather than tripping the magic
+ * prototype setter.
  */
 export function formatLogRecord(level: LogLevel, msg: string, fields: LogFields | undefined, now: number): string {
-  const record: LogRecord = { ts: now, level, msg };
-  if (fields) {
-    for (const [k, v] of Object.entries(fields)) {
-      if (k === "ts" || k === "level" || k === "msg") continue;
-      record[k] = v;
-    }
-  }
   try {
+    const record: LogRecord = Object.create(null);
+    record.ts = now;
+    record.level = level;
+    record.msg = msg;
+    if (fields) {
+      for (const [k, v] of Object.entries(fields)) {
+        if (k === "ts" || k === "level" || k === "msg") continue;
+        record[k] = v;
+      }
+    }
     return JSON.stringify(record, (_key, value) => (typeof value === "bigint" ? value.toString() : value));
   } catch {
-    // A field that can't be serialized (e.g. a circular reference) must not break logging.
+    // A field that can't be built or serialized (circular ref, throwing getter) must not break logging.
     return JSON.stringify({ ts: now, level, msg, fieldsError: "unserializable log fields" });
   }
 }
@@ -120,18 +130,21 @@ export function formatLogLine(level: LogLevel, msg: string, fields: LogFields | 
 /**
  * Build a {@link Logger} over `sink`, optionally pre-bound to `bindings`. The returned value is a
  * callable object: it forwards `log(level, msg, fields)` to the sink and exposes `debug/info/warn/
- * error` plus `child()`. `child(more)` returns a new logger whose bindings are `{ ...bindings,
- * ...more }`, so bound context accumulates down a call chain.
+ * error` plus `child()`. `bindings` is normalized into a null-prototype object (log field keys are
+ * user-controlled, so an untrusted key like `__proto__` must not trip the magic prototype setter),
+ * and `child(more)` returns a new logger whose bindings are `bindings` merged with `more` into a
+ * fresh null-prototype object, so bound context accumulates safely down a call chain.
  */
 export function createLogger(sink: LogSink, bindings: LogFields = {}): Logger {
+  const bound: LogFields = Object.assign(Object.create(null), bindings);
   const emit = (level: LogLevel, msg: string, fields?: LogFields): void => {
-    sink(level, msg, mergeFields(bindings, fields));
+    sink(level, msg, mergeFields(bound, fields));
   };
   return Object.assign(emit, {
     debug: (msg: string, fields?: LogFields) => emit("debug", msg, fields),
     info: (msg: string, fields?: LogFields) => emit("info", msg, fields),
     warn: (msg: string, fields?: LogFields) => emit("warn", msg, fields),
     error: (msg: string, fields?: LogFields) => emit("error", msg, fields),
-    child: (more: LogFields) => createLogger(sink, { ...bindings, ...more }),
+    child: (more: LogFields) => createLogger(sink, Object.assign(Object.create(null), bound, more)),
   });
 }

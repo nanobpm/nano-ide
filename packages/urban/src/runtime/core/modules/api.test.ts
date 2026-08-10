@@ -164,13 +164,13 @@ test("a delegate's app.log is bound to the request's correlation context", async
   );
   const res = await router(req("POST", "/app/api/invoices", { body: JSON.stringify({ id: "i1", amount: 5 }) }));
   assert.equal(res.status, 201);
-  assert.deepEqual(captured, [
-    {
-      level: "info",
-      msg: "creating invoice",
-      fields: { method: "POST", path: "/invoices", operationId: "createInvoice", amount: 5 },
-    },
-  ]);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].level, "info");
+  assert.equal(captured[0].msg, "creating invoice");
+  assert.deepEqual(
+    { ...captured[0].fields },
+    { method: "POST", path: "/invoices", operationId: "createInvoice", amount: 5 },
+  );
 });
 
 test("routes an operation to its delegate with validated params + body", async () => {

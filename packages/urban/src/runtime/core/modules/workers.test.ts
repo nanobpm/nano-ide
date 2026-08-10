@@ -218,19 +218,19 @@ test("mountWorkers binds the job's correlation context onto the handler's app.lo
     elementId: "Task_Charge",
     variables: {},
   });
-  assert.deepEqual(captured, [
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].level, "info");
+  assert.equal(captured[0].msg, "charging");
+  assert.deepEqual(
+    { ...captured[0].fields },
     {
-      level: "info",
-      msg: "charging",
-      fields: {
-        jobKey: "j-7",
-        jobType: "charge",
-        processInstanceKey: "pi-42",
-        elementId: "Task_Charge",
-        amount: 100,
-      },
+      jobKey: "j-7",
+      jobType: "charge",
+      processInstanceKey: "pi-42",
+      elementId: "Task_Charge",
+      amount: 100,
     },
-  ]);
+  );
 });
 
 test("mountWorkers omits absent instance/element from the bound log context", async () => {
@@ -248,7 +248,8 @@ test("mountWorkers omits absent instance/element from the bound log context", as
   });
   await mountWorkers(ctx, app);
   await engine.deliver("ping", { jobKey: "j-1", jobType: "ping", variables: {} });
-  assert.deepEqual(captured, [{ jobKey: "j-1", jobType: "ping" }]);
+  assert.equal(captured.length, 1);
+  assert.deepEqual({ ...captured[0] }, { jobKey: "j-1", jobType: "ping" });
 });
 
 // These are primarily compile-time assertions (the suite is typechecked by `tsc --noEmit`),

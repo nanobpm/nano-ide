@@ -28,6 +28,7 @@ import {
   operationsWithUnsafeId,
   parseSpec,
   resolveSchema,
+  responseSchemaForStatus,
   toRouteMatcher,
   undeclaredPathParams,
   undeclaredSecuritySchemes,
@@ -102,13 +103,17 @@ export interface OperationContract {
   body?: unknown;
 }
 
-/** The loose contract an untyped delegate sees (strings on the wire; unknown JSON body). `body` is
- *  optional so a raw (untyped) delegate typed `OperationHandler<DefaultContract>` still satisfies the
- *  generated registry's per-operation `OperationHandler<ReqFor<K>>` slot — an op whose request body
- *  is optional/absent must be a subtype of the default contract (handler args are contravariant). */
+/** The loose contract an untyped delegate sees. Params/query values are `unknown` (coerced to their
+ *  declared schema type before the delegate runs — the runtime validates then forwards the coerced
+ *  value — but a schemaless/undeclared key, or any param of an ejected op, is forwarded raw, hence
+ *  `unknown` rather than the coerced type); the JSON body is `unknown`. `body` is optional so a raw
+ *  (untyped) delegate typed `OperationHandler<DefaultContract>` still satisfies the generated
+ *  registry's per-operation `OperationHandler<ReqFor<K>>` slot — an op whose request body is
+ *  optional/absent must be a subtype of the default contract (handler args are contravariant), and a
+ *  schema-typed param object (e.g. `{ count: number }`) must be assignable to it. */
 export interface DefaultContract {
-  params: Record<string, string>;
-  query: Record<string, string | string[] | undefined>;
+  params: Record<string, unknown>;
+  query: Record<string, unknown>;
   body?: unknown;
 }
 
@@ -239,16 +244,29 @@ export function apiDocsPath(manifest: unknown): string | undefined {
 }
 
 /** Coerce a wire string to the type its parameter schema declares, so numeric/boolean bounds
- *  validate. A value that will not coerce is left as-is and fails the type check with a clear
- *  message. The delegate still receives the original string(s). */
+ *  validate and the delegate receives the coerced value (not the raw string). A value that will not
+ *  coerce is left as-is and fails the type check with a clear message. */
 function coerceParam(doc: OpenApiDoc, schema: OpenApiSchema | undefined, raw: string): unknown {
   const s = resolveSchema(doc, schema);
   if (!s) return raw;
-  if (s.type === "integer" || s.type === "number") {
+  // Effective scalar type: the explicit `type`, else inferred from a typeless `const`/`enum` whose
+  // values are all numbers or all booleans. Without this, a typeless numeric/boolean const/enum
+  // param (whose generated type is a number/boolean literal) could never be satisfied by the wire
+  // string — every request would 400 against a type the runtime otherwise never produces.
+  let t = s.type;
+  if (t === undefined) {
+    if (typeof s.const === "number") t = "number";
+    else if (typeof s.const === "boolean") t = "boolean";
+    else if (Array.isArray(s.enum) && s.enum.length > 0) {
+      if (s.enum.every((v) => typeof v === "number")) t = "number";
+      else if (s.enum.every((v) => typeof v === "boolean")) t = "boolean";
+    }
+  }
+  if (t === "integer" || t === "number") {
     const n = Number(raw);
     return raw.trim() !== "" && !Number.isNaN(n) ? n : raw;
   }
-  if (s.type === "boolean") {
+  if (t === "boolean") {
     if (raw === "true") return true;
     if (raw === "false") return false;
   }
@@ -501,6 +519,11 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
       const all = req.query.getAll(key);
       query[key] = all.length > 1 ? all : all[0];
     }
+    // What the delegate actually receives: params/query coerced to their declared schema type. Seed
+    // from the raw wire values (used verbatim for ejected ops and for undeclared/schemaless keys);
+    // the validation loop below overwrites each declared parameter with its coerced value.
+    const coercedParams: Record<string, unknown> = { ...params };
+    const coercedQuery: Record<string, unknown> = { ...query };
 
     // Parse the JSON body (empty body → undefined). Invalid JSON is a 400 unless the op is ejected
     // (then the delegate reads the raw request itself).
@@ -530,27 +553,41 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
             if (p.required) issues.push({ path: `params/${p.name}`, message: "is required" });
             continue;
           }
-          issues.push(...validateValue(d, p.schema, coerceParam(d, p.schema, val), `params/${p.name}`));
+          // Coerce once, forward the coerced value to the delegate (so a `count` param is a number
+          // in the delegate's typed input, matching the generated schema type), and validate it.
+          const coerced = coerceParam(d, p.schema, val);
+          coercedParams[p.name] = coerced;
+          issues.push(...validateValue(d, p.schema, coerced, `params/${p.name}`));
         } else if (p.in === "query") {
           const val = query[p.name];
           if (val === undefined) {
             if (p.required) issues.push({ path: `query/${p.name}`, message: "is required" });
             continue;
           }
+          // A declared but schemaless query param has no shape to coerce/validate against — its
+          // generated type is the raw wire `string | string[]`, so preserve raw semantics
+          // (including repeated keys) and forward the value verbatim (already seeded in coercedQuery
+          // from the raw wire). Don't route it through the scalar-repeat rejection below.
+          if (!p.schema) continue;
           const values = Array.isArray(val) ? val : [val];
           const ps = resolveSchema(d, p.schema);
           if (ps?.type === "array") {
             // Repeated keys (?tag=a&tag=b) form the array; coerce + validate each item, then the
-            // whole array against the schema's array constraints (minItems, items, ...).
+            // whole array against the schema's array constraints (minItems, items, ...). The coerced
+            // array is what the delegate receives.
             const items = ps.items ? values.map((v) => coerceParam(d, ps.items, v)) : values;
+            coercedQuery[p.name] = items;
             issues.push(...validateValue(d, ps, items, `query/${p.name}`));
+          } else if (values.length > 1) {
+            // A scalar (non-array) param that's repeated (?x=a&x=b) can't be forwarded as the
+            // single schema-typed scalar the delegate's generated type expects — reject it (400)
+            // rather than hand the delegate an array the type says is impossible.
+            issues.push({ path: `query/${p.name}`, message: "expected a single value" });
           } else {
-            // Scalar param: validate EVERY provided value, not just the first, so extra repeated
-            // values can't bypass validation.
-            values.forEach((v, i) => {
-              const at = values.length > 1 ? `query/${p.name}[${i}]` : `query/${p.name}`;
-              issues.push(...validateValue(d, p.schema, coerceParam(d, p.schema, v), at));
-            });
+            // Scalar param: coerce the single value, forward it, and validate it.
+            const coerced = coerceParam(d, p.schema, values[0]);
+            coercedQuery[p.name] = coerced;
+            issues.push(...validateValue(d, p.schema, coerced, `query/${p.name}`));
           }
         }
       }
@@ -604,14 +641,21 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     // a body-less type.
     const handlerBody = op.requestBodySchema !== undefined || op.requestBodyRequired ? body : undefined;
     try {
-      const result = await handler({ req, params, query, body: handlerBody }, app);
+      const result = await handler({ req, params: coercedParams, query: coercedQuery, body: handlerBody }, app);
       if (!result) return { status: 204 };
+      const status = result.status ?? 200;
       // Optional response validation (dev by default): warn-only, never blocks the response.
       const mode = binding.validateResponses ?? "dev";
       const doValidate =
         mode === "always" || (mode === "dev" && ctx.host.env("NODE_ENV") !== "production");
-      if (doValidate && op.responseSchema && result.body !== undefined) {
-        const rIssues = validateValue(d, op.responseSchema, result.body, "response");
+      // Validate against the response schema for THIS status — exact status, else a matching status
+      // range ("2XX"), else the "default" entry — so a documented error body (e.g. a 400 `{ error }`)
+      // is checked against its own schema, not spuriously against the success response. A
+      // documented-but-bodyless status carries no schema, so it (like a status with no `default`
+      // fallback) is left unvalidated.
+      const responseSchema = responseSchemaForStatus(op.responseSchemas, status);
+      if (doValidate && responseSchema && result.body !== undefined) {
+        const rIssues = validateValue(d, responseSchema, result.body, "response");
         if (rIssues.length > 0) {
           ctx.host.log("warn", "operation response failed schema validation (ADR 0058)", {
             operationId: op.operationId,
@@ -620,7 +664,7 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
         }
       }
       return {
-        status: result.status ?? 200,
+        status,
         headers: { "content-type": "application/json", ...(result.headers ?? {}) },
         body: result.body === undefined ? undefined : JSON.stringify(result.body),
       };

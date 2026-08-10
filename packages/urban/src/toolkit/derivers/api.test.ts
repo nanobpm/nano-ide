@@ -139,10 +139,167 @@ test("required query params aren't undefined-widened; optional ones use the ? mo
     },
   };
   const out = emitApiBindings(qdoc);
-  assert.match(out, /"q": string \| string\[\]/); // required → present, not optional
+  assert.match(out, /"q": string/); // required scalar string → present, coerced to its schema type
   assert.doesNotMatch(out, /"q"\?:/); // not optional
-  assert.doesNotMatch(out, /"q": string \| string\[\] \| undefined/); // not undefined-widened
-  assert.match(out, /"page"\?: string \| string\[\]/); // optional → ? modifier
+  assert.doesNotMatch(out, /"q": string \| undefined/); // not undefined-widened
+  assert.match(out, /"page"\?: string/); // optional → ? modifier
+});
+
+test("params are typed by their schema (coerced), not the raw wire string", () => {
+  const pdoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/things/{id}": {
+        get: {
+          operationId: "getThing",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "verbose", in: "query", schema: { type: "boolean" } },
+            { name: "tags", in: "query", schema: { type: "array", items: { type: "string" } } },
+            { name: "raw", in: "query" }, // no schema → raw wire type
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(pdoc);
+  assert.match(out, /"id": number/); // integer path param → number, not string
+  assert.match(out, /"verbose"\?: boolean/); // boolean query → boolean
+  assert.match(out, /"tags"\?: Array<string>/); // array query → Array<item>
+  assert.match(out, /"raw"\?: string \| string\[\]/); // schemaless query → raw wire type
+});
+
+test("the response type unions every documented JSON response body (success + error)", () => {
+  const rdoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      schemas: {
+        Ok: { type: "object", properties: { ok: { type: "boolean" } }, additionalProperties: false },
+        Err: { type: "object", properties: { error: { type: "string" } }, additionalProperties: false },
+      },
+    },
+    paths: {
+      "/do": {
+        post: {
+          operationId: "doIt",
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Ok" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/Err" } } } },
+          },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(rdoc);
+  assert.match(out, /export type DoItResponse = Ok \| Err;/); // both bodies in the union
+});
+
+test("an ejected operation keeps raw wire param/query types + an unknown body (runtime skips coercion)", () => {
+  const edoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/raw/{id}": {
+        post: {
+          operationId: "rawOp",
+          "x-urban-eject": true,
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "n", in: "query", schema: { type: "integer" } },
+          ],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", properties: { a: { type: "string" } } } } },
+          },
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(edoc);
+  assert.match(out, /"id": string/); // ejected integer path param stays a raw wire string
+  assert.match(out, /"n"\?: string \| string\[\]/); // ejected query param stays raw wire
+  assert.match(out, /body: unknown;/); // ejected body is unvalidated → unknown
+});
+
+test("whole-surface eject (manifest api.eject) types every op as ejected (raw params, unknown body)", () => {
+  const sdoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/thing/{id}": {
+        post: {
+          operationId: "doThing",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "q", in: "query", required: true, schema: { type: "integer" } },
+          ],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", properties: { a: { type: "string" } } } } },
+          },
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  // Without the surface flag the op is fully typed…
+  const typed = emitApiBindings(sdoc, false);
+  assert.match(typed, /"id": number/);
+  assert.match(typed, /"q": number/);
+  // …with whole-surface eject it degrades to raw wire + unknown body, matching the runtime.
+  const ejected = emitApiBindings(sdoc, true);
+  assert.match(ejected, /"id": string/); // raw wire path param
+  assert.match(ejected, /"q"\?: string \| string\[\]/); // required query param becomes optional + raw
+  assert.match(ejected, /body: unknown;/);
+});
+
+test("an ejected required query param is typed optional (runtime does not enforce presence)", () => {
+  const edoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/raw": {
+        get: {
+          operationId: "rawReq",
+          "x-urban-eject": true,
+          parameters: [{ name: "req", in: "query", required: true, schema: { type: "integer" } }],
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(edoc);
+  assert.match(out, /"req"\?: string \| string\[\]/); // required-but-ejected → optional raw wire
+});
+
+test("a component or operationId colliding with a fixed generated name fails the drift gate", () => {
+  const cdoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: { schemas: { ApiOperations: { type: "string" } } },
+    paths: { "/z": { get: { operationId: "getZ", responses: { "200": {} } } } },
+  };
+  assert.throws(() => emitApiBindings(cdoc), /duplicate TypeScript type "ApiOperations"/);
+});
+
+test("a documented-but-bodyless status is excluded from the response union", () => {
+  const rdoc: OpenApiDoc = {
+    openapi: "3.1.0",
+    components: {
+      schemas: { Err: { type: "object", properties: { error: { type: "string" } }, additionalProperties: false } },
+    },
+    paths: {
+      "/x": {
+        get: {
+          operationId: "getX",
+          responses: {
+            "204": {}, // documented, no JSON body → not in the union
+            default: { content: { "application/json": { schema: { $ref: "#/components/schemas/Err" } } } },
+          },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(rdoc);
+  assert.match(out, /export type GetXResponse = Err;/); // only the schema'd default body
 });
 
 test("request body optionality follows requestBody.required (runtime passes undefined when absent)", () => {

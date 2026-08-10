@@ -317,10 +317,46 @@ test("repeated query keys are all validated (extra values don't bypass validatio
     { "/app/operations/listItems": { default: () => ({ body: { ok: true } }) } },
     arraySpec,
   );
-  // First value valid, second (0) violates minimum:1 — must still be caught.
+  // A repeated scalar (non-array) param can't be forwarded as the single schema-typed scalar the
+  // delegate expects, so it's rejected outright (400) — extra values never reach the delegate.
   const res = await router(req("GET", "/app/api/items", { query: "n=5&n=0" }));
   assert.equal(res.status, 400);
   assert.match(JSON.parse(res.body!).error, /validation failed/);
+  assert.match(JSON.stringify(JSON.parse(res.body!).issues), /expected a single value/);
+});
+
+test("a declared but schemaless query param preserves raw wire semantics (repeats allowed)", async () => {
+  const schemalessSpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/items": {
+        get: {
+          operationId: "listItems",
+          parameters: [{ name: "x", in: "query" }], // no schema → raw wire `string | string[]`
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: unknown;
+  const { router } = build(
+    { spec: "openapi.json" },
+    { "/app/operations/listItems": { default: (i: { query: Record<string, unknown> }) => { got = i.query.x; return { body: { ok: true } }; } } },
+    schemalessSpec,
+  );
+  // Repeated key must NOT be rejected as a scalar-repeat — it's forwarded as the raw string[].
+  const res = await router(req("GET", "/app/api/items", { query: "x=a&x=b" }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(got, ["a", "b"]);
+  // A single value stays the raw string.
+  let got1: unknown;
+  const b2 = build(
+    { spec: "openapi.json" },
+    { "/app/operations/listItems": { default: (i: { query: Record<string, unknown> }) => { got1 = i.query.x; return { body: { ok: true } }; } } },
+    schemalessSpec,
+  );
+  await b2.router(req("GET", "/app/api/items", { query: "x=solo" }));
+  assert.equal(got1, "solo");
 });
 
 test("array-typed query params validate the whole array (items + array constraints)", async () => {
@@ -347,6 +383,120 @@ test("array-typed query params validate the whole array (items + array constrain
   assert.equal((await build2("tag=a&tag=b")).status, 200); // valid array
   assert.equal((await build2("tag=a")).status, 400); // fewer than minItems
   assert.equal((await build2("tag=a&tag=c")).status, 400); // "c" not in enum
+});
+
+test("params/query are coerced to their schema type before reaching the delegate", async () => {
+  const coerceSpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/things/{id}": {
+        get: {
+          operationId: "getThing",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "verbose", in: "query", schema: { type: "boolean" } },
+            { name: "tags", in: "query", schema: { type: "array", items: { type: "string" } } },
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: { params: Record<string, unknown>; query: Record<string, unknown> } | undefined;
+  const { router } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/operations/getThing": {
+        default: (i: { params: Record<string, unknown>; query: Record<string, unknown> }) => {
+          got = { params: i.params, query: i.query };
+          return { body: { ok: true } };
+        },
+      },
+    },
+    coerceSpec,
+  );
+  const res = await router(req("GET", "/app/api/things/42", { query: "verbose=true&tags=x&tags=y" }));
+  assert.equal(res.status, 200);
+  // integer path param → number, boolean query → boolean, array query → string[] (all coerced).
+  assert.deepEqual(got, { params: { id: 42 }, query: { verbose: true, tags: ["x", "y"] } });
+});
+
+test("a typeless numeric const/enum query param coerces (so its number-literal type is satisfiable)", async () => {
+  const enumSpec = JSON.stringify({
+    openapi: "3.1.0",
+    paths: {
+      "/pick": {
+        get: {
+          operationId: "pick",
+          parameters: [
+            { name: "v", in: "query", required: true, schema: { enum: [1, 2, 3] } }, // no `type`
+            { name: "k", in: "query", required: true, schema: { const: 7 } }, // no `type`
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: { query: Record<string, unknown> } | undefined;
+  const { router } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/operations/pick": {
+        default: (i: { query: Record<string, unknown> }) => {
+          got = { query: i.query };
+          return { body: { ok: true } };
+        },
+      },
+    },
+    enumSpec,
+  );
+  // A valid enum/const value coerces to a number and passes validation (would 400 if left a string).
+  const ok = await router(req("GET", "/app/api/pick", { query: "v=2&k=7" }));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(got, { query: { v: 2, k: 7 } });
+  // An out-of-set value still fails validation (coercion doesn't loosen the constraint).
+  const bad = await router(req("GET", "/app/api/pick", { query: "v=9&k=7" }));
+  assert.equal(bad.status, 400);
+});
+
+test("response validation is status-keyed: a documented error body validates against ITS schema", async () => {
+  const respSpec = JSON.stringify({
+    openapi: "3.0.0",
+    components: {
+      schemas: {
+        Ok: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false },
+        Err: { type: "object", properties: { error: { type: "string" } }, required: ["error"], additionalProperties: false },
+      },
+    },
+    paths: {
+      "/do": {
+        post: {
+          operationId: "doIt",
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Ok" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/Err" } } } },
+          },
+        },
+      },
+    },
+  });
+  const runWith = (result: { status: number; body: unknown }) => {
+    const b = build(
+      { spec: "openapi.json", validateResponses: "always" },
+      { "/app/operations/doIt": { default: () => result } },
+      respSpec,
+    );
+    return { call: b.router(req("POST", "/app/api/do", { body: "{}" })), logs: b.logs };
+  };
+  // A valid documented 400 error body must NOT warn — the pre-fix code validated it against the 200
+  // success schema and warned. Now it's checked against the 400 schema and passes.
+  const okErr = runWith({ status: 400, body: { error: "bad ref" } });
+  await okErr.call;
+  assert.equal(okErr.logs.some((l) => l.msg.includes("response failed schema validation")), false);
+  // A body that violates the 400 schema DOES warn (proves it's validated against Err, not Ok).
+  const badErr = runWith({ status: 400, body: { oops: 1 } });
+  await badErr.call;
+  assert.equal(badErr.logs.some((l) => l.msg.includes("response failed schema validation")), true);
 });
 
 test("a failed initial spec load is retried, not cached as a permanent 500", async () => {

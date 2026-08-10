@@ -11,6 +11,7 @@ import {
   operationsWithUnsafeId,
   parseSpec,
   resolveSchema,
+  responseSchemaForStatus,
   toRouteMatcher,
   undeclaredPathParams,
   undeclaredSecuritySchemes,
@@ -516,4 +517,47 @@ test("evaluateSecurity: alternative requirements are OR (any one satisfied autho
   );
   // Neither presented → 401.
   assert.equal(evaluateSecurity(doc, op, noHeader, noQuery, env).status, 401);
+});
+
+test("responseSchemaForStatus: a documented-but-bodyless status suppresses the default fallback", () => {
+  const ops = collectOperations({
+    openapi: "3.1.0",
+    paths: {
+      "/x": {
+        get: {
+          operationId: "getX",
+          responses: {
+            "204": {}, // documented, no JSON body
+            default: { content: { "application/json": { schema: { type: "object" } } } },
+          },
+        },
+      },
+    },
+  });
+  const entries = ops[0].responseSchemas;
+  // 204 IS documented (just bodyless) → no validation, and it must NOT fall through to `default`.
+  assert.equal(responseSchemaForStatus(entries, 204), undefined);
+  // 500 is undocumented → falls through to `default`.
+  assert.equal(responseSchemaForStatus(entries, 500)?.type, "object");
+});
+
+test("responseSchemaForStatus: a status-range ('2XX') covers concrete statuses in its class", () => {
+  const ops = collectOperations({
+    openapi: "3.1.0",
+    paths: {
+      "/y": {
+        get: {
+          operationId: "getY",
+          responses: {
+            "2XX": { content: { "application/json": { schema: { type: "string" } } } },
+            default: { content: { "application/json": { schema: { type: "object" } } } },
+          },
+        },
+      },
+    },
+  });
+  const entries = ops[0].responseSchemas;
+  assert.equal(entries.map((e) => e.status).join(","), "2XX,default"); // ranges before default
+  assert.equal(responseSchemaForStatus(entries, 200)?.type, "string"); // 2XX class → range schema
+  assert.equal(responseSchemaForStatus(entries, 404)?.type, "object"); // outside 2XX → default
 });

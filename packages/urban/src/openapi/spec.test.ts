@@ -461,6 +461,23 @@ test("evaluateSecurity: a requirement naming an undeclared scheme is a 500 misco
   assert.deepEqual(undeclaredSecuritySchemes(doc), ["ghost (POST /x)"]);
 });
 
+
+test("evaluateSecurity: malformed security entries fail closed as a 500 misconfiguration", () => {
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      securitySchemes: { webhookKey: { type: "apiKey", in: "header", name: "X-Key", "x-nano-secret-env": "KEY" } },
+    },
+    paths: {
+      "/x": { post: { operationId: "x", security: ["webhookKey"], responses: { "204": {} } } },
+    },
+  };
+  const op = collectOperations(doc)[0];
+  const decision = evaluateSecurity(doc, op, () => "secret", noQuery, secret({ KEY: "secret" }));
+  assert.equal(decision.status, 500);
+  assert.match(decision.error ?? "", /malformed security requirement/);
+});
+
 test("evaluateSecurity: an unsupported scheme type is a 500 misconfiguration", () => {
   const doc: OpenApiDoc = {
     openapi: "3.0.0",

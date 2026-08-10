@@ -92,7 +92,7 @@ export interface OpenApiResponse {
  */
 export interface OpenApiSecurityScheme {
   type?: string;
-  /** For `apiKey`: where the key travels. Only `header` is enforced in this slice. */
+  /** For `apiKey`: where the key travels. `header` and `query` are enforced in this slice. */
   in?: "header" | "query" | "cookie";
   /** For `apiKey`: the header (or query) name carrying the key, e.g. `X-Webhook-Key`. */
   name?: string;
@@ -244,9 +244,10 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
       const responses = isRecord(opRaw.responses) ? opRaw.responses : {};
       // Effective security: an operation's own `security` (even an explicit `[]`, which opts out of
       // a document-level default) wins; otherwise inherit the document-level default; otherwise open.
-      const security = normalizeSecurity(
-        Array.isArray(opRaw.security) ? opRaw.security : doc.security,
-      );
+      const rawSecurity = Object.prototype.hasOwnProperty.call(opRaw, "security")
+        ? opRaw.security
+        : doc.security;
+      const security = normalizeSecurity(rawSecurity);
       out.push({
         operationId,
         method,
@@ -327,19 +328,34 @@ export function operationsWithUnsafeId(doc: OpenApiDoc): string[] {
   return out;
 }
 
-/** Normalize a raw `security` value into a clean requirement list. Non-array → `[]`. Each element
- *  must be an object mapping scheme names → a (string[]) scope list; malformed entries are dropped.
- *  The result is the effective, self-contained requirement set carried on an {@link OperationInfo}. */
+const MALFORMED_SECURITY_REQUIREMENT = "__nano_malformed_security_requirement__";
+
+function malformedSecurityRequirement(): OpenApiSecurityRequirement {
+  return { [MALFORMED_SECURITY_REQUIREMENT]: [] };
+}
+
+/** Normalize a raw `security` value into a clean requirement list. Missing → `[]` (open).
+ *  Present-but-malformed values become an impossible marker requirement so enforcement fails closed
+ *  as a 500 misconfiguration instead of silently opening a guarded operation. */
 function normalizeSecurity(raw: unknown): OpenApiSecurityRequirement[] {
-  if (!Array.isArray(raw)) return [];
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return [malformedSecurityRequirement()];
   const out: OpenApiSecurityRequirement[] = [];
   for (const entry of raw) {
-    if (!isRecord(entry)) continue;
-    const req: OpenApiSecurityRequirement = {};
-    for (const [name, scopes] of Object.entries(entry)) {
-      req[name] = Array.isArray(scopes) ? scopes.filter((s): s is string => typeof s === "string") : [];
+    if (!isRecord(entry)) {
+      out.push(malformedSecurityRequirement());
+      continue;
     }
-    out.push(req);
+    const req: OpenApiSecurityRequirement = {};
+    let malformed = false;
+    for (const [name, scopes] of Object.entries(entry)) {
+      if (!Array.isArray(scopes) || scopes.some((s) => typeof s !== "string")) {
+        malformed = true;
+        break;
+      }
+      req[name] = scopes;
+    }
+    out.push(malformed ? malformedSecurityRequirement() : req);
   }
   return out;
 }
@@ -355,13 +371,13 @@ export interface SecurityDecision {
 }
 
 const SECURITY_OK: SecurityDecision = { ok: true };
+const TEXT_ENCODER = new TextEncoder();
 
 /** Constant-time string comparison — avoids leaking how many leading characters of a secret matched
  *  via response timing. Unequal lengths short-circuit (an acceptable length oracle for API keys). */
 function timingSafeEqual(a: string, b: string): boolean {
-  const enc = new TextEncoder();
-  const ab = enc.encode(a);
-  const bb = enc.encode(b);
+  const ab = TEXT_ENCODER.encode(a);
+  const bb = TEXT_ENCODER.encode(b);
   if (ab.length !== bb.length) return false;
   let diff = 0;
   for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
@@ -398,6 +414,11 @@ export function evaluateSecurity(
     if (names.length === 0) return SECURITY_OK; // an empty object is a "no auth" alternative
     let satisfied = true;
     for (const name of names) {
+      if (name === MALFORMED_SECURITY_REQUIREMENT) {
+        misconfig ??= "malformed security requirement";
+        satisfied = false;
+        break;
+      }
       const scheme = schemes[name];
       if (!scheme) {
         misconfig ??= `security scheme "${name}" is not declared in components.securitySchemes`;
@@ -455,7 +476,7 @@ export function undeclaredSecuritySchemes(doc: OpenApiDoc): string[] {
   for (const op of collectOperations(doc)) {
     for (const requirement of op.security) {
       for (const name of Object.keys(requirement)) {
-        if (!declared.has(name)) {
+        if (name !== MALFORMED_SECURITY_REQUIREMENT && !declared.has(name)) {
           out.push(`${name} (${op.method.toUpperCase()} ${op.path})`);
         }
       }

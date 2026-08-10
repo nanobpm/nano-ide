@@ -23,11 +23,13 @@ test("resolveModulePath appends the first candidate extension that exists", () =
   assert.equal(resolved, "/ops/getX.js");
 });
 
-test("resolveModulePath prefers .ts over .js when both exist", () => {
+test("resolveModulePath prefers a compiled .js over .ts when both exist", () => {
+  // Matches the connector-SDK precedent (connectorShimUrl): a mixed source+build tree must
+  // resolve to the importable .js so it works on plain Node without TypeScript type-stripping.
   const present = new Set(["/ops/getX.ts", "/ops/getX.js"]);
   const resolved = resolveModulePath("/ops/getX", (c) => present.has(c));
-  assert.equal(resolved, "/ops/getX.ts");
-  assert.equal(MODULE_EXTENSION_CANDIDATES[0], ".ts");
+  assert.equal(resolved, "/ops/getX.js");
+  assert.equal(MODULE_EXTENSION_CANDIDATES[0], ".js");
 });
 
 test("resolveModulePath returns the path unchanged when nothing exists", () => {

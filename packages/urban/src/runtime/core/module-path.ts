@@ -7,12 +7,20 @@
 // fails with a "cannot find module" error even though `.../operations/getX.ts` exists. `actions[]`
 // don't hit this because the manifest carries the extension (`"module": "actions/x.ts"`).
 //
-// This mirrors the connector-SDK's `.js`/`.ts` tolerance (adapters/node.ts): probe the on-disk
-// candidates so both a from-source run (`.ts`, via node strip-types / Deno) and a compiled run
-// (`.js`, via `urban run`) resolve the same author-written `<dir>/<operationId>` path.
+// This mirrors the connector-SDK shim resolution (`connectorShimUrl` in adapters/node.ts): probe
+// the on-disk candidates, PREFERRING a compiled `.js` (the published / `urban run` path, importable
+// on plain Node without TypeScript type-stripping) over the from-source `.ts` (node strip-types /
+// Deno), so both resolve the same author-written `<dir>/<operationId>` path. Preferring compiled
+// first matters in a mixed source+build tree: if both exist and the process has no type-stripping,
+// selecting `.ts` would fail even though `.js` was importable.
 
-/** Candidate extensions tried, in order, for an extensionless module path. */
-export const MODULE_EXTENSION_CANDIDATES = [".ts", ".js", ".mjs", ".cjs"] as const;
+/**
+ * Candidate extensions tried, in order, for an extensionless module path. Compiled outputs come
+ * first (matching the connector-SDK precedent) so a mixed source+build tree resolves to the
+ * importable `.js` rather than a `.ts` that fails on a runtime without type-stripping; a
+ * from-source tree (only `.ts` present) falls through to `.ts`.
+ */
+export const MODULE_EXTENSION_CANDIDATES = [".js", ".mjs", ".cjs", ".ts"] as const;
 
 /** True when the path already ends in a JS/TS module extension (.ts/.js/.mjs/.cjs). */
 function hasModuleExtension(path: string): boolean {

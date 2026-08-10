@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scaffold, slugify } from "./scaffold.ts";
 import { main } from "./cli.ts";
+import { parse as parseYaml } from "yaml";
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -96,18 +97,18 @@ test("full preset scaffolds the end-to-end showcase: API + operations + pages", 
   const res = await scaffold({ name: "Hello Urban", dir, preset: "full" });
 
   // OpenAPI-first API surface: spec + one delegate per operationId.
-  assert.ok(res.files.includes("openapi.json"), "scaffolds the OpenAPI spec");
+  assert.ok(res.files.includes("openapi.yaml"), "scaffolds the OpenAPI spec");
   assert.ok(res.files.includes("operations/listGreetings.ts"), "listGreetings delegate");
   assert.ok(res.files.includes("operations/createGreeting.ts"), "createGreeting delegate");
   assert.ok(res.files.includes("pages/home.page.json"), "scaffolds a home page");
 
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
-  assert.equal(manifest.api?.spec, "openapi.json", "manifest declares the api binding");
+  assert.equal(manifest.api?.spec, "openapi.yaml", "manifest declares the api binding");
   assert.equal(manifest.surfaces?.pages?.enabled, true, "pages surface enabled");
 
   // The spec's operationIds must each have a matching delegate module (urban check fails
   // closed otherwise), and every operation must carry a unique operationId.
-  const spec = JSON.parse(await readFile(join(dir, "openapi.json"), "utf8"));
+  const spec = parseYaml(await readFile(join(dir, "openapi.yaml"), "utf8"));
   const opIds: string[] = [];
   const collect = (v: unknown): void => {
     if (!v || typeof v !== "object") return;
@@ -132,6 +133,30 @@ test("full preset scaffolds the end-to-end showcase: API + operations + pages", 
   assert.ok(!/__APP_/.test(createOp), "no un-substituted tokens remain");
 });
 
+test("scaffolds valid YAML even for names with YAML-special characters", async () => {
+  // The title is substituted with a JSON-escaped value into a double-quoted YAML scalar, so
+  // names containing YAML indicators (`:` + space, `#`, leading `-`, `@`, `{`, quotes, `\`)
+  // must not break the authored openapi.yaml. Parse the emitted spec to prove it round-trips.
+  for (const name of [
+    'Foo: Bar #x',
+    'My "Cool" App',
+    "A\\B",
+    "- leading dash",
+    "@handle {x}",
+  ]) {
+    const dir = await mkdtemp(join(tmpdir(), "urban-yaml-hostile-"));
+    await scaffold({ name, dir, preset: "full" });
+    const spec = parseYaml(await readFile(join(dir, "openapi.yaml"), "utf8"));
+    assert.equal(spec.info.title, `${name} API`, `title round-trips for ${JSON.stringify(name)}`);
+    // The description interpolates the name too (double-quoted scalar) — it must render the
+    // real name, not a JSON-escaped form with literal backslashes (Swagger UI would show them).
+    assert.ok(
+      spec.info.description.includes(`The ${name} REST API.`),
+      `description round-trips for ${JSON.stringify(name)}`,
+    );
+  }
+});
+
 test("headless preset drops surfaces, triggers and forms (workers only)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-headless-"));
   const res = await scaffold({ name: "Batch Job", dir, preset: "headless" });
@@ -148,8 +173,8 @@ test("headless preset drops surfaces, triggers and forms (workers only)", async 
   // service still exposes its REST API + Swagger docs.
   assert.ok(!res.files.some((f) => f.startsWith("pages/")), "no page files written");
   assert.ok(!(await exists(join(dir, "pages"))), "no pages dir");
-  assert.equal(manifest.api?.spec, "openapi.json", "headless keeps the api binding");
-  assert.ok(res.files.includes("openapi.json"), "headless keeps the spec");
+  assert.equal(manifest.api?.spec, "openapi.yaml", "headless keeps the api binding");
+  assert.ok(res.files.includes("openapi.yaml"), "headless keeps the spec");
   assert.ok(res.files.includes("operations/listGreetings.ts"), "headless keeps delegates");
 });
 

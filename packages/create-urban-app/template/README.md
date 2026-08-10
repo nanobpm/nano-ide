@@ -8,7 +8,7 @@ that turns a declarative manifest (`nano.app.json`) into a running application o
 
 ```
 nano.app.json         the manifest — the whole app, declared
-openapi.json          the app's REST API contract (OpenAPI); Swagger UI for free
+openapi.yaml          the app's REST API contract (OpenAPI); Swagger UI for free
 operations/*.ts       one delegate per operationId (you write only the body)
 pages/*.page.json     the home UI (a declarative, data-bound screen)
 processes/*.bpmn      BPMN process models
@@ -74,7 +74,7 @@ Then open the app and trigger the demo:
 - **Home UI** — <http://localhost:8090/> — send a greeting and watch the grid update.
 - **API docs** — <http://localhost:8090/app/api-docs> — Swagger UI for the REST API
   (linked from the "API docs ↗" badge on the home page). It's generated from
-  `openapi.json` for free; use "Try it out" to call the API live.
+  `openapi.yaml` for free; use "Try it out" to call the API live.
 
 ```bash
 # Same flow, three ways in — all publish the greet message:
@@ -85,14 +85,14 @@ curl localhost:8090/app/api/greetings         # list what the process recorded
 
 ## API & docs
 
-The app is **OpenAPI-first**. `openapi.json` is the API contract; Urban derives the route
+The app is **OpenAPI-first**. `openapi.yaml` is the API contract; Urban derives the route
 table, typed request/response contracts, and runtime validators from it, and calls one
 delegate per `operationId` under `operations/`. You write only the delegate body.
 
 - **Swagger UI** is served automatically at `/app/api-docs` — no config, no build step.
 - The raw spec (with `servers` pointed at the live base) is at `/app/api-docs/openapi.json`.
 
-Add an endpoint: declare the path + a unique `operationId` in `openapi.json`, then create
+Add an endpoint: declare the path + a unique `operationId` in `openapi.yaml`, then create
 `operations/<operationId>.ts` exporting `defineOperation("<operationId>", (input, app) => …)`.
 `npm run dev` picks it up on save.
 
@@ -121,7 +121,7 @@ your current sources without rewriting them.
 
 ## Next steps
 
-- **Add an API endpoint** — a path + `operationId` in `openapi.json`, then
+- **Add an API endpoint** — a path + `operationId` in `openapi.yaml`, then
   `operations/<operationId>.ts`. Swagger picks it up automatically.
 - **Add a screen** — drop a `*.page.json` under `pages/` (nav, text, `actionForm`,
   `dataGrid` nodes). Link it from the `nav` items.

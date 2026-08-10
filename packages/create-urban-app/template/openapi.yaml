@@ -1,0 +1,80 @@
+openapi: 3.0.3
+info:
+  title: "__APP_NAME__ API"
+  version: 0.1.0
+  description: "The __APP_NAME__ REST API. Urban derives the controller layer (typed request/response contracts, runtime validators, and the route table) from this document; you write only the delegate per operationId under `operations/`. Swagger UI is served for free at `/app/api-docs`."
+
+paths:
+  /greetings:
+    get:
+      operationId: listGreetings
+      summary: List greetings
+      description: Return every greeting recorded so far (read from the `greetings` table).
+      responses:
+        "200":
+          description: The greetings recorded so far.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GreetingList"
+    post:
+      operationId: createGreeting
+      summary: Request a greeting
+      description: >-
+        Publish the greet message. The BPMN process correlates it, the `greet`
+        worker records the greeting, and it then shows up in `GET /greetings`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GreetRequest"
+      responses:
+        "202":
+          description: Accepted — the greet message was published; the process will record the greeting.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Accepted"
+
+components:
+  schemas:
+    GreetRequest:
+      type: object
+      required: [who]
+      properties:
+        who:
+          type: string
+          description: Who to greet.
+          example: Adam
+    Greeting:
+      type: object
+      required: [id, who, message]
+      properties:
+        id:
+          type: integer
+          description: Auto-assigned row id.
+        who:
+          type: string
+        message:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+          nullable: true
+    GreetingList:
+      type: object
+      required: [greetings]
+      properties:
+        greetings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Greeting"
+    Accepted:
+      type: object
+      required: [accepted, who]
+      properties:
+        accepted:
+          type: boolean
+        who:
+          type: string

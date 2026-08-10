@@ -25,6 +25,7 @@ export interface Mounted {
 
 // AppApi is imported lazily to avoid a cycle; declared here as the injected handler surface.
 import type { DataLayer } from "./modules/datasource.ts";
+import type { Logger } from "./logger.ts";
 
 /**
  * The surface injected into worker/trigger/surface handlers — the app's runtime API.
@@ -45,5 +46,13 @@ export interface AppApi {
    */
   sdk?: EngineSdkClient;
   env(name: string): string | undefined;
-  log(level: "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>): void;
+  /**
+   * Structured logger (see {@link Logger}). Callable for back-compat
+   * (`log("info", msg, fields)`), but prefer the level methods and bound context:
+   * `app.log.info(msg, fields)`, `app.log.child({ … })`. The runtime hands worker
+   * handlers a logger already bound to the job's `{ jobKey, jobType,
+   * processInstanceKey, elementId }`, and operation delegates one bound to the
+   * request's `{ method, path, operationId }`, so lines self-correlate.
+   */
+  log: Logger;
 }

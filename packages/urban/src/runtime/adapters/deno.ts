@@ -17,6 +17,7 @@ import type {
   SqliteDb,
 } from "../core/host.ts";
 import { resolveModulePath } from "../core/module-path.ts";
+import { formatLogRecord, levelEnabled, parseLogLevel } from "../core/logger.ts";
 
 type SqliteParam = string | number | bigint | Uint8Array | null;
 
@@ -70,10 +71,10 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
   const log: HostContext["log"] =
     opts.log ??
     ((level, msg, fields) => {
-      const line = fields ? `${msg} ${JSON.stringify(fields)}` : msg;
-      (level === "error" ? console.error : level === "warn" ? console.warn : console.log)(
-        `[urban] ${line}`,
-      );
+      if (!levelEnabled(level, parseLogLevel(Deno.env.get("URBAN_LOG_LEVEL")))) return;
+      // console.* appends the newline; NDJSON stays one object per line. warn/error → stderr.
+      const line = formatLogRecord(level, msg, fields, Date.now());
+      (level === "warn" || level === "error" ? console.error : console.log)(line);
     });
 
   return {

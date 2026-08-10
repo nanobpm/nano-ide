@@ -73,6 +73,20 @@ function isAppJobHandler(value: unknown): value is AppJobHandler {
 }
 
 /**
+ * Hand a handler an {@link AppApi} whose `log` is bound to the job's correlation context, so every
+ * line the handler emits self-tags with `{ jobKey, jobType, processInstanceKey, elementId }` without
+ * the author threading it. Undefined fields (e.g. a job dispatched without an instance) are omitted
+ * so the bound context stays clean. The rest of the API is shared by reference — only `log` is
+ * per-job.
+ */
+function withJobLog(app: AppApi, job: EngineJob): AppApi {
+  const bindings: Record<string, unknown> = { jobKey: job.jobKey, jobType: job.jobType };
+  if (job.processInstanceKey !== undefined) bindings.processInstanceKey = job.processInstanceKey;
+  if (job.elementId !== undefined) bindings.elementId = job.elementId;
+  return { ...app, log: app.log.child(bindings) };
+}
+
+/**
  * Resolve a handler for `jobType` from a loaded module, in priority order:
  *   1. `handlers[jobType]`            (a map keyed by job type — the multi-type module case)
  *   2. a named export matching jobType (or its last dotted segment)
@@ -167,7 +181,7 @@ export async function mountWorkers(ctx: RuntimeContext, app: AppApi): Promise<Wo
     const wrapped: JobHandler = (job) =>
       runInJobContext(
         { instanceKey: job.processInstanceKey, elementId: job.elementId, jobType },
-        () => handler(job, app),
+        () => handler(job, withJobLog(app, job)),
       );
     const sub = await ctx.engine.registerWorker(jobType, wrapped, {
       workerName: `${ctx.manifest.id}:${jobType}`,

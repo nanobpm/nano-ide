@@ -50,7 +50,9 @@ export function renderOperationStub(operationId: string, dir: string = DEFAULT_O
     `\n` +
     `export default defineOperation(${key}, async (input, app) => {\n` +
     `  // \`input\` is the validated request (params/query/body/req); reach app state + services\n` +
-    `  // through the injected \`app\` API. Return \`{ status?, headers?, body? }\` (or nothing → 204).\n` +
+    `  // through the injected \`app\` API. Structured logs via \`app.log.info("…", { … })\` are\n` +
+    `  // auto-tagged with this request's { method, path, operationId } (ADR 0061).\n` +
+    `  // Return \`{ status?, headers?, body? }\` (or nothing → 204).\n` +
     `  throw new NotImplemented(${key});\n` +
     `});\n`
   );

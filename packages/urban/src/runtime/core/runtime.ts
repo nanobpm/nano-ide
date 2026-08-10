@@ -13,6 +13,7 @@ import { deployModels } from "./modules/deploy.ts";
 import type { TemplateSource } from "./modules/templates.ts";
 import { provisionData, DataLayer } from "./modules/datasource.ts";
 import { installExecStore, type JobExecContext } from "./execContext.ts";
+import { createLogger } from "./logger.ts";
 import { mountWorkers } from "./modules/workers.ts";
 import { mountConnectors } from "./modules/connectors.ts";
 import { mountSurfaces } from "./modules/surfaces.ts";
@@ -197,7 +198,7 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
           engine,
           sdk: engineSdk(engine),
           env: (n) => host.env(n),
-          log: (l, m, f) => host.log(l, m, f),
+          log: createLogger((l, m, f) => host.log(l, m, f)),
         };
 
         if (flags.workers) {

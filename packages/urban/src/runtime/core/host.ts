@@ -106,8 +106,8 @@ export interface HostContext {
    * a host that cannot provide one leaves provenance capture disabled (absent-safe).
    */
   createAsyncStore?<T>(): AsyncStore<T>;
-  /** Structured log sink. */
-  log(level: "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>): void;
+  /** Structured log sink. Adds `debug` below `info`; the host adapter owns filtering + encoding. */
+  log(level: "debug" | "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>): void;
 }
 
 /** A job handed to a worker handler, plus the ack/fail callbacks. `In` types the process

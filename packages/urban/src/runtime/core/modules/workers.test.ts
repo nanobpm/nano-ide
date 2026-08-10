@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createLogger } from "../logger.ts";
 import assert from "node:assert/strict";
 import type { AppApi, RuntimeContext } from "../context.ts";
 import type { EngineClient, EngineJob, HostContext, JobHandler, WorkerSubscription } from "../host.ts";
@@ -63,7 +64,7 @@ function makeApp(over: Partial<AppApi> = {}): AppApi {
     data: new DataLayer(new Map(), undefined, {}),
     engine: new MiniEngine(),
     env: (n) => env[n],
-    log: () => {},
+    log: createLogger(() => {}),
     ...over,
   };
 }
@@ -194,7 +195,62 @@ test("mountWorkers silently skips a connector-backed worker (mountConnectors own
   assert.ok(!logs.some((l) => l.msg.includes("neither a handler nor an llm")));
 });
 
-// ── AppJobHandler generics: optional In/Out type parameters ──────────────────────────────
+test("mountWorkers binds the job's correlation context onto the handler's app.log", async () => {
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx({ workers: [{ taskType: "charge", handler: "workers/charge.ts" }] }, engine);
+  const captured: Array<{ level: string; msg: string; fields?: Record<string, unknown> }> = [];
+  // The handler logs through the injected app; assert the runtime pre-bound the job context.
+  const handler: AppJobHandler = (_job, app) => {
+    app.log.info("charging", { amount: 100 });
+    return { ok: true };
+  };
+  ctx.host.importModule = async () => ({ default: handler });
+  const app = makeApp({
+    log: createLogger((level, msg, fields) => {
+      captured.push({ level, msg, fields });
+    }),
+  });
+  await mountWorkers(ctx, app);
+  await engine.deliver("charge", {
+    jobKey: "j-7",
+    jobType: "charge",
+    processInstanceKey: "pi-42",
+    elementId: "Task_Charge",
+    variables: {},
+  });
+  assert.deepEqual(captured, [
+    {
+      level: "info",
+      msg: "charging",
+      fields: {
+        jobKey: "j-7",
+        jobType: "charge",
+        processInstanceKey: "pi-42",
+        elementId: "Task_Charge",
+        amount: 100,
+      },
+    },
+  ]);
+});
+
+test("mountWorkers omits absent instance/element from the bound log context", async () => {
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx({ workers: [{ taskType: "ping", handler: "workers/ping.ts" }] }, engine);
+  const captured: Array<Record<string, unknown> | undefined> = [];
+  const handler: AppJobHandler = (_job, app) => {
+    app.log.warn("no instance");
+  };
+  ctx.host.importModule = async () => ({ default: handler });
+  const app = makeApp({
+    log: createLogger((_level, _msg, fields) => {
+      captured.push(fields);
+    }),
+  });
+  await mountWorkers(ctx, app);
+  await engine.deliver("ping", { jobKey: "j-1", jobType: "ping", variables: {} });
+  assert.deepEqual(captured, [{ jobKey: "j-1", jobType: "ping" }]);
+});
+
 // These are primarily compile-time assertions (the suite is typechecked by `tsc --noEmit`),
 // with a runtime smoke that a typed handler still returns its output when delivered a job.
 test("AppJobHandler carries optional In/Out variable types", async () => {

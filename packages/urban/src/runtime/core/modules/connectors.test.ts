@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createLogger } from "../logger.ts";
 import assert from "node:assert/strict";
 import type { AppApi, RuntimeContext } from "../context.ts";
 import type { EngineClient, EngineJob, HostContext, JobHandler, WorkerSubscription } from "../host.ts";
@@ -83,7 +84,7 @@ function makeApp(env: Record<string, string> = {}): AppApi {
     data: new DataLayer(new Map(), undefined, {}),
     engine: new MiniEngine(),
     env: (n: string) => env[n],
-    log: () => {},
+    log: createLogger(() => {}),
   };
 }
 

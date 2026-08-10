@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { mountSurfaces } from "./surfaces.ts";
 import type { EngineClient, HostContext, HttpRequest, HttpResponse } from "../host.ts";
 import { DataLayer } from "./datasource.ts";
+import { createLogger } from "../logger.ts";
 
 function ctxWith(surfaces: Record<string, unknown>): Parameters<typeof mountSurfaces>[0] {
   const host: HostContext = {
@@ -53,7 +54,7 @@ const fakeApp: Parameters<typeof mountSurfaces>[1] = {
   data: new DataLayer(new Map(), undefined, {}),
   engine: fakeEngine,
   env: () => undefined,
-  log: () => {},
+  log: createLogger(() => {}),
 };
 
 async function render(route: { handler: (req: HttpRequest) => HttpResponse | Promise<HttpResponse> }): Promise<string> {

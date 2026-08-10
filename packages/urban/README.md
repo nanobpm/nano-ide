@@ -100,6 +100,30 @@ The runtime has a single engine client, `SdkEngineClient`, backed by one
 selects the wire transport via `CAMUNDA_TRANSPORT`: `auto` (default) upgrades to
 Falcon on a Nano server and falls back to REST elsewhere.
 
+### Structured logging
+
+Every worker handler and API route delegate receives an `AppApi` whose `log` is a
+level-tagged structured logger (ADR 0061):
+
+```ts
+app.log.info("charge captured", { amount, currency });
+app.log.warn("retrying", { attempt });
+app.log.error("charge failed", { code });
+app.log.debug("gateway response", { raw });   // hidden unless URBAN_LOG_LEVEL=debug
+
+const orderLog = app.log.child({ orderId });    // bind context for a scope
+orderLog.info("shipped");                        // every line carries orderId
+```
+
+The runtime **auto-correlates**: a worker handler's `app.log` is pre-bound to
+`{ jobKey, jobType, processInstanceKey, elementId }` and a route delegate's to
+`{ method, path, operationId }`, so every line you emit is tied to its job/request
+for free.
+
+Records are written as **NDJSON** — one JSON object per line,
+`{"ts":…,"level":…,"msg":…, …fields}` — with `warn`/`error` on stderr and
+`debug`/`info` on stdout. `URBAN_LOG_LEVEL` (default `info`) sets the minimum level.
+
 ### Toolkit — derive artifacts (`urban gen`)
 
 ```ts

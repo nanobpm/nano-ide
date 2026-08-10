@@ -317,10 +317,12 @@ test("repeated query keys are all validated (extra values don't bypass validatio
     { "/app/operations/listItems": { default: () => ({ body: { ok: true } }) } },
     arraySpec,
   );
-  // First value valid, second (0) violates minimum:1 — must still be caught.
+  // A repeated scalar (non-array) param can't be forwarded as the single schema-typed scalar the
+  // delegate expects, so it's rejected outright (400) — extra values never reach the delegate.
   const res = await router(req("GET", "/app/api/items", { query: "n=5&n=0" }));
   assert.equal(res.status, 400);
   assert.match(JSON.parse(res.body!).error, /validation failed/);
+  assert.match(JSON.stringify(JSON.parse(res.body!).issues), /expected a single value/);
 });
 
 test("array-typed query params validate the whole array (items + array constraints)", async () => {

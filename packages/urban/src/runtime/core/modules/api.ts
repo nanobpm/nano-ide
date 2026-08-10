@@ -559,16 +559,16 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
             const items = ps.items ? values.map((v) => coerceParam(d, ps.items, v)) : values;
             coercedQuery[p.name] = items;
             issues.push(...validateValue(d, ps, items, `query/${p.name}`));
+          } else if (values.length > 1) {
+            // A scalar (non-array) param that's repeated (?x=a&x=b) can't be forwarded as the
+            // single schema-typed scalar the delegate's generated type expects — reject it (400)
+            // rather than hand the delegate an array the type says is impossible.
+            issues.push({ path: `query/${p.name}`, message: "expected a single value" });
           } else {
-            // Scalar param: coerce EVERY provided value (validate each so extra repeated values
-            // can't bypass validation), and forward the coerced scalar (or the coerced array when
-            // the key was repeated, mirroring the raw single-vs-array shape).
-            const coercedVals = values.map((v) => coerceParam(d, p.schema, v));
-            coercedQuery[p.name] = coercedVals.length > 1 ? coercedVals : coercedVals[0];
-            coercedVals.forEach((cv, i) => {
-              const at = values.length > 1 ? `query/${p.name}[${i}]` : `query/${p.name}`;
-              issues.push(...validateValue(d, p.schema, cv, at));
-            });
+            // Scalar param: coerce the single value, forward it, and validate it.
+            const coerced = coerceParam(d, p.schema, values[0]);
+            coercedQuery[p.name] = coerced;
+            issues.push(...validateValue(d, p.schema, coerced, `query/${p.name}`));
           }
         }
       }

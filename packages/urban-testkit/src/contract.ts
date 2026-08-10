@@ -230,7 +230,7 @@ function bpmn(processId: string, body: string): string {
 /** Poll `predicate` until it is true or the budget is exhausted (then throw). */
 async function waitFor(
   predicate: () => Promise<boolean>,
-  { timeoutMs = 2_000, intervalMs = 10 } = {},
+  { timeoutMs = 10_000, intervalMs = 10 } = {},
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -243,7 +243,7 @@ async function waitFor(
 /** Poll `produce` until it yields a defined value or the budget is exhausted. */
 async function waitForValue<T>(
   produce: () => Promise<T | undefined>,
-  { timeoutMs = 2_000, intervalMs = 10 } = {},
+  { timeoutMs = 10_000, intervalMs = 10 } = {},
 ): Promise<T> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {

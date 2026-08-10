@@ -116,7 +116,12 @@ function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm")> {
         : new Uint8Array(await (await import("node:fs/promises")).readFile(url));
       mod.initSync({ module: bytes });
       return mod;
-    })();
+    })().catch((err) => {
+      // A transient failure (e.g. an fs read error) must not poison every
+      // later create(): clear the cached rejection so the next call retries.
+      bootPromise = undefined;
+      throw err;
+    });
   }
   return bootPromise;
 }

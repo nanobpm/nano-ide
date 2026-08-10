@@ -11,6 +11,12 @@
     "forms": ["forms/*.form"]
   },
 
+  "api": {
+    "spec": "openapi.json",
+    "dir": "operations",
+    "base": "/app/api"
+  },
+
   "data": {
     "default": "app",
     "sources": {
@@ -44,7 +50,8 @@
   ],
 
   "surfaces": {
-    "taskInbox": { "enabled": true, "path": "/tasks" }
+    "taskInbox": { "enabled": true, "path": "/tasks" },
+    "pages": { "enabled": true }
   },
 
   "ui": {

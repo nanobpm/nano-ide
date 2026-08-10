@@ -5,7 +5,7 @@ import type { AppManifest } from "../manifest.ts";
 import type { EngineClient, HostContext, HttpRequest } from "../host.ts";
 import { makeRouter } from "../router.ts";
 import { DataLayer } from "./datasource.ts";
-import { mountApi, resolveOperationHandler, type OperationHandler } from "./api.ts";
+import { mountApi, resolveOperationHandler, apiDocsPath, type ApiHandle, type OperationHandler } from "./api.ts";
 
 function req(method: string, path: string, opts: { query?: string; body?: string } = {}): HttpRequest {
   return {
@@ -72,9 +72,10 @@ const spec = JSON.stringify({
 });
 
 interface Built {
-  router: (r: HttpRequest) => Promise<{ status?: number; body?: string }>;
+  router: (r: HttpRequest) => Promise<{ status?: number; body?: string; headers?: Record<string, string> }>;
   imported: string[];
   logs: Array<{ level: string; msg: string }>;
+  handle: ApiHandle;
 }
 
 function build(
@@ -108,7 +109,12 @@ function build(
   const ctx: RuntimeContext = { root: "/app", manifest, engine, host };
   const handle = mountApi(ctx, appFixture());
   const router = makeRouter(handle.routes);
-  return { router: (r) => Promise.resolve(router(r)), imported, logs };
+  return { router: (r) => Promise.resolve(router(r)), imported, logs, handle };
+}
+
+/** Mount `mountApi` and return the handle directly (for asserting `describe()`). */
+function buildHandle(api: Record<string, unknown>): { handle: ApiHandle } {
+  return { handle: build(api, {}).handle };
 }
 
 test("resolveOperationHandler prefers default (function) then handler", () => {
@@ -442,4 +448,63 @@ test("an unsafe operationId never mounts (skipped) — a crafted spec can't impo
   const res = await router(req("GET", "/app/api/x"));
   assert.equal(res.status, 404); // no route mounted for the skipped op
   assert.equal(imported.some((p) => p.includes("evil")), false);
+});
+
+test("serves the OpenAPI spec at {base}-docs/openapi.json, rebased to the mounted namespace", async () => {
+  const { router } = build({ spec: "openapi.json" }, {});
+  const res = await router(req("GET", "/app/api-docs/openapi.json"));
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /application\/json/);
+  const doc = JSON.parse(res.body ?? "{}");
+  // The doc is served intact...
+  assert.ok(doc.paths["/invoices"], "keeps the operation paths");
+  // ...but `servers` is rebased to `base` so Swagger UI "Try it out" hits the real routes
+  // (operations mount under /app/api, not the spec's bare /invoices).
+  assert.deepEqual(doc.servers, [{ url: "/app/api" }]);
+});
+
+test("serves the Swagger UI page at {base}-docs by default", async () => {
+  const { router } = build({ spec: "openapi.json" }, {});
+  const res = await router(req("GET", "/app/api-docs"));
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /text\/html/);
+  const body = res.body ?? "";
+  assert.match(body, /swagger-ui/);
+  // The UI reads the spec route we serve.
+  assert.match(body, /\/app\/api-docs\/openapi\.json/);
+});
+
+test("docs default on is reflected in describe()", () => {
+  const { handle } = buildHandle({ spec: "openapi.json" });
+  const d = handle.describe();
+  assert.deepEqual(d.api, {
+    spec: "openapi.json",
+    base: "/app/api",
+    dir: "operations",
+    eject: false,
+    docs: { ui: "/app/api-docs", spec: "/app/api-docs/openapi.json" },
+  });
+});
+
+test("docs:false disables both the UI and the spec route (no reserved paths)", async () => {
+  const { router } = build({ spec: "openapi.json", docs: false }, {});
+  // With docs off, the docs paths fall through to the operation dispatcher → no such operation.
+  assert.equal((await router(req("GET", "/app/api-docs"))).status, 404);
+  assert.equal((await router(req("GET", "/app/api-docs/openapi.json"))).status, 404);
+});
+
+test("a string docs overrides the UI route (and the spec route beneath it)", async () => {
+  const { router } = build({ spec: "openapi.json", docs: "/help" }, {});
+  assert.equal((await router(req("GET", "/help"))).status, 200);
+  assert.equal((await router(req("GET", "/help/openapi.json"))).status, 200);
+  // The default docs path is no longer served.
+  assert.equal((await router(req("GET", "/app/api-docs"))).status, 404);
+});
+
+test("apiDocsPath resolves the UI route (and honours disable / override)", () => {
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json" } }), "/app/api-docs");
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json", base: "/x" } }), "/x-docs");
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json", docs: "/help" } }), "/help");
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json", docs: false } }), undefined);
+  assert.equal(apiDocsPath({}), undefined);
 });

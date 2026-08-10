@@ -77,6 +77,47 @@ test("full preset scaffolds a runnable app with substituted tokens", async () =>
   assert.ok(await exists(join(dir, ".gitignore")));
 });
 
+test("full preset scaffolds the end-to-end showcase: API + operations + pages", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "urban-showcase-"));
+  const res = await scaffold({ name: "Hello Urban", dir, preset: "full" });
+
+  // OpenAPI-first API surface: spec + one delegate per operationId.
+  assert.ok(res.files.includes("openapi.json"), "scaffolds the OpenAPI spec");
+  assert.ok(res.files.includes("operations/listGreetings.ts"), "listGreetings delegate");
+  assert.ok(res.files.includes("operations/createGreeting.ts"), "createGreeting delegate");
+  assert.ok(res.files.includes("pages/home.page.json"), "scaffolds a home page");
+
+  const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
+  assert.equal(manifest.api?.spec, "openapi.json", "manifest declares the api binding");
+  assert.equal(manifest.surfaces?.pages?.enabled, true, "pages surface enabled");
+
+  // The spec's operationIds must each have a matching delegate module (urban check fails
+  // closed otherwise), and every operation must carry a unique operationId.
+  const spec = JSON.parse(await readFile(join(dir, "openapi.json"), "utf8"));
+  const opIds: string[] = [];
+  const collect = (v: unknown): void => {
+    if (!v || typeof v !== "object") return;
+    for (const child of Object.values(v)) {
+      if (child && typeof child === "object") {
+        const id = Reflect.get(child, "operationId");
+        if (typeof id === "string") opIds.push(id);
+      }
+    }
+  };
+  for (const item of Object.values(spec.paths)) collect(item);
+  assert.deepEqual([...opIds].sort(), ["createGreeting", "listGreetings"]);
+  assert.equal(new Set(opIds).size, opIds.length, "operationIds are unique");
+  for (const id of opIds) {
+    assert.ok(await exists(join(dir, "operations", `${id}.ts`)), `delegate for ${id}`);
+  }
+
+  // Tokens are substituted inside the spec (title) and the message-publishing delegate.
+  assert.equal(spec.info.title, "Hello Urban API");
+  const createOp = await readFile(join(dir, "operations/createGreeting.ts"), "utf8");
+  assert.match(createOp, /hello-urban\.greet-requested/, "message name is substituted");
+  assert.ok(!/__APP_/.test(createOp), "no un-substituted tokens remain");
+});
+
 test("headless preset drops surfaces, triggers and forms (workers only)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-headless-"));
   const res = await scaffold({ name: "Batch Job", dir, preset: "headless" });
@@ -88,6 +129,14 @@ test("headless preset drops surfaces, triggers and forms (workers only)", async 
   assert.ok(manifest.workers, "headless keeps workers");
   assert.ok(!res.files.some((f) => f.startsWith("forms/")), "no form files written");
   assert.ok(!(await exists(join(dir, "forms"))), "no forms dir");
+
+  // The human pages surface is dropped, but the machine API surface stays: a headless
+  // service still exposes its REST API + Swagger docs.
+  assert.ok(!res.files.some((f) => f.startsWith("pages/")), "no page files written");
+  assert.ok(!(await exists(join(dir, "pages"))), "no pages dir");
+  assert.equal(manifest.api?.spec, "openapi.json", "headless keeps the api binding");
+  assert.ok(res.files.includes("openapi.json"), "headless keeps the spec");
+  assert.ok(res.files.includes("operations/listGreetings.ts"), "headless keeps delegates");
 });
 
 test("names with quotes/backslashes/control chars stay valid JSON in the manifest", async () => {

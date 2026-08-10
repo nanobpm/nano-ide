@@ -15,7 +15,7 @@
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage } from "../guards.ts";
 import type { HttpRequest, HttpResponse } from "../host.ts";
-import { json, normalizeRoutePath, type Route } from "../router.ts";
+import { html, json, normalizeRoutePath, type Route } from "../router.ts";
 import { resolveAppPath } from "./datasource.ts";
 import {
   collectOperations,
@@ -41,6 +41,48 @@ export interface ApiBinding {
   base?: string;
   validateResponses?: "dev" | "always" | "never";
   eject?: boolean;
+  /** Human API docs (Swagger UI). `true`/omitted → on at `${base}-docs` (ADR 0058); `false` →
+   *  off; a string → a custom absolute route to mount the UI under. Spec-first apps get docs
+   *  for free — the UI reads the SAME OpenAPI document the runtime routes + validates from. */
+  docs?: boolean | string;
+}
+
+/** Pinned Swagger UI dist served from a CDN, so the docs UI adds zero bundle/runtime deps to an
+ *  Urban app (matching the deps-free spirit of the rest of the surface — validators are standalone,
+ *  ADR 0058 Consequences). Pinned (not `latest`) for reproducibility + integrity. */
+const SWAGGER_UI_VERSION = "5.17.14";
+
+/** Escape HTML-significant characters before embedding a value (the app name) in the docs markup. */
+function escapeHtml(s: string): string {
+  return s.replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c,
+  );
+}
+
+/** The self-contained Swagger UI page. Static HTML: it renders even when the spec is momentarily
+ *  unreadable (Swagger UI fetches `specUrl` itself and surfaces any load/parse error in-page),
+ *  which keeps the docs route decoupled from spec-load failures. */
+function swaggerUiPage(title: string, specUrl: string): string {
+  const css = `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_VERSION}/swagger-ui.css`;
+  const bundle = `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_VERSION}/swagger-ui-bundle.js`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<link rel="stylesheet" href="${css}">
+<style>body{margin:0}</style>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="${bundle}" crossorigin="anonymous"></script>
+<script>
+window.ui = SwaggerUIBundle({ url: ${JSON.stringify(specUrl)}, dom_id: '#swagger-ui', deepLinking: true });
+</script>
+</body>
+</html>`;
 }
 
 /** The `{ params, query, body }` contract a typed operation is generic over. */
@@ -113,6 +155,7 @@ function readApiBinding(manifest: unknown): ApiBinding | undefined {
   const base = Reflect.get(raw, "base");
   const validateResponses = Reflect.get(raw, "validateResponses");
   const eject = Reflect.get(raw, "eject");
+  const docs = Reflect.get(raw, "docs");
   // Trim benign manifest whitespace so it can't produce hard-to-diagnose path/import failures.
   return {
     spec: spec.trim(),
@@ -123,7 +166,39 @@ function readApiBinding(manifest: unknown): ApiBinding | undefined {
         ? validateResponses
         : undefined,
     eject: eject === true,
+    // Docs default ON (spec-first apps get Swagger for free); `false` disables; a non-empty
+    // string overrides the route. Anything else (including whitespace) falls back to the default.
+    docs: docs === false ? false : typeof docs === "string" && docs.trim().length > 0 ? docs.trim() : true,
   };
+}
+
+/** Resolve the api `base` + docs routing from a binding, in ONE place, so `mountApi` (which
+ *  serves the docs) and `apiDocsPath` (which the pages surface links to) can never drift. */
+function resolveApiRoutes(binding: ApiBinding): {
+  base: string;
+  docsEnabled: boolean;
+  docsBase: string;
+} {
+  const base = normalizeRoutePath(binding.base, "/app/api");
+  const docsEnabled = binding.docs !== false;
+  // Swagger UI at a SIBLING of the base (`${base}-docs`, e.g. /app/api-docs), never a subpath
+  // of it — so the docs routes can't collide with, or be shadowed by, the operation dispatcher
+  // that owns the `${base}/` prefix (a string `docs` overrides the whole route).
+  const docsBase = normalizeRoutePath(
+    typeof binding.docs === "string" ? binding.docs : `${base}-docs`,
+    `${base}-docs`,
+  );
+  return { base, docsEnabled, docsBase };
+}
+
+/** The Swagger UI route for an app's `api` binding, or `undefined` when there is no api surface
+ *  or docs are disabled. Lets other surfaces (e.g. the pages shell's "API docs" badge) link to
+ *  the docs without re-deriving the path. */
+export function apiDocsPath(manifest: unknown): string | undefined {
+  const binding = readApiBinding(manifest);
+  if (!binding) return undefined;
+  const { docsEnabled, docsBase } = resolveApiRoutes(binding);
+  return docsEnabled ? docsBase : undefined;
 }
 
 /** Coerce a wire string to the type its parameter schema declares, so numeric/boolean bounds
@@ -170,6 +245,13 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   const base = normalizeRoutePath(binding.base, "/app/api");
   const dir = binding.dir ?? "operations";
   const surfaceEject = binding.eject === true;
+
+  // Human API docs (ADR 0058): the Swagger UI base + whether it is enabled, resolved by the
+  // shared helper so this (which serves the docs) and `apiDocsPath` (which links to them from
+  // the pages shell) stay in lockstep. The spec JSON is served under the docs path so the
+  // operations namespace stays purely operations.
+  const { docsEnabled, docsBase } = resolveApiRoutes(binding);
+  const specRoutePath = `${docsBase}/openapi.json`;
 
   // Resolve + parse the spec lazily on first request and cache it (mirroring the lazy module load
   // pattern). A malformed/unreadable spec surfaces as a 500 on request — with the reason — rather
@@ -445,9 +527,46 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     handler: dispatch,
   };
 
+  // Docs routes (ADR 0058): the Swagger UI page + the OpenAPI JSON it reads. Both are exact GET
+  // routes on the `${base}-docs` sibling namespace, so they are wholly independent of the
+  // operation dispatcher above.
+  const serveSpec = async (): Promise<HttpResponse> => {
+    let d: OpenApiDoc;
+    try {
+      d = await loadDoc();
+    } catch (e) {
+      return json({ error: errorMessage(e) }, 500);
+    }
+    // Point Swagger UI "Try it out" at the mounted namespace: operations live under `base`
+    // (e.g. /app/api/invoices), not the spec's bare paths (/invoices). Overriding `servers`
+    // makes the interactive console call the real Urban routes rather than the origin root.
+    return json({ ...d, servers: [{ url: base }] });
+  };
+  const docsTitle = `${ctx.manifest.name ?? "App"} — API docs`;
+  const serveDocs = (): HttpResponse => html(swaggerUiPage(docsTitle, specRoutePath));
+  const docsRoutes: Route[] = docsEnabled
+    ? [
+        { method: "GET", path: docsBase, source: `api-docs:${binding.spec}`, handler: serveDocs },
+        {
+          method: "GET",
+          path: specRoutePath,
+          source: `api-docs:${binding.spec}`,
+          handler: serveSpec,
+        },
+      ]
+    : [];
+
   return {
     name: "api",
-    routes: [rootRoute, route],
-    describe: () => ({ api: { spec: binding.spec, base, dir, eject: surfaceEject } }),
+    routes: [...docsRoutes, rootRoute, route],
+    describe: () => ({
+      api: {
+        spec: binding.spec,
+        base,
+        dir,
+        eject: surfaceEject,
+        docs: docsEnabled ? { ui: docsBase, spec: specRoutePath } : false,
+      },
+    }),
   };
 }

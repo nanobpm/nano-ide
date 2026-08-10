@@ -16,6 +16,6 @@
     "deploy": "urban deploy"
   },
   "dependencies": {
-    "@nanobpm/urban": "^0.24.0"
+    "@nanobpm/urban": "^0.32.0"
   }
 }

@@ -151,6 +151,8 @@ export const DERIVERS = [
 // Gen orchestrator + IO
 export { collectArtifacts, runGen, joinPath, readModels, expandPattern, previewModels } from "./gen.ts";
 export type { GenIO, GenOptions, GenResult } from "./gen.ts";
+export { generate } from "./generate.ts";
+export type { GenerateResult } from "./generate.ts";
 export { createNodeGenIO } from "./fsio.ts";
 
 // Code-first model derivation (workflows/*.ts → BPMN)

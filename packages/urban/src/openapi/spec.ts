@@ -270,8 +270,8 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
  * must be unique across the whole OpenAPI document (it names the delegate module `<dir>/<operationId>`
  * AND the generated controller registry key), so a duplicate would silently overwrite an earlier
  * entry in the emitted object literal — dispatching the wrong delegate while still type-checking — and
- * make the scaffolder plan the same stub twice. Called by the gen/scaffold path so `urban gen` and
- * `urban stubs` fail loudly on an incoherent spec instead of shipping a mis-dispatching registry.
+ * make the scaffolder plan the same stub twice. Called by the gen/scaffold path so `urban gen`
+ * fails loudly on an incoherent spec instead of shipping a mis-dispatching registry.
  */
 export function assertUniqueOperationIds(doc: OpenApiDoc): void {
   const seen = new Set<string>();

@@ -5,7 +5,7 @@
 //
 // The rule is intentionally strict: `api.dir` must be a safe app-relative directory. An absolute path
 // or a `..` segment is REJECTED with a clear error rather than silently rewritten, because a silent
-// rewrite would let `urban stubs` scaffold into one directory while the runtime resolves delegates
+// rewrite would let `urban gen` scaffold into one directory while the runtime resolves delegates
 // from another (drift), and a `..` segment could escape the app root when later joined.
 
 /** The default directory operation delegates live in (mirrors the runtime's `api.dir` default). */

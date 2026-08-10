@@ -41,7 +41,7 @@ export function renderOperationStub(operationId: string, dir: string = DEFAULT_O
   const key = JSON.stringify(operationId);
   return (
     `// Operation delegate stub for the \`${operationId}\` endpoint, scaffolded from the OpenAPI spec\n` +
-    `// (ADR 0059). This file is yours to edit — \`urban stubs\` will never overwrite it. The\n` +
+    `// (ADR 0059). This file is yours to edit — \`urban gen\` will never overwrite it. The\n` +
     `// generated controller (nano-generated/controller.ts) imports this default export and\n` +
     `// type-checks it against the spec, so the signature cannot drift. Implement the body below\n` +
     `// (the validated \`{ req, params, query, body }\` input + the injected \`app\`) and delete the throw.\n` +

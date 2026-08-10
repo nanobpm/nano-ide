@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scaffold, slugify } from "./scaffold.ts";
 import { main } from "./cli.ts";
+import { parse as parseYaml } from "yaml";
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -96,18 +97,18 @@ test("full preset scaffolds the end-to-end showcase: API + operations + pages", 
   const res = await scaffold({ name: "Hello Urban", dir, preset: "full" });
 
   // OpenAPI-first API surface: spec + one delegate per operationId.
-  assert.ok(res.files.includes("openapi.json"), "scaffolds the OpenAPI spec");
+  assert.ok(res.files.includes("openapi.yaml"), "scaffolds the OpenAPI spec");
   assert.ok(res.files.includes("operations/listGreetings.ts"), "listGreetings delegate");
   assert.ok(res.files.includes("operations/createGreeting.ts"), "createGreeting delegate");
   assert.ok(res.files.includes("pages/home.page.json"), "scaffolds a home page");
 
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
-  assert.equal(manifest.api?.spec, "openapi.json", "manifest declares the api binding");
+  assert.equal(manifest.api?.spec, "openapi.yaml", "manifest declares the api binding");
   assert.equal(manifest.surfaces?.pages?.enabled, true, "pages surface enabled");
 
   // The spec's operationIds must each have a matching delegate module (urban check fails
   // closed otherwise), and every operation must carry a unique operationId.
-  const spec = JSON.parse(await readFile(join(dir, "openapi.json"), "utf8"));
+  const spec = parseYaml(await readFile(join(dir, "openapi.yaml"), "utf8"));
   const opIds: string[] = [];
   const collect = (v: unknown): void => {
     if (!v || typeof v !== "object") return;
@@ -148,8 +149,8 @@ test("headless preset drops surfaces, triggers and forms (workers only)", async 
   // service still exposes its REST API + Swagger docs.
   assert.ok(!res.files.some((f) => f.startsWith("pages/")), "no page files written");
   assert.ok(!(await exists(join(dir, "pages"))), "no pages dir");
-  assert.equal(manifest.api?.spec, "openapi.json", "headless keeps the api binding");
-  assert.ok(res.files.includes("openapi.json"), "headless keeps the spec");
+  assert.equal(manifest.api?.spec, "openapi.yaml", "headless keeps the api binding");
+  assert.ok(res.files.includes("openapi.yaml"), "headless keeps the spec");
   assert.ok(res.files.includes("operations/listGreetings.ts"), "headless keeps delegates");
 });
 

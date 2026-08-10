@@ -148,6 +148,12 @@ test("scaffolds valid YAML even for names with YAML-special characters", async (
     await scaffold({ name, dir, preset: "full" });
     const spec = parseYaml(await readFile(join(dir, "openapi.yaml"), "utf8"));
     assert.equal(spec.info.title, `${name} API`, `title round-trips for ${JSON.stringify(name)}`);
+    // The description interpolates the name too (double-quoted scalar) — it must render the
+    // real name, not a JSON-escaped form with literal backslashes (Swagger UI would show them).
+    assert.ok(
+      spec.info.description.includes(`The ${name} REST API.`),
+      `description round-trips for ${JSON.stringify(name)}`,
+    );
   }
 });
 

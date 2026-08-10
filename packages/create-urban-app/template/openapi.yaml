@@ -2,11 +2,7 @@ openapi: 3.0.3
 info:
   title: "__APP_NAME__ API"
   version: 0.1.0
-  description: >-
-    The __APP_NAME__ REST API. Urban derives the controller layer (typed
-    request/response contracts, runtime validators, and the route table) from
-    this document; you write only the delegate per operationId under
-    `operations/`. Swagger UI is served for free at `/app/api-docs`.
+  description: "The __APP_NAME__ REST API. Urban derives the controller layer (typed request/response contracts, runtime validators, and the route table) from this document; you write only the delegate per operationId under `operations/`. Swagger UI is served for free at `/app/api-docs`."
 
 paths:
   /greetings:

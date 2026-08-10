@@ -569,7 +569,7 @@ function collectResponseSchemas(responses: Record<string, unknown>): ResponseSch
  *  ("2XX") → "default". A documented-but-bodyless exact status (or range) returns undefined (no
  *  validation) and does NOT fall through to `default` — the status IS documented, it just carries no
  *  JSON body, so validating it against an unrelated (e.g. error `default`) schema would be wrong. An
- *  UNdocumented status likewise returns undefined rather than being mis-validated. */
+ *  UNdocumented status falls back to the `default` entry when present, else undefined. */
 export function responseSchemaForStatus(
   entries: ResponseSchemaEntry[],
   status: number,

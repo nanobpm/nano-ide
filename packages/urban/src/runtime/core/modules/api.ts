@@ -647,9 +647,11 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
       const mode = binding.validateResponses ?? "dev";
       const doValidate =
         mode === "always" || (mode === "dev" && ctx.host.env("NODE_ENV") !== "production");
-      // Validate against the response schema for THIS status (else the "default" entry) — so a
-      // documented error body (e.g. a 400 `{ error }`) is checked against its own schema, not
-      // spuriously against the success response. An undocumented status is left unvalidated.
+      // Validate against the response schema for THIS status — exact status, else a matching status
+      // range ("2XX"), else the "default" entry — so a documented error body (e.g. a 400 `{ error }`)
+      // is checked against its own schema, not spuriously against the success response. A
+      // documented-but-bodyless status carries no schema, so it (like a status with no `default`
+      // fallback) is left unvalidated.
       const responseSchema = responseSchemaForStatus(op.responseSchemas, status);
       if (doValidate && responseSchema && result.body !== undefined) {
         const rIssues = validateValue(d, responseSchema, result.body, "response");

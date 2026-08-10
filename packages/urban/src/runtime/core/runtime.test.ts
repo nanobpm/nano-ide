@@ -312,14 +312,16 @@ test("app.log is an app-level structured logger routed to the host sink", async 
   const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
   app.log.info("booting", { pid: 1 });
   assert.deepEqual(
-    logs.filter((l) => l.msg === "booting"),
+    // `fields` is the merged bag, deliberately a null-prototype object (untrusted-key hardening);
+    // spread it so the assertion compares contents, not prototype.
+    logs.filter((l) => l.msg === "booting").map((l) => ({ ...l, fields: { ...l.fields } })),
     [{ level: "info", msg: "booting", fields: { pid: 1 } }],
   );
   // ergonomic methods + child binding are present on the handle logger
   const bound = app.log.child({ region: "eu" });
   bound.warn("slow");
   assert.deepEqual(
-    logs.filter((l) => l.msg === "slow"),
+    logs.filter((l) => l.msg === "slow").map((l) => ({ ...l, fields: { ...l.fields } })),
     [{ level: "warn", msg: "slow", fields: { region: "eu" } }],
   );
 });

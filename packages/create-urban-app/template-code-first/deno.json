@@ -1,7 +1,7 @@
 {
 	"tasks": {
 		"typecheck": "deno check main.ts 'workflows/**/*.ts' 'scripts/**/*.ts'",
-		"lint": "deno run -A npm:@biomejs/biome check",
+		"lint": "deno run -A npm:@biomejs/biome@2.5.7 check",
 		"check": "deno run -A npm:@nanobpm/urban@^0.24.0 check",
 		"gen": "deno run -A npm:@nanobpm/urban@^0.24.0 gen",
 		"gen:check": "deno run -A npm:@nanobpm/urban@^0.24.0 gen --check",

@@ -15,6 +15,8 @@ test("resolveModulePath leaves an already-extensioned path untouched", () => {
   assert.equal(resolveModulePath("/a/b/x.js", never), "/a/b/x.js");
   assert.equal(resolveModulePath("/a/b/x.mjs", never), "/a/b/x.mjs");
   assert.equal(resolveModulePath("/a/b/x.cjs", never), "/a/b/x.cjs");
+  assert.equal(resolveModulePath("/a/b/x.mts", never), "/a/b/x.mts");
+  assert.equal(resolveModulePath("/a/b/x.cts", never), "/a/b/x.cts");
 });
 
 test("resolveModulePath appends the first candidate extension that exists", () => {

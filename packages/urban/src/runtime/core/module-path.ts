@@ -16,11 +16,12 @@
 
 /**
  * Candidate extensions tried, in order, for an extensionless module path. Compiled outputs come
- * first (matching the connector-SDK precedent) so a mixed source+build tree resolves to the
- * importable `.js` rather than a `.ts` that fails on a runtime without type-stripping; a
- * from-source tree (only `.ts` present) falls through to `.ts`.
+ * first (`.js`/`.mjs`/`.cjs`, matching the connector-SDK precedent) so a mixed source+build tree
+ * resolves to the importable JS rather than a TS file that fails on a runtime without
+ * type-stripping; a from-source tree falls through to the TS variants (`.ts`/`.mts`/`.cts`). The
+ * source group mirrors the extensions {@link hasModuleExtension} treats as already-extensioned.
  */
-export const MODULE_EXTENSION_CANDIDATES = [".js", ".mjs", ".cjs", ".ts"] as const;
+export const MODULE_EXTENSION_CANDIDATES = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
 
 /** True when the path already ends in a JS/TS module extension (.ts/.js/.mts/.cts/.mjs/.cjs). */
 function hasModuleExtension(path: string): boolean {

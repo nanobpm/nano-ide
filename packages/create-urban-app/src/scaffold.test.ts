@@ -117,6 +117,48 @@ test("scaffolded package.json exposes gen and gen:check scripts", async () => {
   assert.equal(pkg.scripts.dev, "urban dev");
 });
 
+test("scaffold wires @nanobpm/urban-testkit as a devDependency with a runnable starter test", async () => {
+  for (const style of ["model", "code"] as const) {
+    const dir = await mkdtemp(join(tmpdir(), `urban-testkit-${style}-`));
+    const res = await scaffold({ name: "Kit App", dir, style });
+
+    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+    assert.ok(
+      pkg.devDependencies?.["@nanobpm/urban-testkit"],
+      `${style}: testkit is a devDependency`,
+    );
+    assert.equal(
+      pkg.dependencies?.["@nanobpm/urban-testkit"],
+      undefined,
+      `${style}: testkit is NOT a runtime dependency`,
+    );
+    assert.match(pkg.scripts.test, /node --test/, `${style}: has a test script`);
+
+    assert.ok(
+      res.files.includes("tests/engine-contract.test.ts"),
+      `${style}: starter test is scaffolded`,
+    );
+    const starter = await readFile(join(dir, "tests/engine-contract.test.ts"), "utf8");
+    assert.match(
+      starter,
+      /@nanobpm\/urban-testkit/,
+      `${style}: starter test imports the kit`,
+    );
+  }
+});
+
+test("--deno maps @nanobpm/urban-testkit and adds a test task", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "urban-deno-kit-"));
+  await scaffold({ name: "Deno Kit App", dir, deno: true });
+  const denoCfg = JSON.parse(await readFile(join(dir, "deno.json"), "utf8"));
+  assert.match(
+    denoCfg.imports["@nanobpm/urban-testkit"],
+    /^npm:@nanobpm\/urban-testkit@/,
+    "deno import maps the kit to its npm package",
+  );
+  assert.ok(denoCfg.tasks.test, "deno test task present");
+});
+
 test("--deno keeps deno.json and the Deno block, with markers removed", async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-deno-"));
   const res = await scaffold({ name: "Deno App", dir, deno: true });

@@ -13,9 +13,13 @@
     "gen:check": "urban gen --check",
     "start": "node --experimental-strip-types main.ts",
     "dev": "node --watch --experimental-strip-types main.ts",
-    "greet": "node --experimental-strip-types scripts/greet.ts"
+    "greet": "node --experimental-strip-types scripts/greet.ts",
+    "test": "node --test --experimental-strip-types \"tests/**/*.test.ts\""
   },
   "dependencies": {
     "@nanobpm/urban": "^0.24.0"
+  },
+  "devDependencies": {
+    "@nanobpm/urban-testkit": "^0.1.0"
   }
 }

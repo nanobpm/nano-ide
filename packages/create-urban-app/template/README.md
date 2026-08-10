@@ -12,6 +12,7 @@ processes/*.bpmn      BPMN process models
 forms/*.form          form-js user task forms
 db/migrations/*.sql   datasource schema (SQLite by default)
 workers/*.ts          service-task handlers (host-agnostic TypeScript)
+tests/*.test.ts       e2e tests (@nanobpm/urban-testkit, in-process WASM engine)
 main.ts               entrypoint (calls the Urban runtime)
 ```
 
@@ -53,6 +54,20 @@ Then trigger the demo:
 curl -X POST localhost:8090/hooks/greet -H 'content-type: application/json' \
   -d '{"who":"Adam"}'
 ```
+
+## Test it
+
+A starter e2e test ships in `tests/`, powered by
+[`@nanobpm/urban-testkit`](https://www.npmjs.com/package/@nanobpm/urban-testkit) (a
+devDependency). It drives the app against an in-process WASM build of the engine — no
+server, no wall-clock waits, CI-friendly.
+
+```bash
+npm test
+```
+<!-- if:deno -->
+On Deno: `deno task test`.
+<!-- /if:deno -->
 
 ## Generated artifacts
 

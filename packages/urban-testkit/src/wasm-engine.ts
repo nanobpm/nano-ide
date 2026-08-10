@@ -16,12 +16,34 @@ import {
   type EngineClient,
   type EngineJob,
   isBpmnError,
-  isRecord,
   type JobHandler,
-  type ProcessInstanceSnapshot,
-  type ProcessInstanceState,
   type WorkerSubscription,
 } from "@nanobpm/urban/runtime";
+
+// These three are structurally re-declared here (rather than imported from
+// `@nanobpm/urban/runtime`) on purpose: they let the kit depend only on urban's
+// long-published public API, so a scaffolded app can pin the *current* urban
+// release instead of an unreleased one. `ProcessInstanceState`/`Snapshot` are
+// structurally identical to urban's (an `EngineClient` implementation stays
+// assignable by structural typing), and `isRecord` is a generic JSON guard.
+
+/** A process instance's externally-visible lifecycle state — the small set the
+ *  instance-tracking reconciler keys on. Structurally identical to urban's
+ *  `ProcessInstanceState`. */
+export type ProcessInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED";
+
+/** A single process instance's lifecycle snapshot, as returned by
+ *  {@link EngineClient.searchProcessInstances}. Structurally identical to urban's. */
+export interface ProcessInstanceSnapshot {
+  readonly processInstanceKey: string;
+  readonly state: ProcessInstanceState;
+}
+
+/** Narrow an untyped JSON value to a plain object. Used to bridge the wasm
+ *  engine's JSON-string API into the typed `EngineClient` contract. */
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
 
 // A minimal ambient `Deno` declaration lets this file's runtime branch compile
 // under Node's tsc (mirrors the pattern in the urban runtime Deno adapter); the

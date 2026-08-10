@@ -14,12 +14,20 @@
 //   POST /app/actions/start/<process>               → engine.createInstance
 //   POST /app/actions/cancel                        → engine.cancelInstance
 //   POST /app/actions/message                       → engine.publishMessage
+//
+// Page actions are ROUTE-DRIVEN: an `actionForm`/rowAction/detail-form `action` is just
+// `{ path, method?, body?, successLabel? }`. The client POSTs the resolved body (default
+// `{ variables: <form> }`) to `path`, templating `{{form.KEY}}` / `{{row.KEY}}` (and the
+// whole-object `{{form}}` / `{{row}}`) tokens. There are NO bespoke action kinds — a form
+// reaches start/cancel/message above, an OpenAPI operation under /app/api, or any app route
+// uniformly by naming its path.
 
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage, isRecord } from "../guards.ts";
 import type { EngineClient } from "../host.ts";
 import { html, json, type Route } from "../router.ts";
 import { cancelInstanceReconciling, type CancelInstanceResult } from "./cancel.ts";
+import { apiDocsPath } from "./api.ts";
 import { quoteIdent } from "./gateway.ts";
 
 /** The subset of the datasource gateway the page runtime needs. */
@@ -37,6 +45,12 @@ export interface PagesOptions {
   rowLimit?: number;
   /** The injected default datasource name (the alias apps bind to). Default `app`. */
   sourceName?: string;
+  /**
+   * The app's Swagger UI route (from the `api` binding, resolved by `apiDocsPath`). When set,
+   * the shell renders a persistent "API docs" badge linking to it — so a spec-first app surfaces
+   * its interactive docs from its own UI for free. Omitted → no badge (app declares no `api`).
+   */
+  apiDocsPath?: string;
 }
 
 export interface PagesDeps {
@@ -115,7 +129,7 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   };
 
   const routes: Route[] = [];
-  const shell = html(rendererShell(homePage));
+  const shell = html(rendererShell(homePage, opts.apiDocsPath));
 
   // ── the renderer shell + module ─────────────────────────────────────────
   routes.push({ method: "GET", path: "/", source: "surface:pages", handler: () => shell });
@@ -372,6 +386,9 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
     homePage: typeof decl.homePage === "string" ? decl.homePage : undefined,
     rowLimit: typeof decl.rowLimit === "number" ? decl.rowLimit : undefined,
     sourceName: typeof decl.sourceName === "string" ? decl.sourceName : undefined,
+    // Link the shell's "API docs" badge to the app's Swagger UI when it declares an `api`
+    // binding (resolved by the api module, so the path never drifts from where docs mount).
+    apiDocsPath: apiDocsPath(ctx.manifest),
   };
   const sourceName = opts.sourceName ?? "app";
   const bindings = ctx.manifest.instanceTracking ?? [];
@@ -400,7 +417,25 @@ function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function rendererShell(homePage: string): string {
+function rendererShell(homePage: string, apiDocsPath?: string): string {
+  // A persistent "API docs" badge (spec-first apps get their Swagger UI linked from their own
+  // UI for free). `target="_blank"` + hardened `rel` so the docs open without giving the docs
+  // tab a handle back to this window (reverse-tabnabbing).
+  //
+  // The href must be DOCUMENT-relative, exactly like the `./app/runtime.js` script tag below:
+  // the shell is served at the app's mount root (always a trailing "/"), which is the origin
+  // root for a direct run (CLI on :3000) but a path prefix under the Nano console's reverse
+  // proxy (/console/app-view/<name>/). A root-absolute "/app/api-docs" would escape that prefix
+  // and open the CONSOLE origin (e.g. :8080/app/api-docs) instead of the app's docs. Strip the
+  // single leading slash so it rebases onto the mount root; leave a protocol-relative "//host"
+  // (which apiDocsPath never emits) untouched.
+  const badgeHref =
+    apiDocsPath && apiDocsPath.startsWith("/") && !apiDocsPath.startsWith("//")
+      ? `./${apiDocsPath.slice(1)}`
+      : apiDocsPath;
+  const apiDocsBadge = apiDocsPath
+    ? `\n  <a class="pc-apidocs" href="${escapeAttr(badgeHref!)}" target="_blank" rel="noopener noreferrer">API docs \u2197</a>`
+    : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -409,7 +444,7 @@ function rendererShell(homePage: string): string {
   <title>Urban App</title>
   <style>${RENDERER_CSS}</style>
 </head>
-<body>
+<body>${apiDocsBadge}
   <main id="page" data-home="${escapeAttr(homePage)}"><p class="pc-empty">Loading…</p></main>
   <script type="module" src="./app/runtime.js"></script>
 </body>
@@ -457,6 +492,8 @@ const RENDERER_CSS = `
 * { box-sizing: border-box; }
 body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64rem; margin-inline:auto; background:var(--nano-app); color:var(--nano-text); }
 .pc-empty { color:var(--nano-text-faint); }
+.pc-apidocs { position:fixed; top:.75rem; right:.75rem; z-index:10; font-size:.8rem; text-decoration:none; padding:.3rem .6rem; border:1px solid var(--nano-edge); border-radius:999px; background:var(--nano-panel); color:var(--nano-text-muted); }
+.pc-apidocs:hover { color:var(--nano-text); border-color:var(--nano-accent); }
 .pc-heading { font-size:1.6rem; font-weight:650; margin:0 0 .25rem; }
 .pc-sub { color:var(--nano-text-muted); margin:.25rem 0 1rem; }
 .pc-body { margin:.5rem 0; }
@@ -604,6 +641,59 @@ async function getJSON(url, opts) {
   return body;
 }
 
+// ── route-driven actions ────────────────────────────────────────────────
+// Every page action is a single primitive: POST (or any method) the resolved
+// body to an app route path. There are NO bespoke action kinds — a form/row
+// reaches process start, message publish, cancel, an OpenAPI operation, a
+// webhook, or any app route uniformly by naming its path. Path + body may
+// interpolate the current form fields and (for grid rows/detail forms) the row
+// via {{form.KEY}} / {{row.KEY}} tokens; the whole-string tokens {{form}} and
+// {{row}} splice the object itself (type-preserving), so a body of
+// "variables": "{{form}}" sends the form object as the variable map.
+function lookupToken(path, ctx) {
+  const segs = String(path).split(".");
+  const head = segs[0];
+  let base = head === "form" ? (ctx.form || {}) : head === "row" ? (ctx.row || {}) : undefined;
+  for (let i = 1; i < segs.length; i++) base = base == null ? undefined : base[segs[i]];
+  return base;
+}
+function resolveTemplate(node, ctx) {
+  if (typeof node === "string") {
+    const whole = node.match(/^\{\{\s*([\w.]+)\s*\}\}$/);
+    if (whole) return lookupToken(whole[1], ctx);
+    return node.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
+      const v = lookupToken(k, ctx);
+      return v == null ? "" : String(v);
+    });
+  }
+  if (Array.isArray(node)) return node.map((n) => resolveTemplate(n, ctx));
+  if (node && typeof node === "object") {
+    // Null-proto target so a template key like "__proto__" can't trigger prototype
+    // mutation (prototype-pollution class) when copied into the resolved object.
+    const out = Object.create(null);
+    for (const [k, v] of Object.entries(node)) out[k] = resolveTemplate(v, ctx);
+    return out;
+  }
+  return node;
+}
+async function runRoute(action, ctx) {
+  if (!action || typeof action.path !== "string" || action.path === "") {
+    throw new Error("This action has no route configured (action.path is missing or blank)");
+  }
+  const path = action.path.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
+    const v = lookupToken(k, ctx);
+    return v == null ? "" : encodeURIComponent(String(v));
+  });
+  const method = String(action.method || "POST").toUpperCase();
+  let body;
+  if (action.body !== undefined) body = resolveTemplate(action.body, ctx);
+  else if (ctx.form) body = { variables: ctx.form };
+  else body = {};
+  const opts = { method, headers: { "content-type": "application/json" } };
+  if (method !== "GET" && method !== "HEAD") opts.body = JSON.stringify(body);
+  return getJSON(path, opts);
+}
+
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -704,10 +794,14 @@ function renderActionForm(node) {
     }
     btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Submitting…";
     try {
-      const res = await getJSON("/app/actions/start/" + encodeURIComponent(p.action.process),
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ variables }) });
+      // Route-driven: POST the form (as { variables } by default, or the action's
+      // own body template) to the action's route path. correlationKey / process /
+      // message are expressed by the path + body template the page author supplies,
+      // e.g. { path: "/app/actions/message", body: { name, correlationKey, variables: "{{form}}" } }.
+      const res = await runRoute(p.action, { form: variables });
       msg.className = "pc-msg ok";
-      msg.textContent = "Started (instance " + (res.processInstanceKey ?? "?") + ")";
+      msg.textContent = (p.action && p.action.successLabel) ||
+        (res && res.processInstanceKey != null ? "Started (instance " + res.processInstanceKey + ")" : "Done");
       for (const input of inputs.values()) input.value = "";
       document.dispatchEvent(new CustomEvent("pc:refresh"));
     } catch (e) {
@@ -782,23 +876,9 @@ function renderDataGrid(node) {
   }
 
   async function fireAction(action, row) {
-    if (action.kind === "cancelProcess") {
-      return getJSON("/app/actions/cancel", { method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ processInstanceKey: row[action.keyField] }) });
-    }
-    if (action.kind === "publishMessage") {
-      return getJSON("/app/actions/message", { method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: action.message, correlationKey: row[action.correlationKeyField],
-          variables: { ...(action.variables || {}) } }) });
-    }
-    if (action.kind === "startProcess") {
-      return getJSON("/app/actions/start/" + encodeURIComponent(action.process), { method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ variables: { ...(action.variables || {}) } }) });
-    }
-    throw new Error("unknown action");
+    // Route-driven row action: POST the action's body template (default {})
+    // to its route path, with {{row.KEY}} tokens resolved from this row.
+    return runRoute(action, { row });
   }
 
   function rowActionButton(row, ra) {
@@ -833,11 +913,13 @@ function renderDataGrid(node) {
     btn.addEventListener("click", async () => {
       btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Sending…";
       try {
-        await getJSON("/app/actions/message", { method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: f.action.message, correlationKey: row[f.action.correlationKeyField],
-            variables: { [f.inputKey]: input.value, ...(f.action.variables || {}) } }) });
-        msg.className = "pc-msg ok"; msg.textContent = "Sent";
+        // The textarea value is the form's single field (f.inputKey); route + body
+        // template come from f.action, e.g. { path: "/app/actions/message",
+        // body: { name, correlationKey: "{{row.pr_key}}", variables: "{{form}}" } }.
+        // Null-proto so an f.inputKey of "__proto__"/"constructor" can't mutate a prototype.
+        const form = Object.create(null); form[f.inputKey] = input.value;
+        await runRoute(f.action, { form, row });
+        msg.className = "pc-msg ok"; msg.textContent = (f.action && f.action.successLabel) || "Sent";
         document.dispatchEvent(new CustomEvent("pc:refresh"));
       } catch (e) {
         btn.disabled = false; msg.className = "pc-msg err"; msg.textContent = String(e.message || e);

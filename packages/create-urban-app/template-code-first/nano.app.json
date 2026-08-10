@@ -1,47 +1,47 @@
 {
-  "$schema": "https://nanobpm.io/spec-app/nano-app.schema.json",
-  "schemaVersion": 1,
-  "id": "__APP_ID__",
-  "name": "__APP_NAME__",
-  "codename": "Urban",
-  "runtime": { "engine": "embedded", "node": "single" },
+	"$schema": "https://nanobpm.io/spec-app/nano-app.schema.json",
+	"schemaVersion": 1,
+	"id": "__APP_ID__",
+	"name": "__APP_NAME__",
+	"codename": "Urban",
+	"runtime": { "engine": "embedded", "node": "single" },
 
-  "models": {
-    "workflows": ["workflows/*.ts"],
-    "processes": ["processes/*.bpmn"]
-  },
+	"models": {
+		"workflows": ["workflows/*.ts"],
+		"processes": ["processes/*.bpmn"]
+	},
 
-  "data": {
-    "default": "app",
-    "sources": {
-      "app": {
-        "driver": "${NANO_APP_DB_DRIVER:-sqlite}",
-        "url": "${NANO_APP_DB_URL:-file:./db/app.db}",
-        "migrations": "db/migrations"
-      }
-    }
-  },
+	"data": {
+		"default": "app",
+		"sources": {
+			"app": {
+				"driver": "${NANO_APP_DB_DRIVER:-sqlite}",
+				"url": "${NANO_APP_DB_URL:-file:./db/app.db}",
+				"migrations": "db/migrations"
+			}
+		}
+	},
 
-  "types": {
-    "greeting": {
-      "name": "Greeting",
-      "table": "greetings",
-      "fields": {
-        "who": { "type": "string" },
-        "message": { "type": "string" },
-        "createdAt": { "type": "datetime", "optional": true }
-      }
-    }
-  },
+	"types": {
+		"greeting": {
+			"name": "Greeting",
+			"table": "greetings",
+			"fields": {
+				"who": { "type": "string" },
+				"message": { "type": "string" },
+				"createdAt": { "type": "datetime", "optional": true }
+			}
+		}
+	},
 
-  "surfaces": {
-    "taskInbox": { "enabled": true, "path": "/tasks" }
-  },
+	"surfaces": {
+		"taskInbox": { "enabled": true, "path": "/tasks" }
+	},
 
-  "ui": {
-    "enabled": false,
-    "label": "__APP_NAME__",
-    "portEnv": "PORT",
-    "path": "/"
-  }
+	"ui": {
+		"enabled": false,
+		"label": "__APP_NAME__",
+		"portEnv": "PORT",
+		"path": "/"
+	}
 }

@@ -27,14 +27,17 @@ export function text(body: string, status = 200): HttpResponse {
 }
 
 /**
- * Normalize a manifest-supplied route path: ensure a leading "/", drop trailing
- * slashes. Incoming request paths always start with "/", so a manifest path
- * lacking one (e.g. "hooks/x") would otherwise never match. Falls back to
- * `fallback` when the value is missing or collapses to empty ("/").
+ * Normalize a manifest-supplied route path: collapse leading slashes to exactly
+ * one, drop trailing slashes. Incoming request paths always start with "/", so a
+ * manifest path lacking one (e.g. "hooks/x") would otherwise never match. Collapsing
+ * multiple leading slashes also hardens derived URLs (e.g. the Swagger `servers`
+ * entry or the pages "API docs" badge): a `//host` value stays an in-app absolute
+ * path instead of becoming a protocol-relative URL that navigates off-origin. Falls
+ * back to `fallback` when the value is missing or collapses to empty ("/").
  */
 export function normalizeRoutePath(value: string | undefined, fallback: string): string {
   const raw = (value ?? fallback).trim();
-  const withLead = raw.startsWith("/") ? raw : `/${raw}`;
+  const withLead = `/${raw.replace(/^\/+/, "")}`;
   const noTrail = withLead.replace(/\/+$/, "");
   return noTrail || fallback;
 }

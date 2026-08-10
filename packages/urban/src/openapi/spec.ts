@@ -2,12 +2,16 @@
 // deriver (`toolkit/derivers/api.ts`, authoring-time type + wrapper emission) and the runtime
 // (`runtime/core/modules/api.ts`, request validation + routing) build on this one module, so the
 // derived types and the runtime routes/validation always agree. No IO, no `node:*`, no `Deno` —
-// it operates on an already-parsed document object.
+// it operates on document text/objects. Its one external dependency is `yaml` (a browser-safe,
+// pure-JS parser with a dedicated browser build) so `parseSpec` accepts YAML — the sanctioned
+// authoring format for the HTTP surface (ADR 0059) — as well as JSON.
 //
 // Scope: the ADR 0058 "supported profile" — JSON bodies, path/query parameters, a JSON
 // requestBody, response codes, and a JSON-Schema subset validator (type/required/enum/numeric &
 // string bounds/pattern/array & object shape/nullable/$ref). Exotic OpenAPI (callbacks, links,
 // XML, discriminated oneOf composition) is intentionally out of scope for this slice.
+
+import { parse as parseYaml } from "yaml";
 
 /** A JSON Schema (the OpenAPI subset we read). Kept structural and permissive — unknown keywords
  *  are ignored by the validator and fall back to `unknown` in the type emitter. */
@@ -80,11 +84,38 @@ export interface OpenApiResponse {
   content?: Record<string, OpenApiMediaType>;
 }
 
+/**
+ * A security scheme (OpenAPI Components Object → `securitySchemes`). The supported profile is the
+ * `apiKey` type carried in a request header (ADR 0059): a webhook/operation is guarded by a shared
+ * secret. The expected value is never inlined — it is read from an environment variable named by
+ * the `x-nano-secret-env` extension (ADR 0025/0027: secrets stay env pointers).
+ */
+export interface OpenApiSecurityScheme {
+  type?: string;
+  /** For `apiKey`: where the key travels. `header` and `query` are enforced in this slice. */
+  in?: "header" | "query" | "cookie";
+  /** For `apiKey`: the header (or query) name carrying the key, e.g. `X-Webhook-Key`. */
+  name?: string;
+  /** Env var holding the expected secret value. Required to enforce an `apiKey` scheme. */
+  "x-nano-secret-env"?: string;
+  description?: string;
+}
+
+/** A security requirement: scheme name → scopes (scopes are unused for `apiKey`, always `[]`). An
+ *  operation is authorized when ANY one requirement object is fully satisfied (OR across the list,
+ *  AND within an object). An empty list (`security: []`) means the operation is explicitly open. */
+export type OpenApiSecurityRequirement = Record<string, string[]>;
+
 export interface OpenApiDoc {
   openapi?: string;
   info?: { title?: string; version?: string };
   paths?: Record<string, Record<string, unknown>>;
-  components?: { schemas?: Record<string, OpenApiSchema> };
+  components?: {
+    schemas?: Record<string, OpenApiSchema>;
+    securitySchemes?: Record<string, OpenApiSecurityScheme>;
+  };
+  /** Document-level default security, applied to any operation that declares none. */
+  security?: OpenApiSecurityRequirement[];
 }
 
 /** The HTTP methods we mount, lowercase as they appear as path-item keys. */
@@ -103,6 +134,9 @@ export interface OperationInfo {
   requestBodyRequired: boolean;
   /** Schema of the first 2xx (else default) JSON response, when declared. */
   responseSchema?: OpenApiSchema;
+  /** Effective security requirements (op-level if declared — including an explicit empty list —
+   *  else the document-level default, else `[]`). An empty list means the operation is open. */
+  security: OpenApiSecurityRequirement[];
   eject: boolean;
   summary?: string;
 }
@@ -116,20 +150,28 @@ function isSchema(v: unknown): v is OpenApiSchema {
   return isRecord(v);
 }
 
-/** Parse an OpenAPI document from text. JSON only in this slice (ADR 0058 open question: YAML).
- *  Throws with a clear message on malformed input. */
+/** Parse an OpenAPI document from text. Accepts both YAML (the sanctioned authoring format for
+ *  the HTTP surface — ADR 0059) and JSON (still accepted, e.g. a generated interchange artifact).
+ *  JSON is a strict subset of YAML 1.2, so JSON is tried first for a precise error + fast path,
+ *  then the text is parsed as YAML. Throws with a clear message on malformed input. */
 export function parseSpec(text: string): OpenApiDoc {
   let doc: unknown;
   try {
+    // Fast path + precise diagnostics for JSON (and the generated `openapi.json` interchange file).
     doc = JSON.parse(text);
-  } catch (e) {
-    throw new Error(
-      `OpenAPI spec is not valid JSON (YAML is not yet supported — ADR 0058): ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
+  } catch (jsonError) {
+    // Not JSON — parse as YAML (which also subsumes JSON, so authored `.yaml`/`.yml` specs load).
+    try {
+      doc = parseYaml(text);
+    } catch (yamlError) {
+      const jsonMessage = jsonError instanceof Error ? jsonError.message : String(jsonError);
+      const yamlMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
+      throw new Error(`OpenAPI spec is not valid YAML or JSON: JSON parse error: ${jsonMessage}; YAML parse error: ${yamlMessage}`);
+    }
   }
-  if (!isRecord(doc)) throw new Error("OpenAPI spec must be a JSON object");
+  if (!isRecord(doc)) {
+    throw new Error("OpenAPI spec must be an object (a mapping at the document root)");
+  }
   return doc;
 }
 
@@ -200,6 +242,12 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         isRecord(requestBody?.content) ? requestBody.content : undefined,
       );
       const responses = isRecord(opRaw.responses) ? opRaw.responses : {};
+      // Effective security: an operation's own `security` (even an explicit `[]`, which opts out of
+      // a document-level default) wins; otherwise inherit the document-level default; otherwise open.
+      const rawSecurity = Object.prototype.hasOwnProperty.call(opRaw, "security")
+        ? opRaw.security
+        : doc.security;
+      const security = normalizeSecurity(rawSecurity);
       out.push({
         operationId,
         method,
@@ -208,6 +256,7 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         requestBodySchema,
         requestBodyRequired: requestBody?.required === true,
         responseSchema: firstSuccessSchema(responses),
+        security,
         eject: opRaw["x-urban-eject"] === true,
         summary: typeof opRaw.summary === "string" ? opRaw.summary : undefined,
       });
@@ -273,6 +322,163 @@ export function operationsWithUnsafeId(doc: OpenApiDoc): string[] {
       const id = opRaw.operationId;
       if (typeof id === "string" && id.length > 0 && !isSafeOperationId(id)) {
         out.push(`${method.toUpperCase()} ${path} (${id})`);
+      }
+    }
+  }
+  return out;
+}
+
+const MALFORMED_SECURITY_REQUIREMENT = "__nano_malformed_security_requirement__";
+
+function malformedSecurityRequirement(): OpenApiSecurityRequirement {
+  return { [MALFORMED_SECURITY_REQUIREMENT]: [] };
+}
+
+/** Normalize a raw `security` value into a clean requirement list. Missing → `[]` (open).
+ *  Present-but-malformed values become an impossible marker requirement so enforcement fails closed
+ *  as a 500 misconfiguration instead of silently opening a guarded operation. */
+function normalizeSecurity(raw: unknown): OpenApiSecurityRequirement[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) return [malformedSecurityRequirement()];
+  const out: OpenApiSecurityRequirement[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) {
+      out.push(malformedSecurityRequirement());
+      continue;
+    }
+    const req: OpenApiSecurityRequirement = {};
+    let malformed = false;
+    for (const [name, scopes] of Object.entries(entry)) {
+      if (!Array.isArray(scopes) || scopes.some((s) => typeof s !== "string")) {
+        malformed = true;
+        break;
+      }
+      req[name] = scopes;
+    }
+    out.push(malformed ? malformedSecurityRequirement() : req);
+  }
+  return out;
+}
+
+/** The outcome of enforcing an operation's security: `ok` when authorized, otherwise the HTTP
+ *  status to return — `401` (the request presented no/invalid credential) or `500` (the app is
+ *  misconfigured: an operation references an unknown scheme, an unsupported scheme type, or a
+ *  scheme whose secret env var is unset). */
+export interface SecurityDecision {
+  ok: boolean;
+  status?: 401 | 500;
+  error?: string;
+}
+
+const SECURITY_OK: SecurityDecision = { ok: true };
+const TEXT_ENCODER = new TextEncoder();
+
+/** Constant-time string comparison — avoids leaking how many leading characters of a secret matched
+ *  via response timing. Unequal lengths short-circuit (an acceptable length oracle for API keys). */
+function timingSafeEqual(a: string, b: string): boolean {
+  const ab = TEXT_ENCODER.encode(a);
+  const bb = TEXT_ENCODER.encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
+/**
+ * Enforce an operation's effective security requirements (ADR 0059). Pure: the caller supplies the
+ * request's header/query readers and an env reader, so all policy lives here (and is unit-tested)
+ * while the impure lookups stay in the runtime.
+ *
+ * Semantics follow OpenAPI: authorized when ANY one requirement object is satisfied (OR), and a
+ * requirement object is satisfied only when ALL its schemes are (AND). An empty requirement list
+ * means the operation is open. Only `apiKey` schemes (in `header` or `query`) are enforced; the
+ * expected value comes from the scheme's `x-nano-secret-env` env var.
+ *
+ * A referenced scheme that is unknown, not `apiKey`, or missing its secret env var is a server
+ * misconfiguration → `500` (fail closed), reported in preference to a `401` so operators see the
+ * real cause. A well-formed scheme with a wrong/absent presented credential → `401`.
+ */
+export function evaluateSecurity(
+  doc: OpenApiDoc,
+  op: OperationInfo,
+  getHeader: (name: string) => string | undefined,
+  getQuery: (name: string) => string | undefined,
+  getSecret: (envVar: string) => string | undefined,
+): SecurityDecision {
+  if (op.security.length === 0) return SECURITY_OK;
+  const schemes = doc.components?.securitySchemes ?? {};
+  let misconfig: string | undefined;
+
+  for (const requirement of op.security) {
+    const names = Object.keys(requirement);
+    if (names.length === 0) return SECURITY_OK; // an empty object is a "no auth" alternative
+    let satisfied = true;
+    for (const name of names) {
+      if (name === MALFORMED_SECURITY_REQUIREMENT) {
+        misconfig ??= "malformed security requirement";
+        satisfied = false;
+        break;
+      }
+      const scheme = schemes[name];
+      if (!scheme) {
+        misconfig ??= `security scheme "${name}" is not declared in components.securitySchemes`;
+        satisfied = false;
+        break;
+      }
+      if (scheme.type !== "apiKey") {
+        misconfig ??= `security scheme "${name}" has unsupported type "${scheme.type ?? "(none)"}" (only apiKey is enforced)`;
+        satisfied = false;
+        break;
+      }
+      const where = scheme.in ?? "header";
+      if (where !== "header" && where !== "query") {
+        misconfig ??= `security scheme "${name}" apiKey location "${where}" is unsupported (use header or query)`;
+        satisfied = false;
+        break;
+      }
+      if (!scheme.name) {
+        misconfig ??= `security scheme "${name}" is missing its apiKey \`name\``;
+        satisfied = false;
+        break;
+      }
+      const envVar = scheme["x-nano-secret-env"];
+      if (!envVar) {
+        misconfig ??= `security scheme "${name}" is missing \`x-nano-secret-env\` (the env var holding the expected key)`;
+        satisfied = false;
+        break;
+      }
+      const expected = getSecret(envVar);
+      if (expected === undefined || expected === "") {
+        misconfig ??= `security scheme "${name}" secret env ${envVar} is not set`;
+        satisfied = false;
+        break;
+      }
+      const presented = where === "header" ? getHeader(scheme.name) : getQuery(scheme.name);
+      if (presented === undefined || !timingSafeEqual(presented, expected)) {
+        satisfied = false; // a wrong/absent credential → 401 (not a misconfig)
+        break;
+      }
+    }
+    if (satisfied) return SECURITY_OK;
+  }
+
+  return misconfig
+    ? { ok: false, status: 500, error: `security misconfigured: ${misconfig}` }
+    : { ok: false, status: 401, error: "unauthorized" };
+}
+
+/** "scheme (op)" pointers for every operation security requirement that names a scheme absent from
+ *  components.securitySchemes — an app-drift the runtime rejects at request time (500) and the
+ *  `--check` gate can surface ahead of time. */
+export function undeclaredSecuritySchemes(doc: OpenApiDoc): string[] {
+  const declared = new Set(Object.keys(doc.components?.securitySchemes ?? {}));
+  const out: string[] = [];
+  for (const op of collectOperations(doc)) {
+    for (const requirement of op.security) {
+      for (const name of Object.keys(requirement)) {
+        if (name !== MALFORMED_SECURITY_REQUIREMENT && !declared.has(name)) {
+          out.push(`${name} (${op.method.toUpperCase()} ${op.path})`);
+        }
       }
     }
   }

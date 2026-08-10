@@ -9,6 +9,8 @@
 
 export {
   createWasmEngineClient,
+  type ProcessInstanceSnapshot,
+  type ProcessInstanceState,
   WasmEngineClient,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";

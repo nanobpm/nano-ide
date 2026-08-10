@@ -5,14 +5,18 @@ import type { AppManifest } from "../manifest.ts";
 import type { EngineClient, HostContext, HttpRequest } from "../host.ts";
 import { makeRouter } from "../router.ts";
 import { DataLayer } from "./datasource.ts";
-import { mountApi, resolveOperationHandler, type OperationHandler } from "./api.ts";
+import { mountApi, resolveOperationHandler, apiDocsPath, type ApiHandle, type OperationHandler } from "./api.ts";
 
-function req(method: string, path: string, opts: { query?: string; body?: string } = {}): HttpRequest {
+function req(
+  method: string,
+  path: string,
+  opts: { query?: string; body?: string; headers?: Record<string, string> } = {},
+): HttpRequest {
   return {
     method,
     path,
     query: new URLSearchParams(opts.query ?? ""),
-    headers: new Headers(),
+    headers: new Headers(opts.headers ?? {}),
     text: () => Promise.resolve(opts.body ?? ""),
   };
 }
@@ -72,21 +76,23 @@ const spec = JSON.stringify({
 });
 
 interface Built {
-  router: (r: HttpRequest) => Promise<{ status?: number; body?: string }>;
+  router: (r: HttpRequest) => Promise<{ status?: number; body?: string; headers?: Record<string, string> }>;
   imported: string[];
   logs: Array<{ level: string; msg: string }>;
+  handle: ApiHandle;
 }
 
 function build(
   api: Record<string, unknown> | undefined,
   modules: Record<string, Record<string, unknown>>,
   specText = spec,
+  env: (v: string) => string | undefined = () => undefined,
 ): Built {
   const imported: string[] = [];
   const logs: Array<{ level: string; msg: string }> = [];
   const host: HostContext = {
     runtime: "node",
-    env: () => undefined,
+    env,
     readTextFile: async () => specText,
     listDir: async () => [],
     exists: async () => false,
@@ -108,7 +114,12 @@ function build(
   const ctx: RuntimeContext = { root: "/app", manifest, engine, host };
   const handle = mountApi(ctx, appFixture());
   const router = makeRouter(handle.routes);
-  return { router: (r) => Promise.resolve(router(r)), imported, logs };
+  return { router: (r) => Promise.resolve(router(r)), imported, logs, handle };
+}
+
+/** Mount `mountApi` and return the handle directly (for asserting `describe()`). */
+function buildHandle(api: Record<string, unknown>): { handle: ApiHandle } {
+  return { handle: build(api, {}).handle };
 }
 
 test("resolveOperationHandler prefers default (function) then handler", () => {
@@ -222,12 +233,13 @@ test("a malformed spec surfaces as a 500, not a boot failure", async () => {
   assert.match(JSON.parse(res.body!).error, /failed to load/);
 });
 
-test("a manifest api.base without a leading slash is normalized so routes still match", async () => {
+test("a leftover manifest api.base is ignored — operations always mount at the fixed /app/api", async () => {
   let got: Record<string, string> | undefined;
   const { router } = build(
-    { spec: "openapi.json", base: "app/api" }, // no leading slash
+    { spec: "openapi.json", base: "/somewhere/else" }, // base is no longer honoured
     { "/app/operations/getInvoice": { default: (i: { params: Record<string, string> }) => { got = i.params; return { body: { ok: true } }; } } },
   );
+  assert.equal((await router(req("GET", "/somewhere/else/invoices/42"))).status, 404);
   const res = await router(req("GET", "/app/api/invoices/42"));
   assert.equal(res.status, 200);
   assert.deepEqual(got, { id: "42" });
@@ -387,10 +399,10 @@ test("an op declaring no requestBody gets body:undefined at runtime (matches der
   assert.equal(seenBody, undefined);
 });
 
-test("readApiBinding trims whitespace on base/dir/spec so benign formatting can't break resolution", async () => {
+test("readApiBinding trims whitespace on dir/spec so benign formatting can't break resolution", async () => {
   let got: Record<string, string> | undefined;
   const { router, imported } = build(
-    { spec: "  openapi.json  ", base: "  app/api  ", dir: "  operations  " },
+    { spec: "  openapi.json  ", dir: "  operations  " },
     { "/app/operations/getInvoice": { default: (i: { params: Record<string, string> }) => { got = i.params; return { body: { ok: true } }; } } },
   );
   const res = await router(req("GET", "/app/api/invoices/42"));
@@ -442,4 +454,146 @@ test("an unsafe operationId never mounts (skipped) — a crafted spec can't impo
   const res = await router(req("GET", "/app/api/x"));
   assert.equal(res.status, 404); // no route mounted for the skipped op
   assert.equal(imported.some((p) => p.includes("evil")), false);
+});
+
+test("serves the OpenAPI spec at {base}-docs/openapi.json, rebased to the mounted namespace", async () => {
+  const { router } = build({ spec: "openapi.json" }, {});
+  const res = await router(req("GET", "/app/api-docs/openapi.json"));
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /application\/json/);
+  const doc = JSON.parse(res.body ?? "{}");
+  // The doc is served intact...
+  assert.ok(doc.paths["/invoices"], "keeps the operation paths");
+  // ...but `servers` is rebased to `base` (document-relative, issue #151) so Swagger UI "Try it
+  // out" hits the real routes both at the origin root and under the Nano console reverse proxy
+  // (operations mount under /app/api, not the spec's bare /invoices).
+  assert.deepEqual(doc.servers, [{ url: "api" }]);
+});
+
+test("serves the Swagger UI page at {base}-docs by default", async () => {
+  const { router } = build({ spec: "openapi.json" }, {});
+  const res = await router(req("GET", "/app/api-docs"));
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /text\/html/);
+  const body = res.body ?? "";
+  assert.match(body, /swagger-ui/);
+  // The UI reads the spec via a DOCUMENT-relative URL (issue #151) so it resolves through the
+  // Nano console reverse proxy, not a root-absolute path that escapes to the console origin.
+  assert.match(body, /url: "api-docs\/openapi\.json"/);
+  assert.doesNotMatch(body, /url: "\/app\/api-docs\/openapi\.json"/);
+});
+
+test("the trailing-slash docs variant 308-redirects to the canonical path", async () => {
+  const { router } = build({ spec: "openapi.json" }, {});
+  // The router exact-matches non-prefix routes, so `${base}-docs/` (common from proxies/browsers)
+  // would 404 without an explicit alias. It must permanent-redirect to the slash-less canonical.
+  const res = await router(req("GET", "/app/api-docs/"));
+  assert.equal(res.status, 308);
+  assert.equal(res.headers?.["location"], "/app/api-docs");
+});
+
+test("docs default on is reflected in describe()", () => {
+  const { handle } = buildHandle({ spec: "openapi.json" });
+  const d = handle.describe();
+  assert.deepEqual(d.api, {
+    spec: "openapi.json",
+    base: "/app/api",
+    dir: "operations",
+    eject: false,
+    docs: { ui: "/app/api-docs", spec: "/app/api-docs/openapi.json" },
+  });
+});
+
+test("docs:false disables both the UI and the spec route (no reserved paths)", async () => {
+  const { router } = build({ spec: "openapi.json", docs: false }, {});
+  // With docs off, the docs paths fall through to the operation dispatcher → no such operation.
+  assert.equal((await router(req("GET", "/app/api-docs"))).status, 404);
+  assert.equal((await router(req("GET", "/app/api-docs/openapi.json"))).status, 404);
+});
+
+test("a string docs overrides the UI route (and the spec route beneath it)", async () => {
+  const { router } = build({ spec: "openapi.json", docs: "/help" }, {});
+  assert.equal((await router(req("GET", "/help"))).status, 200);
+  assert.equal((await router(req("GET", "/help/openapi.json"))).status, 200);
+  // The default docs path is no longer served.
+  assert.equal((await router(req("GET", "/app/api-docs"))).status, 404);
+});
+
+test("apiDocsPath resolves the UI route (and honours disable / override)", () => {
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json" } }), "/app/api-docs");
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json", base: "/x" } }), "/app/api-docs"); // base ignored
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json", docs: "/help" } }), "/help");
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json", docs: false } }), undefined);
+  assert.equal(apiDocsPath({}), undefined);
+});
+
+// ── Security enforcement (ADR 0059: apiKey-guarded webhook operations) ────────────────────────
+
+const securedSpec = JSON.stringify({
+  openapi: "3.0.0",
+  components: {
+    securitySchemes: {
+      webhookKey: { type: "apiKey", in: "header", name: "X-Webhook-Key", "x-nano-secret-env": "NANO_WEBHOOK_KEY" },
+    },
+  },
+  paths: {
+    "/hooks/submit": {
+      post: {
+        operationId: "submitHook",
+        security: [{ webhookKey: [] }],
+        responses: { "204": {} },
+      },
+    },
+  },
+});
+
+test("secured operation: correct apiKey header reaches the delegate (200)", async () => {
+  const seen: unknown[] = [];
+  const handler: OperationHandler = (input) => {
+    seen.push(input);
+    return { status: 200, body: { ok: true } };
+  };
+  const { router, imported } = build(
+    { spec: "openapi.json", dir: "operations" },
+    { "/app/operations/submitHook": { default: handler } },
+    securedSpec,
+    (v) => (v === "NANO_WEBHOOK_KEY" ? "s3cret" : undefined),
+  );
+  const res = await router(
+    req("POST", "/app/api/hooks/submit", { body: "{}", headers: { "X-Webhook-Key": "s3cret" } }),
+  );
+  assert.equal(res.status, 200);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(imported, ["/app/operations/submitHook"]);
+});
+
+test("secured operation: missing/wrong apiKey is rejected 401 without loading the delegate", async () => {
+  const { router, imported } = build(
+    { spec: "openapi.json", dir: "operations" },
+    { "/app/operations/submitHook": { default: () => ({ status: 200 }) } },
+    securedSpec,
+    (v) => (v === "NANO_WEBHOOK_KEY" ? "s3cret" : undefined),
+  );
+  const missing = await router(req("POST", "/app/api/hooks/submit", { body: "{}" }));
+  assert.equal(missing.status, 401);
+  const wrong = await router(
+    req("POST", "/app/api/hooks/submit", { body: "{}", headers: { "X-Webhook-Key": "nope" } }),
+  );
+  assert.equal(wrong.status, 401);
+  // The delegate must never run for an unauthorized request.
+  assert.deepEqual(imported, []);
+});
+
+test("secured operation: an unset secret env fails closed with 500 (misconfiguration)", async () => {
+  const { router, logs } = build(
+    { spec: "openapi.json", dir: "operations" },
+    { "/app/operations/submitHook": { default: () => ({ status: 200 }) } },
+    securedSpec,
+    () => undefined, // NANO_WEBHOOK_KEY not set
+  );
+  const res = await router(
+    req("POST", "/app/api/hooks/submit", { body: "{}", headers: { "X-Webhook-Key": "anything" } }),
+  );
+  assert.equal(res.status, 500);
+  assert.ok(logs.some((l) => l.level === "error" && /security is misconfigured/.test(l.msg)));
 });

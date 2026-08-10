@@ -1,0 +1,65 @@
+{
+	"schemaVersion": "1.0",
+	"title": "__APP_NAME__",
+	"nodes": [
+		{
+			"type": "nav",
+			"id": "nav",
+			"props": {
+				"variant": "bar",
+				"title": "__APP_NAME__",
+				"items": [{ "label": "Home", "page": "home" }]
+			}
+		},
+		{
+			"type": "text",
+			"id": "title",
+			"props": { "text": "__APP_NAME__", "variant": "heading" }
+		},
+		{
+			"type": "text",
+			"id": "subtitle",
+			"props": {
+				"text": "Send a greeting. It publishes a message that starts the BPMN process; the worker records the greeting and it appears below. The same flow is available as a REST API — see the API docs badge.",
+				"variant": "sub"
+			}
+		},
+		{
+			"type": "actionForm",
+			"id": "greet",
+			"props": {
+				"title": "Send a greeting",
+				"submitLabel": "Greet",
+				"action": {
+					"path": "/app/actions/message",
+					"body": {
+						"name": "__APP_ID__.greet-requested",
+						"correlationKey": "{{form.who}}",
+						"variables": "{{form}}"
+					}
+				},
+				"fields": [{ "key": "who", "label": "Who", "type": "text" }]
+			}
+		},
+		{
+			"type": "dataGrid",
+			"id": "greetings",
+			"props": {
+				"title": "Greetings",
+				"rowKey": "id",
+				"refreshMs": 2000,
+				"data": {
+					"kind": "datasource",
+					"source": "app",
+					"table": "greetings",
+					"orderBy": { "field": "id", "dir": "desc" }
+				},
+				"columns": [
+					{ "field": "who", "header": "Who" },
+					{ "field": "message", "header": "Message" },
+					{ "field": "createdAt", "header": "Created" }
+				]
+			}
+		}
+	]
+}

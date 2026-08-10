@@ -98,6 +98,29 @@ test("GET / serves the renderer shell with the home marker", async () => {
   assert.doesNotMatch(res.body ?? "", /src="\/app\/runtime\.js"/);
 });
 
+test("the API docs badge links via a document-relative href (proxy-safe)", async () => {
+  // With an `api` binding, the shell renders a persistent "API docs" badge. Its
+  // href must be DOCUMENT-relative (./app/api-docs), mirroring the runtime.js
+  // script tag, so it resolves against the shell's mount root. A root-absolute
+  // "/app/api-docs" would escape the Nano console's /console/app-view/<name>/
+  // reverse proxy and open the console origin (e.g. :8080/app/api-docs) instead
+  // of the app's own docs — the port-mismatch bug this guards against.
+  const { engine } = fakeEngine();
+  const routes = createPagesRoutes(
+    { pagesDir: "pages", homePage: "home", sourceName: "app", apiDocsPath: "/app/api-docs" },
+    {
+      db: fakeDb(),
+      engine,
+      readPage: async () => JSON.stringify({ title: "Home", nodes: [] }),
+      listPages: async () => ["home"],
+    },
+  );
+  const res = await makeRouter(routes)(req("GET", "/"));
+  assert.match(res.body ?? "", /class="pc-apidocs"/);
+  assert.match(res.body ?? "", /href="\.\/app\/api-docs"/);
+  assert.doesNotMatch(res.body ?? "", /href="\/app\/api-docs"/);
+});
+
 test("the shell styles the app through the shared --nano-* token contract", async () => {
   const res = await dispatch("GET", "/");
   const html = res.body ?? "";
@@ -120,6 +143,41 @@ test("GET /app/runtime.js serves the renderer module", async () => {
   // path-prefixed reverse proxy (Nano console embed), not just at the origin root.
   assert.match(res.body ?? "", /new URL\("\.\.\/", import\.meta\.url\)/);
   assert.match(res.body ?? "", /function apiUrl\(u\)/);
+});
+
+test("the shell renders an API-docs badge only when an apiDocsPath is provided", async () => {
+  const routes = createPagesRoutes(
+    { pagesDir: "pages", homePage: "home", sourceName: "app", apiDocsPath: "/app/api-docs" },
+    { db: fakeDb(), engine: fakeEngine().engine, readPage: async () => "{}" },
+  );
+  const withBadge = (await makeRouter(routes)(req("GET", "/"))).body ?? "";
+  assert.match(withBadge, /class="pc-apidocs"/);
+  assert.match(withBadge, /href="\.\/app\/api-docs"/);
+  // Opens in a new tab with a hardened rel (no reverse-tabnabbing handle).
+  assert.match(withBadge, /rel="noopener noreferrer"/);
+
+  // No `api` binding → no badge element (the CSS rule is always present in the shell styles).
+  const noBadge = (await dispatch("GET", "/")).body ?? "";
+  assert.doesNotMatch(noBadge, /class="pc-apidocs"/);
+});
+
+test("page actions are route-driven: the runtime ships a single callRoute dispatcher, no bespoke kinds", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A single primitive resolves { path, method?, body? } and POSTs it — there is no per-kind
+  // branching. The template resolver splices {{form}} / {{row}} and {{form.KEY}} / {{row.KEY}}.
+  assert.match(js, /async function runRoute\(action, ctx\)/);
+  assert.match(js, /function resolveTemplate\(node, ctx\)/);
+  assert.match(js, /function lookupToken\(path, ctx\)/);
+  // The form default body is the { variables } envelope, so plain forms hit start operations
+  // without any per-form config; row/detail forms carry an explicit body template instead.
+  assert.match(js, /body = \{ variables: ctx\.form \}/);
+  // Path tokens are URL-encoded (real keys like owner/repo#123 must not break the path).
+  assert.match(js, /encodeURIComponent\(String\(v\)\)/);
+  // The removed bespoke action kinds no longer appear anywhere in the client runtime.
+  assert.doesNotMatch(js, /p\.action\.kind/);
+  assert.doesNotMatch(js, /correlationKeyField/);
+  assert.doesNotMatch(js, /action\.kind === "(startProcess|publishMessage|cancelProcess)"/);
 });
 
 test("the renderer bridges the console theme over postMessage", async () => {

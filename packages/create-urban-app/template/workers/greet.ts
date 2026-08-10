@@ -10,13 +10,16 @@
 
 import type { AppApi, EngineJob } from "@nanobpm/urban";
 
-export async function greet(job: EngineJob, app: AppApi): Promise<Record<string, unknown>> {
-  const who = String(job.variables.who ?? "world");
-  const message = `Hello, ${who}!`;
+export async function greet(
+	job: EngineJob,
+	app: AppApi,
+): Promise<Record<string, unknown>> {
+	const who = String(job.variables.who ?? "world");
+	const message = `Hello, ${who}!`;
 
-  const repo = app.data.repo("greeting");
-  repo.insert({ who, message, createdAt: new Date().toISOString() });
+	const repo = app.data.repo("greeting");
+	repo.insert({ who, message, createdAt: new Date().toISOString() });
 
-  app.log("info", "greeted", { who });
-  return { message };
+	app.log("info", "greeted", { who });
+	return { message };
 }

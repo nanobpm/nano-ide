@@ -111,7 +111,7 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
   }
 
   // The OpenAPI endpoint surface (ADR 0058) mounts AFTER actions (so an exact `actions[]` route
-  // still shadows an operation) and BEFORE the generic pages routes. It owns the `api.base`
+  // still shadows an operation) and BEFORE the generic pages routes. It owns the fixed `/app/api`
   // namespace via a regex dispatcher, so it only contributes routes when the app declares `api`.
   const api = mountApi(ctx, app);
   if (api.routes.length > 0) {

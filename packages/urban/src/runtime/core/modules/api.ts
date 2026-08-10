@@ -2,7 +2,7 @@
 // instead of hand-rolled imperative handlers, an author declares `api: { spec }` in the manifest and
 // writes one delegate module per `operationId`. This runtime reads the SAME OpenAPI document the
 // toolkit deriver turns into types (via the shared `openapi/spec.ts`), mounts one dispatcher over the
-// `api.base` namespace, and for each request: parses → validates params/query/body against the spec →
+// fixed `/app/api` namespace, and for each request: parses → validates params/query/body against the spec →
 // 400 with a structured error → resolves + calls the operationId delegate (validated, typed input +
 // the injected AppApi, exactly like a worker/action handler) → serializes the result.
 //
@@ -15,7 +15,7 @@
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage } from "../guards.ts";
 import type { HttpRequest, HttpResponse } from "../host.ts";
-import { json, normalizeRoutePath, type Route } from "../router.ts";
+import { html, json, normalizeRoutePath, type Route } from "../router.ts";
 import { resolveAppPath } from "./datasource.ts";
 import {
   collectOperations,
@@ -29,6 +29,8 @@ import {
   resolveSchema,
   toRouteMatcher,
   undeclaredPathParams,
+  undeclaredSecuritySchemes,
+  evaluateSecurity,
   validateValue,
   type ValidationIssue,
 } from "../../../openapi/spec.ts";
@@ -38,9 +40,55 @@ import {
 export interface ApiBinding {
   spec: string;
   dir?: string;
-  base?: string;
   validateResponses?: "dev" | "always" | "never";
   eject?: boolean;
+  /** Human API docs (Swagger UI). `true`/omitted → on at `/app/api-docs` (ADR 0058); `false` →
+   *  off; a string → a custom absolute route to mount the UI under. Spec-first apps get docs
+   *  for free — the UI reads the SAME OpenAPI document the runtime routes + validates from. */
+  docs?: boolean | string;
+}
+
+/** The canonical, non-configurable mount prefix for an app's OpenAPI operations. Operations always
+ *  live under `/app/api` so page actions, links, and any `callRoute` can name an operation path as a
+ *  stable framework constant (`/app/api/<op path>`) — there is no per-app `base` knob to drift. */
+const API_BASE = "/app/api";
+
+/** Pinned Swagger UI dist served from a CDN, so the docs UI adds zero bundle/runtime deps to an
+ *  Urban app (matching the deps-free spirit of the rest of the surface — validators are standalone,
+ *  ADR 0058 Consequences). Pinned (not `latest`) for reproducibility. */
+const SWAGGER_UI_VERSION = "5.17.14";
+
+/** Escape HTML-significant characters before embedding a value (the app name) in the docs markup. */
+function escapeHtml(s: string): string {
+  return s.replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c,
+  );
+}
+
+/** The self-contained Swagger UI page. Static HTML: it renders even when the spec is momentarily
+ *  unreadable (Swagger UI fetches `specUrl` itself and surfaces any load/parse error in-page),
+ *  which keeps the docs route decoupled from spec-load failures. */
+function swaggerUiPage(title: string, specUrl: string): string {
+  const css = `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_VERSION}/swagger-ui.css`;
+  const bundle = `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_VERSION}/swagger-ui-bundle.js`;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title)}</title>
+<link rel="stylesheet" href="${css}">
+<style>body{margin:0}</style>
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="${bundle}" crossorigin="anonymous"></script>
+<script>
+window.ui = SwaggerUIBundle({ url: ${JSON.stringify(specUrl)}, dom_id: '#swagger-ui', deepLinking: true });
+</script>
+</body>
+</html>`;
 }
 
 /** The `{ params, query, body }` contract a typed operation is generic over. */
@@ -110,20 +158,52 @@ function readApiBinding(manifest: unknown): ApiBinding | undefined {
   const spec = Reflect.get(raw, "spec");
   if (typeof spec !== "string" || spec.trim().length === 0) return undefined;
   const dir = Reflect.get(raw, "dir");
-  const base = Reflect.get(raw, "base");
   const validateResponses = Reflect.get(raw, "validateResponses");
   const eject = Reflect.get(raw, "eject");
+  const docs = Reflect.get(raw, "docs");
   // Trim benign manifest whitespace so it can't produce hard-to-diagnose path/import failures.
   return {
     spec: spec.trim(),
     dir: typeof dir === "string" && dir.trim().length > 0 ? dir.trim() : undefined,
-    base: typeof base === "string" && base.trim().length > 0 ? base.trim() : undefined,
     validateResponses:
       validateResponses === "dev" || validateResponses === "always" || validateResponses === "never"
         ? validateResponses
         : undefined,
     eject: eject === true,
+    // Docs default ON (spec-first apps get Swagger for free); `false` disables; a non-empty
+    // string overrides the route. Anything else (including whitespace) falls back to the default.
+    docs: docs === false ? false : typeof docs === "string" && docs.trim().length > 0 ? docs.trim() : true,
   };
+}
+
+/** Resolve the api `base` + docs routing, in ONE place, so `mountApi` (which serves the docs) and
+ *  `apiDocsPath` (which the pages surface links to) can never drift. The operation base is the fixed
+ *  `/app/api` constant; only the docs route remains manifest-configurable. */
+function resolveApiRoutes(binding: ApiBinding): {
+  base: string;
+  docsEnabled: boolean;
+  docsBase: string;
+} {
+  const base = API_BASE;
+  const docsEnabled = binding.docs !== false;
+  // Swagger UI at a SIBLING of the base (`/app/api-docs`), never a subpath of it — so the docs
+  // routes can't collide with, or be shadowed by, the operation dispatcher that owns the
+  // `${base}/` prefix (a string `docs` overrides the whole route).
+  const docsBase = normalizeRoutePath(
+    typeof binding.docs === "string" ? binding.docs : `${base}-docs`,
+    `${base}-docs`,
+  );
+  return { base, docsEnabled, docsBase };
+}
+
+/** The Swagger UI route for an app's `api` binding, or `undefined` when there is no api surface
+ *  or docs are disabled. Lets other surfaces (e.g. the pages shell's "API docs" badge) link to
+ *  the docs without re-deriving the path. */
+export function apiDocsPath(manifest: unknown): string | undefined {
+  const binding = readApiBinding(manifest);
+  if (!binding) return undefined;
+  const { docsEnabled, docsBase } = resolveApiRoutes(binding);
+  return docsEnabled ? docsBase : undefined;
 }
 
 /** Coerce a wire string to the type its parameter schema declares, so numeric/boolean bounds
@@ -164,12 +244,34 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   const binding = readApiBinding(ctx.manifest);
   if (!binding) return { name: "api", routes: [], describe: () => ({ api: "disabled" }) };
 
-  // Normalize the manifest base the same way actions[] routes do (shared normalizeRoutePath):
-  // ensure a leading "/", strip trailing slashes, and fall back when empty — otherwise a base
-  // like "app/api" would never match request paths, which always start with "/".
-  const base = normalizeRoutePath(binding.base, "/app/api");
+  // The api `base` is the fixed `/app/api` constant; only the docs routing is derived here. Both
+  // come from the shared helper (ADR 0058) so this module (which serves the docs) and `apiDocsPath`
+  // (which links to them from the pages shell) stay in lockstep — no second, drifting copy of that
+  // logic here. The spec JSON is served under the docs path so the operations namespace stays
+  // purely operations.
+  const { base, docsEnabled, docsBase } = resolveApiRoutes(binding);
   const dir = binding.dir ?? "operations";
   const surfaceEject = binding.eject === true;
+  const specRoutePath = `${docsBase}/openapi.json`;
+  // The Swagger UI page is served at `docsBase` (no trailing slash — the slash variant 308-
+  // redirects onto it), so its browser-relative base is the PARENT directory. Hand Swagger UI a
+  // DOCUMENT-relative spec URL and `servers` entry so both rebase onto the app's mount root:
+  // correct at the origin root (CLI :3000) AND under the Nano console reverse proxy
+  // (/console/app-view/<name>/), where a root-absolute "/app/…" escapes the prefix and hits the
+  // console origin instead of the app (issue #151).
+  const lastSegment = (p: string): string => p.split("/").filter(Boolean).pop() ?? "";
+  const parentPath = (p: string): string => {
+    const parts = p.split("/").filter(Boolean);
+    parts.pop();
+    return `/${parts.join("/")}`;
+  };
+  // `${docsBase}/openapi.json` reached relatively from the docs page = `<docs-segment>/openapi.json`.
+  const specDocUrl = `${lastSegment(docsBase)}/openapi.json`;
+  // `servers` can only be relativized when the operations `base` shares the docs page's parent
+  // directory (the default `${base}-docs` sibling). For a fully custom `docs` path under a
+  // different parent, keep the root-absolute base (works direct; try-it-out through the proxy is
+  // the documented limitation in #151).
+  const serversUrl = parentPath(base) === parentPath(docsBase) ? lastSegment(base) : base;
 
   // Resolve + parse the spec lazily on first request and cache it (mirroring the lazy module load
   // pattern). A malformed/unreadable spec surfaces as a 500 on request — with the reason — rather
@@ -236,6 +338,14 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
               { unsafe },
             );
           }
+          const undeclaredSchemes = undeclaredSecuritySchemes(d);
+          if (undeclaredSchemes.length > 0) {
+            ctx.host.log(
+              "warn",
+              "OpenAPI operations require a security scheme not declared in components.securitySchemes — those requests are rejected with 500 (ADR 0059)",
+              { undeclared: undeclaredSchemes },
+            );
+          }
           const mounted = collectOperations(d).map((op) => {
             const { pattern, paramNames } = toRouteMatcher(base, op.path);
             return { op, pattern, paramNames };
@@ -283,6 +393,26 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     }
     const { op } = match;
     const ejected = surfaceEject || op.eject;
+
+    // Enforce the operation's security requirements (ADR 0059) before touching the body or the
+    // delegate: an unauthorized request should do no work and reveal nothing. Enforced even for
+    // ejected ops (eject changes body handling, not who may call the operation).
+    const authz = evaluateSecurity(
+      d,
+      op,
+      (name) => req.headers.get(name) ?? undefined,
+      (name) => req.query.get(name) ?? undefined,
+      (envVar) => ctx.host.env(envVar),
+    );
+    if (!authz.ok) {
+      if (authz.status === 500) {
+        ctx.host.log("error", "OpenAPI operation security is misconfigured (ADR 0059)", {
+          operationId: op.operationId,
+          reason: authz.error,
+        });
+      }
+      return json({ error: authz.error ?? "unauthorized" }, authz.status ?? 401);
+    }
 
     // Path params from the capture groups; query as a single-or-array map.
     const captures = match.pattern.exec(req.path) ?? [];
@@ -445,9 +575,58 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     handler: dispatch,
   };
 
+  // Docs routes (ADR 0058): the Swagger UI page + the OpenAPI JSON it reads. Both are exact GET
+  // routes on the `${base}-docs` sibling namespace, so they are wholly independent of the
+  // operation dispatcher above.
+  const serveSpec = async (): Promise<HttpResponse> => {
+    let d: OpenApiDoc;
+    try {
+      d = await loadDoc();
+    } catch (e) {
+      return json({ error: errorMessage(e) }, 500);
+    }
+    // Point Swagger UI "Try it out" at the mounted namespace: operations live under `base`
+    // (e.g. /app/api/invoices), not the spec's bare paths (/invoices). Overriding `servers` with a
+    // document-relative URL (issue #151) makes the interactive console call the real Urban routes
+    // both at the origin root and under the Nano console reverse proxy.
+    return json({ ...d, servers: [{ url: serversUrl }] });
+  };
+  const docsTitle = `${ctx.manifest.name ?? "App"} — API docs`;
+  const serveDocs = (): HttpResponse => html(swaggerUiPage(docsTitle, specDocUrl));
+  // A permanent redirect for the trailing-slash variant (`${docsBase}/`). The router only does
+  // exact matches for non-prefix routes, so without this a reverse proxy or browser that appends
+  // a slash would 404 on the Swagger UI. 308 preserves the method and points at the canonical
+  // (slash-less) `docsBase` that `apiDocsPath` and every internal link already use.
+  const redirectDocsSlash = (): HttpResponse => ({ status: 308, headers: { location: docsBase } });
+  const docsRoutes: Route[] = docsEnabled
+    ? [
+        { method: "GET", path: docsBase, source: `api-docs:${binding.spec}`, handler: serveDocs },
+        {
+          method: "GET",
+          path: `${docsBase}/`,
+          source: `api-docs:${binding.spec}`,
+          handler: redirectDocsSlash,
+        },
+        {
+          method: "GET",
+          path: specRoutePath,
+          source: `api-docs:${binding.spec}`,
+          handler: serveSpec,
+        },
+      ]
+    : [];
+
   return {
     name: "api",
-    routes: [rootRoute, route],
-    describe: () => ({ api: { spec: binding.spec, base, dir, eject: surfaceEject } }),
+    routes: [...docsRoutes, rootRoute, route],
+    describe: () => ({
+      api: {
+        spec: binding.spec,
+        base,
+        dir,
+        eject: surfaceEject,
+        docs: docsEnabled ? { ui: docsBase, spec: specRoutePath } : false,
+      },
+    }),
   };
 }

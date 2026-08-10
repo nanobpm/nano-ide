@@ -78,9 +78,11 @@ function applyConditionals(content: string, on: { deno: boolean }): string {
   return content.replace(block, (_m, body: string) => (on.deno ? body : ""));
 }
 
-/** Rename a template filename: `_gitignore` → `.gitignore` (npm strips dotfiles from packs). */
+/** Rename template entries that stand in for dotfiles npm strips from packs. */
 function finalName(name: string): string {
-  return name === "_gitignore" ? ".gitignore" : name;
+  if (name === "_gitignore") return ".gitignore";
+  if (name === "_github") return ".github";
+  return name;
 }
 
 export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
@@ -101,8 +103,9 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     const rel = relative(root, src);
     const parts = rel.split(/[/\\]/).map(finalName);
     const destRel = parts.join("/");
-    // headless = workers only: no human surfaces, so skip the form assets.
-    if (headless && destRel.startsWith("forms/")) continue;
+    // headless = workers only: no human surfaces, so skip the form + page assets. The
+    // `api` binding, its `operations/`, and `openapi.json` are a machine surface and stay.
+    if (headless && (destRel.startsWith("forms/") || destRel.startsWith("pages/"))) continue;
     // Node is the default host; Deno host files are opt-in via `--deno`.
     if (!deno && destRel === "deno.json") continue;
     const dest = join(opts.dir, destRel);

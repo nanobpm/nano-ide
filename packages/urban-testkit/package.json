@@ -48,10 +48,10 @@
     "@nanobpm/engine-wasm": "^0.4.0"
   },
   "peerDependencies": {
-    "@nanobpm/urban": ">=0.31.0"
+    "@nanobpm/urban": ">=0.32.0"
   },
   "devDependencies": {
-    "@nanobpm/urban": "^0.31.1",
+    "@nanobpm/urban": ">=0.32.0",
     "@types/node": "^22.20.1",
     "typescript": "^5.9.3"
   }

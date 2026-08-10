@@ -91,18 +91,24 @@ window.ui = SwaggerUIBundle({ url: ${JSON.stringify(specUrl)}, dom_id: '#swagger
 </html>`;
 }
 
-/** The `{ params, query, body }` contract a typed operation is generic over. */
+/** The `{ params, query, body }` contract a typed operation is generic over. `body` is optional so
+ *  a generated request type for an operation without a required requestBody (its `body?` is
+ *  optional/`undefined`) still satisfies the constraint — see the generated `operations.ts` /
+ *  `controller.ts`, which parameterise `OperationHandler` over the per-op request type. */
 export interface OperationContract {
   params: unknown;
   query: unknown;
-  body: unknown;
+  body?: unknown;
 }
 
-/** The loose contract an untyped delegate sees (strings on the wire; unknown JSON body). */
+/** The loose contract an untyped delegate sees (strings on the wire; unknown JSON body). `body` is
+ *  optional so a raw (untyped) delegate typed `OperationHandler<DefaultContract>` still satisfies the
+ *  generated registry's per-operation `OperationHandler<ReqFor<K>>` slot — an op whose request body
+ *  is optional/absent must be a subtype of the default contract (handler args are contravariant). */
 export interface DefaultContract {
   params: Record<string, string>;
   query: Record<string, string | string[] | undefined>;
-  body: unknown;
+  body?: unknown;
 }
 
 /** The input handed to an operation delegate: the raw request plus the parsed (and, unless ejected,
@@ -128,6 +134,27 @@ export type OperationHandler<Req extends OperationContract = DefaultContract, Re
 ) => Promise<OperationResult<Res> | void> | OperationResult<Res> | void;
 
 /**
+ * Thrown by a write-once operation stub to signal the endpoint exists but has no implementation
+ * yet; the dispatcher maps it to HTTP `501 Not Implemented` (ADR 0059). Delete the throw once you
+ * implement the handler body. A brand property makes the check robust across module realms.
+ */
+export class NotImplemented extends Error {
+  readonly urbanNotImplemented = true as const;
+  constructor(operationId: string) {
+    super(`operation not implemented: ${operationId}`);
+    this.name = "NotImplemented";
+  }
+}
+
+/** True for a `NotImplemented` throw (instanceof, or the brand — resilient to realm/dup-copy). */
+function isNotImplemented(e: unknown): boolean {
+  return (
+    e instanceof NotImplemented ||
+    (typeof e === "object" && e !== null && Reflect.get(e, "urbanNotImplemented") === true)
+  );
+}
+
+/**
  * Typed-identity helper the generated `operations.ts` wrapper re-types per operationId. Authoring:
  * `export default defineOperation("createInvoice", async ({ params, query, body }, app) => { ... })`
  * — the handler's first argument is the validated `OperationInput` (params/query/body/req), not the
@@ -143,6 +170,10 @@ export function defineOperation<Req extends OperationContract = DefaultContract,
 
 function isFunction(v: unknown): v is OperationHandler {
   return typeof v === "function";
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
 /** Resolve an operation delegate from a loaded module: `default` (when a function) else `handler`. */
@@ -290,7 +321,8 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     return docPromise;
   };
 
-  // Lazily import + cache each delegate module, mirroring mountActions.
+  // Lazily import + cache each delegate module, mirroring mountActions. This is the back-compat
+  // fallback for apps without a generated controller registry (see loadController below).
   const moduleCache = new Map<string, Promise<Record<string, unknown>>>();
   const loadModule = (operationId: string): Promise<Record<string, unknown>> => {
     // Defense-in-depth at the import sink: collectOperations already skips unsafe ids, but never
@@ -308,6 +340,35 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
       moduleCache.set(key, pending);
     }
     return pending;
+  };
+
+  // Prefer the generated delegate registry (ADR 0059): one statically-typed barrel the toolkit
+  // emits from the spec, so a missing/mismatched/orphan delegate is a `tsc` error, and dispatch is
+  // a deterministic map lookup rather than a per-request path import. Imported ONCE and cached.
+  // Absent (an app that hasn't re-genned) → `null`, and dispatch falls back to `loadModule`. A
+  // present-but-broken controller (a delegate that throws at import) is NOT swallowed — it retries
+  // and surfaces as a 500 with the reason, exactly like a bad delegate does today.
+  let controllerPromise: Promise<Record<string, unknown> | null> | undefined;
+  const loadController = (): Promise<Record<string, unknown> | null> => {
+    if (!controllerPromise) {
+      const rel = "nano-generated/controller";
+      controllerPromise = ctx.host
+        .exists(resolveAppPath(ctx.root, `${rel}.ts`))
+        .then(async (present) => {
+          if (!present) return null;
+          const mod = await ctx.host.importModule(resolveAppPath(ctx.root, rel));
+          const ops = mod.operations;
+          if (!isRecord(ops)) {
+            throw new Error("nano-generated/controller.ts must export an `operations` registry");
+          }
+          return ops;
+        })
+        .catch((e) => {
+          controllerPromise = undefined; // don't cache the failure — let a later request retry
+          throw e;
+        });
+    }
+    return controllerPromise;
   };
 
   // Build the operation table lazily from the loaded doc (cached).
@@ -496,7 +557,21 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
 
     let handler: OperationHandler | undefined;
     try {
-      handler = resolveOperationHandler(await loadModule(op.operationId));
+      const controller = await loadController();
+      if (controller) {
+        // Deterministic dispatch: the generated registry guarantees (at `tsc` time) one delegate
+        // per operationId. A missing/non-function key here means the controller is stale vs the spec.
+        const candidate = controller[op.operationId];
+        if (!isFunction(candidate)) {
+          ctx.host.log("error", "operation not registered in the generated controller (run `urban gen`)", {
+            operationId: op.operationId,
+          });
+          return json({ error: `operation ${op.operationId} is not registered — run \`urban gen\`` }, 500);
+        }
+        handler = candidate;
+      } else {
+        handler = resolveOperationHandler(await loadModule(op.operationId));
+      }
     } catch (e) {
       ctx.host.log("error", "operation delegate failed to load", {
         operationId: op.operationId,
@@ -541,11 +616,14 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
         body: result.body === undefined ? undefined : JSON.stringify(result.body),
       };
     } catch (e) {
+      // A write-once stub (or any delegate) can signal "endpoint exists, not implemented yet" with
+      // a NotImplemented throw → 501, distinct from an unexpected fault (500).
+      if (isNotImplemented(e)) {
+        return json({ error: errorMessage(e), operationId: op.operationId }, 501);
+      }
       return json({ error: errorMessage(e) }, 500);
     }
   };
-
-  // Categorical safety net: any unexpected throw during dispatch — e.g. a malformed spec
   // `pattern` surfacing from validation — becomes a controlled 500 rather than escaping into
   // the host request handler, which has no top-level catch of its own.
   const dispatch = async (req: HttpRequest): Promise<HttpResponse> => {

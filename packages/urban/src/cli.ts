@@ -25,7 +25,7 @@ import { denoGlobal, processGlobal } from "./runtime/adapters/globals.ts";
 import { errorMessage, isRecord } from "./runtime/core/guards.ts";
 import { scaffold, slugify } from "create-urban-app";
 import type { DataRequest } from "./runtime/index.ts";
-import { addConnector, createNodeGenIO, previewModels, runGen, scaffoldWorkers } from "./toolkit/index.ts";
+import { addConnector, createNodeGenIO, previewModels, runGen, scaffoldWorkers, scaffoldOperations } from "./toolkit/index.ts";
 import { pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -246,6 +246,23 @@ async function cmdStubs(f: Flags): Promise<number> {
     console.log(`  skipped ${run.skipped.length}: ` +
       run.skipped.map((s) => `${s.taskType} (${s.reason})`).join(", "));
   }
+
+  // Operation-delegate stubs from the OpenAPI spec (ADR 0059): one write-once typed delegate per
+  // declared operationId. A no-op for apps without an `api` binding.
+  const opRun = await scaffoldOperations({ root: f.root, io, manifestFile: f.manifest, write: f.write });
+  const opCreated = opRun.outcomes.filter((o) => o.status === "created");
+  const opWould = opRun.outcomes.filter((o) => o.status === "would-create");
+  const opKept = opRun.outcomes.filter((o) => o.status === "kept");
+  if (opRun.write) {
+    if (opCreated.length > 0) {
+      console.log(`✔ scaffolded ${opCreated.length} operation delegate stub(s):`);
+      for (const o of opCreated) console.log(`  + ${o.handlerPath}`);
+    }
+  } else if (opWould.length > 0) {
+    console.log(`Would scaffold ${opWould.length} operation delegate stub(s) — run with --write to apply:`);
+    for (const o of opWould) console.log(`  + ${o.handlerPath}`);
+  }
+  for (const o of opKept) console.log(`  = ${o.handlerPath} (kept — already exists)`);
   return 0;
 }
 

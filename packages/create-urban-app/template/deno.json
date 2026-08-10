@@ -1,6 +1,6 @@
 {
 	"tasks": {
-		"typecheck": "deno check main.ts \"workers/**/*.ts\" \"operations/**/*.ts\"",
+		"typecheck": "deno check main.ts \"nano-generated/controller.ts\" \"workers/**/*.ts\" \"operations/**/*.ts\"",
 		"lint": "deno run -A npm:@biomejs/biome@2.5.7 check",
 		"check": "deno run -A npm:@nanobpm/urban@^0.32.0 check",
 		"gen": "deno run -A npm:@nanobpm/urban@^0.32.0 gen",

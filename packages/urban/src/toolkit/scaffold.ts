@@ -11,12 +11,15 @@ import {
   type SkippedWorker,
   type StubManifestEntry,
 } from "./scaffold/workers.ts";
+import { planOperationScaffold } from "./scaffold/operations.ts";
+import { parseSpec } from "../openapi/spec.ts";
 
 /** The manifest fields the scaffolder reads. */
 interface ScaffoldManifest {
   types?: Record<string, unknown>;
   models?: { processes?: string[] };
   workers?: ScaffoldWorker[];
+  api?: { spec?: string; dir?: string };
 }
 
 export interface ScaffoldOptions {
@@ -101,4 +104,57 @@ export async function scaffoldWorkers(opts: ScaffoldOptions): Promise<ScaffoldRu
   }
 
   return { outcomes, skipped, wired, manifestPatched, write };
+}
+
+/** One planned operation-delegate outcome (write-once). */
+export interface OperationStubOutcome {
+  operationId: string;
+  handlerPath: string;
+  status: StubStatus;
+}
+
+export interface OperationScaffoldRun {
+  outcomes: OperationStubOutcome[];
+  write: boolean;
+}
+
+/**
+ * Scaffold write-once operation-delegate stubs from the app's OpenAPI spec (ADR 0059). One typed
+ * `defineOperation` stub per declared `operationId`, created only if absent (human-owned files are
+ * kept verbatim). Dry-run by default. A no-op when the app declares no `api.spec`.
+ */
+export async function scaffoldOperations(opts: ScaffoldOptions): Promise<OperationScaffoldRun> {
+  const { root, io } = opts;
+  const write = opts.write ?? false;
+  const manifestFile = opts.manifestFile ?? "nano.app.json";
+  const manifestPath = joinPath(root, manifestFile);
+
+  const manifest: ScaffoldManifest = JSON.parse(await io.readText(manifestPath));
+  const specRef = typeof manifest.api?.spec === "string" ? manifest.api.spec.trim() : "";
+  if (specRef.length === 0) return { outcomes: [], write };
+
+  const specText = await io.readText(joinPath(root, specRef));
+  const dir =
+    typeof manifest.api?.dir === "string" && manifest.api.dir.trim().length > 0
+      ? manifest.api.dir.trim()
+      : undefined;
+  const plans = planOperationScaffold(parseSpec(specText), dir);
+
+  const outcomes: OperationStubOutcome[] = [];
+  for (const plan of plans) {
+    const abs = joinPath(root, plan.handlerPath);
+    const exists = await io.exists(abs);
+    let status: StubStatus;
+    if (exists) {
+      status = "kept"; // human-owned — never clobber
+    } else if (write) {
+      await io.writeText(abs, plan.stub);
+      status = "created";
+    } else {
+      status = "would-create";
+    }
+    outcomes.push({ operationId: plan.operationId, handlerPath: plan.handlerPath, status });
+  }
+
+  return { outcomes, write };
 }

@@ -8,7 +8,7 @@
 		"node": ">=22.6"
 	},
 	"scripts": {
-		"typecheck": "deno check main.ts \"workers/**/*.ts\" \"operations/**/*.ts\"",
+		"typecheck": "deno check main.ts \"nano-generated/controller.ts\" \"workers/**/*.ts\" \"operations/**/*.ts\"",
 		"lint": "biome check",
 		"check": "urban check",
 		"gen": "urban gen",

@@ -5,7 +5,7 @@ import type { AppManifest } from "../manifest.ts";
 import type { EngineClient, HostContext, HttpRequest } from "../host.ts";
 import { makeRouter } from "../router.ts";
 import { DataLayer } from "./datasource.ts";
-import { mountApi, resolveOperationHandler, apiDocsPath, type ApiHandle, type OperationHandler } from "./api.ts";
+import { mountApi, resolveOperationHandler, apiDocsPath, NotImplemented, type ApiHandle, type OperationHandler } from "./api.ts";
 
 function req(
   method: string,
@@ -87,15 +87,17 @@ function build(
   modules: Record<string, Record<string, unknown>>,
   specText = spec,
   env: (v: string) => string | undefined = () => undefined,
+  existsPaths: string[] = [],
 ): Built {
   const imported: string[] = [];
   const logs: Array<{ level: string; msg: string }> = [];
+  const existsSet = new Set(existsPaths);
   const host: HostContext = {
     runtime: "node",
     env,
     readTextFile: async () => specText,
     listDir: async () => [],
-    exists: async () => false,
+    exists: async (p: string) => existsSet.has(p),
     openSqlite: () => {
       throw new Error("sqlite not used in this test");
     },
@@ -596,4 +598,88 @@ test("secured operation: an unset secret env fails closed with 500 (misconfigura
   );
   assert.equal(res.status, 500);
   assert.ok(logs.some((l) => l.level === "error" && /security is misconfigured/.test(l.msg)));
+});
+
+// ── Generated controller registry (ADR 0059) ────────────────────────────────────────────────────
+// When `nano-generated/controller.ts` is present, dispatch resolves delegates from its exported
+// `operations` map (deterministic, drift-checked) instead of per-op path imports.
+
+test("controller present: dispatch uses the registry, not a per-op import", async () => {
+  const seen: unknown[] = [];
+  const handler: OperationHandler = (input) => {
+    seen.push(input.params);
+    return { status: 200, body: { ok: true } };
+  };
+  const { router, imported } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/nano-generated/controller": { operations: { getInvoice: handler } },
+    },
+    spec,
+    () => undefined,
+    ["/app/nano-generated/controller.ts"],
+  );
+  const res = await router(req("GET", "/app/api/invoices/7"));
+  assert.equal(res.status, 200);
+  assert.deepEqual(seen, [{ id: "7" }]);
+  // Only the controller barrel is imported — never a per-operation delegate path.
+  assert.deepEqual(imported, ["/app/nano-generated/controller"]);
+});
+
+test("controller present: request validation still runs before the registry delegate", async () => {
+  const handler: OperationHandler = () => ({ status: 201, body: { id: "i", amount: 1 } });
+  const { router } = build(
+    { spec: "openapi.json" },
+    { "/app/nano-generated/controller": { operations: { createInvoice: handler } } },
+    spec,
+    () => undefined,
+    ["/app/nano-generated/controller.ts"],
+  );
+  // amount:0 violates minimum:1 → a 400 from validation, before the delegate.
+  const res = await router(req("POST", "/app/api/invoices", { body: JSON.stringify({ id: "i", amount: 0 }) }));
+  assert.equal(res.status, 400);
+  assert.match(JSON.parse(res.body!).error, /request validation failed/);
+});
+
+test("controller present but missing a delegate key → 500 with a run-`urban gen` hint", async () => {
+  const { router, logs } = build(
+    { spec: "openapi.json" },
+    { "/app/nano-generated/controller": { operations: {} } }, // stale: getInvoice not registered
+    spec,
+    () => undefined,
+    ["/app/nano-generated/controller.ts"],
+  );
+  const res = await router(req("GET", "/app/api/invoices/7"));
+  assert.equal(res.status, 500);
+  assert.match(JSON.parse(res.body!).error, /is not registered/);
+  assert.ok(logs.some((l) => l.level === "error" && /not registered in the generated controller/.test(l.msg)));
+});
+
+test("a NotImplemented throw from a delegate maps to HTTP 501", async () => {
+  const stub: OperationHandler = () => {
+    throw new NotImplemented("getInvoice");
+  };
+  const { router } = build(
+    { spec: "openapi.json" },
+    { "/app/nano-generated/controller": { operations: { getInvoice: stub } } },
+    spec,
+    () => undefined,
+    ["/app/nano-generated/controller.ts"],
+  );
+  const res = await router(req("GET", "/app/api/invoices/7"));
+  assert.equal(res.status, 501);
+  const bodyJson = JSON.parse(res.body!);
+  assert.equal(bodyJson.operationId, "getInvoice");
+  assert.match(bodyJson.error, /not implemented/);
+});
+
+test("no controller present → back-compat per-op import path still works", async () => {
+  const { router, imported } = build(
+    { spec: "openapi.json" },
+    { "/app/operations/getInvoice": { default: () => ({ body: { ok: true } }) } },
+    // no exists paths → controller absent
+  );
+  const res = await router(req("GET", "/app/api/invoices/9"));
+  assert.equal(res.status, 200);
+  assert.deepEqual(imported, ["/app/operations/getInvoice"]);
 });

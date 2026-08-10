@@ -103,9 +103,11 @@ export {
   deriveApi,
   emitApiBindings,
   emitApiBindingsRuntime,
+  emitApiController,
   schemaToTs,
   API_BINDINGS_DTS,
   API_BINDINGS_TS,
+  API_CONTROLLER_TS,
 } from "./derivers/api.ts";
 
 // The OpenAPI machinery the deriver + runtime share (ADR 0058).
@@ -179,6 +181,12 @@ export type {
 } from "./scaffold/workers.ts";
 export { scaffoldWorkers } from "./scaffold.ts";
 export type { ScaffoldOptions, ScaffoldRun, StubOutcome, StubStatus } from "./scaffold.ts";
+
+// Operation-delegate scaffolder (ADR 0059): write-once typed delegate stubs from the OpenAPI spec.
+export { planOperationScaffold, renderOperationStub } from "./scaffold/operations.ts";
+export type { OperationStubPlan } from "./scaffold/operations.ts";
+export { scaffoldOperations } from "./scaffold.ts";
+export type { OperationScaffoldRun, OperationStubOutcome } from "./scaffold.ts";
 
 export { addConnector } from "./addConnector.ts";
 export type { AddConnectorOptions, AddConnectorResult } from "./addConnector.ts";

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { deriveApi, emitApiBindings, emitApiBindingsRuntime, schemaToTs, API_BINDINGS_DTS, API_BINDINGS_TS } from "./api.ts";
+import { deriveApi, emitApiBindings, emitApiBindingsRuntime, emitApiController, schemaToTs, API_BINDINGS_DTS, API_BINDINGS_TS, API_CONTROLLER_TS } from "./api.ts";
 import type { OpenApiDoc } from "../../openapi/spec.ts";
 
 const doc: OpenApiDoc = {
@@ -55,10 +55,37 @@ test("emitApiBindingsRuntime re-types the runtime defineOperation", () => {
   assert.match(out, /return defineOperationRaw\(id, handler\);/);
 });
 
-test("deriveApi emits both artifacts under nano-generated/", () => {
+test("deriveApi emits the type map, typed defineOperation, and the controller under nano-generated/", () => {
   const arts = deriveApi(doc);
   const paths = arts.map((a) => a.path).sort();
-  assert.deepEqual(paths, [`nano-generated/${API_BINDINGS_DTS}`, `nano-generated/${API_BINDINGS_TS}`]);
+  assert.deepEqual(paths, [
+    `nano-generated/${API_BINDINGS_DTS}`,
+    `nano-generated/${API_BINDINGS_TS}`,
+    `nano-generated/${API_CONTROLLER_TS}`,
+  ].sort());
+});
+
+test("emitApiController statically imports each delegate + asserts the set with satisfies", () => {
+  const out = emitApiController(doc);
+  // one default import per operation, from the default operations/ dir, with an explicit .ts ext
+  assert.match(out, /import op0 from "\.\.\/operations\/getInvoice\.ts";/);
+  // the registry maps the real operationId to the imported delegate
+  assert.match(out, /"getInvoice": op0,/);
+  // the load-bearing completeness assertion
+  assert.match(out, /satisfies \{\s*\[K in ApiOperationId\]: OperationHandler<ReqFor<K>, ResFor<K>>;\s*\}/);
+  assert.match(out, /import type \{ OperationHandler \} from "@nanobpm\/urban";/);
+});
+
+test("emitApiController honors a custom api.dir for the delegate import path", () => {
+  const out = emitApiController(doc, "handlers");
+  assert.match(out, /import op0 from "\.\.\/handlers\/getInvoice\.ts";/);
+});
+
+test("emitApiController on an empty spec is a valid empty registry (never = {})", () => {
+  const empty: OpenApiDoc = { openapi: "3.0.0", paths: {} };
+  const out = emitApiController(empty);
+  assert.doesNotMatch(out, /^import op\d/m); // no delegate imports
+  assert.match(out, /export const operations = \{\s*\} satisfies \{/);
 });
 
 test("emitted object types mirror runtime additionalProperties semantics", () => {

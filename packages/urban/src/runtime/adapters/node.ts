@@ -19,6 +19,7 @@ import type {
   SqliteDb,
   WatchHandle,
 } from "../core/host.ts";
+import { resolveModulePath } from "../core/module-path.ts";
 
 type SqliteParam = string | number | bigint | Uint8Array | null;
 
@@ -138,8 +139,9 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
       return wrapNodeSqlite(db);
     },
     importModule: (p) => {
+      const resolved = resolveModulePath(abs(p), existsSync);
       const href =
-        pathToFileURL(abs(p)).href + (opts.importNonce ? `?v=${opts.importNonce}` : "");
+        pathToFileURL(resolved).href + (opts.importNonce ? `?v=${opts.importNonce}` : "");
       const mod: Promise<Record<string, unknown>> = import(href);
       return mod;
     },

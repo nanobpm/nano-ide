@@ -31,24 +31,26 @@ that is gone by the time code executes. Two consequences:
    `deno check`) run in CI/editor — never at load. If that gate is missing or
    advisory, a type error ships silently.
 
-Today only **one** of the three boundaries validates at runtime. The generated
-validator `validateValue` (`packages/urban/src/openapi/spec.ts`) is called in
-exactly one place — `packages/urban/src/runtime/core/modules/api.ts:333–400` (REST
-params/query/body/response, ADR 0058). The other two boundaries **cast**:
+Today only **one** of the three boundaries validates at runtime. The runtime
+validator `validateValue` — a hand-written helper in
+`packages/urban/src/openapi/spec.ts` — is called from exactly one module,
+`packages/urban/src/runtime/core/modules/api.ts` (REST params/query/body/response,
+ADR 0058). The other two boundaries **cast**:
 
-- **Engine → worker:** `packages/urban/src/runtime/core/modules/workers.ts:170`
-  calls `handler(job, app)` with `job.variables: Record<string, unknown>`. The
+- **Engine → worker:** `packages/urban/src/runtime/core/modules/workers.ts`
+  (`dispatch`) calls the handler with `job.variables: Record<string, unknown>`. The
   `In` in `AppJobHandler<In, Out>` is a **phantom** type — never checked.
-- **DB read:** `packages/urban/src/runtime/core/modules/datasource.ts:235–247`,
+- **DB read:** `packages/urban/src/runtime/core/modules/datasource.ts`
   `all<T>()` / `query<T>()` do `return this.db.all<T>(...)` — a pure cast; `T`
   never exists at runtime.
 
 Both of this session's production incidents are escapes at these two unvalidated
 boundaries — "runtime errors not caught by compilation":
 
-- **`gw-guard` incident (instance 250):** `=round >= maxRounds` evaluated
-  `null >= null` because `round`/`maxRounds` were never seeded — `undefined` at the
-  engine→worker boundary, typed as `number`.
+- **`gw-guard` incident (instance 250):** the gateway condition `round >= maxRounds`
+  (stored as the FEEL expression `=round >= maxRounds`) evaluated `null >= null`
+  because `round`/`maxRounds` were never seeded — `undefined` at the engine→worker
+  boundary, typed as `number`.
 - **`record-plan` crash:** `unsupported SQLite parameter type: undefined` because
   `planKey` was `undefined` flowing into a query typed `string`.
 
@@ -112,8 +114,10 @@ At each boundary, validation runs **before** app/handler code:
   named error at the read, not an `undefined` param crash downstream.
 - **REST:** unchanged (already 400s on malformed input).
 
-The validator is **generated**, never hand-written (ADR 0059's rule generalized to
-all three boundaries).
+There are **no per-boundary hand-written validators**: the single validator helper
+(`validateValue`) is written once, and every boundary drives it with a **derived**
+schema — ADR 0059's rule ("a validator you hand-write is one you can get wrong")
+generalized from REST to all three boundaries.
 
 ### 4. The `tsc --noEmit` / `deno check` gate is mandatory, not advisory
 

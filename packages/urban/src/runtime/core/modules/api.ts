@@ -252,6 +252,25 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   const dir = binding.dir ?? "operations";
   const surfaceEject = binding.eject === true;
   const specRoutePath = `${docsBase}/openapi.json`;
+  // The Swagger UI page is served at `docsBase` (no trailing slash — the slash variant 308-
+  // redirects onto it), so its browser-relative base is the PARENT directory. Hand Swagger UI a
+  // DOCUMENT-relative spec URL and `servers` entry so both rebase onto the app's mount root:
+  // correct at the origin root (CLI :3000) AND under the Nano console reverse proxy
+  // (/console/app-view/<name>/), where a root-absolute "/app/…" escapes the prefix and hits the
+  // console origin instead of the app (issue #151).
+  const lastSegment = (p: string): string => p.split("/").filter(Boolean).pop() ?? "";
+  const parentPath = (p: string): string => {
+    const parts = p.split("/").filter(Boolean);
+    parts.pop();
+    return `/${parts.join("/")}`;
+  };
+  // `${docsBase}/openapi.json` reached relatively from the docs page = `<docs-segment>/openapi.json`.
+  const specDocUrl = `${lastSegment(docsBase)}/openapi.json`;
+  // `servers` can only be relativized when the operations `base` shares the docs page's parent
+  // directory (the default `${base}-docs` sibling). For a fully custom `docs` path under a
+  // different parent, keep the root-absolute base (works direct; try-it-out through the proxy is
+  // the documented limitation in #151).
+  const serversUrl = parentPath(base) === parentPath(docsBase) ? lastSegment(base) : base;
 
   // Resolve + parse the spec lazily on first request and cache it (mirroring the lazy module load
   // pattern). A malformed/unreadable spec surfaces as a 500 on request — with the reason — rather
@@ -538,12 +557,13 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
       return json({ error: errorMessage(e) }, 500);
     }
     // Point Swagger UI "Try it out" at the mounted namespace: operations live under `base`
-    // (e.g. /app/api/invoices), not the spec's bare paths (/invoices). Overriding `servers`
-    // makes the interactive console call the real Urban routes rather than the origin root.
-    return json({ ...d, servers: [{ url: base }] });
+    // (e.g. /app/api/invoices), not the spec's bare paths (/invoices). Overriding `servers` with a
+    // document-relative URL (issue #151) makes the interactive console call the real Urban routes
+    // both at the origin root and under the Nano console reverse proxy.
+    return json({ ...d, servers: [{ url: serversUrl }] });
   };
   const docsTitle = `${ctx.manifest.name ?? "App"} — API docs`;
-  const serveDocs = (): HttpResponse => html(swaggerUiPage(docsTitle, specRoutePath));
+  const serveDocs = (): HttpResponse => html(swaggerUiPage(docsTitle, specDocUrl));
   // A permanent redirect for the trailing-slash variant (`${docsBase}/`). The router only does
   // exact matches for non-prefix routes, so without this a reverse proxy or browser that appends
   // a slash would 404 on the Swagger UI. 308 preserves the method and points at the canonical

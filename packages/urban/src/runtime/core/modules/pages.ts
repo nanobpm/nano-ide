@@ -414,8 +414,20 @@ function rendererShell(homePage: string, apiDocsPath?: string): string {
   // A persistent "API docs" badge (spec-first apps get their Swagger UI linked from their own
   // UI for free). `target="_blank"` + hardened `rel` so the docs open without giving the docs
   // tab a handle back to this window (reverse-tabnabbing).
+  //
+  // The href must be DOCUMENT-relative, exactly like the `./app/runtime.js` script tag below:
+  // the shell is served at the app's mount root (always a trailing "/"), which is the origin
+  // root for a direct run (CLI on :3000) but a path prefix under the Nano console's reverse
+  // proxy (/console/app-view/<name>/). A root-absolute "/app/api-docs" would escape that prefix
+  // and open the CONSOLE origin (e.g. :8080/app/api-docs) instead of the app's docs. Strip the
+  // single leading slash so it rebases onto the mount root; leave a protocol-relative "//host"
+  // (which apiDocsPath never emits) untouched.
+  const badgeHref =
+    apiDocsPath && apiDocsPath.startsWith("/") && !apiDocsPath.startsWith("//")
+      ? `./${apiDocsPath.slice(1)}`
+      : apiDocsPath;
   const apiDocsBadge = apiDocsPath
-    ? `\n  <a class="pc-apidocs" href="${escapeAttr(apiDocsPath)}" target="_blank" rel="noopener noreferrer">API docs \u2197</a>`
+    ? `\n  <a class="pc-apidocs" href="${escapeAttr(badgeHref!)}" target="_blank" rel="noopener noreferrer">API docs \u2197</a>`
     : "";
   return `<!doctype html>
 <html lang="en">

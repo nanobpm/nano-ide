@@ -458,9 +458,10 @@ test("serves the OpenAPI spec at {base}-docs/openapi.json, rebased to the mounte
   const doc = JSON.parse(res.body ?? "{}");
   // The doc is served intact...
   assert.ok(doc.paths["/invoices"], "keeps the operation paths");
-  // ...but `servers` is rebased to `base` so Swagger UI "Try it out" hits the real routes
+  // ...but `servers` is rebased to `base` (document-relative, issue #151) so Swagger UI "Try it
+  // out" hits the real routes both at the origin root and under the Nano console reverse proxy
   // (operations mount under /app/api, not the spec's bare /invoices).
-  assert.deepEqual(doc.servers, [{ url: "/app/api" }]);
+  assert.deepEqual(doc.servers, [{ url: "api" }]);
 });
 
 test("serves the Swagger UI page at {base}-docs by default", async () => {
@@ -470,8 +471,10 @@ test("serves the Swagger UI page at {base}-docs by default", async () => {
   assert.match(res.headers?.["content-type"] ?? "", /text\/html/);
   const body = res.body ?? "";
   assert.match(body, /swagger-ui/);
-  // The UI reads the spec route we serve.
-  assert.match(body, /\/app\/api-docs\/openapi\.json/);
+  // The UI reads the spec via a DOCUMENT-relative URL (issue #151) so it resolves through the
+  // Nano console reverse proxy, not a root-absolute path that escapes to the console origin.
+  assert.match(body, /url: "api-docs\/openapi\.json"/);
+  assert.doesNotMatch(body, /url: "\/app\/api-docs\/openapi\.json"/);
 });
 
 test("the trailing-slash docs variant 308-redirects to the canonical path", async () => {

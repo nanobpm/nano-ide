@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   collectOperations,
+  evaluateSecurity,
   isObjectSchema,
   isSafeOperationId,
   type OpenApiDoc,
@@ -12,6 +13,7 @@ import {
   resolveSchema,
   toRouteMatcher,
   undeclaredPathParams,
+  undeclaredSecuritySchemes,
   validateValue,
 } from "./spec.ts";
 
@@ -345,4 +347,173 @@ test("validateValue handles null: typeless object rejects it; nullable/type-null
   assert.equal(validateValue(doc, { const: "a" }, null).length, 1);
   // A truly empty schema allows anything, including null.
   assert.equal(validateValue(doc, {}, null).length, 0);
+});
+
+// ── Security (ADR 0059: one HTTP surface, apiKey-guarded webhook operations) ──────────────────
+
+const secured: OpenApiDoc = {
+  openapi: "3.0.0",
+  components: {
+    securitySchemes: {
+      webhookKey: {
+        type: "apiKey",
+        in: "header",
+        name: "X-Webhook-Key",
+        "x-nano-secret-env": "NANO_WEBHOOK_KEY",
+      },
+      queryKey: {
+        type: "apiKey",
+        in: "query",
+        name: "key",
+        "x-nano-secret-env": "NANO_QUERY_KEY",
+      },
+    },
+  },
+  security: [{ webhookKey: [] }], // document-level default
+  paths: {
+    "/hooks/submit": {
+      post: { operationId: "submitHook", responses: { "204": {} } }, // inherits the default
+    },
+    "/hooks/open": {
+      post: { operationId: "openHook", security: [], responses: { "204": {} } }, // opts out
+    },
+    "/hooks/query": {
+      post: {
+        operationId: "queryHook",
+        security: [{ queryKey: [] }],
+        responses: { "204": {} },
+      },
+    },
+  },
+};
+
+const noHeader = (): undefined => undefined;
+const noQuery = (): undefined => undefined;
+const secret = (vars: Record<string, string>) => (v: string): string | undefined => vars[v];
+
+test("collectOperations resolves effective security (op-level wins, explicit [] opts out, doc default inherited)", () => {
+  const ops = collectOperations(secured);
+  const byId = Object.fromEntries(ops.map((o) => [o.operationId, o]));
+  assert.deepEqual(byId.submitHook.security, [{ webhookKey: [] }]); // inherited default
+  assert.deepEqual(byId.openHook.security, []); // explicit opt-out
+  assert.deepEqual(byId.queryHook.security, [{ queryKey: [] }]); // own requirement
+});
+
+test("evaluateSecurity: an open operation (no requirement) is always authorized", () => {
+  const open = collectOperations(secured).find((o) => o.operationId === "openHook")!;
+  assert.deepEqual(
+    evaluateSecurity(secured, open, noHeader, noQuery, secret({})),
+    { ok: true },
+  );
+});
+
+test("evaluateSecurity: a valid apiKey header authorizes; wrong/absent → 401", () => {
+  const op = collectOperations(secured).find((o) => o.operationId === "submitHook")!;
+  const env = secret({ NANO_WEBHOOK_KEY: "s3cret" });
+  // Correct key.
+  assert.equal(
+    evaluateSecurity(secured, op, (n) => (n === "X-Webhook-Key" ? "s3cret" : undefined), noQuery, env).ok,
+    true,
+  );
+  // Wrong key → 401.
+  assert.deepEqual(
+    evaluateSecurity(secured, op, () => "nope", noQuery, env),
+    { ok: false, status: 401, error: "unauthorized" },
+  );
+  // Missing key → 401.
+  assert.deepEqual(evaluateSecurity(secured, op, noHeader, noQuery, env), {
+    ok: false,
+    status: 401,
+    error: "unauthorized",
+  });
+});
+
+test("evaluateSecurity: an apiKey in query is read from the query, not the header", () => {
+  const op = collectOperations(secured).find((o) => o.operationId === "queryHook")!;
+  const env = secret({ NANO_QUERY_KEY: "qk" });
+  assert.equal(
+    evaluateSecurity(secured, op, noHeader, (n) => (n === "key" ? "qk" : undefined), env).ok,
+    true,
+  );
+  assert.equal(evaluateSecurity(secured, op, noHeader, () => "bad", env).status, 401);
+});
+
+test("evaluateSecurity: an unset secret env is a 500 misconfiguration (fail closed, not 401)", () => {
+  const op = collectOperations(secured).find((o) => o.operationId === "submitHook")!;
+  const decision = evaluateSecurity(secured, op, () => "anything", noQuery, secret({}));
+  assert.equal(decision.ok, false);
+  assert.equal(decision.status, 500);
+  assert.match(decision.error ?? "", /NANO_WEBHOOK_KEY is not set/);
+});
+
+test("evaluateSecurity: a requirement naming an undeclared scheme is a 500 misconfiguration", () => {
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: { securitySchemes: {} },
+    paths: {
+      "/x": { post: { operationId: "x", security: [{ ghost: [] }], responses: { "204": {} } } },
+    },
+  };
+  const op = collectOperations(doc)[0];
+  const decision = evaluateSecurity(doc, op, () => "k", noQuery, secret({}));
+  assert.equal(decision.status, 500);
+  assert.match(decision.error ?? "", /not declared/);
+  assert.deepEqual(undeclaredSecuritySchemes(doc), ["ghost (POST /x)"]);
+});
+
+
+test("evaluateSecurity: malformed security entries fail closed as a 500 misconfiguration", () => {
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      securitySchemes: { webhookKey: { type: "apiKey", in: "header", name: "X-Key", "x-nano-secret-env": "KEY" } },
+    },
+    paths: {
+      "/x": { post: { operationId: "x", security: ["webhookKey"], responses: { "204": {} } } },
+    },
+  };
+  const op = collectOperations(doc)[0];
+  const decision = evaluateSecurity(doc, op, () => "secret", noQuery, secret({ KEY: "secret" }));
+  assert.equal(decision.status, 500);
+  assert.match(decision.error ?? "", /malformed security requirement/);
+});
+
+test("evaluateSecurity: an unsupported scheme type is a 500 misconfiguration", () => {
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: { securitySchemes: { oauth: { type: "oauth2" } } },
+    paths: {
+      "/x": { post: { operationId: "x", security: [{ oauth: [] }], responses: { "204": {} } } },
+    },
+  };
+  const op = collectOperations(doc)[0];
+  const decision = evaluateSecurity(doc, op, () => "k", noQuery, secret({}));
+  assert.equal(decision.status, 500);
+  assert.match(decision.error ?? "", /unsupported type "oauth2"/);
+});
+
+test("evaluateSecurity: alternative requirements are OR (any one satisfied authorizes)", () => {
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      securitySchemes: {
+        a: { type: "apiKey", in: "header", name: "A", "x-nano-secret-env": "A_KEY" },
+        b: { type: "apiKey", in: "header", name: "B", "x-nano-secret-env": "B_KEY" },
+      },
+    },
+    paths: {
+      "/x": {
+        post: { operationId: "x", security: [{ a: [] }, { b: [] }], responses: { "204": {} } },
+      },
+    },
+  };
+  const op = collectOperations(doc)[0];
+  const env = secret({ A_KEY: "aa", B_KEY: "bb" });
+  // Only B presented → still authorized (OR).
+  assert.equal(
+    evaluateSecurity(doc, op, (n) => (n === "B" ? "bb" : undefined), noQuery, env).ok,
+    true,
+  );
+  // Neither presented → 401.
+  assert.equal(evaluateSecurity(doc, op, noHeader, noQuery, env).status, 401);
 });

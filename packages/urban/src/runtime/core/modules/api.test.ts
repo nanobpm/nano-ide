@@ -7,12 +7,16 @@ import { makeRouter } from "../router.ts";
 import { DataLayer } from "./datasource.ts";
 import { mountApi, resolveOperationHandler, apiDocsPath, type ApiHandle, type OperationHandler } from "./api.ts";
 
-function req(method: string, path: string, opts: { query?: string; body?: string } = {}): HttpRequest {
+function req(
+  method: string,
+  path: string,
+  opts: { query?: string; body?: string; headers?: Record<string, string> } = {},
+): HttpRequest {
   return {
     method,
     path,
     query: new URLSearchParams(opts.query ?? ""),
-    headers: new Headers(),
+    headers: new Headers(opts.headers ?? {}),
     text: () => Promise.resolve(opts.body ?? ""),
   };
 }
@@ -82,12 +86,13 @@ function build(
   api: Record<string, unknown> | undefined,
   modules: Record<string, Record<string, unknown>>,
   specText = spec,
+  env: (v: string) => string | undefined = () => undefined,
 ): Built {
   const imported: string[] = [];
   const logs: Array<{ level: string; msg: string }> = [];
   const host: HostContext = {
     runtime: "node",
-    env: () => undefined,
+    env,
     readTextFile: async () => specText,
     listDir: async () => [],
     exists: async () => false,
@@ -520,4 +525,75 @@ test("apiDocsPath resolves the UI route (and honours disable / override)", () =>
   assert.equal(apiDocsPath({ api: { spec: "openapi.json", docs: "/help" } }), "/help");
   assert.equal(apiDocsPath({ api: { spec: "openapi.json", docs: false } }), undefined);
   assert.equal(apiDocsPath({}), undefined);
+});
+
+// ── Security enforcement (ADR 0059: apiKey-guarded webhook operations) ────────────────────────
+
+const securedSpec = JSON.stringify({
+  openapi: "3.0.0",
+  components: {
+    securitySchemes: {
+      webhookKey: { type: "apiKey", in: "header", name: "X-Webhook-Key", "x-nano-secret-env": "NANO_WEBHOOK_KEY" },
+    },
+  },
+  paths: {
+    "/hooks/submit": {
+      post: {
+        operationId: "submitHook",
+        security: [{ webhookKey: [] }],
+        responses: { "204": {} },
+      },
+    },
+  },
+});
+
+test("secured operation: correct apiKey header reaches the delegate (200)", async () => {
+  const seen: unknown[] = [];
+  const handler: OperationHandler = (input) => {
+    seen.push(input);
+    return { status: 200, body: { ok: true } };
+  };
+  const { router, imported } = build(
+    { spec: "openapi.json", dir: "operations" },
+    { "/app/operations/submitHook": { default: handler } },
+    securedSpec,
+    (v) => (v === "NANO_WEBHOOK_KEY" ? "s3cret" : undefined),
+  );
+  const res = await router(
+    req("POST", "/app/api/hooks/submit", { body: "{}", headers: { "X-Webhook-Key": "s3cret" } }),
+  );
+  assert.equal(res.status, 200);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(imported, ["/app/operations/submitHook"]);
+});
+
+test("secured operation: missing/wrong apiKey is rejected 401 without loading the delegate", async () => {
+  const { router, imported } = build(
+    { spec: "openapi.json", dir: "operations" },
+    { "/app/operations/submitHook": { default: () => ({ status: 200 }) } },
+    securedSpec,
+    (v) => (v === "NANO_WEBHOOK_KEY" ? "s3cret" : undefined),
+  );
+  const missing = await router(req("POST", "/app/api/hooks/submit", { body: "{}" }));
+  assert.equal(missing.status, 401);
+  const wrong = await router(
+    req("POST", "/app/api/hooks/submit", { body: "{}", headers: { "X-Webhook-Key": "nope" } }),
+  );
+  assert.equal(wrong.status, 401);
+  // The delegate must never run for an unauthorized request.
+  assert.deepEqual(imported, []);
+});
+
+test("secured operation: an unset secret env fails closed with 500 (misconfiguration)", async () => {
+  const { router, logs } = build(
+    { spec: "openapi.json", dir: "operations" },
+    { "/app/operations/submitHook": { default: () => ({ status: 200 }) } },
+    securedSpec,
+    () => undefined, // NANO_WEBHOOK_KEY not set
+  );
+  const res = await router(
+    req("POST", "/app/api/hooks/submit", { body: "{}", headers: { "X-Webhook-Key": "anything" } }),
+  );
+  assert.equal(res.status, 500);
+  assert.ok(logs.some((l) => l.level === "error" && /security is misconfigured/.test(l.msg)));
 });

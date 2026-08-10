@@ -129,16 +129,14 @@ export function parseSpec(text: string): OpenApiDoc {
   try {
     // Fast path + precise diagnostics for JSON (and the generated `openapi.json` interchange file).
     doc = JSON.parse(text);
-  } catch {
+  } catch (jsonError) {
     // Not JSON — parse as YAML (which also subsumes JSON, so authored `.yaml`/`.yml` specs load).
     try {
       doc = parseYaml(text);
-    } catch (e) {
-      throw new Error(
-        `OpenAPI spec is not valid YAML or JSON: ${
-          e instanceof Error ? e.message : String(e)
-        }`,
-      );
+    } catch (yamlError) {
+      const jsonMessage = jsonError instanceof Error ? jsonError.message : String(jsonError);
+      const yamlMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
+      throw new Error(`OpenAPI spec is not valid YAML or JSON: JSON parse error: ${jsonMessage}; YAML parse error: ${yamlMessage}`);
     }
   }
   if (!isRecord(doc)) {

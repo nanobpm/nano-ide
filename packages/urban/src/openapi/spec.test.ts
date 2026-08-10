@@ -58,6 +58,13 @@ test("parseSpec throws a clear error on non-object and unparseable input", () =>
   assert.throws(() => parseSpec("{ : ]["), /not valid YAML or JSON/);
 });
 
+test("parseSpec includes both JSON and YAML diagnostics when neither parser accepts the input", () => {
+  assert.throws(
+    () => parseSpec("{ : ]["),
+    /JSON parse error:.*YAML parse error:/,
+  );
+});
+
 test("parseSpec parses a YAML OpenAPI document (ADR 0059 authoring format)", () => {
   const yaml = [
     "openapi: 3.0.0",

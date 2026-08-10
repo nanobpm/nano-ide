@@ -7,8 +7,8 @@
 // (produced by `urban gen`); the delegate returns `{ status, body }` and the runtime serializes
 // `body` as JSON. Docs are served for free at `/app/api-docs`.
 
-import { defineOperation } from "../nano-generated/operations.ts";
 import type { Greeting } from "../nano-generated/api-io.d.ts";
+import { defineOperation } from "../nano-generated/operations.ts";
 
 export default defineOperation("listGreetings", (_input, app) => {
 	const greetings = app.data.repo("greeting").all<Greeting>();

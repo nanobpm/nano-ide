@@ -41,6 +41,7 @@ components:
   schemas:
     GreetRequest:
       type: object
+      additionalProperties: false
       required: [who]
       properties:
         who:
@@ -49,6 +50,7 @@ components:
           example: Adam
     Greeting:
       type: object
+      additionalProperties: false
       required: [id, who, message]
       properties:
         id:
@@ -64,6 +66,7 @@ components:
           nullable: true
     GreetingList:
       type: object
+      additionalProperties: false
       required: [greetings]
       properties:
         greetings:
@@ -72,6 +75,7 @@ components:
             $ref: "#/components/schemas/Greeting"
     Accepted:
       type: object
+      additionalProperties: false
       required: [accepted, who]
       properties:
         accepted:

@@ -133,6 +133,24 @@ test("full preset scaffolds the end-to-end showcase: API + operations + pages", 
   assert.ok(!/__APP_/.test(createOp), "no un-substituted tokens remain");
 });
 
+test("scaffolds valid YAML even for names with YAML-special characters", async () => {
+  // The title is substituted with a JSON-escaped value into a double-quoted YAML scalar, so
+  // names containing YAML indicators (`:` + space, `#`, leading `-`, `@`, `{`, quotes, `\`)
+  // must not break the authored openapi.yaml. Parse the emitted spec to prove it round-trips.
+  for (const name of [
+    'Foo: Bar #x',
+    'My "Cool" App',
+    "A\\B",
+    "- leading dash",
+    "@handle {x}",
+  ]) {
+    const dir = await mkdtemp(join(tmpdir(), "urban-yaml-hostile-"));
+    await scaffold({ name, dir, preset: "full" });
+    const spec = parseYaml(await readFile(join(dir, "openapi.yaml"), "utf8"));
+    assert.equal(spec.info.title, `${name} API`, `title round-trips for ${JSON.stringify(name)}`);
+  }
+});
+
 test("headless preset drops surfaces, triggers and forms (workers only)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-headless-"));
   const res = await scaffold({ name: "Batch Job", dir, preset: "headless" });

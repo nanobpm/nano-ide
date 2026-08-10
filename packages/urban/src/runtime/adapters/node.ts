@@ -26,7 +26,8 @@ import { formatLogLine, levelEnabled, parseLogLevel } from "../core/logger.ts";
  * The default host log sink: NDJSON to stdout (`debug`/`info`) and stderr (`warn`/`error`), gated by
  * a minimum level read from `URBAN_LOG_LEVEL` (default `info`) per record so a level change takes
  * effect without a restart. Writing straight to the stream (not `console.*`) keeps one JSON object
- * per line — the Nano host captures these for structured display.
+ * per line so downstream tooling can ingest them (the Nano host does not yet parse or surface these
+ * lines — see ADR 0061).
  */
 function makeNdjsonLog(minLevel: () => string | undefined): HostContext["log"] {
   return (level, msg, fields) => {

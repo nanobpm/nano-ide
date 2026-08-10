@@ -69,8 +69,9 @@ webhook mount and whose `security` is a shared-secret/capability-token scheme �
 both already expressible in OpenAPI (the current spec already uses
 `security: [{ hookSecret: [] }]`). The delegate is resolved by
 `operationId → file` exactly as operations are today. The `actions[]` array is
-retired; `nano.app.json` shrinks to app-level config (`api: { enabled }`, data
-sources, feature toggles) and no longer enumerates individual endpoints.
+retired; `nano.app.json` shrinks to app-level config — the proposed
+`api: { enabled: true }` (replacing today's `api: { spec, dir, base }`), plus data
+sources and feature toggles — and no longer enumerates individual endpoints.
 
 Endpoints that are genuinely webhook-shaped (capability-token relays such as
 `blackboard`, `abandon`, `feature-answer`) remain — they just become operations
@@ -115,12 +116,47 @@ are **no hand-written validators and no hand-written controller boilerplate.** A
 delegate remains **ejectable to a fully imperative handler** per ADR 0058 for the
 rare operation that needs to bypass the generated layer.
 
-### Editor ergonomics
+### OpenAPI validation is an editor-agnostic toolkit gate
 
-`create-urban-app` ships a `.vscode/settings.json` that maps `yaml.schemas` →
-the published OpenAPI 3.1 JSON Schema for `openapi.yaml`, so the redhat YAML LSP
-gives inline validation + autocomplete as the author types. This is the "YAML with
-validation in the editor" ergonomic, at zero framework cost.
+**YAML validation ≠ OpenAPI validation.** There are three layers, and an editor
+plugin covers at most one of them:
+
+1. **YAML syntax** — well-formedness. Any parser (`parseSpec`).
+2. **OpenAPI document validity**, itself two sub-levels:
+   - **(2a) meta-schema conformance** — a structurally valid OpenAPI 3.1 document
+     (required fields, types). This is what an editor's `yaml.schemas` → OpenAPI
+     schema gives you.
+   - **(2b) coherence lint** — unique `operationId`s, resolvable local `$ref`s,
+     path params declared in the path, every operation has a response, referenced
+     security schemes exist. The meta-schema does **not** catch these: a dangling
+     `$ref` or duplicate `operationId` is meta-schema-valid but a broken API.
+3. **App-coherence / drift** — every `operationId` has a delegate; delegate
+   signatures match the spec (the `--check` gate).
+
+The **authoritative validator is a toolkit gate covering layers 1 + 2a + 2b + 3**,
+not an editor extension. It is **editor-agnostic** and runs identically in three
+places, so they can never disagree:
+
+- **CI** — `urban check` / `urban gen --check`.
+- **Nano Studio** (the in-browser RAD IDE) — on-save diagnostics. The OpenAPI
+  toolkit (`packages/urban/src/openapi/spec.ts`) is **pure, browser-safe TS** (zero
+  runtime `node:` imports), so Studio runs the *same* validator in-browser and
+  surfaces the same errors — optionally also wiring the OpenAPI 3.1 schema into
+  Monaco's YAML mode for inline 2a.
+- **Your own IDE** — an `urban check` task/problem-matcher.
+
+The toolkit already performs part of 2b (`operationsWithoutId`,
+`operationsWithUnsafeId`, `undeclaredPathParams`, cycle-guarded `$ref` resolution,
+request/response `validateValue`); this ADR completes it (full 3.1 meta-schema
+conformance + the remaining coherence rules).
+
+### Editor convenience (VS Code)
+
+`create-urban-app` additionally ships a `.vscode/settings.json` mapping
+`yaml.schemas` → the published OpenAPI 3.1 JSON Schema for `openapi.yaml`, so the
+Red Hat YAML LSP gives inline 2a validation + autocomplete for VS Code users. This
+is a **convenience, not the source of truth** — it covers only 2a and only in VS
+Code; the toolkit gate above is what CI, Nano Studio, and `--check` enforce.
 
 ## Consequences
 
@@ -137,8 +173,10 @@ validation in the editor" ergonomic, at zero framework cost.
   an LLM-readable contract all derive from the authored YAML.
 - **Migration is additive.** (a) add the YAML parse path; (b) generate delegate
   stubs + the controller/validator layer; (c) re-express existing `actions[]`
-  hooks as operations and delete the array; (d) ship the `.vscode` schema wiring in
-  the template. Existing JSON specs keep working through the deprecation window.
+  hooks as operations and delete the array; (d) complete the editor-agnostic
+  validation gate (meta-schema + coherence lint) and wire it into CI + Nano Studio,
+  plus the VS Code `.vscode` convenience. Existing JSON specs keep working through
+  the deprecation window.
 - **Downstream:** `nano-workforce` collapses its two `submit`/`plan` front doors to
   one operation each and repoints its page forms at them via `callRoute` (#150) —
   which also fixes the empty-UI / bypassed-`submitPr` regression that motivated

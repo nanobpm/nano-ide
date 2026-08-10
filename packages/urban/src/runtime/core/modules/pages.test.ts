@@ -122,6 +122,34 @@ test("GET /app/runtime.js serves the renderer module", async () => {
   assert.match(res.body ?? "", /function apiUrl\(u\)/);
 });
 
+test("the shell renders an API-docs badge only when an apiDocsPath is provided", async () => {
+  const routes = createPagesRoutes(
+    { pagesDir: "pages", homePage: "home", sourceName: "app", apiDocsPath: "/app/api-docs" },
+    { db: fakeDb(), engine: fakeEngine().engine, readPage: async () => "{}" },
+  );
+  const withBadge = (await makeRouter(routes)(req("GET", "/"))).body ?? "";
+  assert.match(withBadge, /class="pc-apidocs"/);
+  assert.match(withBadge, /href="\/app\/api-docs"/);
+  // Opens in a new tab with a hardened rel (no reverse-tabnabbing handle).
+  assert.match(withBadge, /rel="noopener noreferrer"/);
+
+  // No `api` binding → no badge element (the CSS rule is always present in the shell styles).
+  const noBadge = (await dispatch("GET", "/")).body ?? "";
+  assert.doesNotMatch(noBadge, /class="pc-apidocs"/);
+});
+
+test("renderActionForm supports a publishMessage action (message-started processes)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The form submit branches on the action kind: publishMessage posts to the message endpoint,
+  // deriving the correlation key from the named form field; startProcess keeps its old path.
+  assert.match(js, /p\.action\.kind === "publishMessage"/);
+  assert.match(js, /variables\[p\.action\.correlationKeyField\]/);
+  assert.match(js, /"\/app\/actions\/message"/);
+  // startProcess remains the default/back-compat branch.
+  assert.match(js, /"\/app\/actions\/start\/" \+ encodeURIComponent\(p\.action\.process\)/);
+});
+
 test("the renderer bridges the console theme over postMessage", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";

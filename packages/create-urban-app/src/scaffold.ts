@@ -101,8 +101,9 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     const rel = relative(root, src);
     const parts = rel.split(/[/\\]/).map(finalName);
     const destRel = parts.join("/");
-    // headless = workers only: no human surfaces, so skip the form assets.
-    if (headless && destRel.startsWith("forms/")) continue;
+    // headless = workers only: no human surfaces, so skip the form + page assets. The
+    // `api` binding, its `operations/`, and `openapi.json` are a machine surface and stay.
+    if (headless && (destRel.startsWith("forms/") || destRel.startsWith("pages/"))) continue;
     // Node is the default host; Deno host files are opt-in via `--deno`.
     if (!deno && destRel === "deno.json") continue;
     const dest = join(opts.dir, destRel);

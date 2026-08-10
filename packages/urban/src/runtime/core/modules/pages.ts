@@ -20,6 +20,7 @@ import { errorMessage, isRecord } from "../guards.ts";
 import type { EngineClient } from "../host.ts";
 import { html, json, type Route } from "../router.ts";
 import { cancelInstanceReconciling, type CancelInstanceResult } from "./cancel.ts";
+import { apiDocsPath } from "./api.ts";
 import { quoteIdent } from "./gateway.ts";
 
 /** The subset of the datasource gateway the page runtime needs. */
@@ -37,6 +38,12 @@ export interface PagesOptions {
   rowLimit?: number;
   /** The injected default datasource name (the alias apps bind to). Default `app`. */
   sourceName?: string;
+  /**
+   * The app's Swagger UI route (from the `api` binding, resolved by `apiDocsPath`). When set,
+   * the shell renders a persistent "API docs" badge linking to it — so a spec-first app surfaces
+   * its interactive docs from its own UI for free. Omitted → no badge (app declares no `api`).
+   */
+  apiDocsPath?: string;
 }
 
 export interface PagesDeps {
@@ -115,7 +122,7 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   };
 
   const routes: Route[] = [];
-  const shell = html(rendererShell(homePage));
+  const shell = html(rendererShell(homePage, opts.apiDocsPath));
 
   // ── the renderer shell + module ─────────────────────────────────────────
   routes.push({ method: "GET", path: "/", source: "surface:pages", handler: () => shell });
@@ -372,6 +379,9 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
     homePage: typeof decl.homePage === "string" ? decl.homePage : undefined,
     rowLimit: typeof decl.rowLimit === "number" ? decl.rowLimit : undefined,
     sourceName: typeof decl.sourceName === "string" ? decl.sourceName : undefined,
+    // Link the shell's "API docs" badge to the app's Swagger UI when it declares an `api`
+    // binding (resolved by the api module, so the path never drifts from where docs mount).
+    apiDocsPath: apiDocsPath(ctx.manifest),
   };
   const sourceName = opts.sourceName ?? "app";
   const bindings = ctx.manifest.instanceTracking ?? [];
@@ -400,7 +410,13 @@ function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function rendererShell(homePage: string): string {
+function rendererShell(homePage: string, apiDocsPath?: string): string {
+  // A persistent "API docs" badge (spec-first apps get their Swagger UI linked from their own
+  // UI for free). `target="_blank"` + hardened `rel` so the docs open without giving the docs
+  // tab a handle back to this window (reverse-tabnabbing).
+  const apiDocsBadge = apiDocsPath
+    ? `\n  <a class="pc-apidocs" href="${escapeAttr(apiDocsPath)}" target="_blank" rel="noopener noreferrer">API docs \u2197</a>`
+    : "";
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -409,7 +425,7 @@ function rendererShell(homePage: string): string {
   <title>Urban App</title>
   <style>${RENDERER_CSS}</style>
 </head>
-<body>
+<body>${apiDocsBadge}
   <main id="page" data-home="${escapeAttr(homePage)}"><p class="pc-empty">Loading…</p></main>
   <script type="module" src="./app/runtime.js"></script>
 </body>
@@ -457,6 +473,8 @@ const RENDERER_CSS = `
 * { box-sizing: border-box; }
 body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64rem; margin-inline:auto; background:var(--nano-app); color:var(--nano-text); }
 .pc-empty { color:var(--nano-text-faint); }
+.pc-apidocs { position:fixed; top:.75rem; right:.75rem; z-index:10; font-size:.8rem; text-decoration:none; padding:.3rem .6rem; border:1px solid var(--nano-edge); border-radius:999px; background:var(--nano-panel); color:var(--nano-text-muted); }
+.pc-apidocs:hover { color:var(--nano-text); border-color:var(--nano-accent); }
 .pc-heading { font-size:1.6rem; font-weight:650; margin:0 0 .25rem; }
 .pc-sub { color:var(--nano-text-muted); margin:.25rem 0 1rem; }
 .pc-body { margin:.5rem 0; }
@@ -704,10 +722,28 @@ function renderActionForm(node) {
     }
     btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Submitting…";
     try {
-      const res = await getJSON("/app/actions/start/" + encodeURIComponent(p.action.process),
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ variables }) });
-      msg.className = "pc-msg ok";
-      msg.textContent = "Started (instance " + (res.processInstanceKey ?? "?") + ")";
+      // Two action kinds: startProcess (default, back-compat) -> engine.createInstance; and
+      // publishMessage -> engine.publishMessage, which correlates a message to a message start
+      // (or intermediate catch) event. correlationKeyField names the form field that carries
+      // the correlation key; the whole form becomes the message variables.
+      if (p.action && p.action.kind === "publishMessage") {
+        const correlationKey = String(variables[p.action.correlationKeyField] ?? "").trim();
+        if (!correlationKey) {
+          msg.className = "pc-msg err";
+          msg.textContent = "Field '" + p.action.correlationKeyField + "' is required";
+          return;
+        }
+        await getJSON("/app/actions/message", { method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: p.action.message, correlationKey, variables }) });
+        msg.className = "pc-msg ok";
+        msg.textContent = "Message published";
+      } else {
+        const res = await getJSON("/app/actions/start/" + encodeURIComponent(p.action.process),
+          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ variables }) });
+        msg.className = "pc-msg ok";
+        msg.textContent = "Started (instance " + (res.processInstanceKey ?? "?") + ")";
+      }
       for (const input of inputs.values()) input.value = "";
       document.dispatchEvent(new CustomEvent("pc:refresh"));
     } catch (e) {

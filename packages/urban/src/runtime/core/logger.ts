@@ -161,6 +161,17 @@ export function createLogger(sink: LogSink, bindings: LogFields = {}): Logger {
     info: (msg: string, fields?: LogFields) => emit("info", msg, fields),
     warn: (msg: string, fields?: LogFields) => emit("warn", msg, fields),
     error: (msg: string, fields?: LogFields) => emit("error", msg, fields),
-    child: (more: LogFields) => createLogger(sink, Object.assign(Object.create(null), bound, more)),
+    child: (more: LogFields) => {
+      // child() must not throw even when `more` is hostile (e.g. a Proxy whose key enumeration
+      // throws), mirroring emit()'s "logging never throws" guarantee: degrade to a child bound to
+      // just the parent context rather than let the merge bubble into the worker/route handler.
+      let childBindings: LogFields = bound;
+      try {
+        childBindings = Object.assign(Object.create(null), bound, more);
+      } catch {
+        // `more` could not be enumerated/merged — keep the parent bindings, drop the bad additions.
+      }
+      return createLogger(sink, childBindings);
+    },
   });
 }

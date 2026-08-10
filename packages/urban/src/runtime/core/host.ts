@@ -106,7 +106,14 @@ export interface HostContext {
    * a host that cannot provide one leaves provenance capture disabled (absent-safe).
    */
   createAsyncStore?<T>(): AsyncStore<T>;
-  /** Structured log sink. Adds `debug` below `info`; the host adapter owns filtering + encoding. */
+  /**
+   * Structured log sink. Adds `debug` below `info`; the host adapter owns filtering + encoding.
+   *
+   * NOTE: widening this level union to include `"debug"` is a **breaking change** for any custom
+   * `HostContext` implementation whose `log` was typed with the narrower `"info" | "warn" | "error"`
+   * union — such a host must add a `"debug"` branch to keep satisfying the contract. See the
+   * "Structured logging" custom-host note in the runtime README.
+   */
   log(level: "debug" | "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>): void;
 }
 

@@ -195,3 +195,27 @@ test("a log call never throws when the sink itself throws", () => {
   };
   assert.doesNotThrow(() => createLogger(throwingSink).info("x", { a: 1 }));
 });
+
+test("child() never throws when the added bindings are hostile — degrades to the parent context", () => {
+  // A Proxy whose ownKeys trap throws would break the Object.assign merge in child(); like emit(),
+  // child() must not propagate into the caller. It degrades to a child bound to just the parent
+  // context, and that child still logs normally with its inherited bindings.
+  const { records, sink } = recorder();
+  const hostile = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error("trap");
+      },
+    },
+  );
+  const parent = createLogger(sink).child({ orderId: "o1" });
+  let child: ReturnType<typeof parent.child> | undefined;
+  assert.doesNotThrow(() => {
+    child = parent.child(hostile);
+  });
+  child?.info("shipped");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].msg, "shipped");
+  assert.deepEqual({ ...records[0].fields }, { orderId: "o1" });
+});

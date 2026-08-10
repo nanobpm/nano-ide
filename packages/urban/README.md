@@ -133,6 +133,10 @@ Records are written as **NDJSON** — one JSON object per line,
 `{"ts":…,"level":…,"msg":…, …fields}` — with `warn`/`error` on stderr and
 `debug`/`info` on stdout. `URBAN_LOG_LEVEL` (default `info`) sets the minimum level.
 
+> **Custom hosts:** the `HostContext.log` sink now accepts `"debug"` in addition to
+> `"info" | "warn" | "error"`. A custom host that typed `log` with the narrower union must add a
+> `"debug"` branch to keep satisfying the contract — a breaking change for that surface only.
+
 ### Toolkit — derive artifacts (`urban gen`)
 
 ```ts

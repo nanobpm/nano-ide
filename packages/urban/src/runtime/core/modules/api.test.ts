@@ -325,6 +325,40 @@ test("repeated query keys are all validated (extra values don't bypass validatio
   assert.match(JSON.stringify(JSON.parse(res.body!).issues), /expected a single value/);
 });
 
+test("a declared but schemaless query param preserves raw wire semantics (repeats allowed)", async () => {
+  const schemalessSpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/items": {
+        get: {
+          operationId: "listItems",
+          parameters: [{ name: "x", in: "query" }], // no schema → raw wire `string | string[]`
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: unknown;
+  const { router } = build(
+    { spec: "openapi.json" },
+    { "/app/operations/listItems": { default: (i: { query: Record<string, unknown> }) => { got = i.query.x; return { body: { ok: true } }; } } },
+    schemalessSpec,
+  );
+  // Repeated key must NOT be rejected as a scalar-repeat — it's forwarded as the raw string[].
+  const res = await router(req("GET", "/app/api/items", { query: "x=a&x=b" }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(got, ["a", "b"]);
+  // A single value stays the raw string.
+  let got1: unknown;
+  const b2 = build(
+    { spec: "openapi.json" },
+    { "/app/operations/listItems": { default: (i: { query: Record<string, unknown> }) => { got1 = i.query.x; return { body: { ok: true } }; } } },
+    schemalessSpec,
+  );
+  await b2.router(req("GET", "/app/api/items", { query: "x=solo" }));
+  assert.equal(got1, "solo");
+});
+
 test("array-typed query params validate the whole array (items + array constraints)", async () => {
   const arraySpec = JSON.stringify({
     openapi: "3.0.0",

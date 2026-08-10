@@ -550,6 +550,11 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
             if (p.required) issues.push({ path: `query/${p.name}`, message: "is required" });
             continue;
           }
+          // A declared but schemaless query param has no shape to coerce/validate against — its
+          // generated type is the raw wire `string | string[]`, so preserve raw semantics
+          // (including repeated keys) and forward the value verbatim (already seeded in coercedQuery
+          // from the raw wire). Don't route it through the scalar-repeat rejection below.
+          if (!p.schema) continue;
           const values = Array.isArray(val) ? val : [val];
           const ps = resolveSchema(d, p.schema);
           if (ps?.type === "array") {

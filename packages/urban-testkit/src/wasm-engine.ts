@@ -45,6 +45,20 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** Return a copy of `source` containing only the requested keys that are
+ *  actually present — the client-side analogue of an engine `fetchVariables`
+ *  projection. */
+function pick(
+  source: Record<string, unknown>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (Object.hasOwn(source, k)) out[k] = source[k];
+  }
+  return out;
+}
+
 // A minimal ambient `Deno` declaration lets this file's runtime branch compile
 // under Node's tsc (mirrors the pattern in the urban runtime Deno adapter); the
 // `typeof Deno` guard picks the right file-read path at runtime on either host.
@@ -90,6 +104,9 @@ interface RegisteredWorker {
   readonly handler: JobHandler;
   readonly workerName: string;
   readonly maxParallelJobs: number;
+  /** When set, a job surfaces only this subset of variables (mirrors the live
+   *  SDK adapter's `fetchVariables`, which the engine applies server-side). */
+  readonly fetchVariables?: readonly string[];
 }
 
 let bootPromise: Promise<typeof import("@nanobpm/engine-wasm")> | undefined;
@@ -239,6 +256,9 @@ export class WasmEngineClient implements EngineClient {
     const out: ProcessInstanceSnapshot[] = [];
     for (const inst of records(this.#snapshot().instances)) {
       const key = str(inst.key);
+      // Skip keyless items so a missing/null key can't leak in as "" (matches
+      // the live SDK adapter, which drops instances with no key).
+      if (key === "") continue;
       if (wanted && !wanted.has(key)) continue;
       const state = wasmStateToProcessInstanceState(inst.state);
       if (state === undefined) continue;
@@ -257,6 +277,7 @@ export class WasmEngineClient implements EngineClient {
       handler,
       workerName: options?.workerName ?? `urban-testkit:${jobType}`,
       maxParallelJobs: options?.maxParallelJobs ?? DEFAULT_MAX_JOBS,
+      fetchVariables: options?.fetchVariables,
     });
     // A freshly-registered worker picks up any jobs already waiting for its type.
     await this.drain();
@@ -326,12 +347,21 @@ export class WasmEngineClient implements EngineClient {
 
   async #runJob(worker: RegisteredWorker, raw: Record<string, unknown>): Promise<void> {
     const jobKey = str(raw.key);
+    // A keyless job cannot be completed/failed/errored; skip it rather than
+    // issue an invalid completeJob("") (mirrors the live SDK adapter, which
+    // logs and leaves such a job for redelivery).
+    if (jobKey === "") return;
+    const allVariables = isRecord(raw.variables) ? raw.variables : {};
     const job: EngineJob = {
       jobKey,
       jobType: str(raw.type),
       processInstanceKey: raw.instanceKey == null ? undefined : str(raw.instanceKey),
       elementId: typeof raw.elementId === "string" ? raw.elementId : undefined,
-      variables: isRecord(raw.variables) ? raw.variables : {},
+      // Honour fetchVariables: surface only the requested subset (intersected
+      // with what is present), matching the live SDK adapter's server-side fetch.
+      variables: worker.fetchVariables === undefined
+        ? allVariables
+        : pick(allVariables, worker.fetchVariables),
     };
     try {
       const out = await worker.handler(job);

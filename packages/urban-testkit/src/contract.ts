@@ -98,6 +98,27 @@ export function runEngineClientContract(
     });
   });
 
+  test(`${label}: fetchVariables limits the variables surfaced to a worker`, async () => {
+    await withEngine(async (engine) => {
+      let seen: EngineJob | undefined;
+      await engine.registerWorker(
+        "work",
+        (job) => {
+          seen = job;
+          return {};
+        },
+        { fetchVariables: ["keep"] },
+      );
+      await engine.deployResources(res(SERVICE_BPMN));
+      await engine.createInstance({
+        processDefinitionId: "svc",
+        variables: { keep: 1, drop: 2 },
+        awaitCompletion: true,
+      });
+      assert.deepEqual(seen?.variables, { keep: 1 });
+    });
+  });
+
   test(`${label}: a cancelled instance reports TERMINATED`, async () => {
     await withEngine(async (engine) => {
       // No worker registered → the instance parks at `work`, still ACTIVE.

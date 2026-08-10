@@ -171,6 +171,12 @@ async function cmdGen(f: Flags): Promise<number> {
   console.log(`✔ generated ${res.artifacts.length} artifact(s):`);
   for (const a of res.artifacts) console.log(`  • ${a.path}`);
 
+  // Stale generated files removed from nano-generated/ (renamed/removed artifacts from a prior gen).
+  if (res.swept.length > 0) {
+    console.log(`✔ removed ${res.swept.length} stale generated file(s):`);
+    for (const p of res.swept) console.log(`  - ${p}`);
+  }
+
   // Write-once handler stubs scaffolded as part of generation (workers from the model, operation
   // delegates from the OpenAPI spec). Existing, human-owned stubs are kept verbatim.
   const created = [

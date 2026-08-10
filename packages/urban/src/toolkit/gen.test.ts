@@ -103,6 +103,59 @@ test("collectArtifacts touches no writes", async () => {
   assert.equal(Object.keys(io.files).length, before);
 });
 
+test("runGen sweeps stale files from nano-generated/ (write mode)", async () => {
+  const io = memIO(fixture());
+  // A stale artifact left by a prior gen (e.g. a renamed `data_sdk.ts` orphan) that this run does
+  // not re-emit. It must be removed so the app can't import a dead generated module.
+  io.files["/app/nano-generated/data_sdk.ts"] = "// stale, renamed away";
+  io.files["/app/nano-generated/old-worker-io.d.ts"] = "// stale";
+  const res = await runGen({ root: "/app", io });
+  assert.deepEqual(res.swept, [
+    "nano-generated/data_sdk.ts",
+    "nano-generated/old-worker-io.d.ts",
+  ]);
+  assert.ok(!("/app/nano-generated/data_sdk.ts" in io.files), "stale file removed");
+  assert.ok(!("/app/nano-generated/old-worker-io.d.ts" in io.files), "stale file removed");
+  // Current artifacts survive.
+  assert.ok("/app/nano-generated/worker-io.d.ts" in io.files, "fresh artifact kept");
+});
+
+test("runGen never sweeps runtime-materialized wrappers gen does not emit", async () => {
+  const io = memIO(fixture());
+  // The SDK shims + `urban data`/console dataops wrappers live in nano-generated/ but are not
+  // produced by `urban gen`; the app needs them at runtime, so the sweep must protect them.
+  for (const name of ["domain.ts", "workers.ts", "messages.ts", "domain.json", "data-sdk.ts", "worker-sdk.ts"]) {
+    io.files[`/app/nano-generated/${name}`] = `// runtime-materialized ${name}`;
+  }
+  const res = await runGen({ root: "/app", io });
+  assert.deepEqual(res.swept, [], "no runtime-materialized file swept");
+  for (const name of ["domain.ts", "workers.ts", "messages.ts", "domain.json", "data-sdk.ts", "worker-sdk.ts"]) {
+    assert.ok(`/app/nano-generated/${name}` in io.files, `${name} preserved`);
+  }
+});
+
+test("gen --check never sweeps (read-only)", async () => {
+  const io = memIO(fixture());
+  await runGen({ root: "/app", io });
+  io.files["/app/nano-generated/stale.ts"] = "// stale";
+  const res = await runGen({ root: "/app", io, check: true });
+  assert.deepEqual(res.swept, []);
+  assert.ok("/app/nano-generated/stale.ts" in io.files, "check mode leaves stale files untouched");
+});
+
+test("modelsOnly (urban derive) never sweeps nano-generated type-contract outputs", async () => {
+  const io = memIO(fixture());
+  // A prior `urban gen` wrote the type-contract outputs.
+  await runGen({ root: "/app", io });
+  assert.ok("/app/nano-generated/worker-io.d.ts" in io.files, "precondition: gen wrote outputs");
+  // `urban derive` (modelsOnly) derives only models — its artifacts carry no nano-generated/*, so
+  // the sweep must be a no-op here; otherwise it would wipe the type contracts above.
+  const res = await runGen({ root: "/app", io, modelsOnly: true });
+  assert.deepEqual(res.swept, []);
+  assert.ok("/app/nano-generated/worker-io.d.ts" in io.files, "derive preserved the type contracts");
+  assert.ok("/app/nano-generated/app.schema.sql" in io.files, "derive preserved the migrations");
+});
+
 // --- code-first model derivation (urban gen / urban derive) ---
 
 const GreetIn = envelope("GreetIn", { who: "string" });

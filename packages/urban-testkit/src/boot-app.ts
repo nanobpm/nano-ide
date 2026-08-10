@@ -125,6 +125,11 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
     manifestPath: opts.manifestPath,
     port: 0,
     scheduler,
+  }).catch(async (err: unknown) => {
+    // The engine is live before the app is built; if construction throws (e.g. a bad
+    // manifest) close it so a failed boot doesn't leak the WASM instance across tests.
+    await engine.close();
+    throw err;
   });
   await app.start();
 

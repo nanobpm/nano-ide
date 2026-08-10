@@ -50,7 +50,8 @@ export function createTestHost(opts: CreateTestHostOptions): TestHost {
 
   const host: HostContext = {
     runtime: base.runtime,
-    env: (name) => (name in envOverlay ? envOverlay[name] : base.env(name)),
+    env: (name) =>
+      Object.hasOwn(envOverlay, name) ? envOverlay[name] : base.env(name),
     readTextFile: (path) => base.readTextFile(path),
     listDir: (dir) => base.listDir(dir),
     exists: (path) => base.exists(path),

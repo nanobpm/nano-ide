@@ -99,6 +99,16 @@ test("planWorkerScaffold: skips already-wired, orchestrator, and duplicates", ()
   assert.equal(reasons["t.new"], "duplicate");
 });
 
+test("planWorkerScaffold: skips a task type declared external (out-of-process worker)", () => {
+  const models = [
+    model("a.bpmn", "p1", serviceTask("A", "senior:review"), serviceTask("B", "t.new")),
+  ];
+  const { plans, skipped } = planWorkerScaffold(models, [], [], ["senior:review"]);
+  assert.deepEqual(plans.map((p) => p.taskType), ["t.new"]);
+  const reasons = Object.fromEntries(skipped.map((s) => [s.taskType, s.reason]));
+  assert.equal(reasons["senior:review"], "external");
+});
+
 test("planWorkerScaffold: colliding slugs get a numeric suffix", () => {
   const m = model("a.bpmn", "p", serviceTask("A", "orders.charge"), serviceTask("B", "orders-charge"));
   const { plans } = planWorkerScaffold([m], [], []);
@@ -194,4 +204,29 @@ test("scaffoldWorkers is idempotent: a second --write run is a no-op", async () 
   assert.ok(run2.skipped.some((s) => s.taskType === "t.new" && s.reason === "already-wired"));
   assert.equal(run2.manifestPatched, false, "no new wiring on the second run");
   assert.equal(JSON.stringify(io.files), snapshot, "files unchanged on re-run");
+});
+
+test("scaffoldWorkers reads manifest.externalTaskTypes and skips those (never scaffolds/wires)", async () => {
+  const files = {
+    "/app/nano.app.json": JSON.stringify({
+      id: "demo",
+      models: { processes: ["processes/*.bpmn"] },
+      externalTaskTypes: ["senior:review"],
+    }),
+    "/app/processes/p.bpmn": model("p.bpmn", "p",
+      serviceTask("A", "senior:review"),
+      serviceTask("B", "t.new"),
+    ).xml,
+  };
+  const io = memIO(files);
+  const run = await scaffoldWorkers({ root: "/app", io, write: true });
+  // Only the app-hosted task is scaffolded; the external one is skipped.
+  assert.deepEqual(run.outcomes.map((o) => o.taskType), ["t.new"]);
+  assert.ok(run.skipped.some((s) => s.taskType === "senior:review" && s.reason === "external"));
+  assert.equal(io.files["/app/workers/senior-review/worker.ts"], undefined, "external task gets no stub");
+  const manifest = JSON.parse(io.files["/app/nano.app.json"]);
+  assert.ok(
+    !manifest.workers?.some((w: { taskType: string }) => w.taskType === "senior:review"),
+    "external task is never wired into workers[]",
+  );
 });

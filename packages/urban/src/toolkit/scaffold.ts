@@ -19,6 +19,7 @@ interface ScaffoldManifest {
   types?: Record<string, unknown>;
   models?: { processes?: string[] };
   workers?: ScaffoldWorker[];
+  externalTaskTypes?: string[];
   api?: { spec?: string; dir?: string };
 }
 
@@ -64,7 +65,12 @@ export async function scaffoldWorkers(opts: ScaffoldOptions): Promise<ScaffoldRu
   const models = await readModels(root, io, manifest);
   const declaredTypeIds = Object.keys(manifest.types ?? {});
 
-  const { plans, skipped } = planWorkerScaffold(models, manifest.workers ?? [], declaredTypeIds);
+  const { plans, skipped } = planWorkerScaffold(
+    models,
+    manifest.workers ?? [],
+    declaredTypeIds,
+    manifest.externalTaskTypes ?? [],
+  );
 
   const outcomes: StubOutcome[] = [];
   const wired: StubManifestEntry[] = [];

@@ -135,6 +135,18 @@ test("bootTestApp drives HTTP → worker → SQLite in-process and deterministic
   }
 });
 
+test("bootTestApp stops the in-process server so routes are no longer callable", async () => {
+  const dir = await makeFixture();
+  const app = await bootTestApp(dir);
+  await app.stop();
+  await rm(dir, { recursive: true, force: true });
+  await assert.rejects(
+    () => app.ui.call({ method: "GET", path: "/hooks/order" }),
+    /no router mounted/,
+    "a stopped app's captured handler is cleared, so a route call throws",
+  );
+});
+
 test("bootTestApp reconciles a terminated instance's tracking row on advanceTime", async () => {
   const dir = await makeFixture();
   const app = await bootTestApp(dir);

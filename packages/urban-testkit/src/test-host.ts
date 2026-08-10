@@ -56,11 +56,18 @@ export function createTestHost(opts: CreateTestHostOptions): TestHost {
     exists: (path) => base.exists(path),
     openSqlite: (path) => base.openSqlite(path),
     importModule: (path) => base.importModule(path),
-    // A socket-free HTTP server: keep the mounted router, hand back an inert handle so the
-    // runtime's start()/stop() lifecycle is satisfied without ever binding a port.
+    // A socket-free HTTP server: keep the mounted router, hand back a handle whose stop()
+    // clears the captured handler — so once the app is stopped the in-process server is
+    // inert (a route call throws) and its references are released, matching the real host.
     serveHttp: (_port: number, handler: HttpHandler): Promise<HttpServer> => {
       captured = handler;
-      return Promise.resolve({ port: 0, stop: () => Promise.resolve() });
+      return Promise.resolve({
+        port: 0,
+        stop: () => {
+          captured = undefined;
+          return Promise.resolve();
+        },
+      });
     },
     now: () => opts.now(),
     log: (level, msg, fields) => {

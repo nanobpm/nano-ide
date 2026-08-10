@@ -242,6 +242,19 @@ test("validateValue keeps bounds + multi-type unions under 3.1 type-arrays", () 
   assert.equal(validateValue(doc, strOrNum, null).length, 1); // null not permitted without "null"
 });
 
+test("validateValue rejects non-null values for a null-only schema (type: [null] / type: null)", () => {
+  // A schema whose only declared type is "null" must accept null and reject everything else — the
+  // value-type list is empty, so the type check must fall back to the full `type` list.
+  const nullOnlyArr: OpenApiSchema = { type: ["null"] };
+  assert.deepEqual(validateValue(doc, nullOnlyArr, null), []);
+  assert.equal(validateValue(doc, nullOnlyArr, "x").length, 1);
+  assert.equal(validateValue(doc, nullOnlyArr, 0).length, 1);
+
+  const nullOnlyStr: OpenApiSchema = { type: "null" };
+  assert.deepEqual(validateValue(doc, nullOnlyStr, null), []);
+  assert.equal(validateValue(doc, nullOnlyStr, "x").length, 1);
+});
+
 test("validateValue shape-checks typeless object schemas (no type/runtime drift)", () => {
   // A schema with properties/required but no explicit `type: "object"` is emitted as an object
   // by schemaToTs, so the validator must shape-check it too — otherwise invalid bodies pass.

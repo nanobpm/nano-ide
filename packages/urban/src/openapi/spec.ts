@@ -753,9 +753,12 @@ export function validateValue(
     }
   }
 
-  const valueTypes = schemaValueTypes(schema);
-  if (valueTypes.length > 0 && !matchesAnyType(valueTypes, value)) {
-    issues.push({ path: at, message: `expected ${valueTypes.join(",")}, got ${typeOfValue(value)}` });
+  // `value` is non-null here (the null branch returned above), so match against the declared value
+  // types. Use the full `type` list — not `schemaValueTypes` — so a null-only schema (`["null"]`)
+  // still rejects non-null values instead of skipping the check on an empty value-type list.
+  const declaredTypes = schemaTypeList(schema);
+  if (declaredTypes.length > 0 && !matchesAnyType(declaredTypes, value)) {
+    issues.push({ path: at, message: `expected ${declaredTypes.join(",")}, got ${typeOfValue(value)}` });
     return issues; // the shape checks below assume the declared type held
   }
 

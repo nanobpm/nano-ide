@@ -421,6 +421,43 @@ test("params/query are coerced to their schema type before reaching the delegate
   assert.deepEqual(got, { params: { id: 42 }, query: { verbose: true, tags: ["x", "y"] } });
 });
 
+test("3.1 nullable-typed params still coerce (type: [T, null]) and array-typed repeats still group", async () => {
+  // A param declared with the OpenAPI 3.1 nullable idiom must coerce on its value type exactly like
+  // the 3.0 single-type form — otherwise a `type: ["integer","null"]` query would reach the delegate
+  // as a raw string (and an array-typed nullable would reject repeats).
+  const spec = JSON.stringify({
+    openapi: "3.1.0",
+    paths: {
+      "/things/{id}": {
+        get: {
+          operationId: "getThing",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: ["integer", "null"] } },
+            { name: "tags", in: "query", schema: { type: ["array", "null"], items: { type: "string" } } },
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: { params: Record<string, unknown>; query: Record<string, unknown> } | undefined;
+  const { router } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/operations/getThing": {
+        default: (i: { params: Record<string, unknown>; query: Record<string, unknown> }) => {
+          got = { params: i.params, query: i.query };
+          return { body: { ok: true } };
+        },
+      },
+    },
+    spec,
+  );
+  const res = await router(req("GET", "/app/api/things/7", { query: "tags=x&tags=y" }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(got, { params: { id: 7 }, query: { tags: ["x", "y"] } });
+});
+
 test("a typeless numeric const/enum query param coerces (so its number-literal type is satisfiable)", async () => {
   const enumSpec = JSON.stringify({
     openapi: "3.1.0",

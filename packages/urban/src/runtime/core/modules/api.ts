@@ -29,6 +29,8 @@ import {
   parseSpec,
   resolveSchema,
   responseSchemaForStatus,
+  schemaHasType,
+  firstValueType,
   toRouteMatcher,
   undeclaredPathParams,
   undeclaredSecuritySchemes,
@@ -253,7 +255,7 @@ function coerceParam(doc: OpenApiDoc, schema: OpenApiSchema | undefined, raw: st
   // values are all numbers or all booleans. Without this, a typeless numeric/boolean const/enum
   // param (whose generated type is a number/boolean literal) could never be satisfied by the wire
   // string — every request would 400 against a type the runtime otherwise never produces.
-  let t = s.type;
+  let t = firstValueType(s);
   if (t === undefined) {
     if (typeof s.const === "number") t = "number";
     else if (typeof s.const === "boolean") t = "boolean";
@@ -571,7 +573,7 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
           if (!p.schema) continue;
           const values = Array.isArray(val) ? val : [val];
           const ps = resolveSchema(d, p.schema);
-          if (ps?.type === "array") {
+          if (ps && schemaHasType(ps, "array")) {
             // Repeated keys (?tag=a&tag=b) form the array; coerce + validate each item, then the
             // whole array against the schema's array constraints (minItems, items, ...). The coerced
             // array is what the delegate receives.

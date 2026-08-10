@@ -38,6 +38,26 @@ test("schemaToTs renders primitives, enums, arrays, refs, and unknown fallback",
   assert.equal(schemaToTs(undefined), "unknown");
 });
 
+test("schemaToTs renders OpenAPI 3.1 nullable type-arrays as `T | null`", () => {
+  // The 3.1 idiom `type: [T, "null"]` must emit the same `T | null` as 3.0 `nullable: true`,
+  // not degrade to `unknown` (the bug this fixes).
+  assert.equal(schemaToTs({ type: ["string", "null"] }), "string | null");
+  assert.equal(schemaToTs({ type: ["integer", "null"] }), "number | null");
+  assert.equal(schemaToTs({ type: ["boolean", "null"] }), "boolean | null");
+  assert.equal(schemaToTs({ type: ["array", "null"], items: { type: "string" } }), "Array<string> | null");
+  // 3.0 nullable stays equivalent.
+  assert.equal(schemaToTs({ type: "string", nullable: true }), "string | null");
+  // A bare `type: ["null"]` is exactly `null`.
+  assert.equal(schemaToTs({ type: ["null"] }), "null");
+  // A genuine multi-type union renders as a union (plus `| null` when null is present).
+  assert.equal(schemaToTs({ type: ["string", "number"] }), "string | number");
+  assert.equal(schemaToTs({ type: ["string", "number", "null"] }), "string | number | null");
+});
+
+test("schemaToTs renders a 3.1 nullable object type-array as `{...} | null`", () => {
+  assert.match(schemaToTs({ type: ["object", "null"], properties: { a: { type: "string" } } }), /\| null$/);
+});
+
 test("emitApiBindings emits component types + per-op request/response + the id map", () => {
   const out = emitApiBindings(doc);
   assert.match(out, /export type Invoice = \{/);

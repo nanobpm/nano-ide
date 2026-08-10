@@ -98,6 +98,29 @@ test("GET / serves the renderer shell with the home marker", async () => {
   assert.doesNotMatch(res.body ?? "", /src="\/app\/runtime\.js"/);
 });
 
+test("the API docs badge links via a document-relative href (proxy-safe)", async () => {
+  // With an `api` binding, the shell renders a persistent "API docs" badge. Its
+  // href must be DOCUMENT-relative (./app/api-docs), mirroring the runtime.js
+  // script tag, so it resolves against the shell's mount root. A root-absolute
+  // "/app/api-docs" would escape the Nano console's /console/app-view/<name>/
+  // reverse proxy and open the console origin (e.g. :8080/app/api-docs) instead
+  // of the app's own docs — the port-mismatch bug this guards against.
+  const { engine } = fakeEngine();
+  const routes = createPagesRoutes(
+    { pagesDir: "pages", homePage: "home", sourceName: "app", apiDocsPath: "/app/api-docs" },
+    {
+      db: fakeDb(),
+      engine,
+      readPage: async () => JSON.stringify({ title: "Home", nodes: [] }),
+      listPages: async () => ["home"],
+    },
+  );
+  const res = await makeRouter(routes)(req("GET", "/"));
+  assert.match(res.body ?? "", /class="pc-apidocs"/);
+  assert.match(res.body ?? "", /href="\.\/app\/api-docs"/);
+  assert.doesNotMatch(res.body ?? "", /href="\/app\/api-docs"/);
+});
+
 test("the shell styles the app through the shared --nano-* token contract", async () => {
   const res = await dispatch("GET", "/");
   const html = res.body ?? "";
@@ -129,7 +152,7 @@ test("the shell renders an API-docs badge only when an apiDocsPath is provided",
   );
   const withBadge = (await makeRouter(routes)(req("GET", "/"))).body ?? "";
   assert.match(withBadge, /class="pc-apidocs"/);
-  assert.match(withBadge, /href="\/app\/api-docs"/);
+  assert.match(withBadge, /href="\.\/app\/api-docs"/);
   // Opens in a new tab with a hardened rel (no reverse-tabnabbing handle).
   assert.match(withBadge, /rel="noopener noreferrer"/);
 

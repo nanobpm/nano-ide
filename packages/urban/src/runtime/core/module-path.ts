@@ -22,7 +22,7 @@
  */
 export const MODULE_EXTENSION_CANDIDATES = [".js", ".mjs", ".cjs", ".ts"] as const;
 
-/** True when the path already ends in a JS/TS module extension (.ts/.js/.mjs/.cjs). */
+/** True when the path already ends in a JS/TS module extension (.ts/.js/.mts/.cts/.mjs/.cjs). */
 function hasModuleExtension(path: string): boolean {
   return /\.[cm]?[jt]s$/i.test(path);
 }

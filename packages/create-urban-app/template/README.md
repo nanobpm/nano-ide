@@ -42,6 +42,8 @@ You need a Nano engine reachable at `CAMUNDA_REST_ADDRESS` (default
 
 ```bash
 npm install
+npm run typecheck  # Deno-powered TypeScript check (requires Deno on PATH)
+npm run lint       # Biome + ban-`as` GritQL plugin
 npm run check      # validate the manifest
 npm run gen        # derive generated artifacts (migrations, worker-io types)
 npm start          # deploy models, provision the DB, start workers + surfaces
@@ -58,6 +60,8 @@ npm run dev
 Or run it on **Deno** (no install step):
 
 ```bash
+deno task typecheck
+deno task lint
 deno task check
 deno task gen
 deno task start    # or: deno task dev  (hot reload)
@@ -113,4 +117,3 @@ your current sources without rewriting them.
 - **Enable more surfaces** (task inbox, chat) or triggers in the manifest.
 
 See the [Urban runtime docs](https://github.com/nanobpm/nano-ide/tree/main/packages/urban).
-

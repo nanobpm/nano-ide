@@ -47,7 +47,11 @@
       "types": "./dist/worker.d.ts",
       "default": "./dist/worker.js"
     },
-    "./source": "./src/index.ts"
+    "./source": "./src/index.ts",
+    "./testkit": {
+      "types": "./dist/testkit/index.d.ts",
+      "default": "./dist/testkit/index.js"
+    }
   },
   "files": [
     "dist",
@@ -69,6 +73,7 @@
     "create-urban-app": "^0.7.0"
   },
   "devDependencies": {
+    "@nanobpm/engine-wasm": "^0.4.0",
     "@types/node": "^22.20.1",
     "typescript": "^5.9.3"
   }

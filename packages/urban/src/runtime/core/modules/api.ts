@@ -15,6 +15,7 @@
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage } from "../guards.ts";
 import type { HttpRequest, HttpResponse } from "../host.ts";
+import { MODULE_EXTENSION_CANDIDATES } from "../module-path.ts";
 import { html, json, normalizeRoutePath, type Route } from "../router.ts";
 import { resolveAppPath } from "./datasource.ts";
 import {
@@ -352,21 +353,29 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   const loadController = (): Promise<Record<string, unknown> | null> => {
     if (!controllerPromise) {
       const rel = "nano-generated/controller";
-      controllerPromise = ctx.host
-        .exists(resolveAppPath(ctx.root, `${rel}.ts`))
-        .then(async (present) => {
-          if (!present) return null;
-          const mod = await ctx.host.importModule(resolveAppPath(ctx.root, rel));
-          const ops = mod.operations;
-          if (!isRecord(ops)) {
-            throw new Error("nano-generated/controller.ts must export an `operations` registry");
+      controllerPromise = (async () => {
+        // Probe every supported module extension (compiled .js first, mirroring resolveModulePath),
+        // NOT just `.ts`: a published / `urban run` app ships `controller.js` with the TS sources
+        // absent, and probing only `.ts` there would wrongly report the registry missing and fall
+        // back to per-op dynamic imports — defeating deterministic dispatch in production.
+        let present = false;
+        for (const ext of MODULE_EXTENSION_CANDIDATES) {
+          if (await ctx.host.exists(resolveAppPath(ctx.root, rel + ext))) {
+            present = true;
+            break;
           }
-          return ops;
-        })
-        .catch((e) => {
-          controllerPromise = undefined; // don't cache the failure — let a later request retry
-          throw e;
-        });
+        }
+        if (!present) return null;
+        const mod = await ctx.host.importModule(resolveAppPath(ctx.root, rel));
+        const ops = mod.operations;
+        if (!isRecord(ops)) {
+          throw new Error("nano-generated/controller.ts must export an `operations` registry");
+        }
+        return ops;
+      })().catch((e) => {
+        controllerPromise = undefined; // don't cache the failure — let a later request retry
+        throw e;
+      });
     }
     return controllerPromise;
   };

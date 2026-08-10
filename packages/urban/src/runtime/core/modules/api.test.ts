@@ -683,3 +683,19 @@ test("no controller present → back-compat per-op import path still works", asy
   assert.equal(res.status, 200);
   assert.deepEqual(imported, ["/app/operations/getInvoice"]);
 });
+
+test("compiled app: controller.js present (no .ts) → still uses the registry", async () => {
+  // A published / `urban run` build ships controller.js with TS sources absent. Probing only .ts
+  // would wrongly report the registry missing and fall back to per-op imports; probe all extensions.
+  const handler: OperationHandler = () => ({ status: 200, body: { ok: true } });
+  const { router, imported } = build(
+    { spec: "openapi.json" },
+    { "/app/nano-generated/controller": { operations: { getInvoice: handler } } },
+    spec,
+    () => undefined,
+    ["/app/nano-generated/controller.js"], // only the compiled artifact exists on disk
+  );
+  const res = await router(req("GET", "/app/api/invoices/7"));
+  assert.equal(res.status, 200);
+  assert.deepEqual(imported, ["/app/nano-generated/controller"]);
+});

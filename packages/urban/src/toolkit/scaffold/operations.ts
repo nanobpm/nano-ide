@@ -7,10 +7,10 @@
 // once and never overwritten — unlike the derived `nano-generated/` tree (which includes the
 // controller registry that statically imports these delegates and type-checks the whole set).
 
+import { DEFAULT_OPERATIONS_DIR, normalizeApiDir } from "../api-dir.ts";
 import { collectOperations, type OpenApiDoc } from "../../openapi/spec.ts";
 
-/** The default directory operation delegates live in (mirrors the runtime's `api.dir` default). */
-export const DEFAULT_OPERATIONS_DIR = "operations";
+export { DEFAULT_OPERATIONS_DIR };
 
 /** One planned operation-delegate stub. */
 export interface OperationStubPlan {
@@ -21,10 +21,10 @@ export interface OperationStubPlan {
   stub: string;
 }
 
-/** Normalize an `api.dir` to a clean relative segment (no leading/trailing slashes). */
+/** Normalize an `api.dir` to a clean relative segment (see `normalizeApiDir`); rejects absolute
+ *  paths and `..` segments so stubs are scaffolded where the runtime resolves delegates from. */
 function normalizeDir(dir: string): string {
-  const cleaned = dir.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "").trim();
-  return cleaned.length > 0 ? cleaned : DEFAULT_OPERATIONS_DIR;
+  return normalizeApiDir(dir);
 }
 
 /** Number of `../` hops from `<dir>/<file>.ts` back up to the app root (dir may be nested). */

@@ -8,6 +8,7 @@
 
 import type { DerivedArtifact, Deriver } from "../artifact.ts";
 import { GENERATED_DIR } from "../artifact.ts";
+import { DEFAULT_OPERATIONS_DIR, normalizeApiDir } from "../api-dir.ts";
 import {
   collectOperations,
   isObjectSchema,
@@ -25,8 +26,8 @@ export const API_BINDINGS_TS = "operations.ts";
  *  `tsc` (ADR 0059). The runtime dispatches through this map instead of per-op path imports. */
 export const API_CONTROLLER_TS = "controller.ts";
 
-/** The default directory operation delegates live in (mirrors the runtime's `api.dir` default). */
-export const DEFAULT_OPERATIONS_DIR = "operations";
+export { DEFAULT_OPERATIONS_DIR };
+
 
 /** A TS identifier form of an operationId (used for the per-op type names). */
 function typeStem(operationId: string): string {
@@ -247,10 +248,10 @@ export function emitApiBindingsRuntime(): string {
   );
 }
 
-/** Normalize an `api.dir` to a clean relative segment (no leading/trailing slashes). */
+/** Normalize an `api.dir` to a clean relative segment (see `normalizeApiDir`); rejects absolute
+ *  paths and `..` segments so the generated import paths stay app-relative and can't drift. */
 function normalizeOperationsDir(dir: string): string {
-  const cleaned = dir.replace(/\\/g, "/").replace(/^\.?\/+/, "").replace(/\/+$/, "").trim();
-  return cleaned.length > 0 ? cleaned : DEFAULT_OPERATIONS_DIR;
+  return normalizeApiDir(dir);
 }
 
 /**

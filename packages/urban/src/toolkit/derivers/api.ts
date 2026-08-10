@@ -121,16 +121,19 @@ function objectToTs(schema: OpenApiSchema, depth: number): string {
 /** The `params`/`query` object type for an operation, from its parameters. Values are coerced to
  *  their declared schema type before the delegate receives them (the runtime coerces + validates,
  *  then forwards the coerced value), so a param's type is its schema type — not the raw wire string.
- *  A parameter with no schema keeps the raw wire type (`string`, or `string | string[]` for query). */
+ *  A parameter with no schema, or ANY parameter of an ejected operation (whose runtime skips
+ *  coercion/validation and hands the delegate the raw request), keeps the raw wire type (`string`,
+ *  or `string | string[]` for query). */
 function paramsTs(op: OperationInfo, where: "path" | "query"): string {
   const ps = op.parameters.filter((p) => p.in === where);
   if (ps.length === 0) return "{}";
+  const rawWire = where === "query" ? "string | string[]" : "string";
   const fields = ps.map((p) => {
     const opt = p.required ? "" : "?";
     // Coerced to the schema type (number/boolean/array/enum/…); optionality is carried by the `?`
     // modifier — don't fold `undefined` into the value type, or required params would still accept
-    // undefined. Schemaless params fall back to the raw wire type.
-    const t = p.schema ? schemaToTs(p.schema) : where === "query" ? "string | string[]" : "string";
+    // undefined. Schemaless params, and every param of an ejected op, fall back to the raw wire type.
+    const t = op.eject || !p.schema ? rawWire : schemaToTs(p.schema);
     return `${JSON.stringify(p.name)}${opt}: ${t}`;
   });
   return `{ ${fields.join("; ")} }`;
@@ -180,13 +183,20 @@ export function emitApiBindings(doc: OpenApiDoc): string {
   const opDecls = ops
     .map((op) => {
       const stem = typeStem(op.operationId);
+      // An ejected operation (`x-urban-eject`) bypasses the generated coercion/validation — its
+      // delegate reads the raw request — so its input is NOT schema-shaped at runtime: params/query
+      // stay raw wire types and the body is unvalidated (`unknown`). Typing it by the schema would
+      // claim guarantees the runtime doesn't make. (Whole-surface `api.eject` is a manifest concern
+      // the deriver can't see; that exception is documented in ADR 0059.)
       // With a schema → the typed body. Required but no JSON schema → `unknown` (a body IS
       // required at runtime, just of an unknown shape). Otherwise (optional, absent) → `undefined`.
-      const bodyType = op.requestBodySchema
-        ? schemaToTs(op.requestBodySchema)
-        : op.requestBodyRequired
-          ? "unknown"
-          : "undefined";
+      const bodyType = op.eject
+        ? "unknown"
+        : op.requestBodySchema
+          ? schemaToTs(op.requestBodySchema)
+          : op.requestBodyRequired
+            ? "unknown"
+            : "undefined";
       // An optional (or absent) request body is passed to the delegate as `undefined` at runtime,
       // so mark it optional in the type rather than forcing handlers to treat it as always-present.
       const bodyOpt = op.requestBodyRequired ? "" : "?";

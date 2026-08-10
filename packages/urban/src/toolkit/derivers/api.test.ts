@@ -195,6 +195,33 @@ test("the response type unions every documented JSON response body (success + er
   assert.match(out, /export type DoItResponse = Ok \| Err;/); // both bodies in the union
 });
 
+test("an ejected operation keeps raw wire param/query types + an unknown body (runtime skips coercion)", () => {
+  const edoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/raw/{id}": {
+        post: {
+          operationId: "rawOp",
+          "x-urban-eject": true,
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "n", in: "query", schema: { type: "integer" } },
+          ],
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "object", properties: { a: { type: "string" } } } } },
+          },
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(edoc);
+  assert.match(out, /"id": string/); // ejected integer path param stays a raw wire string
+  assert.match(out, /"n"\?: string \| string\[\]/); // ejected query param stays raw wire
+  assert.match(out, /body: unknown;/); // ejected body is unvalidated → unknown
+});
+
 test("request body optionality follows requestBody.required (runtime passes undefined when absent)", () => {
   const mk = (required: boolean): OpenApiDoc => ({
     openapi: "3.0.0",

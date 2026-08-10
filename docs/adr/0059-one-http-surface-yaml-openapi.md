@@ -104,6 +104,11 @@ Two refinements make "typed request/response" honest end-to-end (urban 0.38.0):
   `boolean`, an `array` as an array — and the generated `params`/`query` types match.
   (A parameter with no schema keeps its raw wire type.) Coercion and validation read
   the one `OpenApiSchema`, so the type and the runtime value never disagree.
+  **Exception — ejection:** an ejected operation (`x-urban-eject`, or whole-surface
+  `api.eject`) deliberately bypasses the generated coercion/validation and hands the
+  delegate the raw request, so its generated `params`/`query` stay raw wire types
+  (`string` / `string | string[]`) and its body is `unknown` — the types stay honest
+  by *not* claiming a coercion the ejected path never performs.
 - **The response type unions *every* documented JSON response, not just the first
   2xx.** A delegate that returns a documented error body (e.g. a `400 { error }`)
   therefore typechecks against its operation's response type, and response-shape

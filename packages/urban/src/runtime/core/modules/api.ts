@@ -49,7 +49,7 @@ export interface ApiBinding {
 
 /** Pinned Swagger UI dist served from a CDN, so the docs UI adds zero bundle/runtime deps to an
  *  Urban app (matching the deps-free spirit of the rest of the surface — validators are standalone,
- *  ADR 0058 Consequences). Pinned (not `latest`) for reproducibility + integrity. */
+ *  ADR 0058 Consequences). Pinned (not `latest`) for reproducibility. */
 const SWAGGER_UI_VERSION = "5.17.14";
 
 /** Escape HTML-significant characters before embedding a value (the app name) in the docs markup. */

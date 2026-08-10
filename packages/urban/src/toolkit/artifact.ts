@@ -23,6 +23,25 @@ export interface Deriver<I> {
  * drop-in for the IDE's own codegen (ADR 0053). One drift domain, gitignored, never committed. */
 export const GENERATED_DIR = "nano-generated";
 
+/**
+ * Files that live in `GENERATED_DIR` but are NOT produced by `urban gen`. These are materialized by
+ * a different writer — the runtime SDK shims and the `urban data` / console-host dataops path, which
+ * derives the typed wrappers from the *live* DB (something `urban gen` can't do without a running
+ * datasource). `urban gen`'s stale-file sweep must own only what it emits, so it protects these by
+ * name: it never deletes them even though it didn't (re)write them this run. Basenames, relative to
+ * `GENERATED_DIR`. Keep in sync with the emitters' filename constants (DOMAIN_BINDINGS,
+ * WORKER_BINDINGS_TS, MESSAGE_BINDINGS_TS, DOMAIN_MODEL_JSON) + the `./data-sdk.ts`/`./worker-sdk.ts`
+ * shim imports the generated wrappers reference.
+ */
+export const RUNTIME_MATERIALIZED_ARTIFACTS: readonly string[] = [
+  "domain.ts",
+  "workers.ts",
+  "messages.ts",
+  "domain.json",
+  "data-sdk.ts",
+  "worker-sdk.ts",
+];
+
 /** Stable ordering so artifact lists compare deterministically. */
 export function sortArtifacts(a: DerivedArtifact[]): DerivedArtifact[] {
   return [...a].sort((x, y) => (x.path < y.path ? -1 : x.path > y.path ? 1 : 0));

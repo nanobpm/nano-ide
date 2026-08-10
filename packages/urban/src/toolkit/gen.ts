@@ -4,7 +4,7 @@
 // pure; all IO is confined here behind a tiny FS port so the same code runs on Node and Deno.
 
 import type { DerivedArtifact } from "./artifact.ts";
-import { isAbsolutePath, sortArtifacts } from "./artifact.ts";
+import { GENERATED_DIR, isAbsolutePath, RUNTIME_MATERIALIZED_ARTIFACTS, sortArtifacts } from "./artifact.ts";
 import { deriveMigrations, type ToolkitManifest } from "./derivers/migrations.ts";
 import { deriveDomain } from "./derivers/domain.ts";
 import { deriveWorkerBindings, type ModelSource } from "./derivers/worker-io.ts";
@@ -51,6 +51,8 @@ export interface GenResult {
   artifacts: DerivedArtifact[];
   /** Paths that differ from disk (only populated by `check`). */
   drift: string[];
+  /** App-relative paths of stale files removed from `nano-generated/` (only populated in write mode). */
+  swept: string[];
   /** True if any code-first workflow failed to import/derive. */
   incomplete: boolean;
   /** Per-file model-derivation errors (empty on success). */
@@ -199,7 +201,30 @@ export async function runGen(opts: GenOptions & { check?: boolean }): Promise<Ge
     }
   }
 
-  return { artifacts, drift, incomplete: derived.incomplete, modelErrors: derived.errors };
+  // Stale-artifact sweep of `nano-generated/` (clean break, nano-bpm#: gen owns its output dir).
+  // The dir is gitignored and fully codegen-owned, so any file this run did not (re)write is stale
+  // from a prior gen — a renamed or removed artifact (e.g. an old `data_sdk.ts`) whose orphan the
+  // app might still import. Remove it. The one exception is the runtime-materialized set: the SDK
+  // shims + the `urban data`/console dataops wrappers gen does NOT emit but the app needs at runtime
+  // (RUNTIME_MATERIALIZED_ARTIFACTS). Protect those by name. Write mode only; skipped when io.remove
+  // is absent (the sweep is best-effort, mirroring the `.bpmn` sweep above). NOT on `modelsOnly`
+  // (`urban derive`): that path derives only models, so `artifacts` carries no `nano-generated/*` and
+  // sweeping would wrongly wipe the type-contract outputs a prior `urban gen` wrote.
+  const swept: string[] = [];
+  if (!opts.check && !opts.modelsOnly && !derived.incomplete && io.remove) {
+    const keep = new Set(
+      artifacts.map((a) => a.path).filter((p) => p.startsWith(`${GENERATED_DIR}/`)),
+    );
+    for (const name of RUNTIME_MATERIALIZED_ARTIFACTS) keep.add(`${GENERATED_DIR}/${name}`);
+    for (const name of await io.listDir(join(root, GENERATED_DIR))) {
+      const rel = `${GENERATED_DIR}/${name}`;
+      if (keep.has(rel)) continue;
+      await io.remove(join(root, rel));
+      swept.push(rel);
+    }
+  }
+
+  return { artifacts, drift, swept: swept.sort(), incomplete: derived.incomplete, modelErrors: derived.errors };
 }
 
 export { dirOf, join as joinPath };

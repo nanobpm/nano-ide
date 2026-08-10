@@ -146,8 +146,14 @@ test("renderActionForm supports a publishMessage action (message-started process
   assert.match(js, /p\.action\.kind === "publishMessage"/);
   assert.match(js, /variables\[p\.action\.correlationKeyField\]/);
   assert.match(js, /"\/app\/actions\/message"/);
+  // The trimmed correlation key is written back as the variable, so the value a
+  // worker reads matches the key the message was correlated on.
+  assert.match(js, /variables\[p\.action\.correlationKeyField\] = correlationKey/);
   // startProcess remains the default/back-compat branch.
   assert.match(js, /"\/app\/actions\/start\/" \+ encodeURIComponent\(p\.action\.process\)/);
+  // A missing action is reported clearly instead of throwing on p.action.process.
+  assert.match(js, /if \(!p\.action \|\| !p\.action\.process\)/);
+  assert.match(js, /no action configured/);
 });
 
 test("the renderer bridges the console theme over postMessage", async () => {

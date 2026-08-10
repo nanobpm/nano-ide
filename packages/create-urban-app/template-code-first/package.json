@@ -17,7 +17,7 @@
     "test": "node --test --experimental-strip-types \"tests/**/*.test.ts\""
   },
   "dependencies": {
-    "@nanobpm/urban": "^0.24.0"
+    "@nanobpm/urban": "^0.31.0"
   },
   "devDependencies": {
     "@nanobpm/urban-testkit": "^0.1.0"

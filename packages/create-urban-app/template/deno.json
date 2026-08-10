@@ -1,15 +1,15 @@
 {
   "tasks": {
-    "check": "deno run -A npm:@nanobpm/urban@^0.24.0 check",
-    "gen": "deno run -A npm:@nanobpm/urban@^0.24.0 gen",
-    "gen:check": "deno run -A npm:@nanobpm/urban@^0.24.0 gen --check",
-    "start": "deno run -A npm:@nanobpm/urban@^0.24.0 run",
-    "dev": "deno run -A npm:@nanobpm/urban@^0.24.0 dev",
-    "deploy": "deno run -A npm:@nanobpm/urban@^0.24.0 deploy",
+    "check": "deno run -A npm:@nanobpm/urban@^0.31.0 check",
+    "gen": "deno run -A npm:@nanobpm/urban@^0.31.0 gen",
+    "gen:check": "deno run -A npm:@nanobpm/urban@^0.31.0 gen --check",
+    "start": "deno run -A npm:@nanobpm/urban@^0.31.0 run",
+    "dev": "deno run -A npm:@nanobpm/urban@^0.31.0 dev",
+    "deploy": "deno run -A npm:@nanobpm/urban@^0.31.0 deploy",
     "test": "deno test -A tests/"
   },
   "imports": {
-    "@nanobpm/urban": "npm:@nanobpm/urban@^0.24.0",
+    "@nanobpm/urban": "npm:@nanobpm/urban@^0.31.0",
     "@nanobpm/urban-testkit": "npm:@nanobpm/urban-testkit@^0.1.0"
   },
   "nodeModulesDir": "auto"

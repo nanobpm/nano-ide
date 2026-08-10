@@ -242,15 +242,15 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   // Normalize the manifest base the same way actions[] routes do (shared normalizeRoutePath):
   // ensure a leading "/", strip trailing slashes, and fall back when empty — otherwise a base
   // like "app/api" would never match request paths, which always start with "/".
-  const base = normalizeRoutePath(binding.base, "/app/api");
+  //
+  // The api `base` and the docs routing are derived TOGETHER by the shared helper (ADR 0058) so
+  // this module (which serves the docs) and `apiDocsPath` (which links to them from the pages
+  // shell) stay in lockstep with a single normalization of `binding.base` — no second, drifting
+  // copy of that logic here. The spec JSON is served under the docs path so the operations
+  // namespace stays purely operations.
+  const { base, docsEnabled, docsBase } = resolveApiRoutes(binding);
   const dir = binding.dir ?? "operations";
   const surfaceEject = binding.eject === true;
-
-  // Human API docs (ADR 0058): the Swagger UI base + whether it is enabled, resolved by the
-  // shared helper so this (which serves the docs) and `apiDocsPath` (which links to them from
-  // the pages shell) stay in lockstep. The spec JSON is served under the docs path so the
-  // operations namespace stays purely operations.
-  const { docsEnabled, docsBase } = resolveApiRoutes(binding);
   const specRoutePath = `${docsBase}/openapi.json`;
 
   // Resolve + parse the spec lazily on first request and cache it (mirroring the lazy module load
@@ -544,9 +544,20 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   };
   const docsTitle = `${ctx.manifest.name ?? "App"} — API docs`;
   const serveDocs = (): HttpResponse => html(swaggerUiPage(docsTitle, specRoutePath));
+  // A permanent redirect for the trailing-slash variant (`${docsBase}/`). The router only does
+  // exact matches for non-prefix routes, so without this a reverse proxy or browser that appends
+  // a slash would 404 on the Swagger UI. 308 preserves the method and points at the canonical
+  // (slash-less) `docsBase` that `apiDocsPath` and every internal link already use.
+  const redirectDocsSlash = (): HttpResponse => ({ status: 308, headers: { location: docsBase } });
   const docsRoutes: Route[] = docsEnabled
     ? [
         { method: "GET", path: docsBase, source: `api-docs:${binding.spec}`, handler: serveDocs },
+        {
+          method: "GET",
+          path: `${docsBase}/`,
+          source: `api-docs:${binding.spec}`,
+          handler: redirectDocsSlash,
+        },
         {
           method: "GET",
           path: specRoutePath,

@@ -474,6 +474,15 @@ test("serves the Swagger UI page at {base}-docs by default", async () => {
   assert.match(body, /\/app\/api-docs\/openapi\.json/);
 });
 
+test("the trailing-slash docs variant 308-redirects to the canonical path", async () => {
+  const { router } = build({ spec: "openapi.json" }, {});
+  // The router exact-matches non-prefix routes, so `${base}-docs/` (common from proxies/browsers)
+  // would 404 without an explicit alias. It must permanent-redirect to the slash-less canonical.
+  const res = await router(req("GET", "/app/api-docs/"));
+  assert.equal(res.status, 308);
+  assert.equal(res.headers?.["location"], "/app/api-docs");
+});
+
 test("docs default on is reflected in describe()", () => {
   const { handle } = buildHandle({ spec: "openapi.json" });
   const d = handle.describe();

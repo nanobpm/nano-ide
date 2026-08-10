@@ -12,7 +12,7 @@
 	},
 
 	"api": {
-		"spec": "openapi.json",
+		"spec": "openapi.yaml",
 		"dir": "operations"
 	},
 

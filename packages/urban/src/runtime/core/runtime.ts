@@ -18,6 +18,7 @@ import { mountConnectors } from "./modules/connectors.ts";
 import { mountSurfaces } from "./modules/surfaces.ts";
 import { mountTriggers } from "./modules/triggers.ts";
 import { mountInstanceTracking } from "./modules/instance-tracking.ts";
+import type { SchedulerDeps } from "./modules/scheduler.ts";
 import { mountSecurity, type SecurityPolicy } from "./modules/security.ts";
 
 /** Resolve the HTTP port: explicit option, else $PORT, else 8090. Throws a clear
@@ -76,6 +77,15 @@ export interface CreateUrbanAppOptions {
    *  `name → content` map). Merged over the manifest's `models.templates` (this wins on
    *  collision). See `deployModels`. */
   templates?: TemplateSource;
+  /**
+   * Injectable timer + clock seam driving every background loop (the cron trigger loops
+   * and the instance-tracking reconciler). Defaults to the live scheduler (real timers,
+   * wall clock). The e2e test kit injects a manual scheduler so those loops advance
+   * deterministically over a virtual clock — the single seam that makes a whole-app
+   * `settle()` possible. Threaded verbatim into `mountTriggers` and `mountInstanceTracking`
+   * so one injected scheduler drives them both (no per-module wiring, no drift).
+   */
+  scheduler?: SchedulerDeps;
 }
 
 export interface UrbanApp {
@@ -210,13 +220,13 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
           describe.surfaces = s.describe();
         }
         if (flags.triggers) {
-          const t = mountTriggers(ctx, api);
+          const t = mountTriggers(ctx, api, opts.scheduler);
           routes.push(...t.routes);
           mounted.push(t);
           describe.triggers = t.describe?.();
         }
         if (flags.instanceTracking && (manifest.instanceTracking?.length ?? 0) > 0) {
-          const it = mountInstanceTracking(ctx, api);
+          const it = mountInstanceTracking(ctx, api, opts.scheduler);
           mounted.push(it);
           describe.instanceTracking = it.describe?.();
         }

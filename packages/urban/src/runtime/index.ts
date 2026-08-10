@@ -119,6 +119,8 @@ export { evalCorrelation } from "./core/modules/triggers.ts";
 export { deployModels } from "./core/modules/deploy.ts";
 export { applyTemplates, resolveTemplates } from "./core/modules/templates.ts";
 export type { TemplateApplication, TemplateSource } from "./core/modules/templates.ts";
+export { defaultScheduler, MAX_TIMER_DELAY_MS } from "./core/modules/scheduler.ts";
+export type { SchedulerDeps } from "./core/modules/scheduler.ts";
 
 // Adapters + engine + run entrypoint
 export { createNodeHost } from "./adapters/node.ts";

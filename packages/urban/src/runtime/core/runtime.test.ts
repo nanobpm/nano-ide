@@ -1,10 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeHost } from "../adapters/node.ts";
 import { createUrbanApp, resolvePort } from "./runtime.ts";
+import type { SchedulerDeps } from "./modules/scheduler.ts";
 import { runFromEnv } from "../run.ts";
 import { isRecord } from "./guards.ts";
 import type {
@@ -401,6 +402,57 @@ test("treats NANOBPMN_APP_HANDSHAKE other than \"1\" as opt-out", async () => {
   } finally {
     if (prev === undefined) delete process.env.NANOBPMN_APP_HANDSHAKE;
     else process.env.NANOBPMN_APP_HANDSHAKE = prev;
+    await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// A minimal deterministic scheduler seam: records armed timers so a test can assert the
+// injected scheduler — not the live one — drives createUrbanApp's background loops.
+function countingScheduler(): SchedulerDeps & { armed: () => number } {
+  let clock = 0;
+  let armed = 0;
+  return {
+    now: () => clock,
+    setTimer: (_fn, _ms) => {
+      armed += 1;
+      return armed;
+    },
+    clearTimer: () => {},
+    armed: () => armed,
+  };
+}
+
+async function makeTrackingFixture(): Promise<string> {
+  const dir = await makeFixture();
+  const manifestPath = join(dir, "nano.app.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.instanceTracking = [
+    {
+      table: "crew_tasks",
+      keyField: "id",
+      statusField: "status",
+      activeStatuses: ["claimed"],
+      onTerminated: { set: { status: "abandoned" } },
+      pollMs: 1000,
+    },
+  ];
+  await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+  return dir;
+}
+
+test("threads an injected scheduler into the instance-tracking reconciler loop", async () => {
+  const dir = await makeTrackingFixture();
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const engine = new FakeEngine();
+  const sched = countingScheduler();
+  const app = await createUrbanApp({ host, engine, root: ".", port: 0, scheduler: sched });
+  try {
+    await app.start();
+    // The reconciler arms its first poll on the injected scheduler, not the live one — so the
+    // whole-app settle loop can drive it deterministically over a virtual clock.
+    assert.ok(sched.armed() >= 1, "injected scheduler armed the reconciler poll");
+  } finally {
     await app.stop();
     await rm(dir, { recursive: true, force: true });
   }

@@ -15,3 +15,12 @@ export {
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
 export { runEngineClientContract } from "./contract.ts";
+export { createManualScheduler, type ManualScheduler } from "./manual-scheduler.ts";
+export { createTestHost, type CreateTestHostOptions, type TestHost } from "./test-host.ts";
+export {
+  bootTestApp,
+  type BootTestAppOptions,
+  type RouteRequest,
+  type TestApp,
+  type UiDriver,
+} from "./boot-app.ts";

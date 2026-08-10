@@ -31,9 +31,12 @@
         "title": "Send a greeting",
         "submitLabel": "Greet",
         "action": {
-          "kind": "publishMessage",
-          "message": "__APP_ID__.greet-requested",
-          "correlationKeyField": "who"
+          "path": "/app/actions/message",
+          "body": {
+            "name": "__APP_ID__.greet-requested",
+            "correlationKey": "{{form.who}}",
+            "variables": "{{form}}"
+          }
         },
         "fields": [{ "key": "who", "label": "Who", "type": "text" }]
       }

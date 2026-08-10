@@ -228,12 +228,13 @@ test("a malformed spec surfaces as a 500, not a boot failure", async () => {
   assert.match(JSON.parse(res.body!).error, /failed to load/);
 });
 
-test("a manifest api.base without a leading slash is normalized so routes still match", async () => {
+test("a leftover manifest api.base is ignored — operations always mount at the fixed /app/api", async () => {
   let got: Record<string, string> | undefined;
   const { router } = build(
-    { spec: "openapi.json", base: "app/api" }, // no leading slash
+    { spec: "openapi.json", base: "/somewhere/else" }, // base is no longer honoured
     { "/app/operations/getInvoice": { default: (i: { params: Record<string, string> }) => { got = i.params; return { body: { ok: true } }; } } },
   );
+  assert.equal((await router(req("GET", "/somewhere/else/invoices/42"))).status, 404);
   const res = await router(req("GET", "/app/api/invoices/42"));
   assert.equal(res.status, 200);
   assert.deepEqual(got, { id: "42" });
@@ -393,10 +394,10 @@ test("an op declaring no requestBody gets body:undefined at runtime (matches der
   assert.equal(seenBody, undefined);
 });
 
-test("readApiBinding trims whitespace on base/dir/spec so benign formatting can't break resolution", async () => {
+test("readApiBinding trims whitespace on dir/spec so benign formatting can't break resolution", async () => {
   let got: Record<string, string> | undefined;
   const { router, imported } = build(
-    { spec: "  openapi.json  ", base: "  app/api  ", dir: "  operations  " },
+    { spec: "  openapi.json  ", dir: "  operations  " },
     { "/app/operations/getInvoice": { default: (i: { params: Record<string, string> }) => { got = i.params; return { body: { ok: true } }; } } },
   );
   const res = await router(req("GET", "/app/api/invoices/42"));
@@ -515,7 +516,7 @@ test("a string docs overrides the UI route (and the spec route beneath it)", asy
 
 test("apiDocsPath resolves the UI route (and honours disable / override)", () => {
   assert.equal(apiDocsPath({ api: { spec: "openapi.json" } }), "/app/api-docs");
-  assert.equal(apiDocsPath({ api: { spec: "openapi.json", base: "/x" } }), "/x-docs");
+  assert.equal(apiDocsPath({ api: { spec: "openapi.json", base: "/x" } }), "/app/api-docs"); // base ignored
   assert.equal(apiDocsPath({ api: { spec: "openapi.json", docs: "/help" } }), "/help");
   assert.equal(apiDocsPath({ api: { spec: "openapi.json", docs: false } }), undefined);
   assert.equal(apiDocsPath({}), undefined);

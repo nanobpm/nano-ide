@@ -2,7 +2,7 @@
 // instead of hand-rolled imperative handlers, an author declares `api: { spec }` in the manifest and
 // writes one delegate module per `operationId`. This runtime reads the SAME OpenAPI document the
 // toolkit deriver turns into types (via the shared `openapi/spec.ts`), mounts one dispatcher over the
-// `api.base` namespace, and for each request: parses → validates params/query/body against the spec →
+// fixed `/app/api` namespace, and for each request: parses → validates params/query/body against the spec →
 // 400 with a structured error → resolves + calls the operationId delegate (validated, typed input +
 // the injected AppApi, exactly like a worker/action handler) → serializes the result.
 //
@@ -38,14 +38,18 @@ import {
 export interface ApiBinding {
   spec: string;
   dir?: string;
-  base?: string;
   validateResponses?: "dev" | "always" | "never";
   eject?: boolean;
-  /** Human API docs (Swagger UI). `true`/omitted → on at `${base}-docs` (ADR 0058); `false` →
+  /** Human API docs (Swagger UI). `true`/omitted → on at `/app/api-docs` (ADR 0058); `false` →
    *  off; a string → a custom absolute route to mount the UI under. Spec-first apps get docs
    *  for free — the UI reads the SAME OpenAPI document the runtime routes + validates from. */
   docs?: boolean | string;
 }
+
+/** The canonical, non-configurable mount prefix for an app's OpenAPI operations. Operations always
+ *  live under `/app/api` so page actions, links, and any `callRoute` can name an operation path as a
+ *  stable framework constant (`/app/api/<op path>`) — there is no per-app `base` knob to drift. */
+const API_BASE = "/app/api";
 
 /** Pinned Swagger UI dist served from a CDN, so the docs UI adds zero bundle/runtime deps to an
  *  Urban app (matching the deps-free spirit of the rest of the surface — validators are standalone,
@@ -152,7 +156,6 @@ function readApiBinding(manifest: unknown): ApiBinding | undefined {
   const spec = Reflect.get(raw, "spec");
   if (typeof spec !== "string" || spec.trim().length === 0) return undefined;
   const dir = Reflect.get(raw, "dir");
-  const base = Reflect.get(raw, "base");
   const validateResponses = Reflect.get(raw, "validateResponses");
   const eject = Reflect.get(raw, "eject");
   const docs = Reflect.get(raw, "docs");
@@ -160,7 +163,6 @@ function readApiBinding(manifest: unknown): ApiBinding | undefined {
   return {
     spec: spec.trim(),
     dir: typeof dir === "string" && dir.trim().length > 0 ? dir.trim() : undefined,
-    base: typeof base === "string" && base.trim().length > 0 ? base.trim() : undefined,
     validateResponses:
       validateResponses === "dev" || validateResponses === "always" || validateResponses === "never"
         ? validateResponses
@@ -172,18 +174,19 @@ function readApiBinding(manifest: unknown): ApiBinding | undefined {
   };
 }
 
-/** Resolve the api `base` + docs routing from a binding, in ONE place, so `mountApi` (which
- *  serves the docs) and `apiDocsPath` (which the pages surface links to) can never drift. */
+/** Resolve the api `base` + docs routing, in ONE place, so `mountApi` (which serves the docs) and
+ *  `apiDocsPath` (which the pages surface links to) can never drift. The operation base is the fixed
+ *  `/app/api` constant; only the docs route remains manifest-configurable. */
 function resolveApiRoutes(binding: ApiBinding): {
   base: string;
   docsEnabled: boolean;
   docsBase: string;
 } {
-  const base = normalizeRoutePath(binding.base, "/app/api");
+  const base = API_BASE;
   const docsEnabled = binding.docs !== false;
-  // Swagger UI at a SIBLING of the base (`${base}-docs`, e.g. /app/api-docs), never a subpath
-  // of it — so the docs routes can't collide with, or be shadowed by, the operation dispatcher
-  // that owns the `${base}/` prefix (a string `docs` overrides the whole route).
+  // Swagger UI at a SIBLING of the base (`/app/api-docs`), never a subpath of it — so the docs
+  // routes can't collide with, or be shadowed by, the operation dispatcher that owns the
+  // `${base}/` prefix (a string `docs` overrides the whole route).
   const docsBase = normalizeRoutePath(
     typeof binding.docs === "string" ? binding.docs : `${base}-docs`,
     `${base}-docs`,
@@ -239,15 +242,11 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   const binding = readApiBinding(ctx.manifest);
   if (!binding) return { name: "api", routes: [], describe: () => ({ api: "disabled" }) };
 
-  // Normalize the manifest base the same way actions[] routes do (shared normalizeRoutePath):
-  // ensure a leading "/", strip trailing slashes, and fall back when empty — otherwise a base
-  // like "app/api" would never match request paths, which always start with "/".
-  //
-  // The api `base` and the docs routing are derived TOGETHER by the shared helper (ADR 0058) so
-  // this module (which serves the docs) and `apiDocsPath` (which links to them from the pages
-  // shell) stay in lockstep with a single normalization of `binding.base` — no second, drifting
-  // copy of that logic here. The spec JSON is served under the docs path so the operations
-  // namespace stays purely operations.
+  // The api `base` is the fixed `/app/api` constant; only the docs routing is derived here. Both
+  // come from the shared helper (ADR 0058) so this module (which serves the docs) and `apiDocsPath`
+  // (which links to them from the pages shell) stay in lockstep — no second, drifting copy of that
+  // logic here. The spec JSON is served under the docs path so the operations namespace stays
+  // purely operations.
   const { base, docsEnabled, docsBase } = resolveApiRoutes(binding);
   const dir = binding.dir ?? "operations";
   const surfaceEject = binding.eject === true;

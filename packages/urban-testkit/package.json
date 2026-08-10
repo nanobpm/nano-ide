@@ -1,0 +1,58 @@
+{
+  "name": "@nanobpm/urban-testkit",
+  "version": "0.1.0",
+  "description": "Generic, in-CI e2e test kit for Urban apps: a WASM-backed EngineClient adapter and a reusable engine contract suite. Install as a devDependency of your Urban app — the WASM engine never lands in production installs of @nanobpm/urban.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "nanobpm",
+    "urban",
+    "testing",
+    "e2e",
+    "wasm",
+    "bpmn"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/urban-testkit"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./source": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+    "test:deno": "deno test -A --no-check src/"
+  },
+  "dependencies": {
+    "@nanobpm/engine-wasm": "^0.4.0"
+  },
+  "peerDependencies": {
+    "@nanobpm/urban": ">=0.32.0"
+  },
+  "devDependencies": {
+    "@nanobpm/urban": ">=0.32.0",
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  }
+}

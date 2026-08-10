@@ -15,6 +15,7 @@ processes/*.bpmn      BPMN process models
 forms/*.form          form-js user task forms
 db/migrations/*.sql   datasource schema (SQLite by default)
 workers/*.ts          service-task handlers (host-agnostic TypeScript)
+tests/*.test.ts       e2e tests (@nanobpm/urban-testkit, in-process WASM engine)
 main.ts               entrypoint (calls the Urban runtime)
 ```
 
@@ -95,6 +96,20 @@ Add an endpoint: declare the path + a unique `operationId` in `openapi.json`, th
 `operations/<operationId>.ts` exporting `defineOperation("<operationId>", (input, app) => …)`.
 `npm run dev` picks it up on save.
 
+
+## Test it
+
+A starter e2e test ships in `tests/`, powered by
+[`@nanobpm/urban-testkit`](https://www.npmjs.com/package/@nanobpm/urban-testkit) (a
+devDependency). It drives the app against an in-process WASM build of the engine — no
+server, no wall-clock waits, CI-friendly.
+
+```bash
+npm test
+```
+<!-- if:deno -->
+On Deno: `deno task test`.
+<!-- /if:deno -->
 
 ## Generated artifacts
 

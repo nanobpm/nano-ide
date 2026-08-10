@@ -15,12 +15,14 @@
 		"gen:check": "urban gen --check",
 		"start": "urban run",
 		"dev": "urban dev",
-		"deploy": "urban deploy"
+		"deploy": "urban deploy",
+		"test": "node --test --experimental-strip-types \"tests/**/*.test.ts\""
 	},
 	"dependencies": {
 		"@nanobpm/urban": "^0.32.0"
 	},
 	"devDependencies": {
-		"@biomejs/biome": "2.5.7"
+		"@biomejs/biome": "2.5.7",
+		"@nanobpm/urban-testkit": "^0.1.0"
 	}
 }

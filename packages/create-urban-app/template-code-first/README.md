@@ -12,6 +12,7 @@ nano.app.json          the manifest — datasource, types, surfaces
 workflows/*.ts         code-first processes (defineFlow) — the model is derived
 scripts/greet.ts       start an instance (WorkflowClient.start)
 db/migrations/*.sql    datasource schema (SQLite by default)
+tests/*.test.ts        e2e tests (@nanobpm/urban-testkit, in-process WASM engine)
 main.ts                entrypoint: runs Urban, deploys the flow, hosts the worker
 ```
 
@@ -58,6 +59,20 @@ Then start a greeting (in another terminal, with the app running):
 ```bash
 npm run greet -- Adam
 ```
+
+## Test it
+
+A starter e2e test ships in `tests/`, powered by
+[`@nanobpm/urban-testkit`](https://www.npmjs.com/package/@nanobpm/urban-testkit) (a
+devDependency). It drives the app against an in-process WASM build of the engine — no
+server, no wall-clock waits, CI-friendly.
+
+```bash
+npm test
+```
+<!-- if:deno -->
+On Deno: `deno task test`.
+<!-- /if:deno -->
 
 ## Generated artifacts
 

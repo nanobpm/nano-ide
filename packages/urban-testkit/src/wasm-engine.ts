@@ -214,7 +214,10 @@ export class WasmEngineClient implements EngineClient {
       .map((t) => ({
         userTaskKey: str(t.key),
         elementId: typeof t.elementId === "string" ? t.elementId : undefined,
-        variables: this.#instanceVariables(str(t.instanceKey)),
+        // Match the live SdkEngineClient: surface the task-local variables
+        // attached to the user-task item (undefined when absent), not the
+        // whole instance's variables (see runtime/engine/nanosdk.ts).
+        variables: isRecord(t.variables) ? t.variables : undefined,
       }));
   }
 

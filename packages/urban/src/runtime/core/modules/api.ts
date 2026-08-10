@@ -369,7 +369,7 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
         const mod = await ctx.host.importModule(resolveAppPath(ctx.root, rel));
         const ops = mod.operations;
         if (!isRecord(ops)) {
-          throw new Error("nano-generated/controller.ts must export an `operations` registry");
+          throw new Error("nano-generated/controller must export an `operations` registry");
         }
         return ops;
       })().catch((e) => {

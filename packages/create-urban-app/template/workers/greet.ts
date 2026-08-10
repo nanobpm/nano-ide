@@ -7,6 +7,11 @@
 //
 // The handler receives the job and the app API: `app.data` (typed datasource),
 // `app.engine`, `app.env`, `app.log`. Return a map to complete the job with variables.
+//
+// `app.log` is a structured logger auto-tagged with this job's correlation context
+// ({ jobKey, jobType, processInstanceKey, elementId }), so every line ties back to the
+// instance that produced it. Use `app.log.info/warn/error/debug(msg, fields)` and
+// `app.log.child(bindings)` to bind more context for a scope.
 
 import type { AppApi, EngineJob } from "@nanobpm/urban";
 
@@ -17,9 +22,14 @@ export async function greet(
 	const who = String(job.variables.who ?? "world");
 	const message = `Hello, ${who}!`;
 
-	const repo = app.data.repo("greeting");
-	repo.insert({ who, message, createdAt: new Date().toISOString() });
+	try {
+		const repo = app.data.repo("greeting");
+		repo.insert({ who, message, createdAt: new Date().toISOString() });
+	} catch (err) {
+		app.log.error("failed to persist greeting", { who, error: String(err) });
+		throw err;
+	}
 
-	app.log("info", "greeted", { who });
+	app.log.info("greeted", { who });
 	return { message };
 }

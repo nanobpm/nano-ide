@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createLogger } from "../logger.ts";
 import assert from "node:assert/strict";
 import type { AppApi, RuntimeContext } from "../context.ts";
 import type { AppManifest } from "../manifest.ts";
@@ -36,7 +37,7 @@ const engine: EngineClient = {
 const data = new DataLayer(new Map(), undefined, {});
 
 function appFixture(): AppApi {
-  return { manifest: { schemaVersion: 1, id: "t", name: "T" }, data, engine, env: () => undefined, log: () => {} };
+  return { manifest: { schemaVersion: 1, id: "t", name: "T" }, data, engine, env: () => undefined, log: createLogger(() => {}) };
 }
 
 const spec = JSON.stringify({
@@ -88,6 +89,7 @@ function build(
   specText = spec,
   env: (v: string) => string | undefined = () => undefined,
   existsPaths: string[] = [],
+  app: AppApi = appFixture(),
 ): Built {
   const imported: string[] = [];
   const logs: Array<{ level: string; msg: string }> = [];
@@ -114,7 +116,7 @@ function build(
   const manifest: AppManifest = { schemaVersion: 1, id: "t", name: "T" };
   if (api) Reflect.set(manifest, "api", api);
   const ctx: RuntimeContext = { root: "/app", manifest, engine, host };
-  const handle = mountApi(ctx, appFixture());
+  const handle = mountApi(ctx, app);
   const router = makeRouter(handle.routes);
   return { router: (r) => Promise.resolve(router(r)), imported, logs, handle };
 }
@@ -135,6 +137,40 @@ test("no api binding → no routes (no-op for actions-only apps)", () => {
   const { router } = build(undefined, {});
   // makeRouter over an empty route table 404s everything.
   return router(req("GET", "/app/api/invoices/1")).then((res) => assert.equal(res.status, 404));
+});
+
+test("a delegate's app.log is bound to the request's correlation context", async () => {
+  const captured: Array<{ level: string; msg: string; fields?: Record<string, unknown> }> = [];
+  const capturingApp: AppApi = {
+    manifest: { schemaVersion: 1, id: "t", name: "T" },
+    data,
+    engine,
+    env: () => undefined,
+    log: createLogger((level, msg, fields) => {
+      captured.push({ level, msg, fields });
+    }),
+  };
+  const handler: OperationHandler = (_input, app) => {
+    app.log.info("creating invoice", { amount: 5 });
+    return { status: 201, body: { id: "i1", amount: 5 } };
+  };
+  const { router } = build(
+    { spec: "openapi.json", dir: "operations" },
+    { "/app/operations/createInvoice": { default: handler } },
+    spec,
+    () => undefined,
+    [],
+    capturingApp,
+  );
+  const res = await router(req("POST", "/app/api/invoices", { body: JSON.stringify({ id: "i1", amount: 5 }) }));
+  assert.equal(res.status, 201);
+  assert.equal(captured.length, 1);
+  assert.equal(captured[0].level, "info");
+  assert.equal(captured[0].msg, "creating invoice");
+  assert.deepEqual(
+    { ...captured[0].fields },
+    { method: "POST", path: "/invoices", operationId: "createInvoice", amount: 5 },
+  );
 });
 
 test("routes an operation to its delegate with validated params + body", async () => {

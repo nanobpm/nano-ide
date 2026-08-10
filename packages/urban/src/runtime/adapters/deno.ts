@@ -17,6 +17,7 @@ import type {
   SqliteDb,
 } from "../core/host.ts";
 import { resolveModulePath } from "../core/module-path.ts";
+import { formatLogRecord, levelEnabled, parseLogLevel } from "../core/logger.ts";
 
 type SqliteParam = string | number | bigint | Uint8Array | null;
 
@@ -64,16 +65,28 @@ export interface DenoHostOptions {
   importNonce?: string;
 }
 
+/** Read `URBAN_LOG_LEVEL` without requiring `--allow-env`. `Deno.env.get` throws when env access is
+ *  not granted, but an app that only logs shouldn't be forced to open env permission just to emit a
+ *  line — so treat a permission (or any) error as an unset value and let logging fall back to the
+ *  default `info` level. Logging must stay safe by default. */
+function readLogLevelEnv(): string | undefined {
+  try {
+    return Deno.env.get("URBAN_LOG_LEVEL");
+  } catch {
+    return undefined;
+  }
+}
+
 export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
   const cwd = opts.cwd ?? Deno.cwd();
   const abs = (p: string) => (isAbsolute(p) ? p : resolve(cwd, p));
   const log: HostContext["log"] =
     opts.log ??
     ((level, msg, fields) => {
-      const line = fields ? `${msg} ${JSON.stringify(fields)}` : msg;
-      (level === "error" ? console.error : level === "warn" ? console.warn : console.log)(
-        `[urban] ${line}`,
-      );
+      if (!levelEnabled(level, parseLogLevel(readLogLevelEnv()))) return;
+      // console.* appends the newline; NDJSON stays one object per line. warn/error → stderr.
+      const line = formatLogRecord(level, msg, fields, Date.now());
+      (level === "warn" || level === "error" ? console.error : console.log)(line);
     });
 
   return {

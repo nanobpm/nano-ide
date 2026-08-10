@@ -304,6 +304,28 @@ test("task-inbox /api/complete returns 400 on a malformed JSON body", async () =
   }
 });
 
+test("app.log is an app-level structured logger routed to the host sink", async () => {
+  const dir = await makeFixture();
+  const logs: Array<{ level: string; msg: string; fields?: Record<string, unknown> }> = [];
+  const host = createNodeHost({ cwd: dir, log: (level, msg, fields) => logs.push({ level, msg, fields }) });
+  const engine = new FakeEngine();
+  const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+  app.log.info("booting", { pid: 1 });
+  assert.deepEqual(
+    // `fields` is the merged bag, deliberately a null-prototype object (untrusted-key hardening);
+    // spread it so the assertion compares contents, not prototype.
+    logs.filter((l) => l.msg === "booting").map((l) => ({ ...l, fields: { ...l.fields } })),
+    [{ level: "info", msg: "booting", fields: { pid: 1 } }],
+  );
+  // ergonomic methods + child binding are present on the handle logger
+  const bound = app.log.child({ region: "eu" });
+  bound.warn("slow");
+  assert.deepEqual(
+    logs.filter((l) => l.msg === "slow").map((l) => ({ ...l, fields: { ...l.fields } })),
+    [{ level: "warn", msg: "slow", fields: { region: "eu" } }],
+  );
+});
+
 test("resolvePort prefers explicit, then $PORT, then 8090; rejects bad $PORT", () => {
   assert.equal(resolvePort(3000, "9999"), 3000);
   assert.equal(resolvePort(undefined, "9999"), 9999);

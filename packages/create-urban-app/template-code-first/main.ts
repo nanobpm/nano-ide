@@ -35,23 +35,25 @@ await client.deploy(greet);
 const worker = new Worker({
 	baseUrl: BASE_URL,
 	workflows: [greet],
-	onError: (err) => console.error("worker error:", err),
+	onError: (err) => app.log.error("worker error", { error: String(err) }),
 });
 worker.start();
 
 const info = app.inspect();
-console.log(
-	`▲ ${info.name} running (code-first) — surfaces on :${info.httpPort ?? "n/a"}; ` +
-		`deployed "${greet.id}" against ${BASE_URL}`,
-);
-console.log(`  start a greeting: npm run greet -- Adam`);
+app.log.info("started (code-first)", {
+	name: info.name,
+	httpPort: info.httpPort ?? null,
+	flow: greet.id,
+	baseUrl: BASE_URL,
+});
+app.log.info("start a greeting with: npm run greet -- Adam");
 
 // ── graceful shutdown ─────────────────────────────────────────────────────────
 let shuttingDown = false;
 async function drainAndExit(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
-	console.log("\nshutting down…");
+	app.log.info("shutting down");
 	try {
 		await worker.stop();
 	} catch {

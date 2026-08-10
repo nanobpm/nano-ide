@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createLogger } from "../logger.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -148,7 +149,9 @@ async function withHarness(
     data,
     engine,
     env: () => undefined,
-    log: (level, msg) => logs.push({ level, msg }),
+    log: createLogger((level, msg) => {
+      logs.push({ level, msg });
+    }),
   };
   return {
     api,

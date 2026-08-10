@@ -640,8 +640,17 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     // required), so pass `undefined` to those handlers rather than leaking a parsed value through
     // a body-less type.
     const handlerBody = op.requestBodySchema !== undefined || op.requestBodyRequired ? body : undefined;
+    // Hand the delegate an AppApi whose `log` is bound to this request's correlation context, so its
+    // lines self-tag with `{ method, path, operationId }` without the author threading it.
+    const requestApp: AppApi = {
+      ...app,
+      log: app.log.child({ method, path: op.path, operationId: op.operationId }),
+    };
     try {
-      const result = await handler({ req, params: coercedParams, query: coercedQuery, body: handlerBody }, app);
+      const result = await handler(
+        { req, params: coercedParams, query: coercedQuery, body: handlerBody },
+        requestApp,
+      );
       if (!result) return { status: 204 };
       const status = result.status ?? 200;
       // Optional response validation (dev by default): warn-only, never blocks the response.

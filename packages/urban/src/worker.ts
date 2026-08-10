@@ -19,3 +19,4 @@
 export type { AppJobHandler } from "./runtime/core/modules/workers.ts";
 export type { EngineJob, JobHandler } from "./runtime/core/host.ts";
 export type { AppApi } from "./runtime/core/context.ts";
+export type { Logger, LogLevel, LogFields } from "./runtime/core/logger.ts";

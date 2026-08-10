@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createLogger } from "../logger.ts";
 import assert from "node:assert/strict";
 import type { AppApi, RuntimeContext } from "../context.ts";
 import type { EngineClient, HostContext, HttpRequest } from "../host.ts";
@@ -46,7 +47,9 @@ function fakeApp(): { app: AppApi; calls: EngineCall[]; logs: Array<{ level: str
     data: new DataLayer(new Map(), undefined, {}),
     engine,
     env: () => undefined,
-    log: (level: string, msg: string) => logs.push({ level, msg }),
+    log: createLogger((level: string, msg: string) => {
+      logs.push({ level, msg });
+    }),
   };
   return { app, calls, logs };
 }

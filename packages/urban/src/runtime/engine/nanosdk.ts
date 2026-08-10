@@ -138,7 +138,7 @@ export interface NanoSdkClient {
   close?(): void | Promise<void>;
 }
 
-type Log = (level: "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>) => void;
+type Log = (level: "debug" | "info" | "warn" | "error", msg: string, fields?: Record<string, unknown>) => void;
 
 /**
  * An `EngineClient` backed entirely by a `@nanobpm/nano-sdk` client. Deploy, create,

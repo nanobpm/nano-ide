@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { runDev, shouldReload, type DevDeps } from "./devserver.ts";
 import type { HostContext } from "./core/host.ts";
 import type { UrbanApp } from "./core/runtime.ts";
+import { createLogger } from "./core/logger.ts";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -226,6 +227,7 @@ function fakeApp(stops: string[], id: string): UrbanApp {
       stops.push(id);
     },
     inspect: () => ({ app: id }),
+    log: createLogger(() => {}),
     data: undefined,
     security: undefined,
     httpPort: undefined,

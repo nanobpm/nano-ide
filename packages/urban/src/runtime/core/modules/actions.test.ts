@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createLogger } from "../logger.ts";
 import assert from "node:assert/strict";
 import type { AppApi, RuntimeContext } from "../context.ts";
 import type { EngineClient, HostContext, HttpRequest } from "../host.ts";
@@ -42,7 +43,7 @@ function appFixture(over: Partial<AppApi> = {}): AppApi {
     data,
     engine,
     env: () => undefined,
-    log: () => {},
+    log: createLogger(() => {}),
     ...over,
   };
 }

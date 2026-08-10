@@ -25,6 +25,8 @@ function readWho(body: unknown): string {
 
 export default defineOperation("createGreeting", async ({ body }, app) => {
 	const who = readWho(body);
+	// `app.log` here is auto-tagged with { method, path, operationId } for this request.
+	app.log.info("greeting requested", { who });
 	await app.engine.publishMessage({
 		name: "__APP_ID__.greet-requested",
 		correlationKey: who,

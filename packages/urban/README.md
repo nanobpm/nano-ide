@@ -100,6 +100,43 @@ The runtime has a single engine client, `SdkEngineClient`, backed by one
 selects the wire transport via `CAMUNDA_TRANSPORT`: `auto` (default) upgrades to
 Falcon on a Nano server and falls back to REST elsewhere.
 
+### Structured logging
+
+Every worker handler and API route delegate receives an `AppApi` whose `log` is a
+level-tagged structured logger (ADR 0061):
+
+```ts
+app.log.info("charge captured", { amount, currency });
+app.log.warn("retrying", { attempt });
+app.log.error("charge failed", { code });
+app.log.debug("gateway response", { raw });   // hidden unless URBAN_LOG_LEVEL=debug
+
+const orderLog = app.log.child({ orderId });    // bind context for a scope
+orderLog.info("shipped");                        // every line carries orderId
+```
+
+The runtime **auto-correlates**: a worker handler's `app.log` is pre-bound to
+`{ jobKey, jobType, processInstanceKey, elementId }` and a route delegate's to
+`{ method, path, operationId }`, so every line you emit is tied to its job/request
+for free.
+
+The `UrbanApp` handle returned by `runFromEnv`/`createUrbanApp` also carries an
+app-level `app.log` (no per-request correlation) for the entrypoint's boot/shutdown
+lines:
+
+```ts
+const app = await runFromEnv();
+app.log.info("started", { httpPort: app.httpPort });
+```
+
+Records are written as **NDJSON** — one JSON object per line,
+`{"ts":…,"level":…,"msg":…, …fields}` — with `warn`/`error` on stderr and
+`debug`/`info` on stdout. `URBAN_LOG_LEVEL` (default `info`) sets the minimum level.
+
+> **Custom hosts:** the `HostContext.log` sink now accepts `"debug"` in addition to
+> `"info" | "warn" | "error"`. A custom host that typed `log` with the narrower union must add a
+> `"debug"` branch to keep satisfying the contract — a breaking change for that surface only.
+
 ### Toolkit — derive artifacts (`urban gen`)
 
 ```ts

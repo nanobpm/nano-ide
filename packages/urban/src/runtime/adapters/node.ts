@@ -20,6 +20,22 @@ import type {
   WatchHandle,
 } from "../core/host.ts";
 import { resolveModulePath } from "../core/module-path.ts";
+import { formatLogLine, levelEnabled, parseLogLevel } from "../core/logger.ts";
+
+/**
+ * The default host log sink: NDJSON to stdout (`debug`/`info`) and stderr (`warn`/`error`), gated by
+ * a minimum level read from `URBAN_LOG_LEVEL` (default `info`) per record so a level change takes
+ * effect without a restart. Writing straight to the stream (not `console.*`) keeps one JSON object
+ * per line so downstream tooling can ingest them (the Nano host does not yet parse or surface these
+ * lines — see ADR 0061).
+ */
+function makeNdjsonLog(minLevel: () => string | undefined): HostContext["log"] {
+  return (level, msg, fields) => {
+    if (!levelEnabled(level, parseLogLevel(minLevel()))) return;
+    const line = formatLogLine(level, msg, fields, Date.now());
+    (level === "warn" || level === "error" ? process.stderr : process.stdout).write(line);
+  };
+}
 
 type SqliteParam = string | number | bigint | Uint8Array | null;
 
@@ -106,13 +122,7 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
   const cwd = opts.cwd ?? process.cwd();
   const abs = (p: string) => (isAbsolute(p) ? p : resolve(cwd, p));
   const log: HostContext["log"] =
-    opts.log ??
-    ((level, msg, fields) => {
-      const line = fields ? `${msg} ${JSON.stringify(fields)}` : msg;
-      (level === "error" ? console.error : level === "warn" ? console.warn : console.log)(
-        `[urban] ${line}`,
-      );
-    });
+    opts.log ?? makeNdjsonLog(() => process.env.URBAN_LOG_LEVEL);
 
   return {
     runtime: "node",

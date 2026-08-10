@@ -147,6 +147,17 @@ test("bootTestApp stops the in-process server so routes are no longer callable",
   );
 });
 
+test("bootTestApp stops the app when the seed step throws", async () => {
+  const dir = await makeFixture();
+  const boom = new Error("seed failed");
+  await assert.rejects(
+    () => bootTestApp(dir, { seed: () => Promise.reject(boom) }),
+    /seed failed/,
+    "a throwing seed rejects the boot and rolls the app back (no leaked engine/router)",
+  );
+  await rm(dir, { recursive: true, force: true });
+});
+
 test("bootTestApp reconciles a terminated instance's tracking row on advanceTime", async () => {
   const dir = await makeFixture();
   const app = await bootTestApp(dir);

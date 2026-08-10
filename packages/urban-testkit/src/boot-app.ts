@@ -133,56 +133,66 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
   });
   await app.start();
 
-  const db = app.data;
-  if (!db) throw new Error("bootTestApp: data layer not mounted (is a data source configured?)");
+  // Past this point the app is running (workers subscribed, engine live, router captured),
+  // so any failure must stop it before rethrowing or it leaks across tests. `app.stop()`
+  // closes the engine too, so no separate engine.close() is needed here.
+  try {
+    const db = app.data;
+    if (!db) throw new Error("bootTestApp: data layer not mounted (is a data source configured?)");
 
-  if (opts.seed) await opts.seed(db);
+    if (opts.seed) await opts.seed(db);
 
-  const ui: UiDriver = {
-    call: async (req) => {
-      const handler = testHost.handler();
-      if (!handler) throw new Error("bootTestApp: no router mounted (did start() run?)");
-      const body = req.body ?? "";
-      return handler({
-        method: req.method,
-        path: req.path,
-        query: toSearchParams(req.query),
-        headers: toHeaders(req.headers),
-        text: () => Promise.resolve(body),
-      });
-    },
-  };
+    const ui: UiDriver = {
+      call: async (req) => {
+        const handler = testHost.handler();
+        if (!handler) throw new Error("bootTestApp: no router mounted (did start() run?)");
+        const body = req.body ?? "";
+        return handler({
+          method: req.method,
+          path: req.path,
+          query: toSearchParams(req.query),
+          headers: toHeaders(req.headers),
+          text: () => Promise.resolve(body),
+        });
+      },
+    };
 
-  async function settle(): Promise<void> {
-    // Fixpoint at the current instant: drain engine work, then fire any due background timer;
-    // a fired timer can enqueue fresh engine work, so loop until nothing fires.
-    for (;;) {
-      await engine.drain();
-      const fired = await scheduler.fireDue();
-      if (fired === 0) break;
-    }
+    const settle = async (): Promise<void> => {
+      // Fixpoint at the current instant: drain engine work, then fire any due background timer;
+      // a fired timer can enqueue fresh engine work, so loop until nothing fires.
+      for (;;) {
+        await engine.drain();
+        const fired = await scheduler.fireDue();
+        if (fired === 0) break;
+      }
+    };
+
+    const advanceTime = async (ms: number): Promise<void> => {
+      // Engine timers first (a BPMN boundary timer may terminate an instance), then the
+      // background-loop timers (so the reconciler poll observes that terminal state), then a
+      // final settle to absorb any follow-on work.
+      await engine.advanceTime(ms);
+      await scheduler.advance(ms);
+      await settle();
+    };
+
+    return {
+      app,
+      engine,
+      db,
+      ui,
+      scheduler,
+      logs: testHost.logs,
+      now: () => scheduler.now(),
+      snapshot: () => engine.snapshot(),
+      settle,
+      advanceTime,
+      stop: () => app.stop(),
+    };
+  } catch (err) {
+    // Roll back a partially-booted app so a failed seed (or a missing data layer) can't leave
+    // the engine/workers/router alive across tests. `app.stop()` closes the engine too.
+    await app.stop();
+    throw err;
   }
-
-  async function advanceTime(ms: number): Promise<void> {
-    // Engine timers first (a BPMN boundary timer may terminate an instance), then the
-    // background-loop timers (so the reconciler poll observes that terminal state), then a
-    // final settle to absorb any follow-on work.
-    await engine.advanceTime(ms);
-    await scheduler.advance(ms);
-    await settle();
-  }
-
-  return {
-    app,
-    engine,
-    db,
-    ui,
-    scheduler,
-    logs: testHost.logs,
-    now: () => scheduler.now(),
-    snapshot: () => engine.snapshot(),
-    settle,
-    advanceTime,
-    stop: () => app.stop(),
-  };
 }

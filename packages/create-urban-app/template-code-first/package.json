@@ -8,7 +8,7 @@
 		"node": ">=22.6"
 	},
 	"scripts": {
-		"typecheck": "deno check main.ts 'workflows/**/*.ts' 'scripts/**/*.ts'",
+		"typecheck": "deno check main.ts \"workflows/**/*.ts\" \"scripts/**/*.ts\"",
 		"lint": "biome check",
 		"check": "urban check",
 		"gen": "urban gen",

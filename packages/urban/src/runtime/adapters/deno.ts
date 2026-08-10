@@ -5,6 +5,7 @@
 
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
@@ -15,6 +16,7 @@ import type {
   HttpServer,
   SqliteDb,
 } from "../core/host.ts";
+import { resolveModulePath } from "../core/module-path.ts";
 
 type SqliteParam = string | number | bigint | Uint8Array | null;
 
@@ -102,8 +104,9 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
       return wrapSqlite(db);
     },
     importModule: (p) => {
+      const resolved = resolveModulePath(abs(p), existsSync);
       const href =
-        pathToFileURL(abs(p)).href + (opts.importNonce ? `?v=${opts.importNonce}` : "");
+        pathToFileURL(resolved).href + (opts.importNonce ? `?v=${opts.importNonce}` : "");
       const mod: Promise<Record<string, unknown>> = import(href);
       return mod;
     },

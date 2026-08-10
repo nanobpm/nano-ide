@@ -8,7 +8,7 @@
 // controller registry that statically imports these delegates and type-checks the whole set).
 
 import { DEFAULT_OPERATIONS_DIR, normalizeApiDir } from "../api-dir.ts";
-import { collectOperations, type OpenApiDoc } from "../../openapi/spec.ts";
+import { assertUniqueOperationIds, collectOperations, type OpenApiDoc } from "../../openapi/spec.ts";
 
 export { DEFAULT_OPERATIONS_DIR };
 
@@ -65,6 +65,7 @@ export function planOperationScaffold(
   doc: OpenApiDoc,
   dir: string = DEFAULT_OPERATIONS_DIR,
 ): OperationStubPlan[] {
+  assertUniqueOperationIds(doc);
   const cleanDir = normalizeDir(dir);
   return collectOperations(doc).map((op) => ({
     operationId: op.operationId,

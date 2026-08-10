@@ -265,6 +265,30 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
   return out;
 }
 
+/**
+ * Throw if the document declares the same `operationId` on more than one operation. An operationId
+ * must be unique across the whole OpenAPI document (it names the delegate module `<dir>/<operationId>`
+ * AND the generated controller registry key), so a duplicate would silently overwrite an earlier
+ * entry in the emitted object literal — dispatching the wrong delegate while still type-checking — and
+ * make the scaffolder plan the same stub twice. Called by the gen/scaffold path so `urban gen` and
+ * `urban stubs` fail loudly on an incoherent spec instead of shipping a mis-dispatching registry.
+ */
+export function assertUniqueOperationIds(doc: OpenApiDoc): void {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const op of collectOperations(doc)) {
+    if (seen.has(op.operationId)) duplicates.add(op.operationId);
+    seen.add(op.operationId);
+  }
+  if (duplicates.size > 0) {
+    const list = [...duplicates].sort().join(", ");
+    throw new Error(
+      `OpenAPI spec declares duplicate operationId(s): ${list}. Each operationId must be unique — ` +
+        "it names the delegate module and the generated controller registry key.",
+    );
+  }
+}
+
 /** "method path" pointers for every operation that declares no `operationId`. Such operations are
  *  unroutable (no delegate to bind), so the runtime mount logs them at `warn` and skips them. */
 export function operationsWithoutId(doc: OpenApiDoc): string[] {

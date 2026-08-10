@@ -11,6 +11,7 @@ import { GENERATED_DIR } from "../artifact.ts";
 import { DEFAULT_OPERATIONS_DIR, normalizeApiDir } from "../api-dir.ts";
 import {
   collectOperations,
+  assertUniqueOperationIds,
   isObjectSchema,
   type OpenApiDoc,
   type OpenApiSchema,
@@ -269,6 +270,7 @@ function normalizeOperationsDir(dir: string): string {
  * not necessarily a valid TS identifier. Requires each delegate to be a default export.
  */
 export function emitApiController(doc: OpenApiDoc, operationsDir: string = DEFAULT_OPERATIONS_DIR): string {
+  assertUniqueOperationIds(doc);
   const ops = collectOperations(doc);
   const dir = normalizeOperationsDir(operationsDir);
 

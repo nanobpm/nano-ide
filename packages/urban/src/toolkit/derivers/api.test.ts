@@ -88,6 +88,17 @@ test("emitApiController on an empty spec is a valid empty registry (never = {})"
   assert.match(out, /export const operations = \{\s*\} satisfies \{/);
 });
 
+test("emitApiController throws on a duplicate operationId (would silently overwrite a map key)", () => {
+  const dupe: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/a": { get: { operationId: "same", responses: { "200": {} } } },
+      "/b": { get: { operationId: "same", responses: { "200": {} } } },
+    },
+  };
+  assert.throws(() => emitApiController(dupe), /duplicate operationId\(s\): same/);
+});
+
 test("emitted object types mirror runtime additionalProperties semantics", () => {
   // default (absent) → extras allowed at runtime, so the emitted type carries an index signature
   assert.match(schemaToTs({ type: "object", properties: { a: { type: "string" } } }), /\[key: string\]: unknown/);

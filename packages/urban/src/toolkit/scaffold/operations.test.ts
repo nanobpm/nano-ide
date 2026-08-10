@@ -48,6 +48,17 @@ test("planOperationScaffold honors a custom api.dir", () => {
   assert.ok(plans.every((p) => p.handlerPath.startsWith("handlers/")));
 });
 
+test("planOperationScaffold throws on a duplicate operationId (incoherent spec)", () => {
+  const dupe: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/a": { get: { operationId: "same", responses: { "200": {} } } },
+      "/b": { get: { operationId: "same", responses: { "200": {} } } },
+    },
+  };
+  assert.throws(() => planOperationScaffold(dupe), /duplicate operationId\(s\): same/);
+});
+
 function memIO(files: Record<string, string>): GenIO & { files: Record<string, string> } {
   return {
     files,

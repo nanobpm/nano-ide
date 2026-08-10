@@ -139,10 +139,60 @@ test("required query params aren't undefined-widened; optional ones use the ? mo
     },
   };
   const out = emitApiBindings(qdoc);
-  assert.match(out, /"q": string \| string\[\]/); // required → present, not optional
+  assert.match(out, /"q": string/); // required scalar string → present, coerced to its schema type
   assert.doesNotMatch(out, /"q"\?:/); // not optional
-  assert.doesNotMatch(out, /"q": string \| string\[\] \| undefined/); // not undefined-widened
-  assert.match(out, /"page"\?: string \| string\[\]/); // optional → ? modifier
+  assert.doesNotMatch(out, /"q": string \| undefined/); // not undefined-widened
+  assert.match(out, /"page"\?: string/); // optional → ? modifier
+});
+
+test("params are typed by their schema (coerced), not the raw wire string", () => {
+  const pdoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/things/{id}": {
+        get: {
+          operationId: "getThing",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "verbose", in: "query", schema: { type: "boolean" } },
+            { name: "tags", in: "query", schema: { type: "array", items: { type: "string" } } },
+            { name: "raw", in: "query" }, // no schema → raw wire type
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(pdoc);
+  assert.match(out, /"id": number/); // integer path param → number, not string
+  assert.match(out, /"verbose"\?: boolean/); // boolean query → boolean
+  assert.match(out, /"tags"\?: Array<string>/); // array query → Array<item>
+  assert.match(out, /"raw"\?: string \| string\[\]/); // schemaless query → raw wire type
+});
+
+test("the response type unions every documented JSON response body (success + error)", () => {
+  const rdoc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      schemas: {
+        Ok: { type: "object", properties: { ok: { type: "boolean" } }, additionalProperties: false },
+        Err: { type: "object", properties: { error: { type: "string" } }, additionalProperties: false },
+      },
+    },
+    paths: {
+      "/do": {
+        post: {
+          operationId: "doIt",
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Ok" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/Err" } } } },
+          },
+        },
+      },
+    },
+  };
+  const out = emitApiBindings(rdoc);
+  assert.match(out, /export type DoItResponse = Ok \| Err;/); // both bodies in the union
 });
 
 test("request body optionality follows requestBody.required (runtime passes undefined when absent)", () => {

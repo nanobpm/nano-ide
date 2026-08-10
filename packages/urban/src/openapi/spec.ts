@@ -122,6 +122,12 @@ export interface OpenApiDoc {
 export const HTTP_METHODS = ["get", "put", "post", "delete", "patch", "options", "head"] as const;
 export type HttpMethodLower = (typeof HTTP_METHODS)[number];
 
+/** A single documented JSON response: its status code (or "default") and body schema. */
+export interface ResponseSchemaEntry {
+  status: string;
+  schema: OpenApiSchema;
+}
+
 /** One resolved operation: its id, method, path, parameters, request body schema, and responses.
  *  This is the shared unit both the deriver (→ types) and the runtime (→ routes) consume. */
 export interface OperationInfo {
@@ -132,8 +138,10 @@ export interface OperationInfo {
   parameters: OpenApiParameter[];
   requestBodySchema?: OpenApiSchema;
   requestBodyRequired: boolean;
-  /** Schema of the first 2xx (else default) JSON response, when declared. */
-  responseSchema?: OpenApiSchema;
+  /** Every documented JSON response, keyed by status code ("200","400",…,"default"), in a stable
+   *  order. The type layer unions these into the operation's response type; the runtime validates a
+   *  handler result against the entry matching its status (else "default"). */
+  responseSchemas: ResponseSchemaEntry[];
   /** Effective security requirements (op-level if declared — including an explicit empty list —
    *  else the document-level default, else `[]`). An empty list means the operation is open. */
   security: OpenApiSecurityRequirement[];
@@ -255,7 +263,7 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         parameters,
         requestBodySchema,
         requestBodyRequired: requestBody?.required === true,
-        responseSchema: firstSuccessSchema(responses),
+        responseSchemas: collectResponseSchemas(responses),
         security,
         eject: opRaw["x-urban-eject"] === true,
         summary: typeof opRaw.summary === "string" ? opRaw.summary : undefined,
@@ -533,15 +541,33 @@ function normalizeParameters(raw: unknown[]): OpenApiParameter[] {
   return order.map((k) => byKey.get(k)!);
 }
 
-function firstSuccessSchema(responses: Record<string, unknown>): OpenApiSchema | undefined {
-  const codes = Object.keys(responses)
-    .filter((c) => /^2\d\d$/.test(c))
+/** Every documented JSON response body, in a stable order: numeric status codes ascending, then
+ *  "default" last. A response without a JSON body schema is skipped. */
+function collectResponseSchemas(responses: Record<string, unknown>): ResponseSchemaEntry[] {
+  const out: ResponseSchemaEntry[] = [];
+  const statusCodes = Object.keys(responses)
+    .filter((c) => /^\d{3}$/.test(c))
     .sort();
-  const code = codes[0] ?? (isRecord(responses.default) ? "default" : undefined);
-  if (!code) return undefined;
-  const resp = responses[code];
-  if (!isRecord(resp)) return undefined;
-  return firstJsonSchema(isRecord(resp.content) ? resp.content : undefined);
+  const codes = isRecord(responses.default) ? [...statusCodes, "default"] : statusCodes;
+  for (const status of codes) {
+    const resp = responses[status];
+    if (!isRecord(resp)) continue;
+    const schema = firstJsonSchema(isRecord(resp.content) ? resp.content : undefined);
+    if (schema) out.push({ status, schema });
+  }
+  return out;
+}
+
+/** Select the response schema to validate a handler result against: the entry whose status matches
+ *  the response status, else the "default" entry, else undefined — an undocumented status is left
+ *  unvalidated rather than mis-validated against an unrelated (e.g. success) response schema. */
+export function responseSchemaForStatus(
+  entries: ResponseSchemaEntry[],
+  status: number,
+): OpenApiSchema | undefined {
+  const exact = entries.find((e) => e.status === String(status));
+  if (exact) return exact.schema;
+  return entries.find((e) => e.status === "default")?.schema;
 }
 
 /** Turn an OpenAPI path template ("/invoices/{id}") into a matcher under `base` ("/app/api"):

@@ -96,6 +96,20 @@ context. Its only jobs are semantic checks + business logic + a response. A thro
 typed error maps to a documented error response (the error shapes live in the
 spec, so the mapping is generated too).
 
+Two refinements make "typed request/response" honest end-to-end (urban 0.38.0):
+
+- **Params/query are coerced, not raw wire strings.** After syntactic validation,
+  the runtime forwards the value **coerced to its declared schema type** — a
+  `type: integer` param reaches the delegate as a `number`, a `boolean` as a
+  `boolean`, an `array` as an array — and the generated `params`/`query` types match.
+  (A parameter with no schema keeps its raw wire type.) Coercion and validation read
+  the one `OpenApiSchema`, so the type and the runtime value never disagree.
+- **The response type unions *every* documented JSON response, not just the first
+  2xx.** A delegate that returns a documented error body (e.g. a `400 { error }`)
+  therefore typechecks against its operation's response type, and response-shape
+  validation is **status-keyed** — a result is validated against the schema for its
+  own status (else `default`), never spuriously against the success schema.
+
 ### 4. Generate everything mechanical; author only semantics
 
 From the one YAML document, `urban gen` derives (machine-owned, `nano-generated/`,

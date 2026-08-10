@@ -349,6 +349,82 @@ test("array-typed query params validate the whole array (items + array constrain
   assert.equal((await build2("tag=a&tag=c")).status, 400); // "c" not in enum
 });
 
+test("params/query are coerced to their schema type before reaching the delegate", async () => {
+  const coerceSpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/things/{id}": {
+        get: {
+          operationId: "getThing",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "verbose", in: "query", schema: { type: "boolean" } },
+            { name: "tags", in: "query", schema: { type: "array", items: { type: "string" } } },
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: { params: Record<string, unknown>; query: Record<string, unknown> } | undefined;
+  const { router } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/operations/getThing": {
+        default: (i: { params: Record<string, unknown>; query: Record<string, unknown> }) => {
+          got = { params: i.params, query: i.query };
+          return { body: { ok: true } };
+        },
+      },
+    },
+    coerceSpec,
+  );
+  const res = await router(req("GET", "/app/api/things/42", { query: "verbose=true&tags=x&tags=y" }));
+  assert.equal(res.status, 200);
+  // integer path param → number, boolean query → boolean, array query → string[] (all coerced).
+  assert.deepEqual(got, { params: { id: 42 }, query: { verbose: true, tags: ["x", "y"] } });
+});
+
+test("response validation is status-keyed: a documented error body validates against ITS schema", async () => {
+  const respSpec = JSON.stringify({
+    openapi: "3.0.0",
+    components: {
+      schemas: {
+        Ok: { type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false },
+        Err: { type: "object", properties: { error: { type: "string" } }, required: ["error"], additionalProperties: false },
+      },
+    },
+    paths: {
+      "/do": {
+        post: {
+          operationId: "doIt",
+          responses: {
+            "200": { content: { "application/json": { schema: { $ref: "#/components/schemas/Ok" } } } },
+            "400": { content: { "application/json": { schema: { $ref: "#/components/schemas/Err" } } } },
+          },
+        },
+      },
+    },
+  });
+  const runWith = (result: { status: number; body: unknown }) => {
+    const b = build(
+      { spec: "openapi.json", validateResponses: "always" },
+      { "/app/operations/doIt": { default: () => result } },
+      respSpec,
+    );
+    return { call: b.router(req("POST", "/app/api/do", { body: "{}" })), logs: b.logs };
+  };
+  // A valid documented 400 error body must NOT warn — the pre-fix code validated it against the 200
+  // success schema and warned. Now it's checked against the 400 schema and passes.
+  const okErr = runWith({ status: 400, body: { error: "bad ref" } });
+  await okErr.call;
+  assert.equal(okErr.logs.some((l) => l.msg.includes("response failed schema validation")), false);
+  // A body that violates the 400 schema DOES warn (proves it's validated against Err, not Ok).
+  const badErr = runWith({ status: 400, body: { oops: 1 } });
+  await badErr.call;
+  assert.equal(badErr.logs.some((l) => l.msg.includes("response failed schema validation")), true);
+});
+
 test("a failed initial spec load is retried, not cached as a permanent 500", async () => {
   let attempts = 0;
   const host: HostContext = {

@@ -51,9 +51,58 @@ const doc: OpenApiDoc = {
   },
 };
 
-test("parseSpec throws a clear error on non-JSON and non-object", () => {
-  assert.throws(() => parseSpec("not json"), /not valid JSON/);
-  assert.throws(() => parseSpec("42"), /must be a JSON object/);
+test("parseSpec throws a clear error on non-object and unparseable input", () => {
+  // A bare scalar parses (as JSON or YAML) but is not a document object.
+  assert.throws(() => parseSpec("42"), /must be an object/);
+  // Unbalanced/garbage that is neither valid JSON nor valid YAML.
+  assert.throws(() => parseSpec("{ : ]["), /not valid YAML or JSON/);
+});
+
+test("parseSpec parses a YAML OpenAPI document (ADR 0059 authoring format)", () => {
+  const yaml = [
+    "openapi: 3.0.0",
+    "info:",
+    "  title: Demo",
+    "  version: 1.0.0",
+    "paths:",
+    "  /invoices:",
+    "    post:",
+    "      operationId: createInvoice",
+    "      requestBody:",
+    "        required: true",
+    "        content:",
+    "          application/json:",
+    "            schema:",
+    "              $ref: '#/components/schemas/Invoice'",
+    "      responses:",
+    "        '201':",
+    "          description: created",
+    "components:",
+    "  schemas:",
+    "    Invoice:",
+    "      type: object",
+    "      required: [id, amount]",
+    "      properties:",
+    "        id: { type: string }",
+    "        amount: { type: integer, minimum: 1 }",
+    "",
+  ].join("\n");
+  const parsed = parseSpec(yaml);
+  assert.equal(parsed.openapi, "3.0.0");
+  const ops = collectOperations(parsed);
+  assert.deepEqual(
+    ops.map((o) => o.operationId),
+    ["createInvoice"],
+  );
+  // The $ref resolves against the YAML-authored components, same as a JSON spec.
+  const resolved = resolveSchema(parsed, { $ref: "#/components/schemas/Invoice" });
+  assert.equal(resolved?.type, "object");
+  assert.deepEqual(resolved?.required, ["id", "amount"]);
+});
+
+test("parseSpec still parses JSON (accepted interchange format)", () => {
+  const parsed = parseSpec(JSON.stringify(doc));
+  assert.equal(parsed.openapi, "3.0.0");
 });
 
 test("collectOperations returns id-bearing ops in stable (path, method) order", () => {

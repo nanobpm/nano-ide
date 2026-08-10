@@ -2,12 +2,16 @@
 // deriver (`toolkit/derivers/api.ts`, authoring-time type + wrapper emission) and the runtime
 // (`runtime/core/modules/api.ts`, request validation + routing) build on this one module, so the
 // derived types and the runtime routes/validation always agree. No IO, no `node:*`, no `Deno` —
-// it operates on an already-parsed document object.
+// it operates on document text/objects. Its one external dependency is `yaml` (a browser-safe,
+// pure-JS parser with a dedicated browser build) so `parseSpec` accepts YAML — the sanctioned
+// authoring format for the HTTP surface (ADR 0059) — as well as JSON.
 //
 // Scope: the ADR 0058 "supported profile" — JSON bodies, path/query parameters, a JSON
 // requestBody, response codes, and a JSON-Schema subset validator (type/required/enum/numeric &
 // string bounds/pattern/array & object shape/nullable/$ref). Exotic OpenAPI (callbacks, links,
 // XML, discriminated oneOf composition) is intentionally out of scope for this slice.
+
+import { parse as parseYaml } from "yaml";
 
 /** A JSON Schema (the OpenAPI subset we read). Kept structural and permissive — unknown keywords
  *  are ignored by the validator and fall back to `unknown` in the type emitter. */
@@ -116,20 +120,30 @@ function isSchema(v: unknown): v is OpenApiSchema {
   return isRecord(v);
 }
 
-/** Parse an OpenAPI document from text. JSON only in this slice (ADR 0058 open question: YAML).
- *  Throws with a clear message on malformed input. */
+/** Parse an OpenAPI document from text. Accepts both YAML (the sanctioned authoring format for
+ *  the HTTP surface — ADR 0059) and JSON (still accepted, e.g. a generated interchange artifact).
+ *  JSON is a strict subset of YAML 1.2, so JSON is tried first for a precise error + fast path,
+ *  then the text is parsed as YAML. Throws with a clear message on malformed input. */
 export function parseSpec(text: string): OpenApiDoc {
   let doc: unknown;
   try {
+    // Fast path + precise diagnostics for JSON (and the generated `openapi.json` interchange file).
     doc = JSON.parse(text);
-  } catch (e) {
-    throw new Error(
-      `OpenAPI spec is not valid JSON (YAML is not yet supported — ADR 0058): ${
-        e instanceof Error ? e.message : String(e)
-      }`,
-    );
+  } catch {
+    // Not JSON — parse as YAML (which also subsumes JSON, so authored `.yaml`/`.yml` specs load).
+    try {
+      doc = parseYaml(text);
+    } catch (e) {
+      throw new Error(
+        `OpenAPI spec is not valid YAML or JSON: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
   }
-  if (!isRecord(doc)) throw new Error("OpenAPI spec must be a JSON object");
+  if (!isRecord(doc)) {
+    throw new Error("OpenAPI spec must be an object (a mapping at the document root)");
+  }
   return doc;
 }
 

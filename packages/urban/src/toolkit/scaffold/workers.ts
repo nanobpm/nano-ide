@@ -39,7 +39,7 @@ export interface WorkerStubPlan {
   manifestEntry: StubManifestEntry;
 }
 
-export type SkipReason = "already-wired" | "orchestrator" | "duplicate";
+export type SkipReason = "already-wired" | "orchestrator" | "duplicate" | "external";
 
 export interface SkippedWorker {
   taskType: string;
@@ -110,14 +110,17 @@ export function renderWorkerStub(
 
 /**
  * Plan write-once handler stubs from the models. A stub is planned for each service-task
- * `taskType` that is NOT already wired in the manifest, NOT the imperative orchestrator, and
- * not a duplicate of one already planned. `declaredTypeIds` are the manifest `types` ids — an
- * envelope `in`/`out` is typed only when it names one (matching the worker-io deriver).
+ * `taskType` that is NOT already wired in the manifest, NOT the imperative orchestrator, NOT
+ * declared external (serviced by an out-of-process worker), and not a duplicate of one already
+ * planned. `declaredTypeIds` are the manifest `types` ids — an envelope `in`/`out` is typed only
+ * when it names one (matching the worker-io deriver). `externalTaskTypes` are the manifest's
+ * declared external task types, which the app owns the model for but deliberately does not host.
  */
 export function planWorkerScaffold(
   models: ModelSource[],
   workers: ScaffoldWorker[] = [],
   declaredTypeIds: Iterable<string> = [],
+  externalTaskTypes: Iterable<string> = [],
 ): WorkerScaffoldPlan {
   const wired = new Set(
     workers
@@ -125,6 +128,7 @@ export function planWorkerScaffold(
       .filter((t): t is string => typeof t === "string" && t.length > 0),
   );
   const declared = new Set(declaredTypeIds);
+  const external = new Set(externalTaskTypes);
 
   const plans: WorkerStubPlan[] = [];
   const skipped: SkippedWorker[] = [];
@@ -136,6 +140,10 @@ export function planWorkerScaffold(
       const taskType = io.taskType;
       if (taskType.endsWith(ORCHESTRATOR_SUFFIX)) {
         skipped.push({ taskType, reason: "orchestrator" });
+        continue;
+      }
+      if (external.has(taskType)) {
+        skipped.push({ taskType, reason: "external" });
         continue;
       }
       if (wired.has(taskType)) {

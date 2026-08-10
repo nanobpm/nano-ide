@@ -108,6 +108,17 @@ typechecks on Node or Deno with no `@types/node` and no `skipLibCheck`.
   wins; this also covers `llm`-bound workers, which live there.
 - The **imperative orchestrator** task (`<workflowId>:__orchestrate`, ADR 0054 /
   `defineWorkflow`) — it is engine-internal, not an author handler.
+- **Externally-serviced** task types listed in `manifest.externalTaskTypes`
+  (schema ≥ 0.5.0) — the app owns the *model* for these tasks but not the
+  *handler*: they are dispatched by an out-of-process worker (e.g. an external
+  coding-agent harness), never an app-hosted stub. `urban gen` writes no stub and
+  adds no `manifest.workers[]` wiring for them, and `--check` does not treat their
+  absence as drift. The schema validator forbids a type appearing in both
+  `externalTaskTypes` and `workers[]` (`external-task-conflict`), so a task is
+  unambiguously either app-hosted or external. Unlike **operation** delegates
+  (statically imported by the generated controller — drift-hard), worker stubs are
+  dispatched dynamically by task type, so skipping one costs no compile-time
+  guarantee.
 - **Duplicates** — a task type appearing in several models is stubbed once.
 
 ### Manifest wiring

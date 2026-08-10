@@ -27,6 +27,8 @@ You need a Nano engine reachable at `CAMUNDA_REST_ADDRESS` (default
 
 ```bash
 npm install
+npm run typecheck  # Deno-powered TypeScript check (requires Deno on PATH)
+npm run lint       # Biome + ban-`as` GritQL plugin
 npm run check      # validate the manifest
 npm run gen        # derive generated artifacts (migrations, worker-io types)
 npm start          # provision the DB, deploy the flow, host the worker + surfaces
@@ -43,6 +45,8 @@ npm run dev
 Or run it on **Deno** (no install step):
 
 ```bash
+deno task typecheck
+deno task lint
 deno task check
 deno task gen
 deno task start    # or: deno task dev  (watch + restart)

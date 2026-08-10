@@ -78,9 +78,11 @@ function applyConditionals(content: string, on: { deno: boolean }): string {
   return content.replace(block, (_m, body: string) => (on.deno ? body : ""));
 }
 
-/** Rename a template filename: `_gitignore` → `.gitignore` (npm strips dotfiles from packs). */
+/** Rename template entries that stand in for dotfiles npm strips from packs. */
 function finalName(name: string): string {
-  return name === "_gitignore" ? ".gitignore" : name;
+  if (name === "_gitignore") return ".gitignore";
+  if (name === "_github") return ".github";
+  return name;
 }
 
 export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {

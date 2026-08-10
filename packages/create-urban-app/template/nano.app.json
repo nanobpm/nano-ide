@@ -1,66 +1,67 @@
 {
-  "$schema": "https://nanobpm.io/spec-app/nano-app.schema.json",
-  "schemaVersion": 1,
-  "id": "__APP_ID__",
-  "name": "__APP_NAME__",
-  "codename": "Urban",
-  "runtime": { "engine": "embedded", "node": "single" },
+	"$schema": "https://nanobpm.io/spec-app/nano-app.schema.json",
+	"schemaVersion": 1,
+	"id": "__APP_ID__",
+	"name": "__APP_NAME__",
+	"codename": "Urban",
+	"runtime": { "engine": "embedded", "node": "single" },
 
-  "models": {
-    "processes": ["processes/*.bpmn"],
-    "forms": ["forms/*.form"]
-  },
+	"models": {
+		"processes": ["processes/*.bpmn"],
+		"forms": ["forms/*.form"]
+	},
 
-  "api": {
-    "spec": "openapi.json",
-    "dir": "operations"
-  },
+	"api": {
+		"spec": "openapi.json",
+		"dir": "operations"
+	},
 
-  "data": {
-    "default": "app",
-    "sources": {
-      "app": {
-        "driver": "${NANO_APP_DB_DRIVER:-sqlite}",
-        "url": "${NANO_APP_DB_URL:-file:./db/app.db}",
-        "migrations": "db/migrations"
-      }
-    }
-  },
+	"data": {
+		"default": "app",
+		"sources": {
+			"app": {
+				"driver": "${NANO_APP_DB_DRIVER:-sqlite}",
+				"url": "${NANO_APP_DB_URL:-file:./db/app.db}",
+				"migrations": "db/migrations"
+			}
+		}
+	},
 
-  "types": {
-    "greeting": {
-      "name": "Greeting",
-      "table": "greetings",
-      "fields": {
-        "who": { "type": "string" },
-        "message": { "type": "string" },
-        "createdAt": { "type": "datetime", "optional": true }
-      }
-    }
-  },
+	"types": {
+		"greeting": {
+			"name": "Greeting",
+			"table": "greetings",
+			"fields": {
+				"who": { "type": "string" },
+				"message": { "type": "string" },
+				"createdAt": { "type": "datetime", "optional": true }
+			}
+		}
+	},
 
-  "triggers": [
-    {
-      "id": "greet-hook",
-      "type": "webhook",
-      "path": "/hooks/greet",
-      "action": { "message": "__APP_ID__.greet-requested", "correlationKey": "= body.who" }
-    }
-  ],
+	"triggers": [
+		{
+			"id": "greet-hook",
+			"type": "webhook",
+			"path": "/hooks/greet",
+			"action": {
+				"message": "__APP_ID__.greet-requested",
+				"correlationKey": "= body.who"
+			}
+		}
+	],
 
-  "surfaces": {
-    "taskInbox": { "enabled": true, "path": "/tasks" },
-    "pages": { "enabled": true }
-  },
+	"surfaces": {
+		"taskInbox": { "enabled": true, "path": "/tasks" },
+		"pages": { "enabled": true }
+	},
 
-  "ui": {
-    "enabled": false,
-    "label": "__APP_NAME__",
-    "portEnv": "PORT",
-    "path": "/"
-  },
+	"ui": {
+		"enabled": false,
+		"label": "__APP_NAME__",
+		"portEnv": "PORT",
+		"path": "/"
+	},
 
-  "workers": [
-    { "taskType": "__APP_ID__.greet", "handler": "workers/greet.ts" }
-  ]
+	"workers": [{ "taskType": "__APP_ID__.greet", "handler": "workers/greet.ts" }]
 }

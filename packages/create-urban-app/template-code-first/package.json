@@ -1,21 +1,26 @@
 {
-  "name": "__APP_ID__",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "__APP_NAME__ — a code-first Urban app.",
-  "engines": {
-    "node": ">=22.6"
-  },
-  "scripts": {
-    "check": "urban check",
-    "gen": "urban gen",
-    "gen:check": "urban gen --check",
-    "start": "node --experimental-strip-types main.ts",
-    "dev": "node --watch --experimental-strip-types main.ts",
-    "greet": "node --experimental-strip-types scripts/greet.ts"
-  },
-  "dependencies": {
-    "@nanobpm/urban": "^0.24.0"
-  }
+	"name": "__APP_ID__",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "__APP_NAME__ — a code-first Urban app.",
+	"engines": {
+		"node": ">=22.6"
+	},
+	"scripts": {
+		"typecheck": "deno check main.ts \"workflows/**/*.ts\" \"scripts/**/*.ts\"",
+		"lint": "biome check",
+		"check": "urban check",
+		"gen": "urban gen",
+		"gen:check": "urban gen --check",
+		"start": "node --experimental-strip-types main.ts",
+		"dev": "node --watch --experimental-strip-types main.ts",
+		"greet": "node --experimental-strip-types scripts/greet.ts"
+	},
+	"dependencies": {
+		"@nanobpm/urban": "^0.24.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.7"
+	}
 }

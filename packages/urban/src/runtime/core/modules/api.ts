@@ -29,6 +29,8 @@ import {
   resolveSchema,
   toRouteMatcher,
   undeclaredPathParams,
+  undeclaredSecuritySchemes,
+  evaluateSecurity,
   validateValue,
   type ValidationIssue,
 } from "../../../openapi/spec.ts";
@@ -336,6 +338,14 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
               { unsafe },
             );
           }
+          const undeclaredSchemes = undeclaredSecuritySchemes(d);
+          if (undeclaredSchemes.length > 0) {
+            ctx.host.log(
+              "warn",
+              "OpenAPI operations require a security scheme not declared in components.securitySchemes — those requests are rejected with 500 (ADR 0059)",
+              { undeclared: undeclaredSchemes },
+            );
+          }
           const mounted = collectOperations(d).map((op) => {
             const { pattern, paramNames } = toRouteMatcher(base, op.path);
             return { op, pattern, paramNames };
@@ -383,6 +393,26 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     }
     const { op } = match;
     const ejected = surfaceEject || op.eject;
+
+    // Enforce the operation's security requirements (ADR 0059) before touching the body or the
+    // delegate: an unauthorized request should do no work and reveal nothing. Enforced even for
+    // ejected ops (eject changes body handling, not who may call the operation).
+    const authz = evaluateSecurity(
+      d,
+      op,
+      (name) => req.headers.get(name) ?? undefined,
+      (name) => req.query.get(name) ?? undefined,
+      (envVar) => ctx.host.env(envVar),
+    );
+    if (!authz.ok) {
+      if (authz.status === 500) {
+        ctx.host.log("error", "OpenAPI operation security is misconfigured (ADR 0059)", {
+          operationId: op.operationId,
+          reason: authz.error,
+        });
+      }
+      return json({ error: authz.error ?? "unauthorized" }, authz.status ?? 401);
+    }
 
     // Path params from the capture groups; query as a single-or-array map.
     const captures = match.pattern.exec(req.path) ?? [];

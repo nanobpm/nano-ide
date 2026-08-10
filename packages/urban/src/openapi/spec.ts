@@ -84,11 +84,38 @@ export interface OpenApiResponse {
   content?: Record<string, OpenApiMediaType>;
 }
 
+/**
+ * A security scheme (OpenAPI Components Object → `securitySchemes`). The supported profile is the
+ * `apiKey` type carried in a request header (ADR 0059): a webhook/operation is guarded by a shared
+ * secret. The expected value is never inlined — it is read from an environment variable named by
+ * the `x-nano-secret-env` extension (ADR 0025/0027: secrets stay env pointers).
+ */
+export interface OpenApiSecurityScheme {
+  type?: string;
+  /** For `apiKey`: where the key travels. Only `header` is enforced in this slice. */
+  in?: "header" | "query" | "cookie";
+  /** For `apiKey`: the header (or query) name carrying the key, e.g. `X-Webhook-Key`. */
+  name?: string;
+  /** Env var holding the expected secret value. Required to enforce an `apiKey` scheme. */
+  "x-nano-secret-env"?: string;
+  description?: string;
+}
+
+/** A security requirement: scheme name → scopes (scopes are unused for `apiKey`, always `[]`). An
+ *  operation is authorized when ANY one requirement object is fully satisfied (OR across the list,
+ *  AND within an object). An empty list (`security: []`) means the operation is explicitly open. */
+export type OpenApiSecurityRequirement = Record<string, string[]>;
+
 export interface OpenApiDoc {
   openapi?: string;
   info?: { title?: string; version?: string };
   paths?: Record<string, Record<string, unknown>>;
-  components?: { schemas?: Record<string, OpenApiSchema> };
+  components?: {
+    schemas?: Record<string, OpenApiSchema>;
+    securitySchemes?: Record<string, OpenApiSecurityScheme>;
+  };
+  /** Document-level default security, applied to any operation that declares none. */
+  security?: OpenApiSecurityRequirement[];
 }
 
 /** The HTTP methods we mount, lowercase as they appear as path-item keys. */
@@ -107,6 +134,9 @@ export interface OperationInfo {
   requestBodyRequired: boolean;
   /** Schema of the first 2xx (else default) JSON response, when declared. */
   responseSchema?: OpenApiSchema;
+  /** Effective security requirements (op-level if declared — including an explicit empty list —
+   *  else the document-level default, else `[]`). An empty list means the operation is open. */
+  security: OpenApiSecurityRequirement[];
   eject: boolean;
   summary?: string;
 }
@@ -212,6 +242,11 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         isRecord(requestBody?.content) ? requestBody.content : undefined,
       );
       const responses = isRecord(opRaw.responses) ? opRaw.responses : {};
+      // Effective security: an operation's own `security` (even an explicit `[]`, which opts out of
+      // a document-level default) wins; otherwise inherit the document-level default; otherwise open.
+      const security = normalizeSecurity(
+        Array.isArray(opRaw.security) ? opRaw.security : doc.security,
+      );
       out.push({
         operationId,
         method,
@@ -220,6 +255,7 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         requestBodySchema,
         requestBodyRequired: requestBody?.required === true,
         responseSchema: firstSuccessSchema(responses),
+        security,
         eject: opRaw["x-urban-eject"] === true,
         summary: typeof opRaw.summary === "string" ? opRaw.summary : undefined,
       });
@@ -285,6 +321,143 @@ export function operationsWithUnsafeId(doc: OpenApiDoc): string[] {
       const id = opRaw.operationId;
       if (typeof id === "string" && id.length > 0 && !isSafeOperationId(id)) {
         out.push(`${method.toUpperCase()} ${path} (${id})`);
+      }
+    }
+  }
+  return out;
+}
+
+/** Normalize a raw `security` value into a clean requirement list. Non-array → `[]`. Each element
+ *  must be an object mapping scheme names → a (string[]) scope list; malformed entries are dropped.
+ *  The result is the effective, self-contained requirement set carried on an {@link OperationInfo}. */
+function normalizeSecurity(raw: unknown): OpenApiSecurityRequirement[] {
+  if (!Array.isArray(raw)) return [];
+  const out: OpenApiSecurityRequirement[] = [];
+  for (const entry of raw) {
+    if (!isRecord(entry)) continue;
+    const req: OpenApiSecurityRequirement = {};
+    for (const [name, scopes] of Object.entries(entry)) {
+      req[name] = Array.isArray(scopes) ? scopes.filter((s): s is string => typeof s === "string") : [];
+    }
+    out.push(req);
+  }
+  return out;
+}
+
+/** The outcome of enforcing an operation's security: `ok` when authorized, otherwise the HTTP
+ *  status to return — `401` (the request presented no/invalid credential) or `500` (the app is
+ *  misconfigured: an operation references an unknown scheme, an unsupported scheme type, or a
+ *  scheme whose secret env var is unset). */
+export interface SecurityDecision {
+  ok: boolean;
+  status?: 401 | 500;
+  error?: string;
+}
+
+const SECURITY_OK: SecurityDecision = { ok: true };
+
+/** Constant-time string comparison — avoids leaking how many leading characters of a secret matched
+ *  via response timing. Unequal lengths short-circuit (an acceptable length oracle for API keys). */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  if (ab.length !== bb.length) return false;
+  let diff = 0;
+  for (let i = 0; i < ab.length; i++) diff |= ab[i] ^ bb[i];
+  return diff === 0;
+}
+
+/**
+ * Enforce an operation's effective security requirements (ADR 0059). Pure: the caller supplies the
+ * request's header/query readers and an env reader, so all policy lives here (and is unit-tested)
+ * while the impure lookups stay in the runtime.
+ *
+ * Semantics follow OpenAPI: authorized when ANY one requirement object is satisfied (OR), and a
+ * requirement object is satisfied only when ALL its schemes are (AND). An empty requirement list
+ * means the operation is open. Only `apiKey` schemes (in `header` or `query`) are enforced; the
+ * expected value comes from the scheme's `x-nano-secret-env` env var.
+ *
+ * A referenced scheme that is unknown, not `apiKey`, or missing its secret env var is a server
+ * misconfiguration → `500` (fail closed), reported in preference to a `401` so operators see the
+ * real cause. A well-formed scheme with a wrong/absent presented credential → `401`.
+ */
+export function evaluateSecurity(
+  doc: OpenApiDoc,
+  op: OperationInfo,
+  getHeader: (name: string) => string | undefined,
+  getQuery: (name: string) => string | undefined,
+  getSecret: (envVar: string) => string | undefined,
+): SecurityDecision {
+  if (op.security.length === 0) return SECURITY_OK;
+  const schemes = doc.components?.securitySchemes ?? {};
+  let misconfig: string | undefined;
+
+  for (const requirement of op.security) {
+    const names = Object.keys(requirement);
+    if (names.length === 0) return SECURITY_OK; // an empty object is a "no auth" alternative
+    let satisfied = true;
+    for (const name of names) {
+      const scheme = schemes[name];
+      if (!scheme) {
+        misconfig ??= `security scheme "${name}" is not declared in components.securitySchemes`;
+        satisfied = false;
+        break;
+      }
+      if (scheme.type !== "apiKey") {
+        misconfig ??= `security scheme "${name}" has unsupported type "${scheme.type ?? "(none)"}" (only apiKey is enforced)`;
+        satisfied = false;
+        break;
+      }
+      const where = scheme.in ?? "header";
+      if (where !== "header" && where !== "query") {
+        misconfig ??= `security scheme "${name}" apiKey location "${where}" is unsupported (use header or query)`;
+        satisfied = false;
+        break;
+      }
+      if (!scheme.name) {
+        misconfig ??= `security scheme "${name}" is missing its apiKey \`name\``;
+        satisfied = false;
+        break;
+      }
+      const envVar = scheme["x-nano-secret-env"];
+      if (!envVar) {
+        misconfig ??= `security scheme "${name}" is missing \`x-nano-secret-env\` (the env var holding the expected key)`;
+        satisfied = false;
+        break;
+      }
+      const expected = getSecret(envVar);
+      if (expected === undefined || expected === "") {
+        misconfig ??= `security scheme "${name}" secret env ${envVar} is not set`;
+        satisfied = false;
+        break;
+      }
+      const presented = where === "header" ? getHeader(scheme.name) : getQuery(scheme.name);
+      if (presented === undefined || !timingSafeEqual(presented, expected)) {
+        satisfied = false; // a wrong/absent credential → 401 (not a misconfig)
+        break;
+      }
+    }
+    if (satisfied) return SECURITY_OK;
+  }
+
+  return misconfig
+    ? { ok: false, status: 500, error: `security misconfigured: ${misconfig}` }
+    : { ok: false, status: 401, error: "unauthorized" };
+}
+
+/** "scheme (op)" pointers for every operation security requirement that names a scheme absent from
+ *  components.securitySchemes — an app-drift the runtime rejects at request time (500) and the
+ *  `--check` gate can surface ahead of time. */
+export function undeclaredSecuritySchemes(doc: OpenApiDoc): string[] {
+  const declared = new Set(Object.keys(doc.components?.securitySchemes ?? {}));
+  const out: string[] = [];
+  for (const op of collectOperations(doc)) {
+    for (const requirement of op.security) {
+      for (const name of Object.keys(requirement)) {
+        if (!declared.has(name)) {
+          out.push(`${name} (${op.method.toUpperCase()} ${op.path})`);
+        }
       }
     }
   }

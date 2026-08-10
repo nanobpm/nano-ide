@@ -733,12 +733,21 @@ function renderActionForm(node) {
           msg.textContent = "Field '" + p.action.correlationKeyField + "' is required";
           return;
         }
+        // Send the trimmed key back as the variable too, so the value a worker
+        // reads matches the key the message was correlated on (no leading/trailing
+        // whitespace divergence between correlationKey and variables[field]).
+        variables[p.action.correlationKeyField] = correlationKey;
         await getJSON("/app/actions/message", { method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ name: p.action.message, correlationKey, variables }) });
         msg.className = "pc-msg ok";
         msg.textContent = "Message published";
       } else {
+        if (!p.action || !p.action.process) {
+          msg.className = "pc-msg err";
+          msg.textContent = "This form has no action configured";
+          return;
+        }
         const res = await getJSON("/app/actions/start/" + encodeURIComponent(p.action.process),
           { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ variables }) });
         msg.className = "pc-msg ok";

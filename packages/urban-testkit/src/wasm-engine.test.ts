@@ -5,7 +5,7 @@ import {
   createWasmEngineClient,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
-import { BpmnError } from "../runtime/core/host.ts";
+import { BpmnError } from "@nanobpm/urban/runtime";
 
 // The shared contract, executed against the in-process WASM adapter.
 runEngineClientContract("wasm", () => createWasmEngineClient());
@@ -100,6 +100,40 @@ test("wasm: advanceTime fires a timer and drains resulting work", async () => {
     assert.equal(after[0]?.state, "COMPLETED", "advancing past the timer completes the instance");
   } finally {
     await engine.close();
+  }
+});
+
+test("wasm: concurrent create() calls share one init and yield independent engines", async () => {
+  // Guards the single-flight boot: two constructions racing the shared boot
+  // promise must both succeed (a plain boolean flag could double-init) and be
+  // isolated engines.
+  const [a, b] = await Promise.all([createWasmEngineClient(), createWasmEngineClient()]);
+  try {
+    assert.notEqual(a, b);
+    const svc = {
+      name: "svc.bpmn",
+      content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="svc" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f1" sourceRef="s" targetRef="work"/>
+    <serviceTask id="work"><extensionElements><zeebe:taskDefinition type="work"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="work" targetRef="e"/><endEvent id="e"/>
+  </process>
+</definitions>`,
+      contentType: "application/bpmn+xml",
+    };
+    // Only `a` gets an instance — `b` must not observe it (separate engines).
+    await a.deployResources([svc]);
+    const { processInstanceKey } = await a.createInstance({ processDefinitionId: "svc" });
+    const inA = await a.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
+    const inB = await b.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
+    assert.equal(inA[0]?.state, "ACTIVE");
+    assert.equal(inB.length, 0);
+  } finally {
+    await a.close();
+    await b.close();
   }
 });
 

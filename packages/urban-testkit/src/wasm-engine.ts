@@ -1,6 +1,6 @@
 // A WASM-backed {@link EngineClient} for in-process, deterministic e2e tests
 // (ADR 0059 test kit, S1 — issue #157). It backs the exact same `EngineClient`
-// seam the live `@nanobpm/nano-sdk` adapter (`../runtime/engine/nanosdk.ts`)
+// seam the live `@nanobpm/nano-sdk` engine adapter (in `@nanobpm/urban`)
 // implements, so the shared contract suite in `./contract.ts` can be run against
 // both — the seam that would have caught the cancelled-instance state-mapping bug.
 //
@@ -11,23 +11,20 @@
 // worker runs autonomously exactly as it would against a live engine, but
 // deterministically and with no wall-clock waits.
 
-import {
-  initSync,
-  TestEngine,
-} from "@nanobpm/engine-wasm";
+import type { TestEngine } from "@nanobpm/engine-wasm";
 import {
   type EngineClient,
   type EngineJob,
   isBpmnError,
+  isRecord,
   type JobHandler,
   type ProcessInstanceSnapshot,
   type ProcessInstanceState,
   type WorkerSubscription,
-} from "../runtime/core/host.ts";
-import { isRecord } from "../runtime/core/guards.ts";
+} from "@nanobpm/urban/runtime";
 
 // A minimal ambient `Deno` declaration lets this file's runtime branch compile
-// under Node's tsc (mirrors the pattern in `../runtime/adapters/deno.ts`); the
+// under Node's tsc (mirrors the pattern in the urban runtime Deno adapter); the
 // `typeof Deno` guard picks the right file-read path at runtime on either host.
 declare const Deno: { readFile(url: URL): Promise<Uint8Array> } | undefined;
 
@@ -73,22 +70,33 @@ interface RegisteredWorker {
   readonly maxParallelJobs: number;
 }
 
-let booted = false;
+let bootPromise: Promise<typeof import("@nanobpm/engine-wasm")> | undefined;
 
-/** Boot the wasm module once per process (idempotent). Loads the `.wasm` bytes
- *  via `import.meta.resolve` so it works from a published package or a workspace
- *  checkout, on both Node and Deno, with no bundler import-attribute support
- *  required. */
-async function bootEngineWasm(): Promise<void> {
-  if (booted) return;
-  const url = new URL(
-    import.meta.resolve("@nanobpm/engine-wasm/nanobpmn_engine_bg.wasm"),
-  );
-  const bytes = typeof Deno !== "undefined"
-    ? await Deno.readFile(url)
-    : new Uint8Array(await (await import("node:fs/promises")).readFile(url));
-  initSync({ module: bytes });
-  booted = true;
+/** Boot the wasm module once per process, single-flight. The first caller starts
+ *  initialization; concurrent callers await the *same* promise, so `initSync`
+ *  runs exactly once even when parallel tests each construct an engine (a plain
+ *  boolean flag would let two callers race past the guard and double-init).
+ *
+ *  `@nanobpm/engine-wasm` is imported dynamically so merely importing the testkit
+ *  (e.g. the contract runner) does not eagerly load the wasm engine; it is pulled
+ *  in only when an engine is actually constructed. Loads the `.wasm` bytes via
+ *  `import.meta.resolve` so it works from a published package or a workspace
+ *  checkout, on both Node and Deno, with no bundler import-attribute support. */
+function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm")> {
+  if (!bootPromise) {
+    bootPromise = (async () => {
+      const mod = await import("@nanobpm/engine-wasm");
+      const url = new URL(
+        import.meta.resolve("@nanobpm/engine-wasm/nanobpmn_engine_bg.wasm"),
+      );
+      const bytes = typeof Deno !== "undefined"
+        ? await Deno.readFile(url)
+        : new Uint8Array(await (await import("node:fs/promises")).readFile(url));
+      mod.initSync({ module: bytes });
+      return mod;
+    })();
+  }
+  return bootPromise;
 }
 
 /**
@@ -107,8 +115,8 @@ export class WasmEngineClient implements EngineClient {
 
   /** Boot the wasm module (idempotent) and return a fresh, empty engine. */
   static async create(): Promise<WasmEngineClient> {
-    await bootEngineWasm();
-    return new WasmEngineClient(new TestEngine());
+    const mod = await bootEngineWasm();
+    return new WasmEngineClient(new mod.TestEngine());
   }
 
   async deployResources(

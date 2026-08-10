@@ -49,6 +49,8 @@ export type {
   HttpResponse,
   HttpServer,
   JobHandler,
+  ProcessInstanceSnapshot,
+  ProcessInstanceState,
   SqliteDb,
   WatchHandle,
   WorkerSubscription,
@@ -58,6 +60,10 @@ export type { AppApi, Mounted, RuntimeContext } from "./core/context.ts";
 // BPMN error contract: a handler throws `BpmnError(code)` to raise a modelled
 // error routed to an error boundary (ADR 0050), instead of a retryable failure.
 export { BpmnError, isBpmnError } from "./core/host.ts";
+
+// Untyped-JSON narrowing guard — used by custom EngineClient adapters that
+// bridge JSON-string engine APIs into the typed contract above.
+export { isRecord } from "./core/guards.ts";
 
 // Connector packs (ADR 0050, in-process port)
 export {

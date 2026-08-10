@@ -13,7 +13,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { EngineClient, EngineJob } from "../runtime/core/host.ts";
+import type { EngineClient, EngineJob } from "@nanobpm/urban/runtime";
 
 /** A single service task `work`, job type `work`. Parks at `work` until a worker
  *  serves it — so it doubles as the cancel fixture when no worker is registered. */

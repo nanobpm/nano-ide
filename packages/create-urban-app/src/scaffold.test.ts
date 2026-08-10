@@ -128,6 +128,16 @@ test("full preset scaffolds the end-to-end showcase: API + operations + pages", 
 
   // Tokens are substituted inside the spec (title) and the message-publishing delegate.
   assert.equal(spec.info.title, "Hello Urban API");
+  // Every component schema is closed (`additionalProperties: false`) so generated apps reject
+  // unknown request/response keys by default — a strict contract out of the box.
+  for (const [name, schema] of Object.entries(spec.components.schemas)) {
+    assert.ok(schema && typeof schema === "object", `schema ${name} is an object`);
+    assert.equal(
+      Reflect.get(schema, "additionalProperties"),
+      false,
+      `schema ${name} is closed (additionalProperties: false)`,
+    );
+  }
   const createOp = await readFile(join(dir, "operations/createGreeting.ts"), "utf8");
   assert.match(createOp, /hello-urban\.greet-requested/, "message name is substituted");
   assert.ok(!/__APP_/.test(createOp), "no un-substituted tokens remain");

@@ -421,6 +421,44 @@ test("params/query are coerced to their schema type before reaching the delegate
   assert.deepEqual(got, { params: { id: 42 }, query: { verbose: true, tags: ["x", "y"] } });
 });
 
+test("a typeless numeric const/enum query param coerces (so its number-literal type is satisfiable)", async () => {
+  const enumSpec = JSON.stringify({
+    openapi: "3.1.0",
+    paths: {
+      "/pick": {
+        get: {
+          operationId: "pick",
+          parameters: [
+            { name: "v", in: "query", required: true, schema: { enum: [1, 2, 3] } }, // no `type`
+            { name: "k", in: "query", required: true, schema: { const: 7 } }, // no `type`
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: { query: Record<string, unknown> } | undefined;
+  const { router } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/operations/pick": {
+        default: (i: { query: Record<string, unknown> }) => {
+          got = { query: i.query };
+          return { body: { ok: true } };
+        },
+      },
+    },
+    enumSpec,
+  );
+  // A valid enum/const value coerces to a number and passes validation (would 400 if left a string).
+  const ok = await router(req("GET", "/app/api/pick", { query: "v=2&k=7" }));
+  assert.equal(ok.status, 200);
+  assert.deepEqual(got, { query: { v: 2, k: 7 } });
+  // An out-of-set value still fails validation (coercion doesn't loosen the constraint).
+  const bad = await router(req("GET", "/app/api/pick", { query: "v=9&k=7" }));
+  assert.equal(bad.status, 400);
+});
+
 test("response validation is status-keyed: a documented error body validates against ITS schema", async () => {
   const respSpec = JSON.stringify({
     openapi: "3.0.0",

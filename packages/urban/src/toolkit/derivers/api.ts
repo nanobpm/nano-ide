@@ -123,24 +123,29 @@ function objectToTs(schema: OpenApiSchema, depth: number): string {
  *  then forwards the coerced value), so a param's type is its schema type — not the raw wire string.
  *  A parameter with no schema, or ANY parameter of an ejected operation (whose runtime skips
  *  coercion/validation and hands the delegate the raw request), keeps the raw wire type (`string`,
- *  or `string | string[]` for query). */
-function paramsTs(op: OperationInfo, where: "path" | "query"): string {
+ *  or `string | string[]` for query). Ejected query params are also made optional: the runtime does
+ *  not enforce presence for ejected ops, so a "required" query param may in fact be absent. */
+function paramsTs(op: OperationInfo, where: "path" | "query", ejected: boolean): string {
   const ps = op.parameters.filter((p) => p.in === where);
   if (ps.length === 0) return "{}";
   const rawWire = where === "query" ? "string | string[]" : "string";
   const fields = ps.map((p) => {
-    const opt = p.required ? "" : "?";
     // Coerced to the schema type (number/boolean/array/enum/…); optionality is carried by the `?`
     // modifier — don't fold `undefined` into the value type, or required params would still accept
     // undefined. Schemaless params, and every param of an ejected op, fall back to the raw wire type.
-    const t = op.eject || !p.schema ? rawWire : schemaToTs(p.schema);
+    // A required query param of an ejected op is nonetheless optional here (runtime skips presence);
+    // path params stay as declared (the route only matches when every path segment is present).
+    const opt = ejected && where === "query" ? "?" : p.required ? "" : "?";
+    const t = ejected || !p.schema ? rawWire : schemaToTs(p.schema);
     return `${JSON.stringify(p.name)}${opt}: ${t}`;
   });
   return `{ ${fields.join("; ")} }`;
 }
 
-/** Emit `api-io.d.ts`: named component types + per-operation Request/Response + the id union. */
-export function emitApiBindings(doc: OpenApiDoc): string {
+/** Emit `api-io.d.ts`: named component types + per-operation Request/Response + the id union.
+ *  `surfaceEject` reflects the manifest's whole-surface `api.eject` (which the deriver otherwise
+ *  can't see): when set, EVERY operation is treated as ejected (raw params/query, `unknown` body). */
+export function emitApiBindings(doc: OpenApiDoc, surfaceEject = false): string {
   const ops = collectOperations(doc);
   const components = doc.components?.schemas ?? {};
 
@@ -159,6 +164,11 @@ export function emitApiBindings(doc: OpenApiDoc): string {
     }
     emittedTypeNames.set(typeName, source);
   };
+  // Reserve the fixed generated declarations (the operation-id union + operations map) up front, so
+  // a component or operationId whose stem collapses onto one of them fails the drift gate with a
+  // clear rename message instead of silently emitting a duplicate, uncompilable declaration.
+  claimTypeName("ApiOperationId", "the generated operation-id union");
+  claimTypeName("ApiOperations", "the generated operations map");
   for (const name of Object.keys(components)) {
     claimTypeName(typeStem(name), `component schema "${name}"`);
   }
@@ -183,14 +193,15 @@ export function emitApiBindings(doc: OpenApiDoc): string {
   const opDecls = ops
     .map((op) => {
       const stem = typeStem(op.operationId);
-      // An ejected operation (`x-urban-eject`) bypasses the generated coercion/validation — its
-      // delegate reads the raw request — so its input is NOT schema-shaped at runtime: params/query
-      // stay raw wire types and the body is unvalidated (`unknown`). Typing it by the schema would
-      // claim guarantees the runtime doesn't make. (Whole-surface `api.eject` is a manifest concern
-      // the deriver can't see; that exception is documented in ADR 0059.)
+      const ejected = surfaceEject || op.eject;
+      // An ejected operation (`x-urban-eject`, or the whole surface via manifest `api.eject`)
+      // bypasses the generated coercion/validation — its delegate reads the raw request — so its
+      // input is NOT schema-shaped at runtime: params/query stay raw wire types and the body is
+      // unvalidated (`unknown`). Typing it by the schema would claim guarantees the runtime doesn't
+      // make. (ADR 0059 documents the ejection exception.)
       // With a schema → the typed body. Required but no JSON schema → `unknown` (a body IS
       // required at runtime, just of an unknown shape). Otherwise (optional, absent) → `undefined`.
-      const bodyType = op.eject
+      const bodyType = ejected
         ? "unknown"
         : op.requestBodySchema
           ? schemaToTs(op.requestBodySchema)
@@ -202,17 +213,18 @@ export function emitApiBindings(doc: OpenApiDoc): string {
       const bodyOpt = op.requestBodyRequired ? "" : "?";
       // Response type: a union of every documented JSON response body (success + errors), so a
       // handler that returns a documented error body typechecks against its operation's response
-      // type. Deduped (identical schemas collapse), stable order. No documented JSON body → unknown.
+      // type. Bodyless documented statuses carry no schema and are skipped here. Deduped (identical
+      // schemas collapse), stable order. No documented JSON body → unknown.
       const respSeen = new Set<string>();
       const respParts = op.responseSchemas
-        .map((e) => schemaToTs(e.schema))
+        .flatMap((e) => (e.schema ? [schemaToTs(e.schema)] : []))
         .filter((t) => (respSeen.has(t) ? false : (respSeen.add(t), true)));
       const resp = respParts.length > 0 ? respParts.join(" | ") : "unknown";
       const summary = op.summary ? `/** ${op.summary.replace(/\*\//g, "*\\/")} */\n` : "";
       return (
         `${summary}export interface ${stem}Request {\n` +
-        `  params: ${paramsTs(op, "path")};\n` +
-        `  query: ${paramsTs(op, "query")};\n` +
+        `  params: ${paramsTs(op, "path", ejected)};\n` +
+        `  query: ${paramsTs(op, "query", ejected)};\n` +
         `  body${bodyOpt}: ${bodyType};\n` +
         `}\n` +
         `export type ${stem}Response = ${resp};`
@@ -330,18 +342,24 @@ export function emitApiController(doc: OpenApiDoc, operationsDir: string = DEFAU
 }
 
 /** Derive the api artifacts from a parsed OpenAPI document. `operationsDir` is the manifest's
- *  `api.dir` (default `operations/`) — the controller's static delegate imports resolve into it. */
-export function deriveApi(doc: OpenApiDoc, operationsDir: string = DEFAULT_OPERATIONS_DIR): DerivedArtifact[] {
+ *  `api.dir` (default `operations/`) — the controller's static delegate imports resolve into it.
+ *  `surfaceEject` is the manifest's whole-surface `api.eject`: when set, every operation is typed as
+ *  ejected (raw params/query, `unknown` body) so the generated types match the runtime. */
+export function deriveApi(
+  doc: OpenApiDoc,
+  operationsDir: string = DEFAULT_OPERATIONS_DIR,
+  surfaceEject = false,
+): DerivedArtifact[] {
   return [
-    { path: `${GENERATED_DIR}/${API_BINDINGS_DTS}`, content: emitApiBindings(doc) },
+    { path: `${GENERATED_DIR}/${API_BINDINGS_DTS}`, content: emitApiBindings(doc, surfaceEject) },
     { path: `${GENERATED_DIR}/${API_BINDINGS_TS}`, content: emitApiBindingsRuntime() },
     { path: `${GENERATED_DIR}/${API_CONTROLLER_TS}`, content: emitApiController(doc, operationsDir) },
   ];
 }
 
-export const apiDeriver: Deriver<{ doc: OpenApiDoc; operationsDir?: string }> = {
+export const apiDeriver: Deriver<{ doc: OpenApiDoc; operationsDir?: string; surfaceEject?: boolean }> = {
   id: "openapi->api-io",
   describe:
     "Derive api-io.d.ts (typed request/response per operationId) + the typed defineOperation + the delegate registry.",
-  derive: ({ doc, operationsDir }) => deriveApi(doc, operationsDir),
+  derive: ({ doc, operationsDir, surfaceEject }) => deriveApi(doc, operationsDir, surfaceEject),
 };

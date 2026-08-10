@@ -243,16 +243,29 @@ export function apiDocsPath(manifest: unknown): string | undefined {
 }
 
 /** Coerce a wire string to the type its parameter schema declares, so numeric/boolean bounds
- *  validate. A value that will not coerce is left as-is and fails the type check with a clear
- *  message. The delegate still receives the original string(s). */
+ *  validate and the delegate receives the coerced value (not the raw string). A value that will not
+ *  coerce is left as-is and fails the type check with a clear message. */
 function coerceParam(doc: OpenApiDoc, schema: OpenApiSchema | undefined, raw: string): unknown {
   const s = resolveSchema(doc, schema);
   if (!s) return raw;
-  if (s.type === "integer" || s.type === "number") {
+  // Effective scalar type: the explicit `type`, else inferred from a typeless `const`/`enum` whose
+  // values are all numbers or all booleans. Without this, a typeless numeric/boolean const/enum
+  // param (whose generated type is a number/boolean literal) could never be satisfied by the wire
+  // string — every request would 400 against a type the runtime otherwise never produces.
+  let t = s.type;
+  if (t === undefined) {
+    if (typeof s.const === "number") t = "number";
+    else if (typeof s.const === "boolean") t = "boolean";
+    else if (Array.isArray(s.enum) && s.enum.length > 0) {
+      if (s.enum.every((v) => typeof v === "number")) t = "number";
+      else if (s.enum.every((v) => typeof v === "boolean")) t = "boolean";
+    }
+  }
+  if (t === "integer" || t === "number") {
     const n = Number(raw);
     return raw.trim() !== "" && !Number.isNaN(n) ? n : raw;
   }
-  if (s.type === "boolean") {
+  if (t === "boolean") {
     if (raw === "true") return true;
     if (raw === "false") return false;
   }

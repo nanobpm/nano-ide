@@ -105,15 +105,21 @@ Two refinements make "typed request/response" honest end-to-end (urban 0.38.0):
   (A parameter with no schema keeps its raw wire type.) Coercion and validation read
   the one `OpenApiSchema`, so the type and the runtime value never disagree.
   **Exception — ejection:** an ejected operation (`x-urban-eject`, or whole-surface
-  `api.eject`) deliberately bypasses the generated coercion/validation and hands the
-  delegate the raw request, so its generated `params`/`query` stay raw wire types
-  (`string` / `string | string[]`) and its body is `unknown` — the types stay honest
-  by *not* claiming a coercion the ejected path never performs.
+  `api.eject`, which `urban gen` reads from the manifest) deliberately bypasses the
+  generated coercion/validation and hands the delegate the raw request, so its generated
+  `params`/`query` stay raw wire types (`string` / `string | string[]`) and its body is
+  `unknown` — the types stay honest by *not* claiming a coercion the ejected path never
+  performs. Ejected **query** params are also typed optional (the runtime enforces no
+  presence check for ejected ops); ejected **path** params stay required (the route only
+  matches when every path segment is present).
 - **The response type unions *every* documented JSON response, not just the first
   2xx.** A delegate that returns a documented error body (e.g. a `400 { error }`)
   therefore typechecks against its operation's response type, and response-shape
-  validation is **status-keyed** — a result is validated against the schema for its
-  own status (else `default`), never spuriously against the success schema.
+  validation is **status-keyed** — a result is validated against the schema for its own
+  status, else a matching status range (`2XX`), else `default`, never spuriously against
+  the success schema. A documented-but-bodyless status (e.g. `204 {}`) is left
+  unvalidated and **does not** fall through to `default` — it is documented, it simply
+  carries no JSON body.
 
 ### 4. Generate everything mechanical; author only semantics
 

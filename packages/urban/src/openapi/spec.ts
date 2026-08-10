@@ -122,10 +122,13 @@ export interface OpenApiDoc {
 export const HTTP_METHODS = ["get", "put", "post", "delete", "patch", "options", "head"] as const;
 export type HttpMethodLower = (typeof HTTP_METHODS)[number];
 
-/** A single documented JSON response: its status code (or "default") and body schema. */
+/** A single documented response: its status code ("200"), status range ("2XX"), or "default", and
+ *  its JSON body schema when it documents one. `schema` is absent when the response is documented
+ *  but carries no JSON body — recorded so an exact-status match can suppress the `default` fallback
+ *  rather than mis-validating a bodyless status against the default (typically error) schema. */
 export interface ResponseSchemaEntry {
   status: string;
-  schema: OpenApiSchema;
+  schema?: OpenApiSchema;
 }
 
 /** One resolved operation: its id, method, path, parameters, request body schema, and responses.
@@ -541,32 +544,40 @@ function normalizeParameters(raw: unknown[]): OpenApiParameter[] {
   return order.map((k) => byKey.get(k)!);
 }
 
-/** Every documented JSON response body, in a stable order: numeric status codes ascending, then
- *  "default" last. A response without a JSON body schema is skipped. */
+/** Every documented response, in a stable order: numeric status codes ascending, then status
+ *  ranges ("1XX".."5XX"), then "default" last. A response with no JSON body schema is still
+ *  recorded (with `schema` undefined) so an exact-status match suppresses the `default` fallback
+ *  instead of the bodyless status being mis-validated against the default (error) schema. */
 function collectResponseSchemas(responses: Record<string, unknown>): ResponseSchemaEntry[] {
+  const isExact = (c: string) => /^\d{3}$/.test(c);
+  const isRange = (c: string) => /^[1-5]XX$/i.test(c);
+  const keys = Object.keys(responses).filter((c) => isExact(c) || isRange(c) || c === "default");
+  const rank = (c: string) => (c === "default" ? 2 : isRange(c) ? 1 : 0);
+  keys.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
   const out: ResponseSchemaEntry[] = [];
-  const statusCodes = Object.keys(responses)
-    .filter((c) => /^\d{3}$/.test(c))
-    .sort();
-  const codes = isRecord(responses.default) ? [...statusCodes, "default"] : statusCodes;
-  for (const status of codes) {
-    const resp = responses[status];
+  for (const key of keys) {
+    const resp = responses[key];
     if (!isRecord(resp)) continue;
+    const status = isRange(key) ? key.toUpperCase() : key;
     const schema = firstJsonSchema(isRecord(resp.content) ? resp.content : undefined);
-    if (schema) out.push({ status, schema });
+    out.push(schema ? { status, schema } : { status });
   }
   return out;
 }
 
-/** Select the response schema to validate a handler result against: the entry whose status matches
- *  the response status, else the "default" entry, else undefined — an undocumented status is left
- *  unvalidated rather than mis-validated against an unrelated (e.g. success) response schema. */
+/** Select the response schema to validate a handler result against: exact status → status range
+ *  ("2XX") → "default". A documented-but-bodyless exact status (or range) returns undefined (no
+ *  validation) and does NOT fall through to `default` — the status IS documented, it just carries no
+ *  JSON body, so validating it against an unrelated (e.g. error `default`) schema would be wrong. An
+ *  UNdocumented status likewise returns undefined rather than being mis-validated. */
 export function responseSchemaForStatus(
   entries: ResponseSchemaEntry[],
   status: number,
 ): OpenApiSchema | undefined {
   const exact = entries.find((e) => e.status === String(status));
   if (exact) return exact.schema;
+  const range = entries.find((e) => e.status === `${Math.floor(status / 100)}XX`);
+  if (range) return range.schema;
   return entries.find((e) => e.status === "default")?.schema;
 }
 

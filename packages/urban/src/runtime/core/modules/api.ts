@@ -103,13 +103,14 @@ export interface OperationContract {
   body?: unknown;
 }
 
-/** The loose contract an untyped delegate sees. Params/query are coerced to their declared schema
- *  type before the delegate runs (the runtime validates then forwards the coerced value), so values
- *  are `unknown`, not raw strings; the JSON body is `unknown`. `body` is optional so a raw (untyped)
- *  delegate typed `OperationHandler<DefaultContract>` still satisfies the generated registry's
- *  per-operation `OperationHandler<ReqFor<K>>` slot — an op whose request body is optional/absent
- *  must be a subtype of the default contract (handler args are contravariant), and a schema-typed
- *  param object (e.g. `{ count: number }`) must be assignable to it. */
+/** The loose contract an untyped delegate sees. Params/query values are `unknown` (coerced to their
+ *  declared schema type before the delegate runs — the runtime validates then forwards the coerced
+ *  value — but a schemaless/undeclared key, or any param of an ejected op, is forwarded raw, hence
+ *  `unknown` rather than the coerced type); the JSON body is `unknown`. `body` is optional so a raw
+ *  (untyped) delegate typed `OperationHandler<DefaultContract>` still satisfies the generated
+ *  registry's per-operation `OperationHandler<ReqFor<K>>` slot — an op whose request body is
+ *  optional/absent must be a subtype of the default contract (handler args are contravariant), and a
+ *  schema-typed param object (e.g. `{ count: number }`) must be assignable to it. */
 export interface DefaultContract {
   params: Record<string, unknown>;
   query: Record<string, unknown>;

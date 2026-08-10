@@ -17,6 +17,19 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
+async function assertScaffoldedQualityGateFiles(dir: string, files: string[]): Promise<void> {
+  for (const file of [
+    "biome.json",
+    "plugins/no-unsafe-type-assertion.grit",
+    ".github/workflows/ci.yml",
+  ]) {
+    assert.ok(files.includes(file), `${file} in the file list`);
+    assert.ok(await exists(join(dir, file)), `${file} on disk`);
+  }
+  assert.ok(!files.some((f) => f.startsWith("_github/")), "_github is renamed to .github");
+  assert.ok(!(await exists(join(dir, "_github"))), "no _github dir on disk");
+}
+
 test("slugify normalizes names", () => {
   assert.equal(slugify("My Cool App"), "my-cool-app");
   assert.equal(slugify("  --Weird__Name!!  "), "weird-name");
@@ -64,6 +77,7 @@ test("full preset scaffolds a runnable app with substituted tokens", async () =>
   const res = await scaffold({ name: "Hello Urban", dir, preset: "full" });
   assert.equal(res.id, "hello-urban");
   assert.ok(res.files.includes("nano.app.json"));
+  await assertScaffoldedQualityGateFiles(dir, res.files);
 
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
   assert.equal(manifest.id, "hello-urban");
@@ -191,6 +205,7 @@ test("code-first style scaffolds a defineFlow app (no processes/, custom main.ts
   const dir = await mkdtemp(join(tmpdir(), "urban-code-"));
   const res = await scaffold({ name: "Code App", dir, style: "code" });
   assert.equal(res.id, "code-app");
+  await assertScaffoldedQualityGateFiles(dir, res.files);
 
   // Code-first source layout: workflows/ + scripts/, no authored BPMN or worker map.
   assert.ok(res.files.includes("workflows/greet.ts"), "has a defineFlow workflow");

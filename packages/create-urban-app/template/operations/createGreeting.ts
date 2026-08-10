@@ -13,19 +13,19 @@
 import { defineOperation } from "@nanobpm/urban";
 
 function readWho(body: unknown): string {
-  if (body && typeof body === "object") {
-    const who = Reflect.get(body, "who");
-    if (typeof who === "string" && who.trim().length > 0) return who.trim();
-  }
-  return "world";
+	if (body && typeof body === "object") {
+		const who = Reflect.get(body, "who");
+		if (typeof who === "string" && who.trim().length > 0) return who.trim();
+	}
+	return "world";
 }
 
 export default defineOperation("createGreeting", async ({ body }, app) => {
-  const who = readWho(body);
-  await app.engine.publishMessage({
-    name: "__APP_ID__.greet-requested",
-    correlationKey: who,
-    variables: { who },
-  });
-  return { status: 202, body: { accepted: true, who } };
+	const who = readWho(body);
+	await app.engine.publishMessage({
+		name: "__APP_ID__.greet-requested",
+		correlationKey: who,
+		variables: { who },
+	});
+	return { status: 202, body: { accepted: true, who } };
 });

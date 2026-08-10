@@ -12,8 +12,9 @@
 // Typed data `envelope`s give the step's `job.variables` (in) and return value
 // (out) real TypeScript types, and are lifted into the generated BPMN as a
 // `nano:shape` + `dataEnvelope` — so the model stays ejectable to model-first.
-import { defineFlow, envelope } from "@nanobpm/urban";
+
 import type { DataLayer, Table } from "@nanobpm/urban";
+import { defineFlow, envelope } from "@nanobpm/urban";
 
 /** What starts a greeting. */
 const GreetIn = envelope("GreetIn", { who: "string" });
@@ -21,26 +22,26 @@ const GreetIn = envelope("GreetIn", { who: "string" });
 const GreetOut = envelope("GreetOut", { message: "string" });
 
 interface Greeting {
-  id?: number;
-  who: string;
-  message: string;
-  createdAt?: string;
+	id?: number;
+	who: string;
+	message: string;
+	createdAt?: string;
 }
 
 let _data: DataLayer | null = null;
 
 /** Injected by `main.ts` after the Urban runtime provisions the datasource. */
 export function setGreetData(d: DataLayer): void {
-  _data = d;
+	_data = d;
 }
 
 function greetings(): Table<Greeting> {
-  if (!_data) {
-    throw new Error(
-      "data layer not injected — call setGreetData(app.data) before starting the Worker",
-    );
-  }
-  return _data.table<Greeting>("greetings", "id");
+	if (!_data) {
+		throw new Error(
+			"data layer not injected — call setGreetData(app.data) before starting the Worker",
+		);
+	}
+	return _data.table<Greeting>("greetings", "id");
 }
 
 /**
@@ -49,16 +50,20 @@ function greetings(): Table<Greeting> {
  * `WorkflowClient.start(greet, { who })` (see scripts/greet.ts).
  */
 export const greet = defineFlow(
-  "greet",
-  { hello: { in: GreetIn, out: GreetOut } },
-  (w) => {
-    // `job.variables` is typed `{ who: string }`; the return is checked against `{ message: string }`.
-    // The step name must differ from the flow id ("greet"), which is reserved for the process itself.
-    w.run("hello", async (job) => {
-      const who = job.variables.who || "world";
-      const message = `Hello, ${who}!`;
-      await greetings().insert({ who, message, createdAt: new Date().toISOString() });
-      return { message };
-    });
-  },
+	"greet",
+	{ hello: { in: GreetIn, out: GreetOut } },
+	(w) => {
+		// `job.variables` is typed `{ who: string }`; the return is checked against `{ message: string }`.
+		// The step name must differ from the flow id ("greet"), which is reserved for the process itself.
+		w.run("hello", async (job) => {
+			const who = job.variables.who || "world";
+			const message = `Hello, ${who}!`;
+			await greetings().insert({
+				who,
+				message,
+				createdAt: new Date().toISOString(),
+			});
+			return { message };
+		});
+	},
 );

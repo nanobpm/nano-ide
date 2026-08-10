@@ -1,21 +1,26 @@
 {
-  "name": "__APP_ID__",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "description": "__APP_NAME__ — an Urban app.",
-  "engines": {
-    "node": ">=22.6"
-  },
-  "scripts": {
-    "check": "urban check",
-    "gen": "urban gen",
-    "gen:check": "urban gen --check",
-    "start": "urban run",
-    "dev": "urban dev",
-    "deploy": "urban deploy"
-  },
-  "dependencies": {
-    "@nanobpm/urban": "^0.32.0"
-  }
+	"name": "__APP_ID__",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "__APP_NAME__ — an Urban app.",
+	"engines": {
+		"node": ">=22.6"
+	},
+	"scripts": {
+		"typecheck": "deno check main.ts 'workers/**/*.ts' 'operations/**/*.ts'",
+		"lint": "biome check",
+		"check": "urban check",
+		"gen": "urban gen",
+		"gen:check": "urban gen --check",
+		"start": "urban run",
+		"dev": "urban dev",
+		"deploy": "urban deploy"
+	},
+	"dependencies": {
+		"@nanobpm/urban": "^0.32.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.7"
+	}
 }

@@ -8,13 +8,13 @@
 import { defineOperation } from "@nanobpm/urban";
 
 interface Greeting {
-  id: number;
-  who: string;
-  message: string;
-  createdAt?: string | null;
+	id: number;
+	who: string;
+	message: string;
+	createdAt?: string | null;
 }
 
 export default defineOperation("listGreetings", (_input, app) => {
-  const greetings = app.data.repo("greeting").all<Greeting>();
-  return { status: 200, body: { greetings } };
+	const greetings = app.data.repo("greeting").all<Greeting>();
+	return { status: 200, body: { greetings } };
 });

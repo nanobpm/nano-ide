@@ -120,6 +120,15 @@ The runtime **auto-correlates**: a worker handler's `app.log` is pre-bound to
 `{ method, path, operationId }`, so every line you emit is tied to its job/request
 for free.
 
+The `UrbanApp` handle returned by `runFromEnv`/`createUrbanApp` also carries an
+app-level `app.log` (no per-request correlation) for the entrypoint's boot/shutdown
+lines:
+
+```ts
+const app = await runFromEnv();
+app.log.info("started", { httpPort: app.httpPort });
+```
+
 Records are written as **NDJSON** — one JSON object per line,
 `{"ts":…,"level":…,"msg":…, …fields}` — with `warn`/`error` on stderr and
 `debug`/`info` on stdout. `URBAN_LOG_LEVEL` (default `info`) sets the minimum level.

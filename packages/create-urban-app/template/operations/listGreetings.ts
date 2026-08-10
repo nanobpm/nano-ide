@@ -12,5 +12,6 @@ import { defineOperation } from "../nano-generated/operations.ts";
 
 export default defineOperation("listGreetings", (_input, app) => {
 	const greetings = app.data.repo("greeting").all<Greeting>();
+	app.log.debug("listed greetings", { count: greetings.length });
 	return { status: 200, body: { greetings } };
 });

@@ -13,7 +13,7 @@ import { deployModels } from "./modules/deploy.ts";
 import type { TemplateSource } from "./modules/templates.ts";
 import { provisionData, DataLayer } from "./modules/datasource.ts";
 import { installExecStore, type JobExecContext } from "./execContext.ts";
-import { createLogger } from "./logger.ts";
+import { createLogger, type Logger } from "./logger.ts";
 import { mountWorkers } from "./modules/workers.ts";
 import { mountConnectors } from "./modules/connectors.ts";
 import { mountSurfaces } from "./modules/surfaces.ts";
@@ -100,6 +100,10 @@ export interface UrbanApp {
   stop(): Promise<void>;
   /** A structured snapshot of what is mounted. */
   inspect(): Record<string, unknown>;
+  /** An app-level structured {@link Logger} for the entrypoint (`main.ts`). It carries no
+   * per-request/per-job correlation (worker handlers and route delegates get a child logger bound
+   * to their job/request context via `AppApi.log`); use it for boot/shutdown lifecycle lines. */
+  readonly log: Logger;
   /** The provisioned data layer (available after start when `data` is mounted). */
   readonly data: DataLayer | undefined;
   readonly security: SecurityPolicy | undefined;
@@ -123,6 +127,11 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     instanceTracking: opts.mount?.instanceTracking ?? true,
   };
   const ctx = { manifest, host, engine, root, templates: opts.templates };
+
+  // One app-level structured logger over the host sink, shared by the entrypoint (exposed as
+  // `app.log`) and the per-invocation `AppApi.log` (workers/route delegates `child()` it with their
+  // correlation context).
+  const appLog = createLogger((l, m, f) => host.log(l, m, f));
 
   // Install the ambient job-execution store once per process (idempotent) so worker dispatch can
   // stamp write-provenance onto DataLayer inserts. Absent-safe: a host without `createAsyncStore`
@@ -174,6 +183,7 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
   const app: UrbanApp = {
     manifest,
     root,
+    log: appLog,
     get data() {
       return data;
     },
@@ -198,7 +208,7 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
           engine,
           sdk: engineSdk(engine),
           env: (n) => host.env(n),
-          log: createLogger((l, m, f) => host.log(l, m, f)),
+          log: appLog,
         };
 
         if (flags.workers) {

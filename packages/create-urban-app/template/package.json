@@ -8,7 +8,7 @@
 		"node": ">=22.6"
 	},
 	"scripts": {
-		"typecheck": "deno check main.ts \"workers/**/*.ts\" \"operations/**/*.ts\"",
+		"typecheck": "deno check main.ts \"nano-generated/controller.ts\" \"workers/**/*.ts\" \"operations/**/*.ts\"",
 		"lint": "biome check",
 		"check": "urban check",
 		"gen": "urban gen",
@@ -19,7 +19,7 @@
 		"test": "node --test --experimental-strip-types \"tests/**/*.test.ts\""
 	},
 	"dependencies": {
-		"@nanobpm/urban": "^0.32.0"
+		"@nanobpm/urban": "^0.36.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.7",

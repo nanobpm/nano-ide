@@ -122,7 +122,7 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
   const manifestPath = join(root, opts.manifestFile ?? "nano.app.json");
   const manifest: ToolkitManifest & {
     models?: { processes?: string[]; workflows?: string[] };
-    api?: { spec?: string };
+    api?: { spec?: string; dir?: string };
   } = JSON.parse(await io.readText(manifestPath));
 
   const artifacts: DerivedArtifact[] = [];
@@ -159,7 +159,10 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
   const specRef = typeof manifest.api?.spec === "string" ? manifest.api.spec.trim() : "";
   if (!opts.modelsOnly && specRef.length > 0) {
     const specText = await io.readText(join(root, specRef));
-    artifacts.push(...deriveApi(parseSpec(specText)));
+    const opsDir = typeof manifest.api?.dir === "string" && manifest.api.dir.trim().length > 0
+      ? manifest.api.dir.trim()
+      : undefined;
+    artifacts.push(...deriveApi(parseSpec(specText), opsDir));
   }
 
   return { artifacts: sortArtifacts(artifacts), derived };

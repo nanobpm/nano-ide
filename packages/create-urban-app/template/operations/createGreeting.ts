@@ -9,8 +9,11 @@
 // It returns 202 Accepted (the work happens asynchronously in the process). The request
 // body is validated against the spec's `GreetRequest` schema before it reaches this
 // delegate, so `who` is present; we still narrow defensively (no `as` casts — see AGENTS.md).
+// The typed `defineOperation` comes from `nano-generated/` (produced by `urban gen`): it types the
+// request/response from the spec and lets the generated controller type-check this delegate so it
+// cannot drift from the contract (ADR 0059).
 
-import { defineOperation } from "@nanobpm/urban";
+import { defineOperation } from "../nano-generated/operations.ts";
 
 function readWho(body: unknown): string {
 	if (body && typeof body === "object") {

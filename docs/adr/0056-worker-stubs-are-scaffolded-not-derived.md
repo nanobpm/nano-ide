@@ -6,6 +6,17 @@ Relates to: ADR 0033 (typed worker bindings), ADR 0053 (derivation is a shared
 library), ADR 0054 (one code-first stack). Depends on PR #71 (`AppJobHandler`
 generics).
 
+> **Amendment (2026-08, ADR 0059):** the standalone `urban stubs` command has been
+> **retired**. Write-once stub scaffolding now runs as part of `urban gen` (workers
+> from the model *and* operation-delegate stubs from the OpenAPI spec). The
+> **scaffold ≠ derive** distinction below is unchanged — stubs are still human-owned
+> and never clobbered — but the two concerns share one command. `urban gen` writes
+> stubs by default; `urban gen --check` writes nothing and now reports a **missing**
+> stub as drift (the generated controller statically imports each operation delegate,
+> so an uncommitted stub must fail CI). Stub *content* is still never drift-checked;
+> only a delegate's *existence* is enforced.
+
+
 ## Context
 
 Model-first analysis established that, given a BPMN model, almost everything an
@@ -25,24 +36,26 @@ the *body* is not — so it is a scaffolding problem, not a derivation problem.
 
 ## Decision
 
-Add a **write-once worker-stub scaffolder** (`urban stubs`) that, from the model,
-creates a typed handler stub per un-wired service task and wires it into the
-manifest — and then **never touches it again**.
+Add a **write-once worker-stub scaffolder** (originally `urban stubs`; now folded
+into `urban gen` — see the amendment above) that, from the model, creates a typed
+handler stub per un-wired service task and wires it into the manifest — and then
+**never touches it again**.
 
 The load-bearing distinction is **scaffold ≠ derive**:
 
-| | `urban gen` (derive) | `urban stubs` (scaffold) |
+| | `urban gen` (derive) | `urban gen` (scaffold) |
 |---|---|---|
 | Output location | `nano-generated/` (gitignored) | `workers/<slug>/worker.ts` (committed) |
 | Ownership | machine-owned | human-owned |
 | On re-run | **overwrite always** | **write-if-absent, never clobber** |
-| Drift-checked (`--check`) | yes (CI gate) | no |
-| Default action | write | **dry-run** (`--write` to apply) |
+| Drift-checked (`--check`) | yes (content) | existence only (never content) |
+| Default action | write | write-if-absent |
 
 Because a stub is human-owned and edited after creation, it must **not** flow
-through the `Deriver`/`runGen`/`--check` path (which exists precisely to
-overwrite and drift-gate the generated tree). It is a separate command with a
-dry-run default.
+through the `Deriver`/`runGen`/`--check` *content* path (which exists precisely to
+overwrite and drift-gate the generated tree). It is composed into `urban gen` as a
+write-once, write-if-absent step (see `toolkit/generate.ts`) that never clobbers an
+existing stub; `--check` only enforces that a required stub **exists**.
 
 ### What a stub is
 
@@ -99,20 +112,21 @@ typechecks on Node or Deno with no `@types/node` and no `skipLibCheck`.
 
 ### Manifest wiring
 
-For every stubbed (or pre-existing but un-wired) task, `--write` appends
-`{ taskType, handler }` to `manifest.workers[]` (creating the array if absent).
-This reformats the manifest with 2-space indent — acceptable for a scaffolding
-tool and only done under `--write`.
+For every stubbed (or pre-existing but un-wired) task, the write-if-absent scaffold
+step appends `{ taskType, handler }` to `manifest.workers[]` (creating the array if
+absent). This reformats the manifest with 2-space indent — acceptable for a
+scaffolding tool and only done when `urban gen` runs in write mode (not `--check`).
 
 ## Consequences
 
 - The model remains the single source of truth for *structure and types*; humans
-  own only the *bodies*. Re-running `urban stubs` after adding a task creates just
+  own only the *bodies*. Re-running `urban gen` after adding a task creates just
   the new stub and leaves edited ones untouched.
 - Never generating bodies keeps the tool honest: it scaffolds the seam, it does
   not fabricate logic.
-- Two commands with opposite semantics (`gen` overwrites+checks; `stubs`
-  write-once) keep the human-owned tree away from the drift gate — a stub edit can
-  never fail `urban gen --check`.
+- The overwrite-and-check derivation and the write-once scaffold have opposite
+  semantics but share one command (`urban gen`): the derived tree is drift-gated,
+  while a human-owned stub's *content* stays out of the gate — a stub edit can
+  never fail `urban gen --check` (only a *missing* stub does).
 - Imperative `defineWorkflow` apps (single degenerate orchestrator task) are not a
   target: their logic is code, not model-shaped, so there is nothing to stub.

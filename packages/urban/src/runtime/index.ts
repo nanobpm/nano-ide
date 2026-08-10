@@ -87,7 +87,7 @@ export { cancelInstanceReconciling } from "./core/modules/cancel.ts";
 export type { CancelInstanceResult, CancelInstanceState } from "./core/modules/cancel.ts";
 export { mountActions, resolveActionHandler } from "./core/modules/actions.ts";
 export type { ActionHandler, ActionRequest, ActionResult, ActionsHandle } from "./core/modules/actions.ts";
-export { defineOperation, mountApi, resolveOperationHandler } from "./core/modules/api.ts";
+export { defineOperation, mountApi, resolveOperationHandler, NotImplemented } from "./core/modules/api.ts";
 export type {
   ApiBinding,
   ApiHandle,

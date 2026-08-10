@@ -103,9 +103,11 @@ export {
   deriveApi,
   emitApiBindings,
   emitApiBindingsRuntime,
+  emitApiController,
   schemaToTs,
   API_BINDINGS_DTS,
   API_BINDINGS_TS,
+  API_CONTROLLER_TS,
 } from "./derivers/api.ts";
 
 // The OpenAPI machinery the deriver + runtime share (ADR 0058).
@@ -149,6 +151,8 @@ export const DERIVERS = [
 // Gen orchestrator + IO
 export { collectArtifacts, runGen, joinPath, readModels, expandPattern, previewModels } from "./gen.ts";
 export type { GenIO, GenOptions, GenResult } from "./gen.ts";
+export { generate } from "./generate.ts";
+export type { GenerateResult } from "./generate.ts";
 export { createNodeGenIO } from "./fsio.ts";
 
 // Code-first model derivation (workflows/*.ts → BPMN)
@@ -179,6 +183,12 @@ export type {
 } from "./scaffold/workers.ts";
 export { scaffoldWorkers } from "./scaffold.ts";
 export type { ScaffoldOptions, ScaffoldRun, StubOutcome, StubStatus } from "./scaffold.ts";
+
+// Operation-delegate scaffolder (ADR 0059): write-once typed delegate stubs from the OpenAPI spec.
+export { planOperationScaffold, renderOperationStub } from "./scaffold/operations.ts";
+export type { OperationStubPlan } from "./scaffold/operations.ts";
+export { scaffoldOperations } from "./scaffold.ts";
+export type { OperationScaffoldRun, OperationStubOutcome } from "./scaffold.ts";
 
 export { addConnector } from "./addConnector.ts";
 export type { AddConnectorOptions, AddConnectorResult } from "./addConnector.ts";

@@ -14,7 +14,6 @@ test("urban data exits 0 with a parseable envelope on an unreadable request", as
     root: ".",
     manifest: "nano.app.json",
     check: false,
-    write: false,
     deno: false,
     models: true,
     stdout: false,

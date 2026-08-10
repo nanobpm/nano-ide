@@ -25,7 +25,7 @@ import { denoGlobal, processGlobal } from "./runtime/adapters/globals.ts";
 import { errorMessage, isRecord } from "./runtime/core/guards.ts";
 import { scaffold, slugify } from "create-urban-app";
 import type { DataRequest } from "./runtime/index.ts";
-import { addConnector, createNodeGenIO, previewModels, runGen, scaffoldWorkers } from "./toolkit/index.ts";
+import { addConnector, createNodeGenIO, previewModels, generate, runGen } from "./toolkit/index.ts";
 import { pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -50,7 +50,6 @@ interface Flags {
   manifest: string;
   port?: number;
   check: boolean;
-  write: boolean;
   deno: boolean;
   models: boolean;
   stdout: boolean;
@@ -62,7 +61,7 @@ interface Flags {
 }
 
 function parse(argv: string[]): Flags {
-  const f: Flags = { root: ".", manifest: "nano.app.json", check: false, write: false, deno: false, models: true, stdout: false, install: true, help: false, version: false, _: [] };
+  const f: Flags = { root: ".", manifest: "nano.app.json", check: false, deno: false, models: true, stdout: false, install: true, help: false, version: false, _: [] };
   const need = (i: number, flag: string): string => {
     const v = argv[i];
     if (v === undefined || v.startsWith("-")) throw new Error(`flag ${flag} requires a value`);
@@ -73,7 +72,6 @@ function parse(argv: string[]): Flags {
     if (a === "-h" || a === "--help") f.help = true;
     else if (a === "-v" || a === "--version") f.version = true;
     else if (a === "--check") f.check = true;
-    else if (a === "--write") f.write = true;
     else if (a === "--deno") f.deno = true;
     else if (a === "--no-models") f.models = false;
     else if (a === "--models") f.models = true;
@@ -108,11 +106,12 @@ Usage:
   urban new <name> [--root <path>] [--deno] [--style model|code]    scaffold a new Urban app
                                     (--code-first is shorthand for --style code)
   urban check                       validate the manifest
-  urban gen [--check] [--no-models] derive artifacts (migrations, worker-io, + code-first models)
+  urban gen [--check] [--no-models] derive artifacts + scaffold write-once handler stubs
+                                    (--check: verify up-to-date without writing; a missing stub or
+                                    drifted artifact fails — run \`urban gen\`)
                                     (--no-models: skip writing derived .bpmn; type-contracts only)
   urban derive [--check|--stdout]   derive code-first models only (workflows/*.ts → processes/*.bpmn)
                                     (--stdout: print {models,incomplete} JSON without writing)
-  urban stubs [--write]             scaffold write-once handler stubs from the model
   urban add <pkg> [--no-install]    install a connector pack + wire it into nano.app.json
   urban run                         materialize + serve the app
   urban dev                         run + watch sources, hot-reload on change
@@ -148,23 +147,43 @@ async function cmdCheck(f: Flags): Promise<number> {
 
 async function cmdGen(f: Flags): Promise<number> {
   const io = createNodeGenIO();
-  const res = await runGen({ root: f.root, io, manifestFile: f.manifest, check: f.check, emitModels: f.models });
+  const res = await generate({ root: f.root, io, manifestFile: f.manifest, check: f.check, emitModels: f.models });
   if (res.incomplete) {
     console.error(`✖ ${res.modelErrors.length} workflow(s) failed to derive:`);
     for (const e of res.modelErrors) console.error(`  • ${e.path}: ${e.message}`);
     return 1;
   }
   if (f.check) {
-    if (res.drift.length === 0) {
-      console.log(`✔ generated artifacts are up to date (${res.artifacts.length} checked)`);
+    if (res.drift.length === 0 && res.missingStubs.length === 0) {
+      console.log(`✔ generated artifacts + handler stubs are up to date (${res.artifacts.length} checked)`);
       return 0;
     }
-    console.error(`✖ ${res.drift.length} generated artifact(s) are out of date — run \`urban gen\`:`);
-    for (const p of res.drift) console.error(`  • ${p}`);
+    if (res.drift.length > 0) {
+      console.error(`✖ ${res.drift.length} generated artifact(s) are out of date — run \`urban gen\`:`);
+      for (const p of res.drift) console.error(`  • ${p}`);
+    }
+    if (res.missingStubs.length > 0) {
+      console.error(`✖ ${res.missingStubs.length} handler stub(s) missing — run \`urban gen\`:`);
+      for (const p of res.missingStubs) console.error(`  • ${p}`);
+    }
     return 1;
   }
   console.log(`✔ generated ${res.artifacts.length} artifact(s):`);
   for (const a of res.artifacts) console.log(`  • ${a.path}`);
+
+  // Write-once handler stubs scaffolded as part of generation (workers from the model, operation
+  // delegates from the OpenAPI spec). Existing, human-owned stubs are kept verbatim.
+  const created = [
+    ...res.workerStubs.filter((o) => o.status === "created").map((o) => o.handlerPath),
+    ...res.operationStubs.filter((o) => o.status === "created").map((o) => o.handlerPath),
+  ];
+  if (created.length > 0) {
+    console.log(`✔ scaffolded ${created.length} handler stub(s):`);
+    for (const p of created) console.log(`  + ${p}`);
+  }
+  if (res.manifestPatched) {
+    console.log(`✔ wired ${res.wiredWorkers.length} worker(s) into ${f.manifest}`);
+  }
   return 0;
 }
 
@@ -214,38 +233,6 @@ async function cmdDerive(f: Flags): Promise<number> {
   }
   console.log(`✔ derived ${res.artifacts.length} model(s):`);
   for (const a of res.artifacts) console.log(`  • ${a.path}`);
-  return 0;
-}
-
-async function cmdStubs(f: Flags): Promise<number> {
-  const io = createNodeGenIO();
-  const run = await scaffoldWorkers({ root: f.root, io, manifestFile: f.manifest, write: f.write });
-
-  const created = run.outcomes.filter((o) => o.status === "created");
-  const would = run.outcomes.filter((o) => o.status === "would-create");
-  const kept = run.outcomes.filter((o) => o.status === "kept");
-  const typing = (o: { typedIn: boolean; typedOut: boolean }) =>
-    o.typedIn || o.typedOut ? ` (typed${o.typedIn ? " in" : ""}${o.typedOut ? " out" : ""})` : "";
-
-  if (run.write) {
-    console.log(`✔ scaffolded ${created.length} worker stub(s):`);
-    for (const o of created) console.log(`  + ${o.handlerPath}${typing(o)}`);
-    if (run.manifestPatched) {
-      console.log(`✔ wired ${run.wired.length} worker(s) into ${f.manifest}`);
-    }
-  } else {
-    if (would.length === 0) {
-      console.log(`✔ no new worker stubs to scaffold`);
-    } else {
-      console.log(`Would scaffold ${would.length} worker stub(s) — run with --write to apply:`);
-      for (const o of would) console.log(`  + ${o.handlerPath}${typing(o)}`);
-    }
-  }
-  for (const o of kept) console.log(`  = ${o.handlerPath} (kept — already exists)`);
-  if (run.skipped.length > 0) {
-    console.log(`  skipped ${run.skipped.length}: ` +
-      run.skipped.map((s) => `${s.taskType} (${s.reason})`).join(", "));
-  }
   return 0;
 }
 
@@ -430,8 +417,6 @@ export async function main(argv: string[]): Promise<number> {
       return cmdGen(f);
     case "derive":
       return cmdDerive(f);
-    case "stubs":
-      return cmdStubs(f);
     case "add":
       return cmdAdd(f);
     case "data":

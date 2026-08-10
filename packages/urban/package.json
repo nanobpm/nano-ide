@@ -1,76 +1,76 @@
 {
-  "name": "@nanobpm/urban",
-  "version": "0.35.0",
-  "description": "Urban: build and run code-first apps on Nano \u2014 runtime, derivation toolkit, and CLI in one. Author durable processes with @nanobpm/workflow (defineFlow), a typed datasource, forms, triggers and surfaces from a nano.app.json manifest, on Node or Deno.",
-  "license": "Apache-2.0",
-  "type": "module",
-  "keywords": [
-    "nanobpm",
-    "urban",
-    "cli",
-    "runtime",
-    "codegen",
-    "derivation",
-    "nano-app",
-    "rad"
-  ],
-  "publishConfig": {
-    "access": "public"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/nanobpm/nano-ide.git",
-    "directory": "packages/urban"
-  },
-  "engines": {
-    "node": ">=22.6"
-  },
-  "bin": {
-    "urban": "src/bin.mjs"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./runtime": {
-      "types": "./dist/runtime/index.d.ts",
-      "default": "./dist/runtime/index.js"
-    },
-    "./toolkit": {
-      "types": "./dist/toolkit/index.d.ts",
-      "default": "./dist/toolkit/index.js"
-    },
-    "./worker": {
-      "types": "./dist/worker.d.ts",
-      "default": "./dist/worker.js"
-    },
-    "./source": "./src/index.ts"
-  },
-  "files": [
-    "dist",
-    "src",
-    "README.md"
-  ],
-  "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
-    "test:deno": "deno test -A --no-check src/"
-  },
-  "dependencies": {
-    "@nanobpm/nano-app-schema": "^0.4.0",
-    "@nanobpm/nano-sdk": "^1.2.3",
-    "@nanobpm/workflow": "^0.8.0",
-    "bpmn-auto-layout": "^2.0.0-alpha.2",
-    "create-urban-app": "^0.9.0",
-    "yaml": "^2.9.0"
-  },
-  "devDependencies": {
-    "@types/node": "^22.20.1",
-    "typescript": "^5.9.3"
-  }
+	"name": "@nanobpm/urban",
+	"version": "0.36.0",
+	"description": "Urban: build and run code-first apps on Nano — runtime, derivation toolkit, and CLI in one. Author durable processes with @nanobpm/workflow (defineFlow), a typed datasource, forms, triggers and surfaces from a nano.app.json manifest, on Node or Deno.",
+	"license": "Apache-2.0",
+	"type": "module",
+	"keywords": [
+		"nanobpm",
+		"urban",
+		"cli",
+		"runtime",
+		"codegen",
+		"derivation",
+		"nano-app",
+		"rad"
+	],
+	"publishConfig": {
+		"access": "public"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/nanobpm/nano-ide.git",
+		"directory": "packages/urban"
+	},
+	"engines": {
+		"node": ">=22.6"
+	},
+	"bin": {
+		"urban": "src/bin.mjs"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./runtime": {
+			"types": "./dist/runtime/index.d.ts",
+			"default": "./dist/runtime/index.js"
+		},
+		"./toolkit": {
+			"types": "./dist/toolkit/index.d.ts",
+			"default": "./dist/toolkit/index.js"
+		},
+		"./worker": {
+			"types": "./dist/worker.d.ts",
+			"default": "./dist/worker.js"
+		},
+		"./source": "./src/index.ts"
+	},
+	"files": [
+		"dist",
+		"src",
+		"README.md"
+	],
+	"scripts": {
+		"build": "tsc -p tsconfig.build.json",
+		"prepack": "npm run build",
+		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+		"test:deno": "deno test -A --no-check src/"
+	},
+	"dependencies": {
+		"@nanobpm/nano-app-schema": "^0.4.0",
+		"@nanobpm/nano-sdk": "^1.2.3",
+		"@nanobpm/workflow": "^0.8.0",
+		"bpmn-auto-layout": "^2.0.0-alpha.2",
+		"create-urban-app": "^0.9.0",
+		"yaml": "^2.9.0"
+	},
+	"devDependencies": {
+		"@types/node": "^22.20.1",
+		"typescript": "^5.9.3"
+	}
 }

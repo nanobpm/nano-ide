@@ -43,7 +43,10 @@ test("the callable form still works for back-compat", () => {
   const { records, sink } = recorder();
   const log = createLogger(sink);
   log("info", "hello", { a: 1 });
-  assert.deepEqual(records, [{ level: "info", msg: "hello", fields: { a: 1 } }]);
+  assert.equal(records.length, 1);
+  assert.equal(records[0].level, "info");
+  assert.equal(records[0].msg, "hello");
+  assert.deepEqual({ ...records[0].fields }, { a: 1 });
 });
 
 test("a context-free line carries no fields object", () => {
@@ -154,4 +157,41 @@ test("child() with an untrusted __proto__ binding key does not pollute Object.pr
   createLogger(sink).child(bindings).info("x");
   const fields = records[0].fields ?? {};
   assert.deepEqual(Object.getOwnPropertyDescriptor(fields, "__proto__")?.value, { polluted: true });
+});
+
+test("an untrusted __proto__ per-call field with no bound context still merges into a null-proto bag", () => {
+  // The no-bindings merge path must normalize too, so a custom sink that later spreads the bag can't
+  // be tripped by the magic prototype setter. JSON.parse builds a genuine own "__proto__" key.
+  const { records, sink } = recorder();
+  const fields: LogFields = JSON.parse('{"__proto__":{"polluted":true}}');
+  createLogger(sink).info("x", fields);
+  const merged = records[0].fields;
+  assert.ok(merged !== undefined);
+  assert.equal(Object.getPrototypeOf(merged), null);
+  assert.deepEqual(Object.getOwnPropertyDescriptor(merged, "__proto__")?.value, { polluted: true });
+});
+
+test("a log call never throws when a hostile fields object defeats the merge", () => {
+  // A Proxy whose ownKeys trap throws breaks mergeFields before it can reach the sink; the emit guard
+  // must degrade to a field-free error line rather than propagate into the caller.
+  const { records, sink } = recorder();
+  const hostile = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error("trap");
+      },
+    },
+  );
+  assert.doesNotThrow(() => createLogger(sink).info("boom", hostile));
+  assert.equal(records.length, 1);
+  assert.equal(records[0].msg, "boom");
+  assert.deepEqual({ ...records[0].fields }, { fieldsError: "unmergeable log fields" });
+});
+
+test("a log call never throws when the sink itself throws", () => {
+  const throwingSink = () => {
+    throw new Error("sink down");
+  };
+  assert.doesNotThrow(() => createLogger(throwingSink).info("x", { a: 1 }));
 });

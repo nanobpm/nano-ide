@@ -71,14 +71,19 @@ export function levelEnabled(level: LogLevel, min: LogLevel): boolean {
 }
 
 /** Merge bound context with per-call fields (per-call wins), omitting the `fields` key entirely when
- *  the result is empty so a context-free line stays `{ level, msg }` clean. Merges into a
- *  null-prototype object: log field keys are user-controlled, so an untrusted key like `__proto__`
- *  must set a plain own property rather than trip the magic prototype setter a normal `{}` inherits
- *  from `Object.prototype` (same treatment as untrusted-key dictionaries elsewhere in this repo). */
+ *  the result is empty so a context-free line stays `{ level, msg }` clean. Always merges into a
+ *  null-prototype object — even on the no-bindings fast path — and returns `undefined` for an empty
+ *  bag: log field keys are user-controlled, so an untrusted key like `__proto__` must set a plain own
+ *  property rather than trip the magic prototype setter a normal `{}` inherits from `Object.prototype`
+ *  (same treatment as untrusted-key dictionaries elsewhere in this repo). Normalizing here — not just
+ *  in {@link formatLogRecord} — keeps the merged bag safe for any custom {@link LogSink} that later
+ *  spreads it into a plain object. */
 function mergeFields(bindings: LogFields, fields?: LogFields): LogFields | undefined {
   const boundKeys = Object.keys(bindings);
-  if (boundKeys.length === 0) return fields;
-  if (!fields || Object.keys(fields).length === 0) return Object.assign(Object.create(null), bindings);
+  const callKeys = fields ? Object.keys(fields) : [];
+  if (boundKeys.length === 0 && callKeys.length === 0) return undefined;
+  if (boundKeys.length === 0) return Object.assign(Object.create(null), fields);
+  if (callKeys.length === 0) return Object.assign(Object.create(null), bindings);
   return Object.assign(Object.create(null), bindings, fields);
 }
 
@@ -138,7 +143,18 @@ export function formatLogLine(level: LogLevel, msg: string, fields: LogFields | 
 export function createLogger(sink: LogSink, bindings: LogFields = {}): Logger {
   const bound: LogFields = Object.assign(Object.create(null), bindings);
   const emit = (level: LogLevel, msg: string, fields?: LogFields): void => {
-    sink(level, msg, mergeFields(bound, fields));
+    try {
+      sink(level, msg, mergeFields(bound, fields));
+    } catch {
+      // A log call must never throw into its caller. A hostile `fields` object (e.g. a Proxy whose
+      // `ownKeys` trap throws, defeating mergeFields before the sink's own formatLogRecord guard)
+      // or a throwing sink degrades to a best-effort, field-free line rather than break the handler.
+      try {
+        sink(level, msg, Object.assign(Object.create(null), { fieldsError: "unmergeable log fields" }));
+      } catch {
+        // The sink itself is broken — nothing more we can safely do without re-throwing.
+      }
+    }
   };
   return Object.assign(emit, {
     debug: (msg: string, fields?: LogFields) => emit("debug", msg, fields),

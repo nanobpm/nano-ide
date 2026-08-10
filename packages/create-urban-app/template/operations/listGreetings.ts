@@ -8,6 +8,7 @@
 import { defineOperation } from "@nanobpm/urban";
 
 interface Greeting {
+  id: number;
   who: string;
   message: string;
   createdAt?: string | null;

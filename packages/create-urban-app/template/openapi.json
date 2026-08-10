@@ -58,8 +58,9 @@
       },
       "Greeting": {
         "type": "object",
-        "required": ["who", "message"],
+        "required": ["id", "who", "message"],
         "properties": {
+          "id": { "type": "integer", "description": "Auto-assigned row id." },
           "who": { "type": "string" },
           "message": { "type": "string" },
           "createdAt": { "type": "string", "format": "date-time", "nullable": true }

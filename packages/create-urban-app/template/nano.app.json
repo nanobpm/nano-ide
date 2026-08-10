@@ -13,8 +13,7 @@
 
   "api": {
     "spec": "openapi.json",
-    "dir": "operations",
-    "base": "/app/api"
+    "dir": "operations"
   },
 
   "data": {

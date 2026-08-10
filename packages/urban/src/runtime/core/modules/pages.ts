@@ -14,6 +14,13 @@
 //   POST /app/actions/start/<process>               → engine.createInstance
 //   POST /app/actions/cancel                        → engine.cancelInstance
 //   POST /app/actions/message                       → engine.publishMessage
+//
+// Page actions are ROUTE-DRIVEN: an `actionForm`/rowAction/detail-form `action` is just
+// `{ path, method?, body?, successLabel? }`. The client POSTs the resolved body (default
+// `{ variables: <form> }`) to `path`, templating `{{form.KEY}}` / `{{row.KEY}}` (and the
+// whole-object `{{form}}` / `{{row}}`) tokens. There are NO bespoke action kinds — a form
+// reaches start/cancel/message above, an OpenAPI operation under /app/api, or any app route
+// uniformly by naming its path.
 
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage, isRecord } from "../guards.ts";
@@ -634,6 +641,59 @@ async function getJSON(url, opts) {
   return body;
 }
 
+// ── route-driven actions ────────────────────────────────────────────────
+// Every page action is a single primitive: POST (or any method) the resolved
+// body to an app route path. There are NO bespoke action kinds — a form/row
+// reaches process start, message publish, cancel, an OpenAPI operation, a
+// webhook, or any app route uniformly by naming its path. Path + body may
+// interpolate the current form fields and (for grid rows/detail forms) the row
+// via {{form.KEY}} / {{row.KEY}} tokens; the whole-string tokens {{form}} and
+// {{row}} splice the object itself (type-preserving), so a body of
+// "variables": "{{form}}" sends the form object as the variable map.
+function lookupToken(path, ctx) {
+  const segs = String(path).split(".");
+  const head = segs[0];
+  let base = head === "form" ? (ctx.form || {}) : head === "row" ? (ctx.row || {}) : undefined;
+  for (let i = 1; i < segs.length; i++) base = base == null ? undefined : base[segs[i]];
+  return base;
+}
+function resolveTemplate(node, ctx) {
+  if (typeof node === "string") {
+    const whole = node.match(/^\{\{\s*([\w.]+)\s*\}\}$/);
+    if (whole) return lookupToken(whole[1], ctx);
+    return node.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
+      const v = lookupToken(k, ctx);
+      return v == null ? "" : String(v);
+    });
+  }
+  if (Array.isArray(node)) return node.map((n) => resolveTemplate(n, ctx));
+  if (node && typeof node === "object") {
+    // Null-proto target so a template key like "__proto__" can't trigger prototype
+    // mutation (prototype-pollution class) when copied into the resolved object.
+    const out = Object.create(null);
+    for (const [k, v] of Object.entries(node)) out[k] = resolveTemplate(v, ctx);
+    return out;
+  }
+  return node;
+}
+async function runRoute(action, ctx) {
+  if (!action || typeof action.path !== "string" || action.path === "") {
+    throw new Error("This action has no route configured (action.path is missing or blank)");
+  }
+  const path = action.path.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, k) => {
+    const v = lookupToken(k, ctx);
+    return v == null ? "" : encodeURIComponent(String(v));
+  });
+  const method = String(action.method || "POST").toUpperCase();
+  let body;
+  if (action.body !== undefined) body = resolveTemplate(action.body, ctx);
+  else if (ctx.form) body = { variables: ctx.form };
+  else body = {};
+  const opts = { method, headers: { "content-type": "application/json" } };
+  if (method !== "GET" && method !== "HEAD") opts.body = JSON.stringify(body);
+  return getJSON(path, opts);
+}
+
 function el(tag, attrs = {}, ...kids) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -734,37 +794,14 @@ function renderActionForm(node) {
     }
     btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Submitting…";
     try {
-      // Two action kinds: startProcess (default, back-compat) -> engine.createInstance; and
-      // publishMessage -> engine.publishMessage, which correlates a message to a message start
-      // (or intermediate catch) event. correlationKeyField names the form field that carries
-      // the correlation key; the whole form becomes the message variables.
-      if (p.action && p.action.kind === "publishMessage") {
-        const correlationKey = String(variables[p.action.correlationKeyField] ?? "").trim();
-        if (!correlationKey) {
-          msg.className = "pc-msg err";
-          msg.textContent = "Field '" + p.action.correlationKeyField + "' is required";
-          return;
-        }
-        // Send the trimmed key back as the variable too, so the value a worker
-        // reads matches the key the message was correlated on (no leading/trailing
-        // whitespace divergence between correlationKey and variables[field]).
-        variables[p.action.correlationKeyField] = correlationKey;
-        await getJSON("/app/actions/message", { method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: p.action.message, correlationKey, variables }) });
-        msg.className = "pc-msg ok";
-        msg.textContent = "Message published";
-      } else {
-        if (!p.action || !p.action.process) {
-          msg.className = "pc-msg err";
-          msg.textContent = "This form has no action configured";
-          return;
-        }
-        const res = await getJSON("/app/actions/start/" + encodeURIComponent(p.action.process),
-          { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ variables }) });
-        msg.className = "pc-msg ok";
-        msg.textContent = "Started (instance " + (res.processInstanceKey ?? "?") + ")";
-      }
+      // Route-driven: POST the form (as { variables } by default, or the action's
+      // own body template) to the action's route path. correlationKey / process /
+      // message are expressed by the path + body template the page author supplies,
+      // e.g. { path: "/app/actions/message", body: { name, correlationKey, variables: "{{form}}" } }.
+      const res = await runRoute(p.action, { form: variables });
+      msg.className = "pc-msg ok";
+      msg.textContent = (p.action && p.action.successLabel) ||
+        (res && res.processInstanceKey != null ? "Started (instance " + res.processInstanceKey + ")" : "Done");
       for (const input of inputs.values()) input.value = "";
       document.dispatchEvent(new CustomEvent("pc:refresh"));
     } catch (e) {
@@ -839,23 +876,9 @@ function renderDataGrid(node) {
   }
 
   async function fireAction(action, row) {
-    if (action.kind === "cancelProcess") {
-      return getJSON("/app/actions/cancel", { method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ processInstanceKey: row[action.keyField] }) });
-    }
-    if (action.kind === "publishMessage") {
-      return getJSON("/app/actions/message", { method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: action.message, correlationKey: row[action.correlationKeyField],
-          variables: { ...(action.variables || {}) } }) });
-    }
-    if (action.kind === "startProcess") {
-      return getJSON("/app/actions/start/" + encodeURIComponent(action.process), { method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ variables: { ...(action.variables || {}) } }) });
-    }
-    throw new Error("unknown action");
+    // Route-driven row action: POST the action's body template (default {})
+    // to its route path, with {{row.KEY}} tokens resolved from this row.
+    return runRoute(action, { row });
   }
 
   function rowActionButton(row, ra) {
@@ -890,11 +913,13 @@ function renderDataGrid(node) {
     btn.addEventListener("click", async () => {
       btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Sending…";
       try {
-        await getJSON("/app/actions/message", { method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: f.action.message, correlationKey: row[f.action.correlationKeyField],
-            variables: { [f.inputKey]: input.value, ...(f.action.variables || {}) } }) });
-        msg.className = "pc-msg ok"; msg.textContent = "Sent";
+        // The textarea value is the form's single field (f.inputKey); route + body
+        // template come from f.action, e.g. { path: "/app/actions/message",
+        // body: { name, correlationKey: "{{row.pr_key}}", variables: "{{form}}" } }.
+        // Null-proto so an f.inputKey of "__proto__"/"constructor" can't mutate a prototype.
+        const form = Object.create(null); form[f.inputKey] = input.value;
+        await runRoute(f.action, { form, row });
+        msg.className = "pc-msg ok"; msg.textContent = (f.action && f.action.successLabel) || "Sent";
         document.dispatchEvent(new CustomEvent("pc:refresh"));
       } catch (e) {
         btn.disabled = false; msg.className = "pc-msg err"; msg.textContent = String(e.message || e);

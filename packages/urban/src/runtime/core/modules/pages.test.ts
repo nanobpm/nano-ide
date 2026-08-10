@@ -161,22 +161,23 @@ test("the shell renders an API-docs badge only when an apiDocsPath is provided",
   assert.doesNotMatch(noBadge, /class="pc-apidocs"/);
 });
 
-test("renderActionForm supports a publishMessage action (message-started processes)", async () => {
+test("page actions are route-driven: the runtime ships a single callRoute dispatcher, no bespoke kinds", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
-  // The form submit branches on the action kind: publishMessage posts to the message endpoint,
-  // deriving the correlation key from the named form field; startProcess keeps its old path.
-  assert.match(js, /p\.action\.kind === "publishMessage"/);
-  assert.match(js, /variables\[p\.action\.correlationKeyField\]/);
-  assert.match(js, /"\/app\/actions\/message"/);
-  // The trimmed correlation key is written back as the variable, so the value a
-  // worker reads matches the key the message was correlated on.
-  assert.match(js, /variables\[p\.action\.correlationKeyField\] = correlationKey/);
-  // startProcess remains the default/back-compat branch.
-  assert.match(js, /"\/app\/actions\/start\/" \+ encodeURIComponent\(p\.action\.process\)/);
-  // A missing action is reported clearly instead of throwing on p.action.process.
-  assert.match(js, /if \(!p\.action \|\| !p\.action\.process\)/);
-  assert.match(js, /no action configured/);
+  // A single primitive resolves { path, method?, body? } and POSTs it — there is no per-kind
+  // branching. The template resolver splices {{form}} / {{row}} and {{form.KEY}} / {{row.KEY}}.
+  assert.match(js, /async function runRoute\(action, ctx\)/);
+  assert.match(js, /function resolveTemplate\(node, ctx\)/);
+  assert.match(js, /function lookupToken\(path, ctx\)/);
+  // The form default body is the { variables } envelope, so plain forms hit start operations
+  // without any per-form config; row/detail forms carry an explicit body template instead.
+  assert.match(js, /body = \{ variables: ctx\.form \}/);
+  // Path tokens are URL-encoded (real keys like owner/repo#123 must not break the path).
+  assert.match(js, /encodeURIComponent\(String\(v\)\)/);
+  // The removed bespoke action kinds no longer appear anywhere in the client runtime.
+  assert.doesNotMatch(js, /p\.action\.kind/);
+  assert.doesNotMatch(js, /correlationKeyField/);
+  assert.doesNotMatch(js, /action\.kind === "(startProcess|publishMessage|cancelProcess)"/);
 });
 
 test("the renderer bridges the console theme over postMessage", async () => {

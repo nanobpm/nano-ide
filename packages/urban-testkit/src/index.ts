@@ -25,6 +25,12 @@ export {
   type UiDriver,
 } from "./boot-app.ts";
 export {
+  type AssertFullCoverageOptions,
+  type CoverageReport,
+  SurfaceCoverage,
+  type SurfaceReport,
+} from "./coverage.ts";
+export {
   type ApiCallOptions,
   type ApiDriver,
   type ApiOperation,

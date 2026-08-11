@@ -176,3 +176,84 @@ test("wasm: unsubscribe stops a worker from serving further jobs", async () => {
     await engine.close();
   }
 });
+
+test("wasm: observeJobs sees each dispatched job type and its unsubscribe detaches the observer", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    await engine.registerWorker("work", () => ({}));
+    await engine.deployResources([
+      {
+        name: "svc.bpmn",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="svc" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f1" sourceRef="s" targetRef="work"/>
+    <serviceTask id="work"><extensionElements><zeebe:taskDefinition type="work"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="work" targetRef="e"/><endEvent id="e"/>
+  </process>
+</definitions>`,
+        contentType: "application/bpmn+xml",
+      },
+    ]);
+
+    // The observer fires for the dispatched job type (this is what the coverage gate records on).
+    const seen: string[] = [];
+    const unobserve = engine.observeJobs((jobType) => seen.push(jobType));
+    await engine.createInstance({ processDefinitionId: "svc", awaitCompletion: true });
+    assert.deepEqual(seen, ["work"]);
+
+    // Its returned unsubscribe detaches the single-slot observer (the mechanism bootTestApp uses
+    // on stop() to bound the coverage recorder's lifetime): a further dispatch records nothing.
+    unobserve();
+    await engine.createInstance({ processDefinitionId: "svc", awaitCompletion: true });
+    assert.deepEqual(seen, ["work"], "no further job type recorded after unsubscribe");
+  } finally {
+    await engine.close();
+  }
+});
+
+test("wasm: a throwing observer is isolated — the job still completes, no incident", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    let calls = 0;
+    await engine.registerWorker("work", () => {
+      calls++;
+      return {};
+    });
+    await engine.deployResources([
+      {
+        name: "svc.bpmn",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="svc" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f1" sourceRef="s" targetRef="work"/>
+    <serviceTask id="work"><extensionElements><zeebe:taskDefinition type="work"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="work" targetRef="e"/><endEvent id="e"/>
+  </process>
+</definitions>`,
+        contentType: "application/bpmn+xml",
+      },
+    ]);
+
+    // A misbehaving observer must not be able to affect engine/job semantics: it is a passive
+    // spectator, so its throw is swallowed and the handler still runs and completes the job.
+    engine.observeJobs(() => {
+      throw new Error("observer blew up");
+    });
+    const { processInstanceKey } = await engine.createInstance({
+      processDefinitionId: "svc",
+      awaitCompletion: true,
+    });
+    assert.equal(calls, 1, "the handler still ran despite the throwing observer");
+    const [inst] = await engine.searchProcessInstances({
+      processInstanceKeys: [processInstanceKey],
+    });
+    assert.equal(inst?.state, "COMPLETED", "the job completed — no failure/incident from the observer");
+  } finally {
+    await engine.close();
+  }
+});

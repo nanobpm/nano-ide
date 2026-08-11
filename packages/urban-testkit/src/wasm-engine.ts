@@ -152,6 +152,10 @@ function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm")> {
 export class WasmEngineClient implements EngineClient {
   readonly #engine: TestEngine;
   readonly #workers = new Map<string, RegisteredWorker>();
+  /** Optional observer notified with a job's type each time a job is dispatched to a
+   *  worker handler. Additive, default-absent seam used by the S4 coverage gate to know
+   *  which worker/job types were actually exercised; a no-op for every other caller. */
+  #onJob: ((jobType: string) => void) | undefined;
 
   private constructor(engine: TestEngine) {
     this.#engine = engine;
@@ -309,6 +313,21 @@ export class WasmEngineClient implements EngineClient {
     return this.#engine.now;
   }
 
+  /**
+   * Register an observer notified with the `jobType` each time a job is dispatched to a
+   * worker handler (before the handler runs, so a failing handler still counts as
+   * "exercised"). Returns an unsubscribe. A single observer is held — a later call
+   * replaces the earlier one — which is all the coverage gate needs; pass `undefined`
+   * (or call the returned unsubscribe) to clear it. The observer is a passive spectator:
+   * a throw from it is swallowed and never affects job completion, the drain, or incidents.
+   */
+  observeJobs(onJob: ((jobType: string) => void) | undefined): () => void {
+    this.#onJob = onJob;
+    return () => {
+      if (this.#onJob === onJob) this.#onJob = undefined;
+    };
+  }
+
   /** The raw engine snapshot (parsed). */
   snapshot(): Record<string, unknown> {
     return this.#snapshot();
@@ -351,10 +370,22 @@ export class WasmEngineClient implements EngineClient {
     // issue an invalid completeJob("") (mirrors the live SDK adapter, which
     // logs and leaves such a job for redelivery).
     if (jobKey === "") return;
+    const jobType = str(raw.type);
+    // Notify the coverage observer (if any) that a job of this type was dispatched — before
+    // running the handler, so an exercised-but-failing worker still counts. Isolated in its own
+    // try/catch: this is a non-invasive test seam, so a throwing observer must never abort the
+    // drain nor alter job/engine semantics (it would otherwise propagate out of #runJob).
+    if (this.#onJob !== undefined) {
+      try {
+        this.#onJob(jobType);
+      } catch {
+        // Swallow: an observer is a passive spectator of dispatch, never a participant.
+      }
+    }
     const allVariables = isRecord(raw.variables) ? raw.variables : {};
     const job: EngineJob = {
       jobKey,
-      jobType: str(raw.type),
+      jobType,
       processInstanceKey: raw.instanceKey == null ? undefined : str(raw.instanceKey),
       elementId: typeof raw.elementId === "string" ? raw.elementId : undefined,
       // Honour fetchVariables: surface only the requested subset (intersected

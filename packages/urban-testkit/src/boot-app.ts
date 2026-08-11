@@ -29,6 +29,7 @@ import {
 } from "./openapi-driver.ts";
 import { createTestHost, type TestHost } from "./test-host.ts";
 import { createWasmEngineClient, type WasmEngineClient } from "./wasm-engine.ts";
+import { SurfaceCoverage } from "./coverage.ts";
 
 /** A route invocation against the in-process router (no socket is opened). */
 export interface RouteRequest {
@@ -61,6 +62,15 @@ export interface BootTestAppOptions {
   /** Seed the app's data layer after `start()` (before the first `settle`). Receives the
    *  provisioned {@link DataLayer}; may be async. */
   seed?: (db: DataLayer) => void | Promise<void>;
+  /**
+   * Enable the coverage-exhaustive gate (S4). When set, {@link TestApp.coverage} is a
+   * {@link SurfaceCoverage} pre-declared with the app's surfaces derived from its manifest
+   * + OpenAPI spec ("operations", "workers"), recording hits automatically as the test
+   * drives the `api` operations and the engine runs jobs. Call
+   * `app.coverage.assertFullCoverage()` at the end of a test to fail on any un-exercised
+   * declared element. Off by default (zero overhead when unused).
+   */
+  coverage?: boolean;
 }
 
 /** The booted app harness returned by {@link bootTestApp}. */
@@ -86,6 +96,14 @@ export interface TestApp {
   callRoute<T = unknown>(req: RouteRequest): Promise<ApiResponse<T>>;
   /** The virtual-clock scheduler driving the app's background loops. */
   readonly scheduler: ManualScheduler;
+  /**
+   * The coverage-exhaustive gate (S4), present only when `bootTestApp` was called with
+   * `{ coverage: true }`. Pre-declared with the app's "operations" (from its OpenAPI spec)
+   * and "workers" (from its manifest) surfaces; hits are recorded automatically as the
+   * test drives `api` operations and the engine runs jobs. Call
+   * `coverage.assertFullCoverage()` to fail on any un-exercised declared element.
+   */
+  readonly coverage?: SurfaceCoverage;
   /** Captured log lines (empty unless `captureLogs` was set). */
   readonly logs: TestHost["logs"];
   /** Current virtual time (ms since epoch). */
@@ -130,6 +148,46 @@ function readApiSpecPath(manifest: unknown): string | undefined {
   return typeof spec === "string" && spec.trim().length > 0 ? spec.trim() : undefined;
 }
 
+/** Derive the declared worker job types from a manifest — the `taskType` of each `workers[]`
+ *  entry (schema key `taskType`, mirroring urban's `workerJobType`). Read guardedly rather than
+ *  via the typed `AppManifest` so the testkit stays decoupled from a specific schema version
+ *  (same self-containment rationale as `readApiSpecPath`). Empty/duplicate/blank types are
+ *  dropped; order of first appearance is preserved. */
+function deriveWorkerJobTypes(manifest: unknown): string[] {
+  if (!manifest || typeof manifest !== "object") return [];
+  const workers = Reflect.get(manifest, "workers");
+  if (!Array.isArray(workers)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const w of workers) {
+    if (!w || typeof w !== "object") continue;
+    const taskType = Reflect.get(w, "taskType");
+    if (typeof taskType !== "string") continue;
+    const jobType = taskType.trim();
+    if (jobType.length === 0 || seen.has(jobType)) continue;
+    seen.add(jobType);
+    out.push(jobType);
+  }
+  return out;
+}
+
+/** Wrap an {@link ApiDriver} so every `call(operationId, …)` records that operation as exercised
+ *  on the "operations" surface before delegating (so an operation that returns an error status —
+ *  or throws — still counts as driven). `callRoute` and the read-only introspection methods pass
+ *  straight through: a raw route is not an enumerated operation, so it is deliberately not recorded
+ *  here. Kept as a thin wrapper so the S3 driver has zero coverage coupling. */
+function instrumentApiCoverage(driver: ApiDriver, coverage: SurfaceCoverage): ApiDriver {
+  return {
+    call: (operationId, callOpts) => {
+      coverage.record("operations", operationId);
+      return driver.call(operationId, callOpts);
+    },
+    callRoute: (req) => driver.callRoute(req),
+    operationIds: () => driver.operationIds(),
+    operation: (operationId) => driver.operation(operationId),
+  };
+}
+
 /** Join an app root and a spec path the way the runtime's `resolveAppPath` (+ `isAbsolutePath`) does:
  *  an absolute `spec` — POSIX root (`/`), a drive-letter root (`C:\` / `C:/`), or a Windows UNC/
  *  drive-root backslash (`\`) — is returned as-is; otherwise it joins onto `root` using `root`'s own
@@ -151,6 +209,18 @@ export function resolveSpecPath(root: string, spec: string): string {
  */
 export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): Promise<TestApp> {
   const engine = await createWasmEngineClient();
+  // Coverage (S4): when enabled, start capturing exercised job types the moment the engine
+  // exists — before the app registers workers — so no dispatch is missed; these hits are
+  // replayed into the SurfaceCoverage once the manifest is known (below). When coverage is off
+  // no observer is attached and no recorder is built — the empty `jobHits` set stays unused.
+  const coverageEnabled = opts.coverage === true;
+  const jobHits = new Set<string>();
+  // The live coverage job observer's unsubscribe, cleared on `stop()` so we neither retain the
+  // recording closure past teardown nor record a stray dispatch during shutdown. Single-slot:
+  // the boot-time capture below is superseded by the coverage observer once the manifest is known,
+  // and this tracks whichever is currently attached.
+  let unobserveJobs: (() => void) | undefined;
+  if (coverageEnabled) unobserveJobs = engine.observeJobs((jobType) => jobHits.add(jobType));
   // Anchor the virtual clock at the engine's clock so DataLayer timestamps and the
   // engine's own timeline share an origin; `advanceTime` keeps them in lockstep thereafter.
   const scheduler = createManualScheduler(engine.now);
@@ -217,7 +287,27 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
       operations = collectOperations(parseOpenApi(text));
     }
     const driver = createApiDriver(operations, uiCall);
-    const api: ApiDriver | undefined = specPath ? driver : undefined;
+
+    // Coverage (S4): declare the app's surfaces from its own manifest + spec (single source),
+    // replay job hits captured during boot, and record every future job dispatch. The `operations`
+    // surface is declared only when the app actually binds an OpenAPI spec — mirroring how `api`
+    // itself is left undefined for a spec-less app — so the gate never claims (and never silently
+    // passes) an operations surface the app doesn't have. When present, the exposed `api` driver is
+    // wrapped so each `api.call(operationId)` marks that operation exercised.
+    let coverage: SurfaceCoverage | undefined;
+    let apiDriver: ApiDriver = driver;
+    if (coverageEnabled) {
+      const declared: Record<string, Iterable<string>> = {
+        workers: deriveWorkerJobTypes(app.manifest),
+      };
+      if (specPath) declared.operations = operations.map((op) => op.operationId);
+      const cov = new SurfaceCoverage(declared);
+      for (const jobType of jobHits) cov.record("workers", jobType);
+      unobserveJobs = engine.observeJobs((jobType) => cov.record("workers", jobType));
+      if (specPath) apiDriver = instrumentApiCoverage(driver, cov);
+      coverage = cov;
+    }
+    const api: ApiDriver | undefined = specPath ? apiDriver : undefined;
     const callRoute = <T,>(req: RouteRequest): Promise<ApiResponse<T>> => driver.callRoute<T>(req);
 
     const settle = async (): Promise<void> => {
@@ -252,11 +342,20 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
       snapshot: () => engine.snapshot(),
       settle,
       advanceTime,
-      stop: () => app.stop(),
+      coverage,
+      stop: () => {
+        // Detach the coverage job observer before closing so no dispatch during shutdown is
+        // recorded and the recording closure isn't retained past teardown. `app.stop()` closes
+        // the engine too, so this is belt-and-braces, but keeps the observer's lifetime bounded.
+        unobserveJobs?.();
+        unobserveJobs = undefined;
+        return app.stop();
+      },
     };
   } catch (err) {
     // Roll back a partially-booted app so a failed seed (or a missing data layer) can't leave
     // the engine/workers/router alive across tests. `app.stop()` closes the engine too.
+    unobserveJobs?.();
     await app.stop();
     throw err;
   }

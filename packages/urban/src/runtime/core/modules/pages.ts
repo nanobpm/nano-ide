@@ -525,7 +525,9 @@ body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64r
 .pc-card h2 { font-size:1rem; margin:0 0 .75rem; }
 .pc-field { display:flex; flex-direction:column; gap:.25rem; margin-bottom:.6rem; }
 .pc-field label { font-size:.8rem; color:var(--nano-text-muted); }
-.pc-field input { padding:.5rem .6rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); }
+.pc-field input:not([type=checkbox]) { padding:.5rem .6rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); }
+.pc-field-check label { display:flex; flex-direction:row; align-items:center; gap:.5rem; font-size:.9rem; color:var(--nano-text); cursor:pointer; }
+.pc-field-check input { width:auto; padding:0; accent-color:var(--nano-accent); cursor:pointer; }
 .pc-btn { padding:.5rem .9rem; border:0; border-radius:.4rem; background:var(--nano-accent); color:var(--nano-on-accent); font:inherit; cursor:pointer; }
 .pc-btn:disabled { opacity:.5; cursor:default; }
 .pc-msg { font-size:.85rem; margin-top:.5rem; min-height:1.2em; }
@@ -833,8 +835,24 @@ function renderActionForm(node) {
   const inputs = new Map();
   const fieldTypes = new Map();
   for (const f of p.fields || []) {
-    const kind = f.type === "number" ? "number" : "text";
+    const kind = f.type === "checkbox" ? "checkbox" : (f.type === "number" ? "number" : "text");
     fieldTypes.set(f.key, kind);
+    if (kind === "checkbox") {
+      // A boolean field renders a real checkbox; its default checked state comes
+      // from default/checked on the field (unset -> unchecked). We record that on
+      // the input's defaultChecked so a post-submit reset can restore it without a
+      // side map that could drift from the actual input.
+      const checked = f.default === true || f.checked === true;
+      const input = el("input", { type: "checkbox" });
+      input.defaultChecked = checked;
+      input.checked = checked;
+      inputs.set(f.key, input);
+      // Input-first, wrapped in the label so the whole row is a click target.
+      card.append(
+        el("div", { class: "pc-field pc-field-check" }, el("label", {}, input, " " + (f.label || f.key))),
+      );
+      continue;
+    }
     const attrs = { type: kind, placeholder: f.label || f.key };
     if (kind === "number") {
       attrs.inputmode = "numeric";
@@ -851,7 +869,11 @@ function renderActionForm(node) {
   btn.addEventListener("click", async () => {
     const variables = Object.create(null);
     for (const [k, input] of inputs) {
-      if (fieldTypes.get(k) === "number") {
+      if (fieldTypes.get(k) === "checkbox") {
+        // Always emit a real boolean (checked -> true / false), never a string,
+        // so a strict equality check on the action side sees the intended value.
+        variables[k] = input.checked === true;
+      } else if (fieldTypes.get(k) === "number") {
         const t = String(input.value).trim();
         // Blank → omit so the action-side default applies; a non-finite parse
         // (NaN/Infinity) is also omitted rather than smuggling a raw string
@@ -874,7 +896,12 @@ function renderActionForm(node) {
       msg.className = "pc-msg ok";
       msg.textContent = (p.action && p.action.successLabel) ||
         (res && res.processInstanceKey != null ? "Started (instance " + res.processInstanceKey + ")" : "Done");
-      for (const input of inputs.values()) input.value = "";
+      for (const [k, input] of inputs) {
+        // Text/number inputs clear; a checkbox resets to its declared default,
+        // read straight off the input's defaultChecked (no side map to drift).
+        if (fieldTypes.get(k) === "checkbox") input.checked = input.defaultChecked;
+        else input.value = "";
+      }
       document.dispatchEvent(new CustomEvent("pc:refresh"));
     } catch (e) {
       msg.className = "pc-msg err"; msg.textContent = String(e.message || e);

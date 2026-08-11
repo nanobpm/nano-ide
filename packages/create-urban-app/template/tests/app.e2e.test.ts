@@ -74,12 +74,13 @@ describe("app e2e (urban-testkit)", () => {
     assert.equal(list.body.greetings.length, 1, "exactly one greeting was recorded");
     assert.equal(list.body.greetings[0].who, "Ada");
     assert.equal(list.body.greetings[0].message, "Hello, Ada!", "the worker composed the message");
-  });
 
-  test("coverage gate: every operation and worker was exercised", () => {
-    // Fails, naming the un-exercised ids, if you add an operation or worker without a test that
-    // drives it. Scope it with `assertFullCoverage({ surfaces: ["operations"] })` if you want to
-    // gate only some surfaces.
+    // Coverage gate (S4): now that the pipeline has driven every surface, assert nothing was
+    // left un-exercised. This fails — naming the un-exercised ids — the moment you add an
+    // operation or worker without a test that drives it. Asserting it here (rather than in a
+    // separate test) keeps the check self-contained: it doesn't depend on another test having
+    // run first. Scope it with `assertFullCoverage({ surfaces: ["operations"] })` to gate only
+    // some surfaces.
     app.coverage?.assertFullCoverage();
   });
 });

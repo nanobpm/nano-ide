@@ -107,10 +107,10 @@ server, no wall-clock waits, CI-friendly.
 - **`app.e2e.test.ts`** — the flagship test. It boots the whole app with
   `bootTestApp(root, { coverage: true })`, then exercises the real pipeline end to end:
   `POST /greetings` → the message-start process runs → the `greet` worker persists the
-  row → `GET /greetings` reads it back. A second test asserts the **coverage gate**
-  (`app.coverage.assertFullCoverage()`) — it fails if any declared operation or worker
-  was never exercised, so the suite grows a hole the moment you add a surface without a
-  test.
+  row → `GET /greetings` reads it back. At the end of that same test it asserts the
+  **coverage gate** (`app.coverage.assertFullCoverage()`) — it fails if any declared
+  operation or worker was never exercised, so the suite grows a hole the moment you add a
+  surface without a test.
 - **`engine-contract.test.ts`** — a minimal smoke test of the engine seam.
 
 ```bash
@@ -120,8 +120,8 @@ npm test
 On Deno: `deno task test`.
 <!-- /if:deno -->
 
-Each test runs on its own temp database (via a `NANO_APP_DB_URL` override), so runs are
-isolated and repeatable. To extend the suite, drive another `operations[]` id through
+The suite runs on its own temp database (via a `NANO_APP_DB_URL` override), so runs are
+isolated and repeatable. To extend it, drive another `operations[]` id through
 `app.api.call(...)` (or assert on `app.engine` state) and the coverage gate will keep
 you honest.
 

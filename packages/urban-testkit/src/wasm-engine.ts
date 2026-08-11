@@ -318,7 +318,8 @@ export class WasmEngineClient implements EngineClient {
    * worker handler (before the handler runs, so a failing handler still counts as
    * "exercised"). Returns an unsubscribe. A single observer is held — a later call
    * replaces the earlier one — which is all the coverage gate needs; pass `undefined`
-   * (or call the returned unsubscribe) to clear it.
+   * (or call the returned unsubscribe) to clear it. The observer is a passive spectator:
+   * a throw from it is swallowed and never affects job completion, the drain, or incidents.
    */
   observeJobs(onJob: ((jobType: string) => void) | undefined): () => void {
     this.#onJob = onJob;
@@ -370,9 +371,17 @@ export class WasmEngineClient implements EngineClient {
     // logs and leaves such a job for redelivery).
     if (jobKey === "") return;
     const jobType = str(raw.type);
-    // Notify the coverage observer (if any) that a job of this type was dispatched —
-    // before running the handler, so an exercised-but-failing worker still counts.
-    this.#onJob?.(jobType);
+    // Notify the coverage observer (if any) that a job of this type was dispatched — before
+    // running the handler, so an exercised-but-failing worker still counts. Isolated in its own
+    // try/catch: this is a non-invasive test seam, so a throwing observer must never abort the
+    // drain nor alter job/engine semantics (it would otherwise propagate out of #runJob).
+    if (this.#onJob !== undefined) {
+      try {
+        this.#onJob(jobType);
+      } catch {
+        // Swallow: an observer is a passive spectator of dispatch, never a participant.
+      }
+    }
     const allVariables = isRecord(raw.variables) ? raw.variables : {};
     const job: EngineJob = {
       jobKey,

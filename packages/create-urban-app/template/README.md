@@ -99,10 +99,19 @@ Add an endpoint: declare the path + a unique `operationId` in `openapi.yaml`, th
 
 ## Test it
 
-A starter e2e test ships in `tests/`, powered by
+Two e2e tests ship in `tests/`, powered by
 [`@nanobpm/urban-testkit`](https://www.npmjs.com/package/@nanobpm/urban-testkit) (a
-devDependency). It drives the app against an in-process WASM build of the engine — no
+devDependency). They drive the app against an in-process WASM build of the engine — no
 server, no wall-clock waits, CI-friendly.
+
+- **`app.e2e.test.ts`** — the flagship test. It boots the whole app with
+  `bootTestApp(root, { coverage: true })`, then exercises the real pipeline end to end:
+  `POST /greetings` → the message-start process runs → the `greet` worker persists the
+  row → `GET /greetings` reads it back. A second test asserts the **coverage gate**
+  (`app.coverage.assertFullCoverage()`) — it fails if any declared operation or worker
+  was never exercised, so the suite grows a hole the moment you add a surface without a
+  test.
+- **`engine-contract.test.ts`** — a minimal smoke test of the engine seam.
 
 ```bash
 npm test
@@ -110,6 +119,11 @@ npm test
 <!-- if:deno -->
 On Deno: `deno task test`.
 <!-- /if:deno -->
+
+Each test runs on its own temp database (via a `NANO_APP_DB_URL` override), so runs are
+isolated and repeatable. To extend the suite, drive another `operations[]` id through
+`app.api.call(...)` (or assert on `app.engine` state) and the coverage gate will keep
+you honest.
 
 ## Generated artifacts
 

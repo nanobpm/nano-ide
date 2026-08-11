@@ -66,6 +66,42 @@ test("wasm: a BpmnError from a worker is routed as a BPMN error, not a failure",
   }
 });
 
+test("wasm: deployResources skips non-engine models (forms) but deploys the BPMN alongside them", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    const model = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="withform" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f" sourceRef="s" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+</definitions>`;
+    // The runtime's deployModels sends processes AND forms here. A `.form` is JSON, not a process:
+    // it must be skipped, not fed to the BPMN parser (which would throw "no <process> element found").
+    const { deployed } = await engine.deployResources([
+      { name: "withform.bpmn", content: model, contentType: "text/xml" },
+      {
+        name: "greeting.form",
+        content: JSON.stringify({ components: [{ type: "textfield", key: "who" }] }),
+        contentType: "application/json",
+      },
+    ]);
+    assert.equal(deployed, 1, "only the BPMN was deployed; the form was skipped");
+    // The BPMN really deployed — an instance runs to completion.
+    const { processInstanceKey } = await engine.createInstance({
+      processDefinitionId: "withform",
+    });
+    const rows = await engine.searchProcessInstances({
+      processInstanceKeys: [processInstanceKey],
+    });
+    assert.equal(rows[0]?.state, "COMPLETED", "the process deployed alongside the form still runs");
+  } finally {
+    await engine.close();
+  }
+});
+
 test("wasm: advanceTime fires a timer and drains resulting work", async () => {
   const engine = await createWasmEngineClient();
   try {

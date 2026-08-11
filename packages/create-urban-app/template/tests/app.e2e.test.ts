@@ -27,17 +27,18 @@ import { bootTestApp, type TestApp } from "@nanobpm/urban-testkit";
 // The app root is this repo's root (one level up from `tests/`).
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-// Provision the app's SQLite in a throwaway temp dir so tests never touch (or leak into)
-// your real ./db/app.db, and every run starts from a freshly-migrated, empty schema. The
-// harness resolves the manifest's `${NANO_APP_DB_URL}` from this env overlay.
-const DB_DIR = mkdtempSync(join(tmpdir(), "urban-e2e-"));
-
 describe("app e2e (urban-testkit)", () => {
   let app: TestApp;
+  // Provision the app's SQLite in a throwaway temp dir so tests never touch (or leak into)
+  // your real ./db/app.db, and every run starts from a freshly-migrated, empty schema. Created
+  // in `before()` (not at module load) so a filtered/skipped run has no filesystem side effects.
+  // The harness resolves the manifest's `${NANO_APP_DB_URL}` from this env overlay.
+  let dbDir: string;
 
   before(async () => {
+    dbDir = mkdtempSync(join(tmpdir(), "urban-e2e-"));
     app = await bootTestApp(APP_ROOT, {
-      env: { NANO_APP_DB_URL: `file:${join(DB_DIR, "app.db")}` },
+      env: { NANO_APP_DB_URL: `file:${join(dbDir, "app.db")}` },
       // Enable the S4 coverage gate: pre-declares this app's operations (from openapi.yaml)
       // and workers (from nano.app.json), and records each as the test exercises it.
       coverage: true,
@@ -48,7 +49,7 @@ describe("app e2e (urban-testkit)", () => {
 
   after(async () => {
     await app?.stop();
-    rmSync(DB_DIR, { recursive: true, force: true });
+    if (dbDir) rmSync(dbDir, { recursive: true, force: true });
   });
 
   test("records a greeting through the full POST → process → worker → GET pipeline", async () => {

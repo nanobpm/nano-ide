@@ -1132,14 +1132,18 @@ function renderDataGrid(node) {
           try { selStart = active.selectionStart; selEnd = active.selectionEnd; } catch (e) { /* non-text field */ }
         }
       }
-      // Capture scroll offsets of every scrolled descendant before the swap. An open detail
-      // node is reused (same element instance), but replaceChildren() detaches it, which
-      // resets the scrollTop/scrollLeft of any inner scroll container (e.g. a scrolled-into
-      // .pc-transcript, max-height + overflow:auto) back to 0. Key by the live element so we
-      // can restore only the ones that get re-attached; closed/removed nodes are skipped.
+      // Capture scroll offsets of scrolled descendants before the swap. An open detail node is
+      // reused (same element instance), but replaceChildren() detaches it, which resets the
+      // scrollTop/scrollLeft of any inner scroll container (e.g. a scrolled-into .pc-transcript,
+      // max-height + overflow:auto) back to 0. Only built (open) detail subtrees are re-attached
+      // by the rebuild, so walk just those — not the whole grid — to keep this O(open panels)
+      // rather than O(grid size). Restoration below skips any node that isn't re-attached.
       const scrollSaved = [];
-      for (const sc of tbody.querySelectorAll("*")) {
-        if (sc.scrollTop || sc.scrollLeft) scrollSaved.push([sc, sc.scrollTop, sc.scrollLeft]);
+      for (const entry of detailNodes.values()) {
+        if (!entry.built) continue;
+        for (const sc of entry.dtr.querySelectorAll("*")) {
+          if (sc.scrollTop || sc.scrollLeft) scrollSaved.push([sc, sc.scrollTop, sc.scrollLeft]);
+        }
       }
       tbody.replaceChildren();
       for (const row of rows) renderRow(row);

@@ -244,9 +244,9 @@ test("renderer preserves inner scroll depth across the refresh poll", async () =
   const js = res.body ?? "";
   // Offsets are captured from scrolled descendants before replaceChildren()…
   assert.match(js, /const scrollSaved = \[\]/);
-  assert.match(js, /if \(sc\.scrollTop \|\| sc\.scrollLeft\) scrollSaved\.push/);
+  assert.match(js, /if\s*\(\s*sc\.scrollTop\s*\|\|\s*sc\.scrollLeft\s*\)\s*scrollSaved\.push/);
   // …and restored only on nodes re-attached by the rebuild (still connected).
-  assert.match(js, /if \(sc\.isConnected\) \{ sc\.scrollTop = top; sc\.scrollLeft = left; \}/);
+  assert.match(js, /if\s*\(\s*sc\.isConnected\s*\)\s*\{\s*sc\.scrollTop\s*=\s*top\s*;\s*sc\.scrollLeft\s*=\s*left\s*;\s*\}/);
 });
 
 test("renderer wires a column's linkField to a new-tab anchor", async () => {

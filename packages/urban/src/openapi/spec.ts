@@ -338,6 +338,32 @@ export function assertUniqueOperationIds(doc: OpenApiDoc): void {
   }
 }
 
+/** Groups of operationIds that name the SAME requestBody schema `$ref` as their JSON body,
+ *  keyed by that ref (only refs shared by two or more operations are returned, sorted). A single
+ *  request-body schema reused verbatim by multiple operations is the structural fingerprint of the
+ *  "one permissive schema standing in for what should be mutually-exclusive variants" defect: two
+ *  operations that genuinely want different shapes (e.g. `startConvergenceLoop` wants pr|url,
+ *  `startPlanFanout` wants issue|url) are forced to share one loose object, so neither can be
+ *  tightened without breaking the other. gen surfaces this as a non-fatal warning so an author can
+ *  split it into per-operation named variants + `oneOf` (the Camunda REST v2 pattern). Structural
+ *  only (pure, total) — the message is built by the caller. */
+export function sharedRequestBodySchemas(doc: OpenApiDoc): { ref: string; operationIds: string[] }[] {
+  const byRef = new Map<string, string[]>();
+  for (const op of collectOperations(doc)) {
+    const ref = op.requestBodySchema?.$ref;
+    if (typeof ref !== "string" || ref.length === 0) continue;
+    const ids = byRef.get(ref) ?? [];
+    ids.push(op.operationId);
+    byRef.set(ref, ids);
+  }
+  const out: { ref: string; operationIds: string[] }[] = [];
+  for (const [ref, ids] of byRef) {
+    if (ids.length > 1) out.push({ ref, operationIds: [...ids].sort() });
+  }
+  out.sort((a, b) => a.ref.localeCompare(b.ref));
+  return out;
+}
+
 /** "method path" pointers for every operation that declares no `operationId`. Such operations are
  *  unroutable (no delegate to bind), so the runtime mount logs them at `warn` and skips them. */
 export function operationsWithoutId(doc: OpenApiDoc): string[] {

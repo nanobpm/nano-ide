@@ -38,5 +38,46 @@ runEngineClientContract("wasm", () => createWasmEngineClient());
 
 Runs on Node (`node --test`) and Deno; the adapter is runtime-agnostic.
 
-Later slices add `bootTestApp`, a deterministic `settle()` loop, and the
-coverage/behaviour explorers (issue #157).
+## Booting a whole app (S2 + S3)
+
+**`bootTestApp(root, opts?)`** boots a real Urban app in-process against the WASM engine
+and a **virtual clock** — no ports, no wall-clock waits, no polling races. It returns a
+harness over every surface plus deterministic time control:
+
+- `app.ui.call(req)` — the low-level in-process router (method, path, query, headers, body).
+- `app.api` — a **spec-driven** operations driver, or `undefined` when the app has no
+  `api` binding. It reads the booted app's *own* OpenAPI document (JSON or YAML) and lets
+  you call operations by `operationId`, so a test never hard-codes a route path or method
+  and can never drift from the surface it drives.
+- `app.callRoute(req)` — a response-parsing wrapper over `ui.call` for page actions, hooks,
+  or any raw path (available with or without an `api` binding).
+- `app.db` — the provisioned data layer; `app.engine` — the WASM engine; `app.snapshot()`.
+- `app.settle()` — drive to a fixpoint at the current instant; `app.advanceTime(ms)` — the
+  only way time moves (engine + background-loop timers in lockstep, then settle).
+
+```ts
+import { bootTestApp } from "@nanobpm/urban-testkit";
+
+const app = await bootTestApp(appRoot);
+try {
+  // Call an operation by its operationId — path/method/base come from the app's spec.
+  const res = await app.api!.call("startConvergenceLoop", { body: { pr: "acme/web#42" } });
+  //   → fills the `/app/api` base + path template, sets content-type, JSON-serializes body
+
+  // A path parameter fills the operation's `{name}` placeholders:
+  const one = await app.api!.call("getOrder", { params: { item: "widget" } });
+
+  // Drive a raw route (page action, webhook, hook) by exact path:
+  await app.callRoute({ method: "POST", path: "/hooks/order", body: JSON.stringify({ item: "x" }) });
+
+  // Reconcile a terminated instance's tracking row deterministically (no 15s poll wait):
+  await app.advanceTime(5000);
+} finally {
+  await app.stop();
+}
+```
+
+`app.api.operationIds()` and `app.api.operation(id)` enumerate the surface (the source of
+truth for a future coverage gate).
+
+Later slices add the coverage/behaviour explorers (issue #157).

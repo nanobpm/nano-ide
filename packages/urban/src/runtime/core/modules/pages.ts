@@ -611,8 +611,20 @@ function applyTheme(msg) {
 // True when this app runs inside the Nano console's same-origin iframe (vs a
 // standalone CLI run). Gates the theme bridge below AND in-host link navigation:
 // embedded, a processExplorer link routes the console in place; standalone, the
-// link keeps its native new-window behavior.
-const NANO_EMBEDDED = !!(window.parent && window.parent !== window);
+// link keeps its native new-window behavior. The same-origin probe matters: a
+// cross-origin framer is also window.parent, but postMessage to our own origin
+// would never reach it and hostNavigate would still preventDefault the link —
+// so a cross-origin embed must fall through to the native _blank anchor. Reading
+// parent.location.origin throws under the same-origin policy for a cross-origin
+// parent, so the try/catch is the origin gate.
+const NANO_EMBEDDED = (() => {
+  if (!window.parent || window.parent === window) return false;
+  try {
+    return window.parent.location.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+})();
 
 // Ask the framing console to navigate in-host. Returns true when a message was
 // posted (embedded) so the caller can suppress the native anchor; false
@@ -771,11 +783,13 @@ function gridCell(col, row) {
           href,
           target: "_blank",
           rel: "noopener noreferrer",
-          // Embedded in the console a plain click routes the host's explorer in
-          // place (via the nano-navigate bridge) instead of opening a new
-          // window. A modified click (⌘/ctrl/shift/alt = new-tab intent) and any
-          // standalone run fall through to the native anchor above.
+          // Embedded in the console a plain primary click routes the host's
+          // explorer in place (via the nano-navigate bridge) instead of opening
+          // a new window. A non-primary button (middle/right = new-tab/context
+          // intent), a modified click (⌘/ctrl/shift/alt = new-tab intent) and
+          // any standalone run fall through to the native anchor above.
           onclick: (ev) => {
+            if (ev.button !== 0) return;
             if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
             if (hostNavigate("processExplorer", { instance: keyStr })) ev.preventDefault();
           },

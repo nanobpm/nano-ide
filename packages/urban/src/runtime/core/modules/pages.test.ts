@@ -266,6 +266,9 @@ test("renderer wires a column's processExplorer link to the console explorer", a
   // hostNavigate("processExplorer", {instance}) + preventDefault; a modified
   // click (new-tab intent) short-circuits so the native _blank anchor wins.
   assert.match(js, /hostNavigate\("processExplorer",\s*\{\s*instance:\s*keyStr\s*\}\)/);
+  // Non-primary buttons (middle/right) and modified clicks keep the native
+  // new-tab behavior; only a plain primary click routes in-host.
+  assert.match(js, /ev\.button !== 0/);
   assert.match(js, /ev\.metaKey \|\| ev\.ctrlKey \|\| ev\.shiftKey \|\| ev\.altKey/);
   assert.match(js, /ev\.preventDefault\(\)/);
 });
@@ -273,11 +276,15 @@ test("renderer wires a column's processExplorer link to the console explorer", a
 test("renderer exposes an embed-gated host-navigation bridge", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
-  // In-host navigation is gated on being embedded (a same-origin console iframe):
-  // standalone, hostNavigate returns false so callers keep the native new-window
-  // anchor. The payload is structured (target + params) and posted to the console
-  // origin — the host builds its own route, so row data can't smuggle a path.
-  assert.match(js, /const NANO_EMBEDDED = !!\(window\.parent && window\.parent !== window\)/);
+  // In-host navigation is gated on being embedded in a SAME-ORIGIN console
+  // iframe: standalone (or a cross-origin framer, where postMessage to our own
+  // origin could never be delivered) hostNavigate returns false so callers keep
+  // the native new-window anchor. The payload is structured (target + params)
+  // and posted to the console origin — the host builds its own route, so row
+  // data can't smuggle a path. The same-origin gate reads parent.location.origin
+  // in a try/catch (a cross-origin parent throws under the same-origin policy).
+  assert.match(js, /window\.parent\.location\.origin === window\.location\.origin/);
+  assert.match(js, /const NANO_EMBEDDED =/);
   assert.match(js, /function hostNavigate\(target, params\)/);
   assert.match(js, /if \(!NANO_EMBEDDED\) return false;/);
   assert.match(

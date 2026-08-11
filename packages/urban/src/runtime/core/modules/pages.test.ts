@@ -234,6 +234,21 @@ test("renderer keeps the detail input focused across the refresh poll", async ()
   assert.match(js, /s\.addRange\(savedRange\)/);
 });
 
+test("renderer preserves inner scroll depth across the refresh poll", async () => {
+  // Regression: an open detail row is reused across the 5s poll, but tbody.replaceChildren()
+  // detaches it, which resets the scrollTop of any inner overflow:auto container — so a
+  // scrolled-into transcript (.pc-transcript, max-height + overflow:auto) jumped back to the
+  // top every refreshMs. The client now captures scroll offsets of scrolled descendants
+  // before the swap and restores them on the nodes that stay connected afterwards.
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Offsets are captured from scrolled descendants before replaceChildren()…
+  assert.match(js, /const scrollSaved = \[\]/);
+  assert.match(js, /if\s*\(\s*sc\.scrollTop\s*\|\|\s*sc\.scrollLeft\s*\)\s*scrollSaved\.push/);
+  // …and restored only on nodes re-attached by the rebuild (still connected).
+  assert.match(js, /if\s*\(\s*sc\.isConnected\s*\)\s*\{\s*sc\.scrollTop\s*=\s*top\s*;\s*sc\.scrollLeft\s*=\s*left\s*;\s*\}/);
+});
+
 test("renderer wires a column's linkField to a new-tab anchor", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";

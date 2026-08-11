@@ -1132,6 +1132,19 @@ function renderDataGrid(node) {
           try { selStart = active.selectionStart; selEnd = active.selectionEnd; } catch (e) { /* non-text field */ }
         }
       }
+      // Capture scroll offsets of scrolled descendants before the swap. An open detail node is
+      // reused (same element instance), but replaceChildren() detaches it, which resets the
+      // scrollTop/scrollLeft of any inner scroll container (e.g. a scrolled-into .pc-transcript,
+      // max-height + overflow:auto) back to 0. Only built (open) detail subtrees are re-attached
+      // by the rebuild, so walk just those — not the whole grid — to keep this O(open panels)
+      // rather than O(grid size). Restoration below skips any node that isn't re-attached.
+      const scrollSaved = [];
+      for (const entry of detailNodes.values()) {
+        if (!entry.built) continue;
+        for (const sc of entry.dtr.querySelectorAll("*")) {
+          if (sc.scrollTop || sc.scrollLeft) scrollSaved.push([sc, sc.scrollTop, sc.scrollLeft]);
+        }
+      }
       tbody.replaceChildren();
       for (const row of rows) renderRow(row);
       if (!rows.length) tbody.append(el("tr", {}, el("td", { colspan: span }, "No rows")));
@@ -1142,6 +1155,10 @@ function renderDataGrid(node) {
         } else if (selStart != null && typeof active.setSelectionRange === "function") {
           try { active.setSelectionRange(selStart, selEnd); } catch (e) { /* non-text field */ }
         }
+      }
+      // Restore scroll depth on the reused nodes that survived the swap (still connected).
+      for (const [sc, top, left] of scrollSaved) {
+        if (sc.isConnected) { sc.scrollTop = top; sc.scrollLeft = left; }
       }
     } catch (e) {
       tbody.replaceChildren(el("tr", {}, el("td", { colspan: span }, String(e.message || e))));

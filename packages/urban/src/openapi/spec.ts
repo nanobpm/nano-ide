@@ -800,8 +800,21 @@ export function validateValue(
     for (const sub of schema.allOf) issues.push(...validateValue(doc, sub, value, path));
   }
   if (schema.anyOf) {
-    const perVariant = schema.anyOf.map((sub) => validateValue(doc, sub, value, path));
-    if (!perVariant.some((v) => v.length === 0)) {
+    // `anyOf` needs only ONE match, so short-circuit on the first clean variant — `validateValue`
+    // runs on every request (params/query/body/response) and evaluating every variant for a large
+    // schema is needless work once we have a hit. Only when NO variant matches do we build the full
+    // per-variant issue list to name the allowed shapes and surface the closest variant's issues.
+    let anyMatched = false;
+    const perVariant: ValidationIssue[][] = [];
+    for (const sub of schema.anyOf) {
+      const subIssues = validateValue(doc, sub, value, path);
+      if (subIssues.length === 0) {
+        anyMatched = true;
+        break;
+      }
+      perVariant.push(subIssues);
+    }
+    if (!anyMatched) {
       issues.push({
         path: at,
         message: `does not match any of the ${schema.anyOf.length} allowed shapes${variantSummary(doc, schema.anyOf)}`,

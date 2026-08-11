@@ -375,6 +375,21 @@ test("validateValue: a failed oneOf discriminant names the shapes and surfaces t
   // Exactly one discriminant → valid.
   assert.equal(validateValue(doc, start, { pr: "a/b#1" }, "body").length, 0);
 
+  // `anyOf` no-match reporting mirrors `oneOf`: name the allowed shapes AND surface the closest
+  // variant's issues, so the improved diagnostics are guarded for the union branch too. Here a value
+  // matches NEITHER discriminated variant, and `{pr}` is the closest (its own field is the issue).
+  const anyStart: OpenApiSchema = { anyOf: [byPr, byUrl] };
+  const anyNone = validateValue(doc, anyStart, { maxRounds: 3 }, "body");
+  assert.ok(anyNone.length > 0, "a value matching no anyOf variant is rejected");
+  assert.ok(
+    anyNone.some((i) => /allowed:.*\{pr\}.*\|.*\{url\}/.test(i.message)),
+    `anyOf summary names the allowed shapes: ${JSON.stringify(anyNone)}`,
+  );
+  assert.ok(
+    anyNone.some((i) => i.path === "body/pr" && /required/.test(i.message)),
+    `anyOf surfaces the closest variant's field issue: ${JSON.stringify(anyNone)}`,
+  );
+
   // The "matched more than one" branch: genuinely overlapping (non-exclusive) variants. A value that
   // satisfies two shapes is ambiguous and must be reported as such.
   const overlapping: OpenApiSchema = { oneOf: [{ type: "integer" }, { type: "integer", minimum: 10 }] };

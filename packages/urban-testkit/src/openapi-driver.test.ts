@@ -324,6 +324,22 @@ test("collectOperations: skips operations without an operationId and non-object 
   assert.deepEqual(ops.map((o) => o.operationId), ["a"]);
 });
 
+test("collectOperations: skips unsafe operationIds the runtime would never mount", () => {
+  // An operationId names the delegate module file, so the runtime (isSafeOperationId) rejects path
+  // separators and parent-dir traversal. The driver must mirror that or it would list/call an
+  // operation that was never mounted — a drift from the surface it drives.
+  const ops = collectOperations({
+    paths: {
+      "/safe": { get: { operationId: "getSafe" } },
+      "/traversal": { get: { operationId: "../secret" } },
+      "/slash": { get: { operationId: "a/b" } },
+      "/backslash": { post: { operationId: "a\\b" } },
+      "/dot": { get: { operationId: "." } },
+    },
+  });
+  assert.deepEqual(ops.map((o) => o.operationId), ["getSafe"]);
+});
+
 test("parseOpenApi: reads JSON and YAML, and throws a clear error on garbage", () => {
   const readOpenApiVersion = (doc: unknown): unknown =>
     doc !== null && typeof doc === "object" ? Reflect.get(doc, "openapi") : undefined;

@@ -69,6 +69,16 @@ export function parseOpenApi(text: string): unknown {
   return doc;
 }
 
+/** An operationId names the delegate module file (`<dir>/<operationId>`), so the runtime only mounts
+ *  it when it is a single safe path segment — separators (`/`, `\`) and parent-dir traversal (`..`,
+ *  `.`) are rejected so a crafted spec can't import a file outside the operations directory. Mirrors
+ *  urban's `isSafeOperationId` (openapi/spec.ts) so the driver enumerates exactly the mounted surface
+ *  and never lists/calls an operation the runtime would have skipped. Kept standalone for the same
+ *  version-robustness reason the whole module is (see file header) rather than importing urban's. */
+function isSafeOperationId(id: string): boolean {
+  return id.length > 0 && !id.includes("/") && !id.includes("\\") && !id.includes("..") && id !== ".";
+}
+
 /** Extract the `{name}` placeholders from a path template, in order of appearance. */
 function templateParams(path: string): string[] {
   const names: string[] = [];
@@ -84,7 +94,9 @@ function templateParams(path: string): string[] {
 /**
  * Enumerate the operations of an OpenAPI document exactly as the runtime does: walk `paths` → each
  * HTTP method → the operation's `operationId`. Operations without an `operationId` are skipped (the
- * runtime cannot dispatch them either). Paths are visited in sorted order for a stable enumeration.
+ * runtime cannot dispatch them either), as are those whose `operationId` is not a safe path segment
+ * (`isSafeOperationId`) — the runtime never mounts those, so listing them here would let a test call
+ * an operation that does not exist. Paths are visited in sorted order for a stable enumeration.
  */
 export function collectOperations(doc: unknown): ApiOperation[] {
   const out: ApiOperation[] = [];
@@ -97,7 +109,7 @@ export function collectOperations(doc: unknown): ApiOperation[] {
       const opRaw = item[method];
       if (!isRecord(opRaw)) continue;
       const operationId = typeof opRaw.operationId === "string" ? opRaw.operationId : undefined;
-      if (!operationId) continue;
+      if (!operationId || !isSafeOperationId(operationId)) continue;
       out.push({ operationId, method, path, pathParams });
     }
   }

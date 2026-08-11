@@ -14,10 +14,13 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+<!-- if:deno -->
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
+<!-- /if:deno -->
       - run: npm install
+      - run: npm run gen
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run check

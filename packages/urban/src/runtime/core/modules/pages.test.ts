@@ -280,7 +280,10 @@ test("renderer exposes an embed-gated host-navigation bridge", async () => {
   assert.match(js, /const NANO_EMBEDDED = !!\(window\.parent && window\.parent !== window\)/);
   assert.match(js, /function hostNavigate\(target, params\)/);
   assert.match(js, /if \(!NANO_EMBEDDED\) return false;/);
-  assert.match(js, /window\.parent\.postMessage\(\{ type: "nano-navigate", target: target, params: params \}, window\.location\.origin\)/);
+  assert.match(
+    js,
+    /window\.parent\.postMessage\(\s*\{\s*type:\s*"nano-navigate",\s*target:\s*target,\s*params:\s*params\s*\}\s*,\s*window\.location\.origin\s*\)/,
+  );
   // The theme bridge reuses the same embed flag (no second window.parent probe).
   assert.match(js, /if \(NANO_EMBEDDED\) \{/);
 });

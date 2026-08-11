@@ -73,7 +73,8 @@ export interface PagesDeps {
   cancel?(processInstanceKey: string): Promise<CancelInstanceResult>;
 }
 
-/** A JavaScript-body response (the renderer module served at /app/runtime.js). */
+/** A JavaScript-body response (the renderer module served at the fingerprinted
+ * `/app/runtime.<hash>.js`, and its `/app/runtime.js` back-compat route). */
 function javascript(
   body: string,
   status = 200,
@@ -445,7 +446,7 @@ function rendererShell(homePage: string, apiDocsPath?: string): string {
   // UI for free). `target="_blank"` + hardened `rel` so the docs open without giving the docs
   // tab a handle back to this window (reverse-tabnabbing).
   //
-  // The href must be DOCUMENT-relative, exactly like the `./app/runtime.js` script tag below:
+  // The href must be DOCUMENT-relative, exactly like the `./app/runtime.<hash>.js` script tag below:
   // the shell is served at the app's mount root (always a trailing "/"), which is the origin
   // root for a direct run (CLI on :3000) but a path prefix under the Nano console's reverse
   // proxy (/console/app-view/<name>/). A root-absolute "/app/api-docs" would escape that prefix

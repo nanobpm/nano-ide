@@ -28,7 +28,7 @@ You need a Nano engine reachable at `CAMUNDA_REST_ADDRESS` (default
 
 ```bash
 npm install
-npm run typecheck  # Deno-powered TypeScript check (requires Deno on PATH)
+npm run typecheck  # type-check the app (Node/tsc by default; `deno check` under --deno)
 npm run lint       # Biome + ban-`as` GritQL plugin
 npm run check      # validate the manifest
 npm run gen        # derive generated artifacts (migrations, worker-io types)

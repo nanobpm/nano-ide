@@ -1,0 +1,22 @@
+{
+	"compilerOptions": {
+		"target": "esnext",
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"lib": ["esnext"],
+		"types": ["node"],
+		"strict": true,
+		"noEmit": true,
+		"allowImportingTsExtensions": true,
+		"verbatimModuleSyntax": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true
+	},
+	"include": [
+		"main.ts",
+		"workers/**/*.ts",
+		"operations/**/*.ts",
+		"nano-generated/**/*.ts",
+		"tests/**/*.ts"
+	]
+}

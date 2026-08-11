@@ -66,7 +66,7 @@
 		"@nanobpm/nano-sdk": "^1.2.3",
 		"@nanobpm/workflow": "^0.8.0",
 		"bpmn-auto-layout": "^2.0.0-alpha.2",
-		"create-urban-app": "^0.12.0",
+		"create-urban-app": "^0.13.0",
 		"yaml": "^2.9.0"
 	},
 	"devDependencies": {

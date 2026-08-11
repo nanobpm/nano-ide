@@ -108,15 +108,41 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     if (headless && (destRel.startsWith("forms/") || destRel.startsWith("pages/"))) continue;
     // Node is the default host; Deno host files are opt-in via `--deno`.
     if (!deno && destRel === "deno.json") continue;
+    // tsconfig.json backs the default Node `tsc --noEmit` typecheck; under `--deno` the
+    // typecheck runs `deno check` instead, so the Node tsconfig is unneeded.
+    if (deno && destRel === "tsconfig.json") continue;
     const dest = join(opts.dir, destRel);
     await mkdir(dirname(dest), { recursive: true });
     const raw = await readFile(src, "utf8");
     let content = applyConditionals(substitute(raw, vars), { deno });
+    if (deno && destRel === "package.json") content = toDenoPackageJson(content, style);
     if (headless && destRel === "nano.app.json") content = toHeadlessManifest(content);
     await writeFile(dest, content);
     written.push(destRel);
   }
   return { dir: opts.dir, id, files: written.sort() };
+}
+
+/**
+ * `--deno`: point the Node `package.json` typecheck back at `deno check` and drop the
+ * Node-only TypeScript toolchain devDeps (the Deno host typechecks via `deno check`, and
+ * `deno.json` carries the parallel task). Everything else stays so the app still runs on Node.
+ */
+function toDenoPackageJson(json: string, style: "model" | "code"): string {
+  const pkg: {
+    scripts?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  } = JSON.parse(json);
+  const denoCheck =
+    style === "code"
+      ? 'deno check main.ts "workflows/**/*.ts" "scripts/**/*.ts"'
+      : 'deno check main.ts "nano-generated/controller.ts" "workers/**/*.ts" "operations/**/*.ts"';
+  if (pkg.scripts) pkg.scripts.typecheck = denoCheck;
+  if (pkg.devDependencies) {
+    delete pkg.devDependencies["@types/node"];
+    delete pkg.devDependencies.typescript;
+  }
+  return JSON.stringify(pkg, null, "\t") + "\n";
 }
 
 /** headless preset: drop the human-facing surfaces, triggers and form models. */

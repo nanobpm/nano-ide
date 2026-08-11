@@ -215,6 +215,68 @@ test("scaffolded package.json exposes gen and gen:check scripts", async () => {
   assert.equal(pkg.scripts.dev, "urban dev");
 });
 
+test("Node is the default typecheck: tsc + tsconfig.json + TS toolchain devDeps", async () => {
+  for (const style of ["model", "code"] as const) {
+    const dir = await mkdtemp(join(tmpdir(), `urban-tsc-${style}-`));
+    const res = await scaffold({ name: "TS App", dir, style });
+
+    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+    assert.equal(pkg.scripts.typecheck, "tsc --noEmit", `${style}: typecheck runs tsc`);
+    assert.equal(pkg.devDependencies?.typescript, "^5.6.0", `${style}: typescript devDep`);
+    assert.equal(
+      pkg.devDependencies?.["@types/node"],
+      "^22.0.0",
+      `${style}: @types/node devDep`,
+    );
+
+    assert.ok(res.files.includes("tsconfig.json"), `${style}: tsconfig.json scaffolded`);
+    const tsconfig = JSON.parse(await readFile(join(dir, "tsconfig.json"), "utf8"));
+    assert.equal(tsconfig.compilerOptions.noEmit, true, `${style}: tsconfig is noEmit`);
+    assert.equal(
+      tsconfig.compilerOptions.allowImportingTsExtensions,
+      true,
+      `${style}: tsconfig allows .ts import extensions`,
+    );
+
+    // The Node default needs no Deno runtime in CI.
+    const ci = await readFile(join(dir, ".github/workflows/ci.yml"), "utf8");
+    assert.ok(!/setup-deno/.test(ci), `${style}: CI does not install Deno`);
+    assert.ok(!/if:deno/.test(ci), `${style}: CI conditional markers are resolved`);
+  }
+  // Model-first tsc includes generated files, so CI derives them before typechecking.
+  const modelDir = await mkdtemp(join(tmpdir(), "urban-tsc-model-ci-"));
+  await scaffold({ name: "TS Model", dir: modelDir });
+  const modelCi = await readFile(join(modelDir, ".github/workflows/ci.yml"), "utf8");
+  assert.match(modelCi, /run: npm run gen\n\s+- run: npm run typecheck/, "gen precedes typecheck");
+});
+
+test("--deno reverts typecheck to deno check and drops the Node TS toolchain", async () => {
+  for (const [style, expected] of [
+    ["model", 'deno check main.ts "nano-generated/controller.ts" "workers/**/*.ts" "operations/**/*.ts"'],
+    ["code", 'deno check main.ts "workflows/**/*.ts" "scripts/**/*.ts"'],
+  ] as const) {
+    const dir = await mkdtemp(join(tmpdir(), `urban-deno-tsc-${style}-`));
+    const res = await scaffold({ name: "Deno TS App", dir, style, deno: true });
+
+    const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+    assert.equal(pkg.scripts.typecheck, expected, `${style}: typecheck uses deno check`);
+    assert.equal(pkg.devDependencies?.typescript, undefined, `${style}: no typescript devDep`);
+    assert.equal(
+      pkg.devDependencies?.["@types/node"],
+      undefined,
+      `${style}: no @types/node devDep`,
+    );
+
+    assert.ok(!res.files.includes("tsconfig.json"), `${style}: no Node tsconfig.json`);
+    assert.ok(!(await exists(join(dir, "tsconfig.json"))), `${style}: no tsconfig.json on disk`);
+
+    // The Deno typecheck needs the Deno runtime in CI.
+    const ci = await readFile(join(dir, ".github/workflows/ci.yml"), "utf8");
+    assert.match(ci, /setup-deno/, `${style}: CI installs Deno`);
+    assert.ok(!/if:deno/.test(ci), `${style}: CI conditional markers are resolved`);
+  }
+});
+
 test("scaffold wires @nanobpm/urban-testkit as a devDependency with a runnable starter test", async () => {
   for (const style of ["model", "code"] as const) {
     const dir = await mkdtemp(join(tmpdir(), `urban-testkit-${style}-`));

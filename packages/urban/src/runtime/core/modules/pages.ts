@@ -525,7 +525,7 @@ body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64r
 .pc-card h2 { font-size:1rem; margin:0 0 .75rem; }
 .pc-field { display:flex; flex-direction:column; gap:.25rem; margin-bottom:.6rem; }
 .pc-field label { font-size:.8rem; color:var(--nano-text-muted); }
-.pc-field input { padding:.5rem .6rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); }
+.pc-field input:not([type=checkbox]) { padding:.5rem .6rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); }
 .pc-field-check label { display:flex; flex-direction:row; align-items:center; gap:.5rem; font-size:.9rem; color:var(--nano-text); cursor:pointer; }
 .pc-field-check input { width:auto; padding:0; accent-color:var(--nano-accent); cursor:pointer; }
 .pc-btn { padding:.5rem .9rem; border:0; border-radius:.4rem; background:var(--nano-accent); color:var(--nano-on-accent); font:inherit; cursor:pointer; }
@@ -834,18 +834,17 @@ function renderActionForm(node) {
   // pollute Object.prototype or shadow inherited props (prototype-pollution class).
   const inputs = new Map();
   const fieldTypes = new Map();
-  // Checkbox fields remember their declared default so a post-submit reset
-  // restores it (clearing .value is a no-op for a checkbox).
-  const checkboxDefaults = new Map();
   for (const f of p.fields || []) {
     const kind = f.type === "checkbox" ? "checkbox" : (f.type === "number" ? "number" : "text");
     fieldTypes.set(f.key, kind);
     if (kind === "checkbox") {
       // A boolean field renders a real checkbox; its default checked state comes
-      // from default/checked on the field (unset -> unchecked).
+      // from default/checked on the field (unset -> unchecked). We record that on
+      // the input's defaultChecked so a post-submit reset can restore it without a
+      // side map that could drift from the actual input.
       const checked = f.default === true || f.checked === true;
-      checkboxDefaults.set(f.key, checked);
       const input = el("input", { type: "checkbox" });
+      input.defaultChecked = checked;
       input.checked = checked;
       inputs.set(f.key, input);
       // Input-first, wrapped in the label so the whole row is a click target.
@@ -898,8 +897,9 @@ function renderActionForm(node) {
       msg.textContent = (p.action && p.action.successLabel) ||
         (res && res.processInstanceKey != null ? "Started (instance " + res.processInstanceKey + ")" : "Done");
       for (const [k, input] of inputs) {
-        // Text/number inputs clear; a checkbox resets to its declared default.
-        if (fieldTypes.get(k) === "checkbox") input.checked = checkboxDefaults.get(k) === true;
+        // Text/number inputs clear; a checkbox resets to its declared default,
+        // read straight off the input's defaultChecked (no side map to drift).
+        if (fieldTypes.get(k) === "checkbox") input.checked = input.defaultChecked;
         else input.value = "";
       }
       document.dispatchEvent(new CustomEvent("pc:refresh"));

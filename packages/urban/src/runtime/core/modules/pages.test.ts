@@ -364,9 +364,9 @@ test("the renderer honours boolean (checkbox) actionForm fields", async () => {
   // …and whose submitted value is always a real boolean (never a string), so a
   // strict `=== true` check on the action side sees the intended value.
   assert.match(js, /variables\[k\] = input\.checked === true;/);
-  // A post-submit reset restores a checkbox to its declared default rather than
-  // clearing `.value` (a no-op for a checkbox).
-  assert.match(js, /input\.checked = checkboxDefaults\.get\(k\) === true;/);
+  // A post-submit reset restores a checkbox to its declared default (read off the
+  // input's defaultChecked) rather than clearing `.value` (a no-op for a checkbox).
+  assert.match(js, /input\.checked = input\.defaultChecked;/);
 });
 
 test("renderer makes collapsible nodes persist their state across sessions", async () => {

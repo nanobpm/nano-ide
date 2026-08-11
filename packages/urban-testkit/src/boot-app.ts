@@ -18,6 +18,15 @@
 import { createUrbanApp, type UrbanApp } from "@nanobpm/urban/runtime";
 import type { DataLayer, HttpResponse } from "@nanobpm/urban/runtime";
 import { createManualScheduler, type ManualScheduler } from "./manual-scheduler.ts";
+import {
+  type ApiDriver,
+  type ApiOperation,
+  type ApiResponse,
+  collectOperations,
+  createApiDriver,
+  type DriverRouteRequest,
+  parseOpenApi,
+} from "./openapi-driver.ts";
 import { createTestHost, type TestHost } from "./test-host.ts";
 import { createWasmEngineClient, type WasmEngineClient } from "./wasm-engine.ts";
 
@@ -64,6 +73,17 @@ export interface TestApp {
   readonly db: DataLayer;
   /** Drive mounted HTTP routes in-process. */
   readonly ui: UiDriver;
+  /**
+   * Drive the app's OpenAPI operations by `operationId`, derived from the app's own spec (ADR 0059).
+   * Undefined when the app declares no `api` binding — guard with `if (app.api)` for a generic
+   * harness, or assert its presence in an app-specific e2e.
+   */
+  readonly api: ApiDriver | undefined;
+  /**
+   * Call a raw route (page action, hook, or any exact path) and get a response-parsed result — a
+   * thin wrapper over {@link UiDriver.call}. Available whether or not the app has an `api` binding.
+   */
+  callRoute<T = unknown>(req: RouteRequest): Promise<ApiResponse<T>>;
   /** The virtual-clock scheduler driving the app's background loops. */
   readonly scheduler: ManualScheduler;
   /** Captured log lines (empty unless `captureLogs` was set). */
@@ -98,6 +118,24 @@ function toSearchParams(query: RouteRequest["query"]): URLSearchParams {
 function toHeaders(headers: RouteRequest["headers"]): Headers {
   if (headers instanceof Headers) return headers;
   return new Headers(headers ?? {});
+}
+
+/** Read the `api.spec` path from a manifest, guarded (mirrors urban's `readApiBinding`: an `api`
+ *  block with a non-empty string `spec`). Returns undefined when the app declares no api surface. */
+function readApiSpecPath(manifest: unknown): string | undefined {
+  if (!manifest || typeof manifest !== "object") return undefined;
+  const api = Reflect.get(manifest, "api");
+  if (!api || typeof api !== "object") return undefined;
+  const spec = Reflect.get(api, "spec");
+  return typeof spec === "string" && spec.trim().length > 0 ? spec.trim() : undefined;
+}
+
+/** Join an app root and a spec path the way the runtime's `resolveAppPath` does (the host is
+ *  anchored at the app root, so a relative spec resolves against it). */
+function resolveSpecPath(root: string, spec: string): string {
+  if (spec.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(spec)) return spec;
+  const base = root.replace(/[/\\]+$/, "");
+  return `${base}/${spec}`;
 }
 
 /**
@@ -157,6 +195,25 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
       },
     };
 
+    // A route caller in the shape the OpenAPI driver expects (its `DriverRouteRequest` matches
+    // `RouteRequest`), so `api` and `callRoute` reuse the single in-process `ui.call` primitive.
+    const uiCall = (req: DriverRouteRequest): Promise<HttpResponse> => ui.call(req);
+
+    // Build the OpenAPI driver from the app's OWN spec (ADR 0059's single HTTP surface). Reading the
+    // spec through the same host the runtime used guarantees the driver enumerates exactly the
+    // operations the app mounted — no second source of truth (AGENTS.md "Derivation Over Duplication").
+    // With no `api` binding the driver still backs `callRoute` (which needs no operations), but
+    // `api` itself is left undefined so a generic harness can detect the absence of an API surface.
+    let operations: ApiOperation[] = [];
+    const specPath = readApiSpecPath(app.manifest);
+    if (specPath) {
+      const text = await testHost.host.readTextFile(resolveSpecPath(app.root, specPath));
+      operations = collectOperations(parseOpenApi(text));
+    }
+    const driver = createApiDriver(operations, uiCall);
+    const api: ApiDriver | undefined = specPath ? driver : undefined;
+    const callRoute = <T,>(req: RouteRequest): Promise<ApiResponse<T>> => driver.callRoute<T>(req);
+
     const settle = async (): Promise<void> => {
       // Fixpoint at the current instant: drain engine work, then fire any due background timer;
       // a fired timer can enqueue fresh engine work, so loop until nothing fires.
@@ -181,6 +238,8 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
       engine,
       db,
       ui,
+      api,
+      callRoute,
       scheduler,
       logs: testHost.logs,
       now: () => scheduler.now(),

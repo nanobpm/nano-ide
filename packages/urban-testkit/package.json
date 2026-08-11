@@ -45,7 +45,8 @@
     "test:deno": "deno test -A --no-check src/"
   },
   "dependencies": {
-    "@nanobpm/engine-wasm": "^0.4.0"
+    "@nanobpm/engine-wasm": "^0.4.0",
+    "yaml": "^2.9.0"
   },
   "peerDependencies": {
     "@nanobpm/urban": ">=0.32.0"

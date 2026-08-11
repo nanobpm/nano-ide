@@ -24,3 +24,13 @@ export {
   type TestApp,
   type UiDriver,
 } from "./boot-app.ts";
+export {
+  type ApiCallOptions,
+  type ApiDriver,
+  type ApiOperation,
+  type ApiResponse,
+  collectOperations,
+  createApiDriver,
+  type DriverRouteRequest,
+  parseOpenApi,
+} from "./openapi-driver.ts";

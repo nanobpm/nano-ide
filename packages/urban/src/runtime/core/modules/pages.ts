@@ -608,7 +608,36 @@ function applyTheme(msg) {
     }
   }
 }
-if (window.parent && window.parent !== window) {
+// True when this app runs inside the Nano console's same-origin iframe (vs a
+// standalone CLI run). Gates the theme bridge below AND in-host link navigation:
+// embedded, a processExplorer link routes the console in place; standalone, the
+// link keeps its native new-window behavior. The same-origin probe matters: a
+// cross-origin framer is also window.parent, but postMessage to our own origin
+// would never reach it and hostNavigate would still preventDefault the link —
+// so a cross-origin embed must fall through to the native _blank anchor. Reading
+// parent.location.origin throws under the same-origin policy for a cross-origin
+// parent, so the try/catch is the origin gate.
+const NANO_EMBEDDED = (() => {
+  if (!window.parent || window.parent === window) return false;
+  try {
+    return window.parent.location.origin === window.location.origin;
+  } catch {
+    return false;
+  }
+})();
+
+// Ask the framing console to navigate in-host. Returns true when a message was
+// posted (embedded) so the caller can suppress the native anchor; false
+// standalone so it falls through to the new-window <a>. The payload is
+// structured (target + params), never a raw href — the console constructs its
+// own route, so app/row data can't smuggle a path or scheme across the boundary.
+function hostNavigate(target, params) {
+  if (!NANO_EMBEDDED) return false;
+  window.parent.postMessage({ type: "nano-navigate", target: target, params: params }, window.location.origin);
+  return true;
+}
+
+if (NANO_EMBEDDED) {
   window.addEventListener("message", (ev) => {
     // Same-origin proxy (posture A): only trust a message from the framing
     // parent AND from our own origin. ev.source alone is insufficient — a
@@ -723,8 +752,12 @@ function renderText(node) {
 //      non-empty key (after trimming surrounding whitespace) produces a link.
 //      Unknown link kinds fall back to plain text so an unrecognised schema
 //      can't render a broken anchor.
-// Both open in a new tab with rel=noopener noreferrer so the opened page can't
-// reach window.opener. Shared by the top-level grid and child grids.
+// The external linkField anchor always opens in a new tab (rel=noopener
+// noreferrer). The processExplorer anchor does too when the app runs
+// standalone, but when embedded in the console a plain click instead routes the
+// host's own explorer view in place via the nano-navigate postMessage bridge
+// (a modified/middle click keeps the new-tab behavior). Shared by the top-level
+// grid and child grids.
 function gridCell(col, row) {
   const text = row[col.field] == null ? "" : String(row[col.field]);
   if (col.linkField) {
@@ -745,7 +778,22 @@ function gridCell(col, row) {
       return el(
         "td",
         {},
-        el("a", { class: "pc-link", href, target: "_blank", rel: "noopener noreferrer" }, text),
+        el("a", {
+          class: "pc-link",
+          href,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          // Embedded in the console a plain primary click routes the host's
+          // explorer in place (via the nano-navigate bridge) instead of opening
+          // a new window. A non-primary button (middle/right = new-tab/context
+          // intent), a modified click (⌘/ctrl/shift/alt = new-tab intent) and
+          // any standalone run fall through to the native anchor above.
+          onclick: (ev) => {
+            if (ev.button !== 0) return;
+            if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+            if (hostNavigate("processExplorer", { instance: keyStr })) ev.preventDefault();
+          },
+        }, text),
       );
     }
   }

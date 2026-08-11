@@ -353,6 +353,22 @@ test("the renderer honours numeric actionForm fields", async () => {
   assert.match(js, /if \(!Number\.isFinite\(num\)\) continue;/);
 });
 
+test("the renderer honours boolean (checkbox) actionForm fields", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Fields declared `type: "checkbox"` render a real <input type="checkbox">…
+  assert.match(js, /f\.type === "checkbox"/);
+  assert.match(js, /el\("input", \{ type: "checkbox" \}\)/);
+  // …whose default checked state comes from `default`/`checked` on the field…
+  assert.match(js, /f\.default === true \|\| f\.checked === true/);
+  // …and whose submitted value is always a real boolean (never a string), so a
+  // strict `=== true` check on the action side sees the intended value.
+  assert.match(js, /variables\[k\] = input\.checked === true;/);
+  // A post-submit reset restores a checkbox to its declared default rather than
+  // clearing `.value` (a no-op for a checkbox).
+  assert.match(js, /input\.checked = checkboxDefaults\.get\(k\) === true;/);
+});
+
 test("renderer makes collapsible nodes persist their state across sessions", async () => {
   // A node with `collapsible` gets a clickable header that hides/shows the card
   // body, and the collapsed state is written to localStorage keyed by the home

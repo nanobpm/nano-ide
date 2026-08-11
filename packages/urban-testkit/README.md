@@ -78,6 +78,47 @@ try {
 ```
 
 `app.api.operationIds()` and `app.api.operation(id)` enumerate the surface (the source of
-truth for a future coverage gate).
+truth for the coverage gate below).
 
-Later slices add the coverage/behaviour explorers (issue #157).
+## Coverage-exhaustive gate (S4)
+
+Boot with `{ coverage: true }` and the harness derives the app's declared **surfaces** from
+its *own* manifest + OpenAPI spec — never a second hand-written list — and records which
+elements a test run actually exercises. `assertFullCoverage()` then **fails the build listing
+any declared element that was never driven**, turning "we forgot to test operation X /
+worker Y" from a silent gap into a red test.
+
+Two surfaces ship in this slice:
+
+- **`operations`** — every `operationId` in the app's OpenAPI document. Recorded when the
+  test calls `app.api.call(operationId, …)` (even if the operation returns an error status —
+  a driven-but-failing operation still counts as exercised).
+- **`workers`** — every `workers[].taskType` in the manifest. Recorded automatically as the
+  engine dispatches each job type, including workers a service task runs synchronously inside
+  `createInstance`.
+
+```ts
+const app = await bootTestApp(appRoot, { coverage: true });
+try {
+  await app.api!.call("createOrder", { body: { item: "widget" } });
+  await app.api!.call("getOrder", { params: { item: "widget" } });
+
+  // Fails naming any operation/worker the test never drove:
+  //   Coverage incomplete — declared surface elements were never exercised:
+  //     operations: 1 un-exercised → cancelInstance
+  app.coverage!.assertFullCoverage();
+} finally {
+  await app.stop();
+}
+```
+
+`app.coverage.report()` returns per-surface `{ declared, exercised, missing, unexpected,
+complete }` for a custom assertion, and `assertFullCoverage({ surfaces: ["operations"] })`
+gates a chosen subset. Elements exercised outside the declared surface (e.g. an internal
+system job type) surface as `unexpected` and are **informational only** — the gate fails on
+`missing`, not on extras. Coverage is off by default (`app.coverage` is `undefined`), so a
+plain `bootTestApp(root)` carries zero overhead.
+
+The core (`SurfaceCoverage`) is surface-agnostic and free of any runtime import, so later
+slices can add surfaces (webhook triggers, BPMN elements, SQLite tables) by declaring their
+ids and recording hits — no change to the gate itself (issue #157).

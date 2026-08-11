@@ -209,9 +209,10 @@ export function resolveSpecPath(root: string, spec: string): string {
  */
 export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): Promise<TestApp> {
   const engine = await createWasmEngineClient();
-  // Coverage (S4): start capturing exercised job types the moment the engine exists — before
-  // the app registers workers — so no dispatch is missed. These hits are replayed into the
-  // SurfaceCoverage once the manifest is known (below). Absent overhead when coverage is off.
+  // Coverage (S4): when enabled, start capturing exercised job types the moment the engine
+  // exists — before the app registers workers — so no dispatch is missed; these hits are
+  // replayed into the SurfaceCoverage once the manifest is known (below). When coverage is off
+  // no observer is attached and no recorder is built — the empty `jobHits` set stays unused.
   const coverageEnabled = opts.coverage === true;
   const jobHits = new Set<string>();
   // The live coverage job observer's unsubscribe, cleared on `stop()` so we neither retain the

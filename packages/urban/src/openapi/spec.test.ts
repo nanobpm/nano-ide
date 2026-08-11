@@ -333,6 +333,57 @@ test("validateValue enforces allOf (intersection), anyOf/oneOf (union) — match
   assert.ok(validateValue(doc, one, "x").length > 0); // matches NEITHER
 });
 
+test("validateValue: a failed oneOf discriminant names the shapes and surfaces the closest variant", () => {
+  // The Camunda-style discriminated request body: exactly one of two mutually-exclusive variants
+  // (mutual exclusion enforced by additionalProperties:false + a distinct required discriminant).
+  const byPr: OpenApiSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["pr"],
+    properties: { pr: { type: "string" }, maxRounds: { type: "integer" } },
+  };
+  const byUrl: OpenApiSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["url"],
+    properties: { url: { type: "string" }, maxRounds: { type: "integer" } },
+  };
+  const start: OpenApiSchema = { oneOf: [byPr, byUrl] };
+
+  // Neither discriminant supplied → matched 0. The summary must NAME the allowed shapes, and the
+  // closest variant's own issue must be surfaced (not just the opaque "matched 0").
+  const none = validateValue(doc, start, { maxRounds: 3 }, "body");
+  assert.ok(none.length > 0, "an empty discriminant is rejected");
+  assert.ok(
+    none.some((i) => /allowed:.*\{pr\}.*\|.*\{url\}/.test(i.message)),
+    `summary names the allowed shapes: ${JSON.stringify(none)}`,
+  );
+  assert.ok(
+    none.some((i) => i.path === "body/pr" && /required/.test(i.message)),
+    `closest variant's field issue is surfaced: ${JSON.stringify(none)}`,
+  );
+
+  // Both discriminants supplied → with additionalProperties:false, EACH variant rejects the other's
+  // field, so this is also "matches none" (the desirable strictness — a body can't smuggle both).
+  const both = validateValue(doc, start, { pr: "a/b#1", url: "http://x" }, "body");
+  assert.ok(
+    both.some((i) => /does not match any of the 2 allowed shapes/.test(i.message)),
+    `supplying both discriminants is rejected by the strict variants: ${JSON.stringify(both)}`,
+  );
+
+  // Exactly one discriminant → valid.
+  assert.equal(validateValue(doc, start, { pr: "a/b#1" }, "body").length, 0);
+
+  // The "matched more than one" branch: genuinely overlapping (non-exclusive) variants. A value that
+  // satisfies two shapes is ambiguous and must be reported as such.
+  const overlapping: OpenApiSchema = { oneOf: [{ type: "integer" }, { type: "integer", minimum: 10 }] };
+  const ambiguous = validateValue(doc, overlapping, 20, "n");
+  assert.ok(
+    ambiguous.some((i) => /must match exactly one of the 2 allowed shapes, but matched 2/.test(i.message)),
+    `ambiguous (multi-match) is reported: ${JSON.stringify(ambiguous)}`,
+  );
+});
+
 test("undeclaredPathParams flags path-template params with no declared parameter", () => {
   const drift: OpenApiDoc = {
     openapi: "3.0.0",

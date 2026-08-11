@@ -214,7 +214,12 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
   // SurfaceCoverage once the manifest is known (below). Absent overhead when coverage is off.
   const coverageEnabled = opts.coverage === true;
   const jobHits = new Set<string>();
-  if (coverageEnabled) engine.observeJobs((jobType) => jobHits.add(jobType));
+  // The live coverage job observer's unsubscribe, cleared on `stop()` so we neither retain the
+  // recording closure past teardown nor record a stray dispatch during shutdown. Single-slot:
+  // the boot-time capture below is superseded by the coverage observer once the manifest is known,
+  // and this tracks whichever is currently attached.
+  let unobserveJobs: (() => void) | undefined;
+  if (coverageEnabled) unobserveJobs = engine.observeJobs((jobType) => jobHits.add(jobType));
   // Anchor the virtual clock at the engine's clock so DataLayer timestamps and the
   // engine's own timeline share an origin; `advanceTime` keeps them in lockstep thereafter.
   const scheduler = createManualScheduler(engine.now);
@@ -293,7 +298,7 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
         workers: deriveWorkerJobTypes(app.manifest),
       });
       for (const jobType of jobHits) cov.record("workers", jobType);
-      engine.observeJobs((jobType) => cov.record("workers", jobType));
+      unobserveJobs = engine.observeJobs((jobType) => cov.record("workers", jobType));
       apiDriver = instrumentApiCoverage(driver, cov);
       coverage = cov;
     }
@@ -333,11 +338,19 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
       settle,
       advanceTime,
       coverage,
-      stop: () => app.stop(),
+      stop: () => {
+        // Detach the coverage job observer before closing so no dispatch during shutdown is
+        // recorded and the recording closure isn't retained past teardown. `app.stop()` closes
+        // the engine too, so this is belt-and-braces, but keeps the observer's lifetime bounded.
+        unobserveJobs?.();
+        unobserveJobs = undefined;
+        return app.stop();
+      },
     };
   } catch (err) {
     // Roll back a partially-booted app so a failed seed (or a missing data layer) can't leave
     // the engine/workers/router alive across tests. `app.stop()` closes the engine too.
+    unobserveJobs?.();
     await app.stop();
     throw err;
   }

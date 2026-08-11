@@ -12,6 +12,7 @@ import {
   parseSpec,
   resolveSchema,
   responseSchemaForStatus,
+  sharedRequestBodySchemas,
   toRouteMatcher,
   undeclaredPathParams,
   undeclaredSecuritySchemes,
@@ -333,6 +334,72 @@ test("validateValue enforces allOf (intersection), anyOf/oneOf (union) — match
   assert.ok(validateValue(doc, one, "x").length > 0); // matches NEITHER
 });
 
+test("validateValue: a failed oneOf discriminant names the shapes and surfaces the closest variant", () => {
+  // The Camunda-style discriminated request body: exactly one of two mutually-exclusive variants
+  // (mutual exclusion enforced by additionalProperties:false + a distinct required discriminant).
+  const byPr: OpenApiSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["pr"],
+    properties: { pr: { type: "string" }, maxRounds: { type: "integer" } },
+  };
+  const byUrl: OpenApiSchema = {
+    type: "object",
+    additionalProperties: false,
+    required: ["url"],
+    properties: { url: { type: "string" }, maxRounds: { type: "integer" } },
+  };
+  const start: OpenApiSchema = { oneOf: [byPr, byUrl] };
+
+  // Neither discriminant supplied → matched 0. The summary must NAME the allowed shapes, and the
+  // closest variant's own issue must be surfaced (not just the opaque "matched 0").
+  const none = validateValue(doc, start, { maxRounds: 3 }, "body");
+  assert.ok(none.length > 0, "an empty discriminant is rejected");
+  assert.ok(
+    none.some((i) => /allowed:.*\{pr\}.*\|.*\{url\}/.test(i.message)),
+    `summary names the allowed shapes: ${JSON.stringify(none)}`,
+  );
+  assert.ok(
+    none.some((i) => i.path === "body/pr" && /required/.test(i.message)),
+    `closest variant's field issue is surfaced: ${JSON.stringify(none)}`,
+  );
+
+  // Both discriminants supplied → with additionalProperties:false, EACH variant rejects the other's
+  // field, so this is also "matches none" (the desirable strictness — a body can't smuggle both).
+  const both = validateValue(doc, start, { pr: "a/b#1", url: "http://x" }, "body");
+  assert.ok(
+    both.some((i) => /does not match any of the 2 allowed shapes/.test(i.message)),
+    `supplying both discriminants is rejected by the strict variants: ${JSON.stringify(both)}`,
+  );
+
+  // Exactly one discriminant → valid.
+  assert.equal(validateValue(doc, start, { pr: "a/b#1" }, "body").length, 0);
+
+  // `anyOf` no-match reporting mirrors `oneOf`: name the allowed shapes AND surface the closest
+  // variant's issues, so the improved diagnostics are guarded for the union branch too. Here a value
+  // matches NEITHER discriminated variant, and `{pr}` is the closest (its own field is the issue).
+  const anyStart: OpenApiSchema = { anyOf: [byPr, byUrl] };
+  const anyNone = validateValue(doc, anyStart, { maxRounds: 3 }, "body");
+  assert.ok(anyNone.length > 0, "a value matching no anyOf variant is rejected");
+  assert.ok(
+    anyNone.some((i) => /allowed:.*\{pr\}.*\|.*\{url\}/.test(i.message)),
+    `anyOf summary names the allowed shapes: ${JSON.stringify(anyNone)}`,
+  );
+  assert.ok(
+    anyNone.some((i) => i.path === "body/pr" && /required/.test(i.message)),
+    `anyOf surfaces the closest variant's field issue: ${JSON.stringify(anyNone)}`,
+  );
+
+  // The "matched more than one" branch: genuinely overlapping (non-exclusive) variants. A value that
+  // satisfies two shapes is ambiguous and must be reported as such.
+  const overlapping: OpenApiSchema = { oneOf: [{ type: "integer" }, { type: "integer", minimum: 10 }] };
+  const ambiguous = validateValue(doc, overlapping, 20, "n");
+  assert.ok(
+    ambiguous.some((i) => /must match exactly one of the 2 allowed shapes, but matched 2/.test(i.message)),
+    `ambiguous (multi-match) is reported: ${JSON.stringify(ambiguous)}`,
+  );
+});
+
 test("undeclaredPathParams flags path-template params with no declared parameter", () => {
   const drift: OpenApiDoc = {
     openapi: "3.0.0",
@@ -607,4 +674,31 @@ test("responseSchemaForStatus: a status-range ('2XX') covers concrete statuses i
   assert.equal(entries.map((e) => e.status).join(","), "2XX,default"); // ranges before default
   assert.equal(responseSchemaForStatus(entries, 200)?.type, "string"); // 2XX class → range schema
   assert.equal(responseSchemaForStatus(entries, 404)?.type, "object"); // outside 2XX → default
+});
+
+test("sharedRequestBodySchemas: flags a requestBody $ref reused across operations, ignores single-use", () => {
+  const jsonRef = (ref: string) => ({ requestBody: { content: { "application/json": { schema: { $ref: ref } } } } });
+  const doc: OpenApiDoc = {
+    openapi: "3.1.0",
+    components: {
+      schemas: {
+        StartVariables: { type: "object" },
+        FeatureAnswer: { type: "object" },
+      },
+    },
+    paths: {
+      // Two operations share the SAME loose body schema — the defect fingerprint.
+      "/convergence": { post: { operationId: "startConvergenceLoop", ...jsonRef("#/components/schemas/StartVariables") } },
+      "/fanout": { post: { operationId: "startPlanFanout", ...jsonRef("#/components/schemas/StartVariables") } },
+      // A distinct, single-use body — must NOT be flagged.
+      "/feature": { post: { operationId: "answerFeature", ...jsonRef("#/components/schemas/FeatureAnswer") } },
+      // An inline (non-$ref) body — no shared identity to compare, must NOT be flagged.
+      "/inline": { post: { operationId: "inlineBody", requestBody: { content: { "application/json": { schema: { type: "object" } } } } } },
+    },
+  };
+
+  const shared = sharedRequestBodySchemas(doc);
+  assert.equal(shared.length, 1, `only the reused ref is flagged: ${JSON.stringify(shared)}`);
+  assert.equal(shared[0].ref, "#/components/schemas/StartVariables");
+  assert.deepEqual(shared[0].operationIds, ["startConvergenceLoop", "startPlanFanout"]); // sorted
 });

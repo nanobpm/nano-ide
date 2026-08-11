@@ -11,7 +11,7 @@ import { deriveWorkerBindings, type ModelSource } from "./derivers/worker-io.ts"
 import { deriveMeta } from "./derivers/meta.ts";
 import { deriveMessageBindings } from "./derivers/messages.ts";
 import { deriveApi } from "./derivers/api.ts";
-import { parseSpec } from "../openapi/spec.ts";
+import { parseSpec, sharedRequestBodySchemas } from "../openapi/spec.ts";
 import { deriveModels, type DerivedModels, type ModelError, MODEL_PROVENANCE } from "./models.ts";
 
 /** Minimal filesystem port. Node/Deno impls live in `fsio.ts`. */
@@ -57,6 +57,9 @@ export interface GenResult {
   incomplete: boolean;
   /** Per-file model-derivation errors (empty on success). */
   modelErrors: ModelError[];
+  /** Non-fatal spec-hygiene warnings (e.g. a requestBody schema shared by >1 operation). Empty on
+   *  a clean spec. Surfaced by the CLI but never fail gen/check — advisory only. */
+  warnings: string[];
 }
 
 function join(root: string, rel: string): string {
@@ -118,7 +121,7 @@ export async function collectArtifacts(opts: GenOptions): Promise<DerivedArtifac
 
 /** Internal: collect artifacts AND the model-derivation details (needed by `runGen` for the
  * incomplete signal + the provenance-scoped stale sweep). */
-async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifact[]; derived: DerivedModels }> {
+async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifact[]; derived: DerivedModels; warnings: string[] }> {
   const { root, io } = opts;
   const emitModels = opts.emitModels ?? true;
   const manifestPath = join(root, opts.manifestFile ?? "nano.app.json");
@@ -128,6 +131,7 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
   } = JSON.parse(await io.readText(manifestPath));
 
   const artifacts: DerivedArtifact[] = [];
+  const warnings: string[] = [];
 
   // 1. types → migrations + domain row types (DomainTables spine + DomainTypes registry)
   if (!opts.modelsOnly && manifest.types && Object.keys(manifest.types).length > 0) {
@@ -164,15 +168,25 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
     const opsDir = typeof manifest.api?.dir === "string" && manifest.api.dir.trim().length > 0
       ? manifest.api.dir.trim()
       : undefined;
-    artifacts.push(...deriveApi(parseSpec(specText), opsDir, manifest.api?.eject === true));
+    const doc = parseSpec(specText);
+    artifacts.push(...deriveApi(doc, opsDir, manifest.api?.eject === true));
+    // Non-fatal spec-hygiene: a requestBody schema reused by >1 operation can't be tightened into
+    // per-operation discriminated variants — flag it so the author can split it (never fail gen).
+    for (const { ref, operationIds } of sharedRequestBodySchemas(doc)) {
+      warnings.push(
+        `requestBody schema ${ref} is shared by ${operationIds.length} operations ` +
+          `(${operationIds.join(", ")}). A single schema can't model per-operation discriminants — ` +
+          "consider splitting it into named variants + oneOf (additionalProperties:false) per operation.",
+      );
+    }
   }
 
-  return { artifacts: sortArtifacts(artifacts), derived };
+  return { artifacts: sortArtifacts(artifacts), derived, warnings };
 }
 
 /** Run the derivers and write artifacts (or, with `check`, report drift without writing). */
 export async function runGen(opts: GenOptions & { check?: boolean }): Promise<GenResult> {
-  const { artifacts, derived } = await collectAll(opts);
+  const { artifacts, derived, warnings } = await collectAll(opts);
   const { root, io } = opts;
   const emitModels = opts.emitModels ?? true;
   const drift: string[] = [];
@@ -224,7 +238,7 @@ export async function runGen(opts: GenOptions & { check?: boolean }): Promise<Ge
     }
   }
 
-  return { artifacts, drift, swept: swept.sort(), incomplete: derived.incomplete, modelErrors: derived.errors };
+  return { artifacts, drift, swept: swept.sort(), incomplete: derived.incomplete, modelErrors: derived.errors, warnings };
 }
 
 export { dirOf, join as joinPath };

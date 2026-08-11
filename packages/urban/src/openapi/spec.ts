@@ -338,6 +338,32 @@ export function assertUniqueOperationIds(doc: OpenApiDoc): void {
   }
 }
 
+/** Groups of operationIds that name the SAME requestBody schema `$ref` as their JSON body,
+ *  keyed by that ref (only refs shared by two or more operations are returned, sorted). A single
+ *  request-body schema reused verbatim by multiple operations is the structural fingerprint of the
+ *  "one permissive schema standing in for what should be mutually-exclusive variants" defect: two
+ *  operations that genuinely want different shapes (e.g. `startConvergenceLoop` wants pr|url,
+ *  `startPlanFanout` wants issue|url) are forced to share one loose object, so neither can be
+ *  tightened without breaking the other. gen surfaces this as a non-fatal warning so an author can
+ *  split it into per-operation named variants + `oneOf` (the Camunda REST v2 pattern). Structural
+ *  only (pure, total) — the message is built by the caller. */
+export function sharedRequestBodySchemas(doc: OpenApiDoc): { ref: string; operationIds: string[] }[] {
+  const byRef = new Map<string, string[]>();
+  for (const op of collectOperations(doc)) {
+    const ref = op.requestBodySchema?.$ref;
+    if (typeof ref !== "string" || ref.length === 0) continue;
+    const ids = byRef.get(ref) ?? [];
+    ids.push(op.operationId);
+    byRef.set(ref, ids);
+  }
+  const out: { ref: string; operationIds: string[] }[] = [];
+  for (const [ref, ids] of byRef) {
+    if (ids.length > 1) out.push({ ref, operationIds: [...ids].sort() });
+  }
+  out.sort((a, b) => a.ref.localeCompare(b.ref));
+  return out;
+}
+
 /** "method path" pointers for every operation that declares no `operationId`. Such operations are
  *  unroutable (no delegate to bind), so the runtime mount logs them at `warn` and skips them. */
 export function operationsWithoutId(doc: OpenApiDoc): string[] {
@@ -697,6 +723,36 @@ function matchesAnyType(declared: string[], value: unknown): boolean {
   return declared.some((t) => matchesType(t, value));
 }
 
+/** A short, human-readable label for one `anyOf`/`oneOf` variant, so a composition failure can name
+ *  the allowed shapes instead of an opaque "matched 0". Prefers the variant's discriminant — its
+ *  `required` fields (e.g. `{pr}` vs `{url}`) — since that is exactly what a caller must choose
+ *  between; falls back to the declared type(s), else "object". */
+function variantLabel(doc: OpenApiDoc, variant: OpenApiSchema): string {
+  const s = resolveSchema(doc, variant);
+  if (!s) return "?";
+  const req = Array.isArray(s.required) ? s.required : [];
+  if (req.length > 0) return `{${req.join(", ")}}`;
+  const types = schemaTypeList(s);
+  return types.length > 0 ? types.join("|") : "object";
+}
+
+/** The `(allowed: {pr} | {url})` suffix for a composition-failure summary message. */
+function variantSummary(doc: OpenApiDoc, variants: OpenApiSchema[]): string {
+  return ` (allowed: ${variants.map((v) => variantLabel(doc, v)).join(" | ")})`;
+}
+
+/** When a `oneOf`/`anyOf` matched no variant, surface actionable detail: the issues of the variant
+ *  the value was CLOSEST to (fewest problems). For the discriminant case this is the shape the
+ *  caller meant, so its issues read like `pr: is required` / `url: is not an allowed property`
+ *  instead of a bare "matched 0". Ties resolve to the earliest variant (declaration order). */
+function closestVariantIssues(perVariant: ValidationIssue[][]): ValidationIssue[] {
+  let best: ValidationIssue[] | undefined;
+  for (const iss of perVariant) {
+    if (best === undefined || iss.length < best.length) best = iss;
+  }
+  return best ?? [];
+}
+
 /** Validate `value` against `schema` (resolving local $refs against `doc`), returning every issue
  *  found (empty = valid). A pragmatic JSON-Schema subset; unknown keywords are ignored. */
 export function validateValue(
@@ -743,13 +799,47 @@ export function validateValue(
   if (schema.allOf) {
     for (const sub of schema.allOf) issues.push(...validateValue(doc, sub, value, path));
   }
-  if (schema.anyOf && !schema.anyOf.some((sub) => validateValue(doc, sub, value, path).length === 0)) {
-    issues.push({ path: at, message: "does not match any schema in anyOf" });
+  if (schema.anyOf) {
+    // `anyOf` needs only ONE match, so short-circuit on the first clean variant — `validateValue`
+    // runs on every request (params/query/body/response) and evaluating every variant for a large
+    // schema is needless work once we have a hit. Only when NO variant matches do we build the full
+    // per-variant issue list to name the allowed shapes and surface the closest variant's issues.
+    let anyMatched = false;
+    const perVariant: ValidationIssue[][] = [];
+    for (const sub of schema.anyOf) {
+      const subIssues = validateValue(doc, sub, value, path);
+      if (subIssues.length === 0) {
+        anyMatched = true;
+        break;
+      }
+      perVariant.push(subIssues);
+    }
+    if (!anyMatched) {
+      issues.push({
+        path: at,
+        message: `does not match any of the ${schema.anyOf.length} allowed shapes${variantSummary(doc, schema.anyOf)}`,
+      });
+      issues.push(...closestVariantIssues(perVariant));
+    }
   }
   if (schema.oneOf) {
-    const matched = schema.oneOf.filter((sub) => validateValue(doc, sub, value, path).length === 0).length;
-    if (matched !== 1) {
-      issues.push({ path: at, message: `must match exactly one schema in oneOf (matched ${matched})` });
+    const perVariant = schema.oneOf.map((sub) => validateValue(doc, sub, value, path));
+    const matched = perVariant.filter((v) => v.length === 0).length;
+    if (matched === 0) {
+      // No variant matched: name the allowed shapes AND surface the closest variant's issues, so a
+      // discriminated body (e.g. exactly one of pr|url) fails with actionable detail, not "matched 0".
+      issues.push({
+        path: at,
+        message: `does not match any of the ${schema.oneOf.length} allowed shapes${variantSummary(doc, schema.oneOf)}`,
+      });
+      issues.push(...closestVariantIssues(perVariant));
+    } else if (matched > 1) {
+      // Matched more than one: the shapes are not mutually exclusive for this value (usually a body
+      // that supplies two discriminants, or under-constrained variants). Report the ambiguity.
+      issues.push({
+        path: at,
+        message: `must match exactly one of the ${schema.oneOf.length} allowed shapes, but matched ${matched}${variantSummary(doc, schema.oneOf)}`,
+      });
     }
   }
 

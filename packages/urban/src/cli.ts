@@ -153,6 +153,12 @@ async function cmdGen(f: Flags): Promise<number> {
     for (const e of res.modelErrors) console.error(`  • ${e.path}: ${e.message}`);
     return 1;
   }
+  // Non-fatal spec-hygiene advisories (e.g. a requestBody schema shared by >1 operation). Printed
+  // in both gen and check; never change the exit code.
+  if (res.warnings.length > 0) {
+    console.warn(`⚠ ${res.warnings.length} spec warning(s):`);
+    for (const w of res.warnings) console.warn(`  • ${w}`);
+  }
   if (f.check) {
     if (res.drift.length === 0 && res.missingStubs.length === 0) {
       console.log(`✔ generated artifacts + handler stubs are up to date (${res.artifacts.length} checked)`);

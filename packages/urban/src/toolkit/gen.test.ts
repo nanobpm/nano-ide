@@ -257,3 +257,35 @@ test("collectArtifacts resolves an ABSOLUTE api.spec at its own path, not root-r
   const res = await collectArtifacts({ root: "/app", io });
   assert.ok(res.map((a) => a.path).includes("nano-generated/api-io.d.ts"));
 });
+
+test("runGen warns when a requestBody schema is shared across operations, but never fails", async () => {
+  const manifest = JSON.stringify({ id: "demo", data: { default: "app" }, api: { spec: "openapi.json" } });
+  const openapi = JSON.stringify({
+    openapi: "3.1.0",
+    components: { schemas: { StartVariables: { type: "object", properties: { pr: { type: "string" }, url: { type: "string" }, issue: { type: "string" } } } } },
+    paths: {
+      "/convergence": { post: { operationId: "startConvergenceLoop", requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/StartVariables" } } } }, responses: { "200": {} } } },
+      "/fanout": { post: { operationId: "startPlanFanout", requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/StartVariables" } } } }, responses: { "200": {} } } },
+    },
+  });
+  const io = memIO({ "/app/nano.app.json": manifest, "/app/openapi.json": openapi });
+  const res = await runGen({ root: "/app", io });
+
+  assert.equal(res.incomplete, false); // advisory only — gen still succeeds
+  assert.equal(res.warnings.length, 1, `one shared-body warning: ${JSON.stringify(res.warnings)}`);
+  assert.match(res.warnings[0], /StartVariables/);
+  assert.match(res.warnings[0], /startConvergenceLoop, startPlanFanout/);
+  // A clean spec (distinct bodies) produces no warning.
+  const clean = memIO({
+    "/app/nano.app.json": manifest,
+    "/app/openapi.json": JSON.stringify({
+      openapi: "3.1.0",
+      components: { schemas: { A: { type: "object" }, B: { type: "object" } } },
+      paths: {
+        "/a": { post: { operationId: "opA", requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/A" } } } }, responses: { "200": {} } } },
+        "/b": { post: { operationId: "opB", requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/B" } } } }, responses: { "200": {} } } },
+      },
+    }),
+  });
+  assert.deepEqual((await runGen({ root: "/app", io: clean })).warnings, []);
+});

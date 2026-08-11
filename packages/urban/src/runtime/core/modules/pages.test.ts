@@ -90,12 +90,15 @@ test("GET / serves the renderer shell with the home marker", async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers?.["content-type"] ?? "", /text\/html/);
   assert.match(res.body ?? "", /data-home="home"/);
-  // The runtime module is loaded by a *relative* src so it resolves against the
-  // document's mount path — works both at the origin root and under the Nano
-  // console's /console/app-view/<name>/ reverse proxy. A root-absolute
-  // "/app/runtime.js" would 404 against the console origin and never hydrate.
-  assert.match(res.body ?? "", /src="\.\/app\/runtime\.js"/);
-  assert.doesNotMatch(res.body ?? "", /src="\/app\/runtime\.js"/);
+  // The runtime module is loaded by a *relative*, *content-fingerprinted* src so it resolves
+  // against the document's mount path — works both at the origin root and under the Nano
+  // console's /console/app-view/<name>/ reverse proxy. A root-absolute path would 404 against
+  // the console origin; a non-fingerprinted URL would let a stale browser cache replay an old
+  // module after an upgrade (silently breaking every page action).
+  assert.match(res.body ?? "", /src="\.\/app\/runtime\.[0-9a-f]{8}\.js"/);
+  assert.doesNotMatch(res.body ?? "", /src="\/app\/runtime\./);
+  // The shell itself must never be pinned by the browser (it carries the current module hash).
+  assert.match(res.headers?.["cache-control"] ?? "", /no-cache/);
 });
 
 test("the API docs badge links via a document-relative href (proxy-safe)", async () => {
@@ -143,6 +146,31 @@ test("GET /app/runtime.js serves the renderer module", async () => {
   // path-prefixed reverse proxy (Nano console embed), not just at the origin root.
   assert.match(res.body ?? "", /new URL\("\.\.\/", import\.meta\.url\)/);
   assert.match(res.body ?? "", /function apiUrl\(u\)/);
+});
+
+test("the fingerprinted runtime URL from the shell is served immutable; the shell references it", async () => {
+  // The shell's <script src> must point at a route the router actually serves, and that route
+  // must carry long-lived immutable caching (the URL is unique per content, so it can never go
+  // stale). This is the cache-bust that stops an upgraded app from replaying an old module.
+  const shell = await dispatch("GET", "/");
+  const m = (shell.body ?? "").match(/src="\.(\/app\/runtime\.[0-9a-f]{8}\.js)"/);
+  assert.ok(m, "shell must reference a fingerprinted runtime URL");
+  const res = await dispatch("GET", m![1]);
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /javascript/);
+  assert.match(res.body ?? "", /pc:refresh/);
+  assert.match(res.headers?.["cache-control"] ?? "", /immutable/);
+  assert.match(res.headers?.["cache-control"] ?? "", /max-age=31536000/);
+});
+
+test("the legacy /app/runtime.js URL still serves the module, but no-cache", async () => {
+  // Back-compat + defence in depth: an old cached shell (or any client) hitting the unhashed URL
+  // still gets the current bytes, and `no-cache` forces revalidation instead of a stale replay.
+  const res = await dispatch("GET", "/app/runtime.js");
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /javascript/);
+  assert.match(res.body ?? "", /pc:refresh/);
+  assert.match(res.headers?.["cache-control"] ?? "", /no-cache/);
 });
 
 test("the shell renders an API-docs badge only when an apiDocsPath is provided", async () => {

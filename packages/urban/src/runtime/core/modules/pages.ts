@@ -74,8 +74,16 @@ export interface PagesDeps {
 }
 
 /** A JavaScript-body response (the renderer module served at /app/runtime.js). */
-function javascript(body: string, status = 200): { status: number; headers: Record<string, string>; body: string } {
-  return { status, headers: { "content-type": "text/javascript; charset=utf-8" }, body };
+function javascript(
+  body: string,
+  status = 200,
+  extraHeaders?: Record<string, string>,
+): { status: number; headers: Record<string, string>; body: string } {
+  return {
+    status,
+    headers: { "content-type": "text/javascript; charset=utf-8", ...extraHeaders },
+    body,
+  };
 }
 
 /** A SQL identifier guard — a table name must be a bare identifier *and* a known table
@@ -130,15 +138,30 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
 
   const routes: Route[] = [];
   const shell = html(rendererShell(homePage, opts.apiDocsPath));
+  // The shell must never be pinned by the browser: it carries the *current* fingerprinted
+  // runtime URL, so a stale shell would keep pointing at an old module hash. `no-cache` forces
+  // a revalidation on every load; the shell body is tiny, and the expensive module it references
+  // is what gets the long-lived immutable caching (via its content-hashed URL).
+  shell.headers = { ...shell.headers, "cache-control": "no-cache" };
 
   // ── the renderer shell + module ─────────────────────────────────────────
   routes.push({ method: "GET", path: "/", source: "surface:pages", handler: () => shell });
   routes.push({ method: "GET", path: "/index.html", source: "surface:pages", handler: () => shell });
+  // The fingerprinted module URL (referenced by the shell): unique per content, so cache it hard.
+  routes.push({
+    method: "GET",
+    path: RUNTIME_JS_PATH,
+    source: "surface:pages",
+    handler: () => javascript(RENDERER_JS, 200, { "cache-control": IMMUTABLE_CACHE }),
+  });
+  // Back-compat / defence in depth: the legacy unhashed URL keeps working, but is served
+  // `no-cache` so any client (or cached shell) that still requests it always revalidates and
+  // gets the current bytes instead of replaying a heuristically-cached older copy.
   routes.push({
     method: "GET",
     path: "/app/runtime.js",
     source: "surface:pages",
-    handler: () => javascript(RENDERER_JS),
+    handler: () => javascript(RENDERER_JS, 200, { "cache-control": "no-cache" }),
   });
 
   // ── GET /app/pages (index of available pages) ───────────────────────────
@@ -446,7 +469,7 @@ function rendererShell(homePage: string, apiDocsPath?: string): string {
 </head>
 <body>${apiDocsBadge}
   <main id="page" data-home="${escapeAttr(homePage)}"><p class="pc-empty">Loading…</p></main>
-  <script type="module" src="./app/runtime.js"></script>
+  <script type="module" src=".${RUNTIME_JS_PATH}"></script>
 </body>
 </html>`;
 }
@@ -1311,3 +1334,25 @@ async function renderPage() {
 window.addEventListener("hashchange", renderPage);
 renderPage();
 `;
+
+/** A tiny, dependency-free FNV-1a hash → 8 hex chars. Used to fingerprint the renderer
+ *  module's URL so a content change busts the browser cache. Environment-agnostic (no
+ *  `crypto` import) so the runtime stays loadable under Node, Deno, and the embedded host. */
+function fnv1aHex(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+// The renderer module is served at a *content-fingerprinted* URL. The shell references this exact
+// path, so whenever `RENDERER_JS` changes (e.g. an Urban upgrade in a marketplace/Studio update)
+// the URL changes with it and the browser fetches the new module instead of silently replaying a
+// heuristically-cached copy of the old one — the failure that made a "Cancel" button (and every
+// other page action) do nothing after an upgrade until a hard refresh. Because the URL is unique
+// per content, the response itself is served `immutable` with a one-year max-age.
+const RUNTIME_JS_HASH = fnv1aHex(RENDERER_JS);
+const RUNTIME_JS_PATH = `/app/runtime.${RUNTIME_JS_HASH}.js`;
+const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";

@@ -29,6 +29,8 @@ import {
   parseSpec,
   resolveSchema,
   responseSchemaForStatus,
+  schemaHasType,
+  schemaValueTypes,
   toRouteMatcher,
   undeclaredPathParams,
   undeclaredSecuritySchemes,
@@ -249,24 +251,31 @@ export function apiDocsPath(manifest: unknown): string | undefined {
 function coerceParam(doc: OpenApiDoc, schema: OpenApiSchema | undefined, raw: string): unknown {
   const s = resolveSchema(doc, schema);
   if (!s) return raw;
-  // Effective scalar type: the explicit `type`, else inferred from a typeless `const`/`enum` whose
-  // values are all numbers or all booleans. Without this, a typeless numeric/boolean const/enum
-  // param (whose generated type is a number/boolean literal) could never be satisfied by the wire
-  // string — every request would 400 against a type the runtime otherwise never produces.
-  let t = s.type;
-  if (t === undefined) {
-    if (typeof s.const === "number") t = "number";
-    else if (typeof s.const === "boolean") t = "boolean";
+  // Which value types the schema permits coercion into: the explicit `type`(s), else inferred from a
+  // typeless `const`/`enum` whose values are all numbers or all booleans. Without the inference, a
+  // typeless numeric/boolean const/enum param (whose generated type is a number/boolean literal)
+  // could never be satisfied by the wire string — every request would 400 against a type the runtime
+  // otherwise never produces.
+  let valueTypes = schemaValueTypes(s);
+  if (valueTypes.length === 0) {
+    if (typeof s.const === "number") valueTypes = ["number"];
+    else if (typeof s.const === "boolean") valueTypes = ["boolean"];
     else if (Array.isArray(s.enum) && s.enum.length > 0) {
-      if (s.enum.every((v) => typeof v === "number")) t = "number";
-      else if (s.enum.every((v) => typeof v === "boolean")) t = "boolean";
+      if (s.enum.every((v) => typeof v === "number")) valueTypes = ["number"];
+      else if (s.enum.every((v) => typeof v === "boolean")) valueTypes = ["boolean"];
     }
   }
-  if (t === "integer" || t === "number") {
+  // Coerce order-independently for OpenAPI 3.1 multi-type unions: a schema that *allows* number or
+  // boolean gets that coercion attempted regardless of where it sits in the `type` array (so
+  // `["string","integer"]` and `["integer","string"]` behave identically). Each attempt falls back
+  // to the raw string when it doesn't parse, preserving a value that only fits the union's `string`
+  // arm. Number is tried before boolean so a numeric-looking value in a `number|boolean` union
+  // becomes a number (`"true"`/`"false"` aren't numeric, so they still reach the boolean arm).
+  if (valueTypes.includes("integer") || valueTypes.includes("number")) {
     const n = Number(raw);
-    return raw.trim() !== "" && !Number.isNaN(n) ? n : raw;
+    if (raw.trim() !== "" && !Number.isNaN(n)) return n;
   }
-  if (t === "boolean") {
+  if (valueTypes.includes("boolean")) {
     if (raw === "true") return true;
     if (raw === "false") return false;
   }
@@ -571,7 +580,7 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
           if (!p.schema) continue;
           const values = Array.isArray(val) ? val : [val];
           const ps = resolveSchema(d, p.schema);
-          if (ps?.type === "array") {
+          if (ps && schemaHasType(ps, "array")) {
             // Repeated keys (?tag=a&tag=b) form the array; coerce + validate each item, then the
             // whole array against the schema's array constraints (minItems, items, ...). The coerced
             // array is what the delegate receives.

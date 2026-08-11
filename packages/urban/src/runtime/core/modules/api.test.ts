@@ -457,6 +457,87 @@ test("params/query are coerced to their schema type before reaching the delegate
   assert.deepEqual(got, { params: { id: 42 }, query: { verbose: true, tags: ["x", "y"] } });
 });
 
+test("3.1 nullable-typed params still coerce (type: [T, null]) and array-typed repeats still group", async () => {
+  // A param declared with the OpenAPI 3.1 nullable idiom must coerce on its value type exactly like
+  // the 3.0 single-type form — otherwise a `type: ["integer","null"]` query would reach the delegate
+  // as a raw string (and an array-typed nullable would reject repeats).
+  const spec = JSON.stringify({
+    openapi: "3.1.0",
+    paths: {
+      "/things/{id}": {
+        get: {
+          operationId: "getThing",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: ["integer", "null"] } },
+            { name: "tags", in: "query", schema: { type: ["array", "null"], items: { type: "string" } } },
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: { params: Record<string, unknown>; query: Record<string, unknown> } | undefined;
+  const { router } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/operations/getThing": {
+        default: (i: { params: Record<string, unknown>; query: Record<string, unknown> }) => {
+          got = { params: i.params, query: i.query };
+          return { body: { ok: true } };
+        },
+      },
+    },
+    spec,
+  );
+  const res = await router(req("GET", "/app/api/things/7", { query: "tags=x&tags=y" }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(got, { params: { id: 7 }, query: { tags: ["x", "y"] } });
+});
+
+test("3.1 multi-type union params coerce order-independently (type array order doesn't matter)", async () => {
+  // A 3.1 union like `["string","integer"]` must coerce numeric-looking values to numbers regardless
+  // of where `integer`/`number` sits in the array — otherwise coercion is order-dependent and a
+  // `["string","integer"]` param would never enforce numeric bounds (it'd reach the delegate as a
+  // raw string), while `["integer","string"]` would. Non-numeric values still fall back to the
+  // string arm, and a `number|boolean` union coerces each token to its natural type.
+  const spec = JSON.stringify({
+    openapi: "3.1.0",
+    paths: {
+      "/u": {
+        get: {
+          operationId: "u",
+          parameters: [
+            { name: "a", in: "query", required: true, schema: { type: ["string", "integer"] } },
+            { name: "b", in: "query", required: true, schema: { type: ["integer", "string"] } },
+            { name: "c", in: "query", required: true, schema: { type: ["string", "integer"] } },
+            { name: "d", in: "query", required: true, schema: { type: ["number", "boolean"] } },
+            { name: "e", in: "query", required: true, schema: { type: ["number", "boolean"] } },
+          ],
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  let got: { query: Record<string, unknown> } | undefined;
+  const { router } = build(
+    { spec: "openapi.json" },
+    {
+      "/app/operations/u": {
+        default: (i: { query: Record<string, unknown> }) => {
+          got = { query: i.query };
+          return { body: { ok: true } };
+        },
+      },
+    },
+    spec,
+  );
+  const res = await router(req("GET", "/app/api/u", { query: "a=42&b=42&c=hello&d=3.5&e=true" }));
+  assert.equal(res.status, 200);
+  // a and b both coerce to 42 despite opposite type-array order; c stays a string (only fits the
+  // union's string arm); d coerces to a number, e to a boolean.
+  assert.deepEqual(got, { query: { a: 42, b: 42, c: "hello", d: 3.5, e: true } });
+});
+
 test("a typeless numeric const/enum query param coerces (so its number-literal type is satisfiable)", async () => {
   const enumSpec = JSON.stringify({
     openapi: "3.1.0",

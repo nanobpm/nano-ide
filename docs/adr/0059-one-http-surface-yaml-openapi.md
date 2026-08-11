@@ -211,7 +211,10 @@ Code; the toolkit gate above is what CI, Nano Studio, and `--check` enforce.
 
 - **Non-JSON bodies / streaming.** This ADR keeps ADR 0058's "supported profile"
   (JSON bodies, path/query params, JSON responses). Multipart/streaming stay out of
-  scope.
+  scope. The `type` keyword is read in both dialects: OpenAPI 3.0 (`type: T` +
+  `nullable: true`) and 3.1 (`type: [T, "null"]` or a multi-type `type` array), so a
+  3.1-authored spec's nullable fields emit `T | null` and validate as such rather than
+  degrading to `unknown`.
 - **Per-operation raw OpenAPI escape hatch.** For the rare construct the generator
   cannot express, allow a raw spec fragment on an operation. Deferred until a real
   case appears — we do not want an escape hatch that quietly reintroduces

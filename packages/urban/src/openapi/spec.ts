@@ -8,8 +8,10 @@
 //
 // Scope: the ADR 0058 "supported profile" — JSON bodies, path/query parameters, a JSON
 // requestBody, response codes, and a JSON-Schema subset validator (type/required/enum/numeric &
-// string bounds/pattern/array & object shape/nullable/$ref). Exotic OpenAPI (callbacks, links,
-// XML, discriminated oneOf composition) is intentionally out of scope for this slice.
+// string bounds/pattern/array & object shape/nullable/$ref). The `type` keyword is read in both
+// OpenAPI 3.0 (a single string, `nullable: true` for null) and 3.1 (a `string[]`, e.g. the
+// `type: [T, "null"]` nullable idiom or a multi-type union) dialects. Exotic OpenAPI (callbacks,
+// links, XML, discriminated oneOf composition) is intentionally out of scope for this slice.
 
 import { parse as parseYaml } from "yaml";
 
@@ -17,7 +19,11 @@ import { parse as parseYaml } from "yaml";
  *  are ignored by the validator and fall back to `unknown` in the type emitter. */
 export interface OpenApiSchema {
   $ref?: string;
-  type?: string;
+  // OpenAPI 3.0 uses a single `type` string; JSON Schema 2020-12 (OpenAPI 3.1) also permits an
+  // array of types, most commonly the nullable idiom `type: [T, "null"]`. Both dialects are read
+  // via the `schemaTypeList`/`schemaValueTypes`/`schemaAllowsNull`/`schemaHasType` helpers so the
+  // type emitter and the runtime validator treat a 3.1 type-array the same way.
+  type?: string | string[];
   nullable?: boolean;
   enum?: unknown[];
   const?: unknown;
@@ -47,6 +53,37 @@ export interface OpenApiSchema {
 }
 
 /**
+ * The declared JSON-Schema `type`(s) as a list, normalizing OpenAPI 3.0 (a single string) and
+ * 3.1 (a `string[]`) into one shape. Returns `[]` when no `type` keyword is present, so callers
+ * distinguish "typeless" (infer from other keywords) from "typed".
+ */
+export function schemaTypeList(schema: OpenApiSchema): string[] {
+  if (schema.type === undefined) return [];
+  return Array.isArray(schema.type) ? schema.type : [schema.type];
+}
+
+/** The declared non-"null" value types — what a 3.1 `type: [T, "null"]` permits as a value. */
+export function schemaValueTypes(schema: OpenApiSchema): string[] {
+  return schemaTypeList(schema).filter((t) => t !== "null");
+}
+
+/** The first declared non-"null" value type (for single-type scalar logic), or `undefined`. */
+export function firstValueType(schema: OpenApiSchema): string | undefined {
+  return schemaValueTypes(schema)[0];
+}
+
+/** Whether the schema permits an explicit `null` — via OpenAPI 3.0 `nullable: true` or the 3.1
+ *  idiom `type: [..., "null"]`. */
+export function schemaAllowsNull(schema: OpenApiSchema): boolean {
+  return schema.nullable === true || schemaTypeList(schema).includes("null");
+}
+
+/** Whether the schema declares (permits) the given non-"null" value type. */
+export function schemaHasType(schema: OpenApiSchema, t: string): boolean {
+  return schemaValueTypes(schema).includes(t);
+}
+
+/**
  * Whether a schema describes an object shape. OpenAPI/JSON-Schema let the `type`
  * keyword be omitted when `properties`/`required`/`additionalProperties` already imply
  * an object. The type emitter (`schemaToTs`) and the runtime validator (`validateValue`)
@@ -54,8 +91,9 @@ export interface OpenApiSchema {
  * the emitted type calls an object is the same body the validator shape-checks.
  */
 export function isObjectSchema(schema: OpenApiSchema): boolean {
-  if (schema.type === "object") return true;
-  if (schema.type !== undefined) return false;
+  const valueTypes = schemaValueTypes(schema);
+  if (valueTypes.includes("object")) return true;
+  if (valueTypes.length > 0) return false;
   return (
     schema.properties !== undefined ||
     schema.required !== undefined ||
@@ -650,7 +688,13 @@ function matchesType(declared: string, value: unknown): boolean {
   const actual = typeOfValue(value);
   if (declared === "number") return actual === "number" || actual === "integer";
   if (declared === "integer") return actual === "integer";
+  if (declared === "null") return value === null;
   return actual === declared;
+}
+
+/** Whether `value` matches any of the declared value types (a 3.1 `type` list is a union). */
+function matchesAnyType(declared: string[], value: unknown): boolean {
+  return declared.some((t) => matchesType(t, value));
 }
 
 /** Validate `value` against `schema` (resolving local $refs against `doc`), returning every issue
@@ -667,18 +711,19 @@ export function validateValue(
   const at = path || "(root)";
 
   if (value === null) {
-    if (schema.nullable === true || schema.type === "null") return issues;
+    if (schemaAllowsNull(schema)) return issues;
     // enum/const may explicitly permit null even without `nullable`.
     if (schema.enum && schema.enum.some((e) => e === null)) return issues;
     if (schema.const === null) return issues;
     // Otherwise null is invalid for a typed schema, an object schema (properties/required imply
     // object), or an enum/const that doesn't list null. A truly empty schema ({}) allows anything.
+    const valueTypes = schemaValueTypes(schema);
     if (schema.enum) {
       issues.push({ path: at, message: `must be one of ${JSON.stringify(schema.enum)}` });
     } else if (schema.const !== undefined) {
       issues.push({ path: at, message: `must equal ${JSON.stringify(schema.const)}` });
-    } else if (schema.type) {
-      issues.push({ path: at, message: `expected ${schema.type}, got null` });
+    } else if (valueTypes.length > 0) {
+      issues.push({ path: at, message: `expected ${valueTypes.join(",")}, got null` });
     } else if (isObjectSchema(schema)) {
       issues.push({ path: at, message: "expected object, got null" });
     }
@@ -708,12 +753,16 @@ export function validateValue(
     }
   }
 
-  if (schema.type && !matchesType(schema.type, value)) {
-    issues.push({ path: at, message: `expected ${schema.type}, got ${typeOfValue(value)}` });
+  // `value` is non-null here (the null branch returned above), so match against the declared value
+  // types. Use the full `type` list — not `schemaValueTypes` — so a null-only schema (`["null"]`)
+  // still rejects non-null values instead of skipping the check on an empty value-type list.
+  const declaredTypes = schemaTypeList(schema);
+  if (declaredTypes.length > 0 && !matchesAnyType(declaredTypes, value)) {
+    issues.push({ path: at, message: `expected ${declaredTypes.join(",")}, got ${typeOfValue(value)}` });
     return issues; // the shape checks below assume the declared type held
   }
 
-  if (schema.type === "string" && typeof value === "string") {
+  if (schemaHasType(schema, "string") && typeof value === "string") {
     if (schema.minLength !== undefined && value.length < schema.minLength) {
       issues.push({ path: at, message: `shorter than minLength ${schema.minLength}` });
     }
@@ -737,7 +786,7 @@ export function validateValue(
     }
   }
 
-  if ((schema.type === "number" || schema.type === "integer") && typeof value === "number") {
+  if ((schemaHasType(schema, "number") || schemaHasType(schema, "integer")) && typeof value === "number") {
     // OpenAPI 3.0 uses the boolean form (`exclusiveMinimum: true` makes `minimum` exclusive);
     // JSON Schema 2020-12 (OpenAPI 3.1) uses the numeric form (`exclusiveMinimum: <number>`).
     // Support both so specs in either dialect are validated, not silently under-checked.
@@ -763,7 +812,7 @@ export function validateValue(
     }
   }
 
-  if (schema.type === "array" && Array.isArray(value)) {
+  if (schemaHasType(schema, "array") && Array.isArray(value)) {
     if (schema.minItems !== undefined && value.length < schema.minItems) {
       issues.push({ path: at, message: `fewer than minItems ${schema.minItems}` });
     }

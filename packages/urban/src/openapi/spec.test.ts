@@ -208,6 +208,53 @@ test("isObjectSchema treats typeless property/required/additionalProperties sche
   assert.equal(isObjectSchema({}), false); // no shape keywords → not an object
 });
 
+test("isObjectSchema understands OpenAPI 3.1 nullable type-arrays", () => {
+  assert.equal(isObjectSchema({ type: ["object", "null"] }), true); // nullable object is an object
+  assert.equal(isObjectSchema({ type: ["string", "null"] }), false); // nullable scalar is not
+});
+
+test("validateValue accepts OpenAPI 3.1 nullable type-arrays (type: [T, null])", () => {
+  // The 3.1 idiom `type: [T, "null"]` must be treated exactly like 3.0 `nullable: true`: the value
+  // type is accepted, an explicit null is accepted, and a wrong type is still rejected.
+  const nullableStr: OpenApiSchema = { type: ["string", "null"] };
+  assert.deepEqual(validateValue(doc, nullableStr, "hi"), []);
+  assert.deepEqual(validateValue(doc, nullableStr, null), []);
+  assert.equal(validateValue(doc, nullableStr, 42).length, 1);
+
+  const nullableInt: OpenApiSchema = { type: ["integer", "null"] };
+  assert.deepEqual(validateValue(doc, nullableInt, 7), []);
+  assert.deepEqual(validateValue(doc, nullableInt, null), []);
+  assert.equal(validateValue(doc, nullableInt, "no").length, 1);
+});
+
+test("validateValue keeps bounds + multi-type unions under 3.1 type-arrays", () => {
+  // String bounds still apply to the string arm of a nullable string.
+  const bounded: OpenApiSchema = { type: ["string", "null"], minLength: 2 };
+  assert.deepEqual(validateValue(doc, bounded, "ok"), []);
+  assert.deepEqual(validateValue(doc, bounded, null), []);
+  assert.equal(validateValue(doc, bounded, "x").length, 1); // shorter than minLength
+
+  // A genuine multi-type union (no null) accepts any listed type, rejects others.
+  const strOrNum: OpenApiSchema = { type: ["string", "number"] };
+  assert.deepEqual(validateValue(doc, strOrNum, "a"), []);
+  assert.deepEqual(validateValue(doc, strOrNum, 1), []);
+  assert.equal(validateValue(doc, strOrNum, true).length, 1);
+  assert.equal(validateValue(doc, strOrNum, null).length, 1); // null not permitted without "null"
+});
+
+test("validateValue rejects non-null values for a null-only schema (type: [null] / type: null)", () => {
+  // A schema whose only declared type is "null" must accept null and reject everything else — the
+  // value-type list is empty, so the type check must fall back to the full `type` list.
+  const nullOnlyArr: OpenApiSchema = { type: ["null"] };
+  assert.deepEqual(validateValue(doc, nullOnlyArr, null), []);
+  assert.equal(validateValue(doc, nullOnlyArr, "x").length, 1);
+  assert.equal(validateValue(doc, nullOnlyArr, 0).length, 1);
+
+  const nullOnlyStr: OpenApiSchema = { type: "null" };
+  assert.deepEqual(validateValue(doc, nullOnlyStr, null), []);
+  assert.equal(validateValue(doc, nullOnlyStr, "x").length, 1);
+});
+
 test("validateValue shape-checks typeless object schemas (no type/runtime drift)", () => {
   // A schema with properties/required but no explicit `type: "object"` is emitted as an object
   // by schemaToTs, so the validator must shape-check it too — otherwise invalid bodies pass.

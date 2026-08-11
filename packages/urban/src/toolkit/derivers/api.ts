@@ -18,6 +18,9 @@ import {
   type OpenApiSchema,
   type OperationInfo,
   refName,
+  schemaAllowsNull,
+  schemaTypeList,
+  schemaValueTypes,
 } from "../../openapi/spec.ts";
 
 /** Filenames of the emitted artifacts (siblings of worker-io.d.ts in nano-generated/). */
@@ -49,7 +52,7 @@ export function schemaToTs(schema: OpenApiSchema | undefined, depth = 0): string
     const name = refName(schema.$ref);
     return name ? typeStem(name) : "unknown";
   }
-  const nullable = schema.nullable === true;
+  const nullable = schemaAllowsNull(schema);
   const wrap = (t: string) => (nullable ? `${t} | null` : t);
 
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
@@ -67,7 +70,13 @@ export function schemaToTs(schema: OpenApiSchema | undefined, depth = 0): string
     return wrap(schema.allOf.map((s) => schemaToTs(s, depth + 1)).join(" & "));
   }
 
-  switch (schema.type) {
+  // Value types, normalized from OpenAPI 3.0 (single string) or 3.1 (array, e.g. `[T, "null"]` or a
+  // multi-type union). `null` is stripped here and re-applied by `wrap` via `schemaAllowsNull`.
+  const valueTypes = schemaValueTypes(schema);
+  if (valueTypes.length > 1) {
+    return wrap(valueTypes.map((t) => tsForScalarType(t, schema, depth)).join(" | "));
+  }
+  switch (valueTypes[0]) {
     case "string":
       return wrap("string");
     case "integer":
@@ -75,16 +84,36 @@ export function schemaToTs(schema: OpenApiSchema | undefined, depth = 0): string
       return wrap("number");
     case "boolean":
       return wrap("boolean");
-    case "null":
-      return "null";
     case "array":
       return wrap(`Array<${schemaToTs(schema.items, depth + 1)}>`);
     case "object":
       return wrap(objectToTs(schema, depth));
     default:
-      // No `type`: infer object-ness from object-only keywords (shared with the runtime
-      // validator via isObjectSchema so types and validation agree); otherwise unknown.
+      // No value type. A schema whose only declared type is "null" is exactly `null`; otherwise
+      // infer object-ness from object-only keywords (shared with the runtime validator via
+      // isObjectSchema so types and validation agree), else fall back to unknown.
+      if (schemaTypeList(schema).length > 0 && schemaValueTypes(schema).length === 0) return "null";
       if (isObjectSchema(schema)) return wrap(objectToTs(schema, depth));
+      return "unknown";
+  }
+}
+
+/** The TS expression for a single (non-"null") JSON-Schema value type. Nullability is applied by
+ *  the caller's `wrap`, so this never emits `| null`. */
+function tsForScalarType(t: string, schema: OpenApiSchema, depth: number): string {
+  switch (t) {
+    case "string":
+      return "string";
+    case "integer":
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "array":
+      return `Array<${schemaToTs(schema.items, depth + 1)}>`;
+    case "object":
+      return objectToTs(schema, depth);
+    default:
       return "unknown";
   }
 }

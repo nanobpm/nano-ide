@@ -289,18 +289,22 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
     const driver = createApiDriver(operations, uiCall);
 
     // Coverage (S4): declare the app's surfaces from its own manifest + spec (single source),
-    // replay job hits captured during boot, and record every future job dispatch. The exposed
-    // `api` driver is wrapped so each `api.call(operationId)` marks that operation exercised.
+    // replay job hits captured during boot, and record every future job dispatch. The `operations`
+    // surface is declared only when the app actually binds an OpenAPI spec — mirroring how `api`
+    // itself is left undefined for a spec-less app — so the gate never claims (and never silently
+    // passes) an operations surface the app doesn't have. When present, the exposed `api` driver is
+    // wrapped so each `api.call(operationId)` marks that operation exercised.
     let coverage: SurfaceCoverage | undefined;
     let apiDriver: ApiDriver = driver;
     if (coverageEnabled) {
-      const cov = new SurfaceCoverage({
-        operations: operations.map((op) => op.operationId),
+      const declared: Record<string, Iterable<string>> = {
         workers: deriveWorkerJobTypes(app.manifest),
-      });
+      };
+      if (specPath) declared.operations = operations.map((op) => op.operationId);
+      const cov = new SurfaceCoverage(declared);
       for (const jobType of jobHits) cov.record("workers", jobType);
       unobserveJobs = engine.observeJobs((jobType) => cov.record("workers", jobType));
-      apiDriver = instrumentApiCoverage(driver, cov);
+      if (specPath) apiDriver = instrumentApiCoverage(driver, cov);
       coverage = cov;
     }
     const api: ApiDriver | undefined = specPath ? apiDriver : undefined;

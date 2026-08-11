@@ -109,6 +109,30 @@ async function makeFixture(): Promise<string> {
   return dir;
 }
 
+/** A minimal app with a worker but NO `api` binding — a spec-less app has no operations surface. */
+async function makeWorkerOnlyFixture(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "urban-testkit-coverage-noapi-"));
+  await mkdir(join(dir, "processes"), { recursive: true });
+  await mkdir(join(dir, "workers"), { recursive: true });
+  await mkdir(join(dir, "db", "migrations"), { recursive: true });
+  await writeFile(join(dir, "processes", "order.bpmn"), ORDER_BPMN);
+  await writeFile(join(dir, "workers", "handlers.ts"), HANDLERS);
+  await writeFile(join(dir, "db", "migrations", "001_init.sql"), MIGRATION);
+  const manifest = {
+    schemaVersion: 1,
+    id: "testkit-coverage-noapi-fixture",
+    name: "Testkit Coverage No-API Fixture",
+    models: { processes: ["processes/*.bpmn"] },
+    data: {
+      default: "app",
+      sources: { app: { driver: "sqlite", url: "file:./db/app.db", migrations: "db/migrations" } },
+    },
+    workers: [{ taskType: "order.pack", handler: "workers/handlers.ts" }],
+  };
+  await writeFile(join(dir, "nano.app.json"), JSON.stringify(manifest, null, 2));
+  return dir;
+}
+
 test("coverage: declares the app's surfaces from its own manifest + spec", async () => {
   const dir = await makeFixture();
   const app = await bootTestApp(dir, { coverage: true });
@@ -198,6 +222,30 @@ test("coverage: off by default — app.coverage is undefined", async () => {
   const app = await bootTestApp(dir);
   try {
     assert.equal(app.coverage, undefined, "no coverage overhead unless opted in");
+  } finally {
+    await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("coverage: a spec-less app declares no `operations` surface — only what it actually has", async () => {
+  const dir = await makeWorkerOnlyFixture();
+  const app = await bootTestApp(dir, { coverage: true });
+  try {
+    assert.ok(app.coverage);
+    assert.equal(app.api, undefined, "no api binding → no operations driver");
+    // The gate must reflect the app's real surfaces: workers only, never a phantom `operations`.
+    assert.deepEqual(app.coverage.surfaces(), ["workers"]);
+    assert.equal(
+      app.coverage.report().surfaces.find((s) => s.surface === "operations"),
+      undefined,
+      "no empty operations surface is fabricated",
+    );
+    // Gating a surface the app doesn't declare is a test bug, not a silent pass.
+    assert.throws(
+      () => app.coverage?.assertFullCoverage({ surfaces: ["operations"] }),
+      /unknown surface\(s\) operations/,
+    );
   } finally {
     await app.stop();
     await rm(dir, { recursive: true, force: true });

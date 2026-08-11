@@ -130,12 +130,18 @@ function readApiSpecPath(manifest: unknown): string | undefined {
   return typeof spec === "string" && spec.trim().length > 0 ? spec.trim() : undefined;
 }
 
-/** Join an app root and a spec path the way the runtime's `resolveAppPath` does (the host is
- *  anchored at the app root, so a relative spec resolves against it). */
-function resolveSpecPath(root: string, spec: string): string {
-  if (spec.startsWith("/") || /^[a-zA-Z]:[\\/]/.test(spec)) return spec;
-  const base = root.replace(/[/\\]+$/, "");
-  return `${base}/${spec}`;
+/** Join an app root and a spec path the way the runtime's `resolveAppPath` (+ `isAbsolutePath`) does:
+ *  an absolute `spec` — POSIX root (`/`), a drive-letter root (`C:\` / `C:/`), or a Windows UNC/
+ *  drive-root backslash (`\`) — is returned as-is; otherwise it joins onto `root` using `root`'s own
+ *  separator (backslash if `root` contains one, else `/`), rewriting both segments to that separator
+ *  so the result is never mixed (e.g. no `C:\app/openapi.yaml`). Kept in lockstep with the runtime's
+ *  canonical resolver so spec loading behaves identically cross-platform (no gen/runtime drift). */
+export function resolveSpecPath(root: string, spec: string): string {
+  if (/^(\/|\\|[A-Za-z]:[/\\])/.test(spec)) return spec;
+  const sep = root.includes("\\") ? "\\" : "/";
+  const norm = (s: string): string => (sep === "\\" ? s.replace(/\//g, "\\") : s.replace(/\\/g, "/"));
+  const base = norm(root).replace(/[/\\]+$/, "");
+  return `${base}${sep}${norm(spec)}`;
 }
 
 /**

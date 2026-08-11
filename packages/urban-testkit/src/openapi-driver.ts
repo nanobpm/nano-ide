@@ -42,14 +42,18 @@ export interface ApiOperation {
 /**
  * Parse an OpenAPI document from text. JSON is tried first (fast path + precise errors; also covers
  * a generated `openapi.json`), then YAML (which subsumes JSON, so authored `.yaml`/`.yml` load).
- * Mirrors urban's own `parseSpec` so a spec that loads in production loads here too.
+ * Mirrors urban's own `parseSpec` so a spec that loads in production loads here too — including its
+ * root-shape guard: a non-object root (e.g. `42`, `[]`, `null`) is rejected, so a malformed spec
+ * fails fast here exactly as the runtime rejects it ("spec must be an object"), rather than silently
+ * enumerating zero operations and surfacing later as a confusing "unknown operationId".
  */
 export function parseOpenApi(text: string): unknown {
+  let doc: unknown;
   try {
-    return JSON.parse(text);
+    doc = JSON.parse(text);
   } catch (jsonError) {
     try {
-      return parseYaml(text);
+      doc = parseYaml(text);
     } catch (yamlError) {
       const jsonMessage = jsonError instanceof Error ? jsonError.message : String(jsonError);
       const yamlMessage = yamlError instanceof Error ? yamlError.message : String(yamlError);
@@ -59,6 +63,10 @@ export function parseOpenApi(text: string): unknown {
       );
     }
   }
+  if (!isRecord(doc)) {
+    throw new Error("testkit: OpenAPI spec must be an object (a mapping at the document root)");
+  }
+  return doc;
 }
 
 /** Extract the `{name}` placeholders from a path template, in order of appearance. */

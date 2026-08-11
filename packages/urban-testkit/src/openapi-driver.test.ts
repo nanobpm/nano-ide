@@ -12,7 +12,7 @@ import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify as toYaml } from "yaml";
-import { bootTestApp } from "./boot-app.ts";
+import { bootTestApp, resolveSpecPath } from "./boot-app.ts";
 import { collectOperations, parseOpenApi } from "./openapi-driver.ts";
 
 const ORDER_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
@@ -330,4 +330,28 @@ test("parseOpenApi: reads JSON and YAML, and throws a clear error on garbage", (
   assert.equal(readOpenApiVersion(parseOpenApi('{"openapi":"3.0.3"}')), "3.0.3");
   assert.equal(readOpenApiVersion(parseOpenApi("openapi: 3.0.3")), "3.0.3");
   assert.throws(() => parseOpenApi("{ this: is: not: valid"), /not valid JSON or YAML/);
+});
+
+test("parseOpenApi: rejects a non-object root (matching runtime's parseSpec guard)", () => {
+  // A scalar/array/null root would silently enumerate zero operations, surfacing later as a
+  // confusing "unknown operationId"; fail fast here exactly as the runtime rejects the spec.
+  assert.throws(() => parseOpenApi("42"), /must be an object/);
+  assert.throws(() => parseOpenApi("[]"), /must be an object/);
+  assert.throws(() => parseOpenApi("null"), /must be an object/);
+  assert.throws(() => parseOpenApi('"just a string"'), /must be an object/);
+});
+
+test("resolveSpecPath: mirrors runtime resolveAppPath (POSIX, Windows/UNC absolutes, no mixed separators)", () => {
+  // Relative specs join onto the root using the root's own separator.
+  assert.equal(resolveSpecPath("/srv/app", "openapi.yaml"), "/srv/app/openapi.yaml");
+  assert.equal(resolveSpecPath("/srv/app/", "api/openapi.yaml"), "/srv/app/api/openapi.yaml");
+  // A backslash root joins with backslash, and the relative segment is normalized to match (no mix).
+  assert.equal(resolveSpecPath("C:\\app", "api/openapi.yaml"), "C:\\app\\api\\openapi.yaml");
+  assert.equal(resolveSpecPath("C:\\app\\", "openapi.yaml"), "C:\\app\\openapi.yaml");
+  // Absolute specs are returned as-is: POSIX root, drive-letter roots, UNC, and single-backslash root.
+  assert.equal(resolveSpecPath("/srv/app", "/data/spec.yaml"), "/data/spec.yaml");
+  assert.equal(resolveSpecPath("/srv/app", "C:\\data\\spec.yaml"), "C:\\data\\spec.yaml");
+  assert.equal(resolveSpecPath("/srv/app", "c:/data/spec.yaml"), "c:/data/spec.yaml");
+  assert.equal(resolveSpecPath("/srv/app", "\\\\server\\share\\spec.yaml"), "\\\\server\\share\\spec.yaml");
+  assert.equal(resolveSpecPath("/srv/app", "\\data\\spec.yaml"), "\\data\\spec.yaml");
 });

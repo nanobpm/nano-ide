@@ -70,10 +70,54 @@ function escapeHtml(s: string): string {
   );
 }
 
+/**
+ * Derive the ABSOLUTE spec + operations-server URLs the Swagger UI page should use, from the docs
+ * page's own address (`pageHref`), the mount-root-relative docs path (`docsBase`, e.g.
+ * `/app/api-docs`) and operations base (`apiBase`, e.g. `/app/api`).
+ *
+ * Why this can't be done server-side: the docs page can load at `<docsBase>` OR `<docsBase>/` (a
+ * trailing slash — reverse proxies and some webviews append one), and behind the Nano console
+ * proxy it carries a path prefix (`/console/app-view/<name>`). A document-relative spec URL or a
+ * relative `servers` entry resolves DIFFERENTLY depending on that trailing slash — which sent
+ * "Try it out" to `<mount>/app/api-docs/api/<op>` (a 404) instead of `<mount>/app/api/<op>`. The
+ * app never sees the proxy prefix, so `window.location` in the browser is the only place with the
+ * full mount path.
+ *
+ * We strip any trailing slash from the page path, then strip the known `docsBase` suffix to recover
+ * the (proxy-prefixed) mount root, and re-append `docsBase`/`apiBase` as ORIGIN-absolute URLs — so
+ * Swagger UI performs no further relative resolution and is immune to the trailing slash. When the
+ * page path doesn't end in `docsBase` (unexpected) or the href is malformed, we fall back to the
+ * document-relative `relSpec` and leave `servers` to the served spec (`server: null`).
+ *
+ * This runs in the browser: it is embedded verbatim into the docs page via `.toString()` so the
+ * shipped page and these unit tests exercise the exact same code (no drift). Keep it dependency-free
+ * and free of template literals / `${}` (it is interpolated into a template literal).
+ */
+export function deriveSwaggerUrls(
+  pageHref: string,
+  docsBase: string,
+  apiBase: string,
+  relSpec: string,
+): { specUrl: string; server: string | null } {
+  try {
+    const loc = new URL(pageHref);
+    const path = loc.pathname.replace(/\/+$/, "");
+    if (path.length >= docsBase.length && path.slice(path.length - docsBase.length) === docsBase) {
+      const mount = loc.origin + path.slice(0, path.length - docsBase.length);
+      return { specUrl: mount + docsBase + "/openapi.json", server: mount + apiBase };
+    }
+  } catch {
+    // Malformed href — fall through to the document-relative fallback below.
+  }
+  return { specUrl: relSpec, server: null };
+}
+
 /** The self-contained Swagger UI page. Static HTML: it renders even when the spec is momentarily
- *  unreadable (Swagger UI fetches `specUrl` itself and surfaces any load/parse error in-page),
- *  which keeps the docs route decoupled from spec-load failures. */
-function swaggerUiPage(title: string, specUrl: string): string {
+ *  unreadable (on a fetch/parse failure it hands `specUrl` to Swagger UI, which surfaces the error
+ *  in-page), which keeps the docs route decoupled from spec-load failures. The client derives
+ *  absolute spec + server URLs from `window.location` via `deriveSwaggerUrls` so "Try it out"
+ *  targets the app regardless of a trailing slash on the docs URL or a reverse-proxy prefix. */
+function swaggerUiPage(title: string, specUrl: string, docsBase: string, apiBase: string): string {
   const css = `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_VERSION}/swagger-ui.css`;
   const bundle = `https://cdn.jsdelivr.net/npm/swagger-ui-dist@${SWAGGER_UI_VERSION}/swagger-ui-bundle.js`;
   return `<!doctype html>
@@ -89,7 +133,22 @@ function swaggerUiPage(title: string, specUrl: string): string {
 <div id="swagger-ui"></div>
 <script src="${bundle}" crossorigin="anonymous"></script>
 <script>
-window.ui = SwaggerUIBundle({ url: ${JSON.stringify(specUrl)}, dom_id: '#swagger-ui', deepLinking: true });
+(function () {
+  var derive = ${deriveSwaggerUrls.toString()};
+  var urls = derive(window.location.href, ${JSON.stringify(docsBase)}, ${JSON.stringify(apiBase)}, ${JSON.stringify(specUrl)});
+  function boot(opts) { window.ui = SwaggerUIBundle(opts); }
+  fetch(urls.specUrl)
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (spec) {
+      if (spec && urls.server) { spec.servers = [{ url: urls.server }]; }
+      boot(spec
+        ? { spec: spec, dom_id: '#swagger-ui', deepLinking: true }
+        : { url: urls.specUrl, dom_id: '#swagger-ui', deepLinking: true });
+    })
+    .catch(function () {
+      boot({ url: urls.specUrl, dom_id: '#swagger-ui', deepLinking: true });
+    });
+})();
 </script>
 </body>
 </html>`;
@@ -312,12 +371,13 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   const dir = binding.dir ?? "operations";
   const surfaceEject = binding.eject === true;
   const specRoutePath = `${docsBase}/openapi.json`;
-  // The Swagger UI page is served at `docsBase` (no trailing slash — the slash variant 308-
-  // redirects onto it), so its browser-relative base is the PARENT directory. Hand Swagger UI a
-  // DOCUMENT-relative spec URL and `servers` entry so both rebase onto the app's mount root:
-  // correct at the origin root (CLI :3000) AND under the Nano console reverse proxy
-  // (/console/app-view/<name>/), where a root-absolute "/app/…" escapes the prefix and hits the
-  // console origin instead of the app (issue #151).
+  // Fallback values for the RAW served spec + docs page. The interactive Swagger UI computes
+  // ABSOLUTE spec + server URLs client-side from `window.location` (see `deriveSwaggerUrls`), which
+  // is immune to a trailing slash on the docs URL and to the Nano console reverse-proxy prefix
+  // (/console/app-view/<name>/). These document-relative values remain (a) the client's fallback
+  // when the page path unexpectedly doesn't end in `docsBase`, and (b) what a non-interactive
+  // consumer reading `openapi.json` directly sees. They still rebase onto the app's mount root
+  // rather than using a root-absolute "/app/…" that would escape the proxy prefix (issue #151).
   const lastSegment = (p: string): string => p.split("/").filter(Boolean).pop() ?? "";
   const parentPath = (p: string): string => {
     const parts = p.split("/").filter(Boolean);
@@ -328,8 +388,7 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
   const specDocUrl = `${lastSegment(docsBase)}/openapi.json`;
   // `servers` can only be relativized when the operations `base` shares the docs page's parent
   // directory (the default `${base}-docs` sibling). For a fully custom `docs` path under a
-  // different parent, keep the root-absolute base (works direct; try-it-out through the proxy is
-  // the documented limitation in #151).
+  // different parent, keep the root-absolute base for the raw spec.
   const serversUrl = parentPath(base) === parentPath(docsBase) ? lastSegment(base) : base;
 
   // Resolve + parse the spec lazily on first request and cache it (mirroring the lazy module load
@@ -741,7 +800,7 @@ export function mountApi(ctx: RuntimeContext, app: AppApi): ApiHandle {
     return json({ ...d, servers: [{ url: serversUrl }] });
   };
   const docsTitle = `${ctx.manifest.name ?? "App"} — API docs`;
-  const serveDocs = (): HttpResponse => html(swaggerUiPage(docsTitle, specDocUrl));
+  const serveDocs = (): HttpResponse => html(swaggerUiPage(docsTitle, specDocUrl, docsBase, base));
   // A permanent redirect for the trailing-slash variant (`${docsBase}/`). The router only does
   // exact matches for non-prefix routes, so without this a reverse proxy or browser that appends
   // a slash would 404 on the Swagger UI. 308 preserves the method and points at the canonical

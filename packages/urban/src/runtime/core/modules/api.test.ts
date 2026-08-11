@@ -6,7 +6,7 @@ import type { AppManifest } from "../manifest.ts";
 import type { EngineClient, HostContext, HttpRequest } from "../host.ts";
 import { makeRouter } from "../router.ts";
 import { DataLayer } from "./datasource.ts";
-import { mountApi, resolveOperationHandler, apiDocsPath, NotImplemented, type ApiHandle, type OperationHandler } from "./api.ts";
+import { mountApi, resolveOperationHandler, apiDocsPath, deriveSwaggerUrls, NotImplemented, type ApiHandle, type OperationHandler } from "./api.ts";
 
 function req(
   method: string,
@@ -746,10 +746,135 @@ test("serves the Swagger UI page at {base}-docs by default", async () => {
   assert.match(res.headers?.["content-type"] ?? "", /text\/html/);
   const body = res.body ?? "";
   assert.match(body, /swagger-ui/);
-  // The UI reads the spec via a DOCUMENT-relative URL (issue #151) so it resolves through the
-  // Nano console reverse proxy, not a root-absolute path that escapes to the console origin.
-  assert.match(body, /url: "api-docs\/openapi\.json"/);
+  // The page derives ABSOLUTE spec + server URLs from window.location (issue #151 + the trailing-
+  // slash 404): the embedded derivation is passed the mount-root docs base, operations base, and a
+  // document-relative fallback. It must never hard-code a root-absolute "/app/api-docs/openapi.json"
+  // that would escape the Nano console reverse-proxy prefix.
+  assert.match(body, /window\.location\.href/);
+  assert.match(body, /"\/app\/api-docs"/); // docsBase handed to the client derivation
+  assert.match(body, /"\/app\/api"/); //     operations base handed to the client derivation
+  assert.match(body, /"api-docs\/openapi\.json"/); // document-relative fallback
   assert.doesNotMatch(body, /url: "\/app\/api-docs\/openapi\.json"/);
+});
+
+test("the rendered docs page runs its derivation end-to-end and targets the app through the proxy", async () => {
+  const { router } = build({ spec: "openapi.json" }, {});
+  const res = await router(req("GET", "/app/api-docs"));
+  const body = res.body ?? "";
+  // Extract the inline bootstrap <script> (the one that is NOT the swagger-ui-bundle src include).
+  const scripts = [...body.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  assert.ok(scripts.length >= 1, "expected an inline bootstrap script");
+  const boot = scripts[scripts.length - 1];
+  // 1) It must be syntactically valid JS (guards the `${derive.toString()}` template interpolation).
+  const runBoot = new Function("window", "SwaggerUIBundle", "fetch", boot);
+  // 2) Execute it in a mocked browser at the EXACT reported failing URL (proxy prefix + trailing
+  //    slash) and assert the servers override Swagger UI receives is the app's /app/api under the
+  //    proxy — never the /app/api-docs/api that produced the 404.
+  const specDoc = { openapi: "3.0.3", paths: {}, servers: [{ url: "api" }] };
+  let received: unknown;
+  const swaggerStub = (opts: { spec?: { servers?: unknown } }): unknown => {
+    received = opts.spec?.servers;
+    return {};
+  };
+  const proxySlashUrl = "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api-docs/";
+  const win: { location: { href: string }; ui?: unknown } = { location: { href: proxySlashUrl } };
+  let fetched = "";
+  const fetchStub = (url: string): Promise<{ ok: boolean; json: () => Promise<unknown> }> => {
+    fetched = url;
+    return Promise.resolve({ ok: true, json: () => Promise.resolve(specDoc) });
+  };
+  runBoot(win, swaggerStub, fetchStub);
+  await new Promise((r) => setTimeout(r, 0)); // let the fetch().then microtasks settle
+  assert.equal(
+    fetched,
+    "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api-docs/openapi.json",
+    "spec is fetched at an absolute, proxy-prefixed URL (immune to the trailing slash)",
+  );
+  assert.deepEqual(received, [
+    { url: "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api" },
+    // ^ Try it out now targets the app's operations base under the proxy, not /app/api-docs/api.
+  ]);
+});
+
+test("deriveSwaggerUrls: absolute spec+server from the page URL, immune to trailing slash + proxy prefix", () => {
+  const docsBase = "/app/api-docs";
+  const apiBase = "/app/api";
+  const rel = "api-docs/openapi.json";
+  // Direct CLI (:3000), no trailing slash — the canonical case.
+  assert.deepEqual(deriveSwaggerUrls("http://127.0.0.1:3000/app/api-docs", docsBase, apiBase, rel), {
+    specUrl: "http://127.0.0.1:3000/app/api-docs/openapi.json",
+    server: "http://127.0.0.1:3000/app/api",
+  });
+  // Direct CLI WITH a trailing slash — a relative "servers: api" used to resolve to
+  // /app/api-docs/api here (the reported 404). The absolute derivation is unaffected.
+  assert.deepEqual(deriveSwaggerUrls("http://127.0.0.1:3000/app/api-docs/", docsBase, apiBase, rel), {
+    specUrl: "http://127.0.0.1:3000/app/api-docs/openapi.json",
+    server: "http://127.0.0.1:3000/app/api",
+  });
+  // Under the Nano console reverse proxy — the mount prefix is preserved in both URLs.
+  assert.deepEqual(
+    deriveSwaggerUrls(
+      "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api-docs",
+      docsBase,
+      apiBase,
+      rel,
+    ),
+    {
+      specUrl: "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api-docs/openapi.json",
+      server: "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api",
+    },
+  );
+  // Proxy WITH a trailing slash — the exact failure the user reported. Now correct.
+  assert.deepEqual(
+    deriveSwaggerUrls(
+      "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api-docs/",
+      docsBase,
+      apiBase,
+      rel,
+    ),
+    {
+      specUrl: "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api-docs/openapi.json",
+      server: "http://127.0.0.1:8080/console/app-view/Nano_Workforce/app/api",
+    },
+  );
+  // A query string / fragment on the docs URL is ignored (pathname only).
+  assert.equal(
+    deriveSwaggerUrls("http://127.0.0.1:3000/app/api-docs?x=1#y", docsBase, apiBase, rel).server,
+    "http://127.0.0.1:3000/app/api",
+  );
+});
+
+test("deriveSwaggerUrls: a custom docs path keeps the proxy prefix too", () => {
+  // A string `docs` override lands the page at a root-level `/help`; the derivation still recovers
+  // the (proxy-prefixed) mount root by stripping that suffix and re-appending the operations base.
+  assert.deepEqual(
+    deriveSwaggerUrls(
+      "http://127.0.0.1:8080/console/app-view/App/help/",
+      "/help",
+      "/app/api",
+      "help/openapi.json",
+    ),
+    {
+      specUrl: "http://127.0.0.1:8080/console/app-view/App/help/openapi.json",
+      server: "http://127.0.0.1:8080/console/app-view/App/app/api",
+    },
+  );
+});
+
+test("deriveSwaggerUrls: falls back to the document-relative spec when the path doesn't match or href is bad", () => {
+  const docsBase = "/app/api-docs";
+  const apiBase = "/app/api";
+  const rel = "api-docs/openapi.json";
+  // Page path doesn't end in docsBase (unexpected) → keep the relative fallback, no server override.
+  assert.deepEqual(deriveSwaggerUrls("http://127.0.0.1:3000/elsewhere", docsBase, apiBase, rel), {
+    specUrl: rel,
+    server: null,
+  });
+  // Malformed href → same safe fallback (no throw).
+  assert.deepEqual(deriveSwaggerUrls("not a url", docsBase, apiBase, rel), {
+    specUrl: rel,
+    server: null,
+  });
 });
 
 test("the trailing-slash docs variant 308-redirects to the canonical path", async () => {

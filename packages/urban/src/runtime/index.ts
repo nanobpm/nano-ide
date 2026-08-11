@@ -54,8 +54,10 @@ export type {
   WorkerSubscription,
 } from "./core/host.ts";
 export type { AppApi, Mounted, RuntimeContext } from "./core/context.ts";
-// Structured logging surface (see core/logger.ts): the shape of `AppApi.log`.
-export type { Logger, LogLevel, LogFields } from "./core/logger.ts";
+// Structured logging surface (see core/logger.ts): the shape of `AppApi.log`, plus `createLogger`
+// so consumers can build a Logger for a custom sink or a no-op test double (`createLogger(() => {})`).
+export { createLogger } from "./core/logger.ts";
+export type { Logger, LogLevel, LogFields, LogSink } from "./core/logger.ts";
 
 // BPMN error contract: a handler throws `BpmnError(code)` to raise a modelled
 // error routed to an error boundary (ADR 0050), instead of a retryable failure.

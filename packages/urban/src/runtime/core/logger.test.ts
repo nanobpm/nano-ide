@@ -219,3 +219,14 @@ test("child() never throws when the added bindings are hostile — degrades to t
   assert.equal(records[0].msg, "shipped");
   assert.deepEqual({ ...records[0].fields }, { orderId: "o1" });
 });
+
+test("createLogger is re-exported from the runtime public barrel", async () => {
+  // Consumers build a Logger via the package entry (`@nanobpm/urban/runtime`) — e.g. a no-op sink
+  // for test doubles of `app.log`, or a custom sink in app code — so the barrel must expose it.
+  const barrel = await import("../index.ts");
+  assert.equal(typeof barrel.createLogger, "function");
+  const { records, sink } = recorder();
+  barrel.createLogger(sink).info("via-barrel");
+  assert.equal(records.length, 1);
+  assert.equal(records[0].msg, "via-barrel");
+});

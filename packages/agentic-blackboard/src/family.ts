@@ -160,7 +160,11 @@ function handleRead(
   const rawSince = payload.since;
   const since = typeof rawSince === "number" ? rawSince : undefined;
   const page = store.readPage(scope, { since });
-  ctx.send(reply(frame, { op: "read", scope, cursor: page.cursor, entries: page.entries }));
+  // `scope` is NOT echoed: under the default resolver it is the connection's
+  // capability credential (a secret), and it is server-derived so the client
+  // never needs it back for routing. Echoing it would only widen its exposure
+  // to logs/recordings.
+  ctx.send(reply(frame, { op: "read", cursor: page.cursor, entries: page.entries }));
 }
 
 function handleAppend(
@@ -195,7 +199,7 @@ function handleAppend(
   if (input.kind === "file-claim" && files && files.length > 0) {
     conflicts = store.detectFileClaimConflicts(scope, { authorTask: input.authorTask, files, beforeId: id });
   }
-  ctx.send(reply(frame, { op: "append", scope, inserted, id, conflicts }));
+  ctx.send(reply(frame, { op: "append", inserted, id, conflicts }));
 }
 
 /** Build a control-lane blackboard reply that echoes the request `seq` for correlation. */

@@ -240,10 +240,21 @@ export class BlackboardStore {
    * its last read.
    */
   readPage(scope: string, opts: { since?: number } = {}): BlackboardPage {
-    const rows = this.#db.all<DbRow>(`SELECT * FROM ${BLACKBOARD_TABLE} WHERE scope = ? ORDER BY id`, [scope]);
-    const cursor = rows.reduce((max, r) => (r.id > max ? r.id : max), 0);
     const since = opts.since ?? 0;
-    const entries = rows.filter((r) => r.id > since).map(toEntry);
+    // Read the head id independently so the cursor is the board's true head even
+    // when `since` filters every entry out (a caught-up poller learns it is
+    // caught up), and let SQL page with `id > since` against the (scope, id)
+    // index instead of loading the whole board to filter client-side.
+    const head = this.#db.all<{ cursor: number | bigint | null }>(
+      `SELECT MAX(id) AS cursor FROM ${BLACKBOARD_TABLE} WHERE scope = ?`,
+      [scope],
+    );
+    const cursor = Number(head[0]?.cursor ?? 0);
+    const rows = this.#db.all<DbRow>(
+      `SELECT * FROM ${BLACKBOARD_TABLE} WHERE scope = ? AND id > ? ORDER BY id`,
+      [scope, since],
+    );
+    const entries = rows.map(toEntry);
     return { entries, cursor };
   }
 
@@ -269,13 +280,21 @@ export class BlackboardStore {
     if (want.size === 0) return [];
     const me = opts.authorTask?.trim() || "";
     const beforeId = opts.beforeId;
+    // Push `id < beforeId` into SQL (the common path per the docstring) so we
+    // scan only strictly-prior claims via the (scope, id) index rather than
+    // loading every file-claim for the scope and filtering client-side.
+    const clauses = ["scope = ?", "kind = 'file-claim'"];
+    const params: unknown[] = [scope];
+    if (beforeId != null) {
+      clauses.push("id < ?");
+      params.push(beforeId);
+    }
     const rows = this.#db.all<DbRow>(
-      `SELECT * FROM ${BLACKBOARD_TABLE} WHERE scope = ? AND kind = 'file-claim' ORDER BY id`,
-      [scope],
+      `SELECT * FROM ${BLACKBOARD_TABLE} WHERE ${clauses.join(" AND ")} ORDER BY id`,
+      params,
     );
     const out: ClaimConflict[] = [];
     for (const r of rows) {
-      if (beforeId != null && r.id >= beforeId) continue;
       if ((r.author_task || "") === me) continue;
       for (const f of new Set(decodeFiles(r.files))) {
         if (want.has(f)) {

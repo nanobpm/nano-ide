@@ -90,14 +90,14 @@ test("append then read round-trips through the S1 seam", async () => {
   const appendReply = lastReply(conn);
   assert.equal(appendReply.op, "append");
   assert.equal(appendReply.inserted, true);
-  assert.equal(appendReply.scope, "board-cap");
+  assert.equal(appendReply.scope, undefined, "reply must not echo the (secret) capability scope");
   assert.deepEqual(appendReply.conflicts, []);
 
   conn.receive(frame("blackboard", { op: "read" }, 2));
   await tick();
   const readReply = lastReply(conn);
   assert.equal(readReply.op, "read");
-  assert.equal(readReply.scope, "board-cap");
+  assert.equal(readReply.scope, undefined, "reply must not echo the (secret) capability scope");
   const entries = readReply.entries;
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.body, "hello");

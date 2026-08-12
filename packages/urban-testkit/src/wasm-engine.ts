@@ -45,6 +45,17 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** Whether a deploy resource is an executable engine model (BPMN or DMN) the WASM engine can parse.
+ *  BPMN/DMN are XML (`text/xml`); forms (`application/json`) and other assets are not engine models.
+ *  Falls back to the file extension when a contentType is absent. */
+function isEngineModel(r: { name?: string; contentType?: string }): boolean {
+  const ct = (r.contentType ?? "").toLowerCase();
+  if (ct.includes("xml")) return true;
+  if (ct.length > 0) return false;
+  const name = (r.name ?? "").toLowerCase();
+  return name.endsWith(".bpmn") || name.endsWith(".dmn");
+}
+
 /** Return a copy of `source` containing only the requested keys that are
  *  actually present — the client-side analogue of an engine `fetchVariables`
  *  projection. */
@@ -170,8 +181,18 @@ export class WasmEngineClient implements EngineClient {
   async deployResources(
     resources: { name: string; content: string; contentType: string }[],
   ): Promise<{ deployed: number }> {
-    for (const r of resources) this.#engine.deploy(r.content);
-    return { deployed: resources.length };
+    // The runtime's `deployModels` sends every model resource here — processes AND decisions AND
+    // forms (the manifest `models.forms`). Only executable models go to the engine: BPMN + DMN are
+    // XML (`text/xml`); a `.form` is `application/json` and has no engine execution semantics, so
+    // forwarding its JSON to the BPMN parser throws "no <process> element found". Deploy only the
+    // XML resources and skip the rest, so an app that ships a form still boots under the test engine.
+    let deployed = 0;
+    for (const r of resources) {
+      if (!isEngineModel(r)) continue;
+      this.#engine.deploy(r.content);
+      deployed++;
+    }
+    return { deployed };
   }
 
   async createInstance(input: {

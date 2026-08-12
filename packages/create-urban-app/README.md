@@ -19,6 +19,7 @@ my-app/
   forms/greeting.form    # a form
   db/migrations/001_init.sql
   workers/greet.ts       # a job worker
+  tests/app.e2e.test.ts  # e2e tests (@nanobpm/urban-testkit)
   main.ts                # entrypoint that runs the app
   package.json           # npm run scripts
   .gitignore
@@ -63,6 +64,23 @@ nano-bpm engine (set `CAMUNDA_REST_ADDRESS`, default `http://localhost:8080/v2`)
 The scaffolded `package.json` also exposes `check`, `dev` and `deploy` scripts. With
 `--deno`, the equivalent `deno task <name>` commands are available too.
 
+## Test it
+
+Every scaffold ships e2e tests wired to
+[`@nanobpm/urban-testkit`](../urban-testkit), which runs the app against an in-process
+WASM build of the engine — no server, no wall-clock waits, CI-friendly:
+
+```bash
+cd my-app
+npm test
+```
+
+A **model-first** app gets a flagship `tests/app.e2e.test.ts` that boots the whole app,
+drives the full `POST → process → worker → GET` pipeline, and asserts a **coverage
+gate** (`assertFullCoverage()`) that fails if any operation or worker is left
+un-exercised. A **code-first** app gets an engine-contract smoke test. See the generated
+`README.md`'s "Test it" section for how to extend the suite.
+
 ## Options
 
 | Flag | Purpose | Default |
@@ -78,3 +96,4 @@ The scaffolded `package.json` also exposes `check`, `dev` and `deploy` scripts. 
 
 - [`@nanobpm/urban`](../urban) — the runtime, derivation toolkit, and CLI (`urban new`, `run`, `gen`, `check`, `deploy`) in one package.
 - [`@nanobpm/workflow`](../workflow) — the code-first process surface (`defineFlow`).
+- [`@nanobpm/urban-testkit`](../urban-testkit) — the in-process WASM e2e harness the scaffold's tests are built on (`bootTestApp`, coverage gate).

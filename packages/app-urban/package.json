@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@nanobpm/urban": "^0.18.0",
-    "create-urban-app": "^0.13.0"
+    "create-urban-app": "^0.14.0"
   },
   "files": ["nano-ide.ext.json", "README.md"]
 }

@@ -6,10 +6,21 @@ name: Release
 # impossible to publish from main with failing CI. The filename stays
 # release.yml because the npm Trusted Publisher (OIDC) config is keyed to it.
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
-    branches: [main]
+  # DISABLED during the agentic-protocol epic (#124) — re-enable per issue #193.
+  #
+  # Auto-publish is paused so the parallel slice fan-out can't push a broken
+  # @nanobpm/urban (and siblings) to npm `latest` while the epic is in flight.
+  # `workflow_dispatch` keeps this file valid; it is inert because the release
+  # job's `conclusion == 'success'` guard skips a manual dispatch too.
+  #
+  # To re-enable: revert this PR to restore the workflow_run trigger verbatim
+  # (the npm Trusted Publisher / OIDC config is keyed to release.yml, so keep the
+  # filename and the workflow_run shape intact).
+  workflow_dispatch: {}
+  # workflow_run:
+  #   workflows: ["CI"]
+  #   types: [completed]
+  #   branches: [main]
 
 permissions:
   contents: read

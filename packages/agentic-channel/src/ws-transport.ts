@@ -119,10 +119,12 @@ class WsConnection implements ChannelConnection {
 
 export class WebSocketChannelTransport implements ChannelTransport {
   readonly #wss: WebSocketServer;
+  readonly #server: HttpServer | undefined;
   #listener: ((conn: ChannelConnection) => void) | undefined;
 
   constructor(options: WebSocketChannelTransportOptions = {}) {
     const path = options.path ?? DEFAULT_PATH;
+    this.#server = options.server;
     this.#wss = options.server
       ? new WebSocketServer({ server: options.server, path })
       : new WebSocketServer({ port: options.port ?? 0, host: options.host, path });
@@ -139,20 +141,24 @@ export class WebSocketChannelTransport implements ChannelTransport {
 
   /** Resolve once the server is listening on its port. */
   ready(): Promise<void> {
-    if (this.#wss.address() !== null) {
+    // In shared-port mode the app owns the HTTP server: `ws` never emits
+    // `listening` on the WebSocketServer, so wait on the HTTP server instead
+    // (or resolve at once if it is already listening) to avoid hanging forever.
+    const source = this.#server ?? this.#wss;
+    if (this.#server ? this.#server.listening : this.#wss.address() !== null) {
       return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
       const onListening = () => {
-        this.#wss.off("error", onError);
+        source.off("error", onError);
         resolve();
       };
       const onError = (err: Error) => {
-        this.#wss.off("listening", onListening);
+        source.off("listening", onListening);
         reject(err);
       };
-      this.#wss.once("listening", onListening);
-      this.#wss.once("error", onError);
+      source.once("listening", onListening);
+      source.once("error", onError);
     });
   }
 

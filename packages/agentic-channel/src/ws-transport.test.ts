@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
+import { createServer } from "node:http";
 import { test } from "node:test";
 import { encodeFrame } from "@nanobpm/agentic-protocol";
 import type { Frame } from "@nanobpm/agentic-protocol";
@@ -125,6 +126,45 @@ test("the hub replies on the same connection", async (t) => {
 
   await transport.ready();
   const port = transport.address?.port;
+  const client = new WebSocket(`ws://127.0.0.1:${port}/agentic?token=${SECRET}&capability=cap-1`);
+  client.on("error", () => {});
+  t.after(() => client.close());
+  await once(client, "open");
+  client.send(registerBytes("w-1"), { binary: true });
+
+  const [data] = await once(client, "message");
+  assert.ok(data instanceof Buffer);
+  assert.ok(data.length > 0);
+});
+
+test("ready() resolves in shared-port mode when attached to an app HTTP server", async (t) => {
+  // `ws` never emits `listening` on the WebSocketServer when it shares an
+  // existing HTTP server, so ready() must observe the HTTP server instead —
+  // otherwise it hangs forever. This test would time out without that fix.
+  const server = createServer();
+  const transport = new WebSocketChannelTransport({ server });
+  const hub = new AgenticHub({
+    transport,
+    authenticator: sharedSecretAuthenticator({ secret: SECRET }),
+    sweepIntervalMs: 0,
+  });
+  t.after(() => hub.close());
+  t.after(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+
+  // ready() must resolve now that the shared HTTP server is listening.
+  await transport.ready();
+
+  const addr = server.address();
+  assert.ok(addr !== null && typeof addr === "object");
+  const port = addr.port;
+
+  hub.registerFamilyHandler("register", (_frame, ctx) => {
+    ctx.send({ lane: "control", family: "serve", seq: 1, payload: { instance: "w-1", tokens: [] } });
+  });
+
   const client = new WebSocket(`ws://127.0.0.1:${port}/agentic?token=${SECRET}&capability=cap-1`);
   client.on("error", () => {});
   t.after(() => client.close());

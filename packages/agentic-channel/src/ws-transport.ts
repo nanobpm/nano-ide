@@ -29,6 +29,12 @@ const DEFAULT_PATH = "/agentic";
 /** RFC 6455 close code for a frame whose type the endpoint cannot accept. */
 const CLOSE_UNSUPPORTED_DATA = 1003;
 
+/**
+ * Grace period for the shutdown close handshake before a still-open peer is
+ * force-terminated, so `close()` stays bounded even if a peer stalls.
+ */
+const GRACEFUL_CLOSE_TIMEOUT_MS = 250;
+
 /** Normalise Node's header map to a flat, lower-cased string record. */
 function flattenHeaders(req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -184,10 +190,23 @@ export class WebSocketChannelTransport implements ChannelTransport {
 
   close(): Promise<void> {
     return new Promise((resolve, reject) => {
+      // Prefer a graceful close handshake so peers observe a normal closure
+      // (with any application close code/reason) instead of an abnormal 1006.
+      // Fall back to terminate() for any peer that doesn't complete the
+      // handshake promptly, keeping shutdown bounded and deterministic.
       for (const client of this.#wss.clients) {
-        client.terminate();
+        client.close();
       }
-      this.#wss.close((err) => (err ? reject(err) : resolve()));
+      const fallback = setTimeout(() => {
+        for (const client of this.#wss.clients) {
+          client.terminate();
+        }
+      }, GRACEFUL_CLOSE_TIMEOUT_MS);
+      fallback.unref?.();
+      this.#wss.close((err) => {
+        clearTimeout(fallback);
+        err ? reject(err) : resolve();
+      });
     });
   }
 }

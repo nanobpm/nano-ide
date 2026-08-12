@@ -162,6 +162,28 @@ test("keeps the connection alive on a malformed frame but reports the error", as
   await hub.close();
 });
 
+test("liveness: a malformed frame still refreshes lastSeen so an active peer is not swept", async () => {
+  // A peer actively sending bytes is alive at the transport level even when the
+  // bytes fail to decode; sweeping it as "silent" would drop a live connection.
+  const clock = fakeClock(1000);
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: goodAuth, clock, sweepIntervalMs: 0 });
+
+  const conn = new FakeConnection("c1", { token: "s3cret", credential: "cap-1", remote: "peer-a" });
+  transport.accept(conn);
+  await tick();
+
+  clock.set(1000 + 20_000);
+  conn.receive(new Uint8Array([0, 1, 2, 3])); // malformed, but proof of life
+  await tick();
+
+  clock.set(1000 + 40_000); // 40s since connect, but only 20s since last frame
+  hub.sweepNow();
+  assert.equal(hub.connectionCount, 1);
+  assert.equal(conn.closed, null);
+  await hub.close();
+});
+
 test("liveness: an inbound frame refreshes lastSeen so a live peer is not swept", async () => {
   const clock = fakeClock(1000);
   const transport = new FakeTransport();

@@ -207,3 +207,28 @@ test("ready() resolves in shared-port mode when attached to an app HTTP server",
   assert.ok(data instanceof Buffer);
   assert.ok(data.length > 0);
 });
+test("close() shuts a connected peer down with a clean close handshake, not an abnormal 1006", async (t) => {
+  // terminate() aborts without a handshake, so peers observe 1006 (abnormal) and
+  // lose any application close code/reason. A graceful close lets them observe a
+  // normal closure during shutdown.
+  const transport = new WebSocketChannelTransport({ port: 0 });
+  const hub = new AgenticHub({
+    transport,
+    authenticator: sharedSecretAuthenticator({ secret: SECRET }),
+    sweepIntervalMs: 0,
+  });
+
+  await transport.ready();
+  const port = transport.address?.port;
+  assert.ok(port !== undefined && port > 0);
+
+  const client = new WebSocket(`ws://127.0.0.1:${port}/agentic?token=${SECRET}&capability=cap-1`);
+  client.on("error", () => {});
+  t.after(() => client.close());
+  await once(client, "open");
+
+  const closed = once(client, "close");
+  await transport.close();
+  const [code] = await closed;
+  assert.notEqual(code, 1006); // not an abnormal closure
+});

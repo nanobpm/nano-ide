@@ -164,6 +164,10 @@ export class AgenticHub {
   }
 
   #onMessage(id: string, hubConn: HubConnection, bytes: Uint8Array): void {
+    // Any inbound bytes are proof of life at the transport level — refresh
+    // liveness before decoding so an actively-transmitting peer is never swept
+    // as "silent", even if the bytes fail to decode into a well-formed frame.
+    this.registry.touch(id);
     let frame: Frame;
     try {
       frame = decodeFrame(bytes);
@@ -176,8 +180,6 @@ export class AgenticHub {
       }
       throw err;
     }
-    // Any well-formed inbound frame is proof of life.
-    this.registry.touch(id);
     this.router.route(frame, hubConn).catch((err: unknown) => this.#onError(err, id));
   }
 

@@ -189,6 +189,12 @@ export class AgenticClient {
    * enrolment attribute; it never becomes part of a routing token (invariant #3).
    */
   register(input?: { capability?: Capability }): Promise<RegisterResult> {
+    // A closed client is terminal: its buffer is released and the transport can
+    // never reopen, so a register here could only create a pending promise that
+    // never resolves and buffer a frame that never drains. Fail fast instead.
+    if (this.isClosed) {
+      return Promise.reject(new Error("register on a closed client"));
+    }
     const capability = input?.capability ?? this.capability;
     if (capability === undefined) {
       return Promise.reject(new Error("register requires a capability (pass one, or set it in the client options)"));
@@ -227,6 +233,9 @@ export class AgenticClient {
 
   /** Produce a single liveness heartbeat (control lane). Ages out on TTL if it stops (S2). */
   heartbeat(): void {
+    if (this.refuseWhenClosed("heartbeat")) {
+      return;
+    }
     const payload: HeartbeatPayload = { instance: this.instance };
     this.enqueue("heartbeat", OUTBOUND_LANE.heartbeat, payload);
   }
@@ -238,6 +247,12 @@ export class AgenticClient {
    * are UTF-8-encoded on the wire as the payload's `chunk` string.
    */
   relay(stream: string, chunk: string): void {
+    // Terminal client: refuse before touching the per-stream offset map (which
+    // close() already released) so a post-close relay neither re-grows that map
+    // nor buffers a frame that can never drain.
+    if (this.refuseWhenClosed("relay")) {
+      return;
+    }
     const offset = this.relayOffsets.get(stream) ?? 0;
     const payload: RelayPayload = { stream, offset, chunk };
     this.relayOffsets.set(stream, offset + byteLength(chunk));
@@ -462,12 +477,35 @@ export class AgenticClient {
   }
 
   private enqueue(family: MessageFamily, lane: QosLane, payload: unknown): void {
+    if (this.refuseWhenClosed(family)) {
+      return;
+    }
     if (this.rejectInvalidOutbound(family, payload)) {
       return;
     }
     const frame: Frame = { lane, family, seq: this.nextSeq(), payload };
     this.ring.enqueue(frame);
     this.pump();
+  }
+
+  /** True once close() has been called — the terminal state (see {@link close}). */
+  private get isClosed(): boolean {
+    return this.state === "closed";
+  }
+
+  /**
+   * Categorical guard for every outbound-producing surface: once the client is
+   * closed (terminal), the transport can never reopen and the buffer has been
+   * released, so any frame produced here can never drain. Rather than silently
+   * re-grow the ring close() emptied — and mislead the caller — refuse and
+   * surface the misuse via onError. Returns true when the call was refused.
+   */
+  private refuseWhenClosed(family: MessageFamily): boolean {
+    if (!this.isClosed) {
+      return false;
+    }
+    this.emitError(new Error(`cannot ${family} on a closed client`));
+    return true;
   }
 
   /**

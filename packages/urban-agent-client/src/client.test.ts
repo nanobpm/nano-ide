@@ -144,6 +144,30 @@ test("close() releases the outbound buffer so a terminal client pins no backlog"
   assert.equal(client.buffered, 0, "close() cleared the outbound ring");
 });
 
+test("a closed client refuses every outbound-producing call instead of buffering frames that can never drain", async () => {
+  const errors: Error[] = [];
+  const { client } = newClient({ capability: { cognition: "high" } });
+  client.onError((e) => errors.push(e));
+  client.connect();
+  client.close();
+
+  // register() fails fast rather than creating a pending promise that never resolves.
+  await assert.rejects(client.register({ capability: { cognition: "high" } }), /closed client/);
+
+  // heartbeat/relay are refused (surfaced via onError) and buffer nothing.
+  client.heartbeat();
+  client.relay("stdout", "post-close");
+  assert.equal(client.buffered, 0, "a closed client buffers no frames");
+  assert.ok(
+    errors.some((e) => /cannot heartbeat on a closed client/.test(e.message)),
+    "heartbeat after close surfaces an error",
+  );
+  assert.ok(
+    errors.some((e) => /cannot relay on a closed client/.test(e.message)),
+    "relay after close surfaces an error",
+  );
+});
+
 test("relay offset tracks UTF-8 byte length per stream, independently", () => {
   const { client, t } = newClient();
   client.connect();

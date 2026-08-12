@@ -86,7 +86,7 @@ The package also exports its internals for reuse and testing:
 ## Conformance
 
 `npm run test:conformance` runs this client against the **shared** adversarial
-corpus at `@nanobpm/agentic-protocol/conformance` — golden frames both
+corpus at `@nanobpm/agentic-protocol/source/conformance` — golden frames both
 directions, malformed byte vectors, and routing-token vectors — the same corpus
 the S0 codec and the cross-repo c8ctl client are held to. It runs from source
 (no build step) so the repo's `conformance` CI job exercises the real vectors.

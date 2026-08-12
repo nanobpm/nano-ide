@@ -68,8 +68,11 @@ export const websocketTransport: TransportFactory = (url, hooks) => {
 
   socket.addEventListener("open", () => hooks.onOpen());
   socket.addEventListener("message", (event) => deliverIncoming(event.data, hooks));
-  socket.addEventListener("error", () => {
-    hooks.onError(new Error("agentic channel transport error"));
+  socket.addEventListener("error", (event) => {
+    // Preserve the underlying error event as the cause so callers (tests,
+    // operational logs) can inspect the transport-level failure rather than
+    // only seeing a generic message.
+    hooks.onError(new Error("agentic channel transport error", { cause: event }));
   });
   socket.addEventListener("close", (event) => {
     hooks.onClose({ code: event.code, reason: event.reason, local: localClose });

@@ -90,6 +90,44 @@ test("overflow falls back to interactive, then control, when nothing lower is bu
   assert.equal(res.evicted?.seq, 0);
 });
 
+test("overflow drops a lower-priority incoming frame rather than evicting a higher-priority buffered one", () => {
+  // Ring full of only control frames: a bulk frame must NOT displace control.
+  const ring = new OutboundRing({ capacity: 2 });
+  ring.enqueue(frame("control", 0, "heartbeat"));
+  ring.enqueue(frame("control", 1, "heartbeat"));
+  const { evicted } = ring.enqueue(frame("bulk", 2));
+  // The incoming bulk frame is the least important — it is dropped, not buffered.
+  assert.equal(evicted?.lane, "bulk");
+  assert.equal(evicted?.seq, 2);
+  assert.equal(ring.size, 2);
+  assert.deepEqual(
+    ring.toArray().map((f) => [f.lane, f.seq]),
+    [
+      ["control", 0],
+      ["control", 1],
+    ],
+    "both control frames survive; the bulk frame never entered the ring",
+  );
+});
+
+test("enqueueFront also drops a lower-priority incoming frame instead of evicting higher-priority traffic", () => {
+  const ring = new OutboundRing({ capacity: 2 });
+  ring.enqueue(frame("control", 0, "heartbeat"));
+  ring.enqueue(frame("interactive", 1));
+  // interactive is still higher priority than bulk, so a bulk front-insert is dropped.
+  const { evicted } = ring.enqueueFront(frame("bulk", 2));
+  assert.equal(evicted?.lane, "bulk");
+  assert.equal(evicted?.seq, 2);
+  assert.equal(ring.size, 2);
+  assert.deepEqual(
+    ring.toArray().map((f) => [f.lane, f.seq]),
+    [
+      ["control", 0],
+      ["interactive", 1],
+    ],
+  );
+});
+
 test("peek is non-destructive and matches the next dequeue", () => {
   const ring = new OutboundRing({ capacity: 4 });
   ring.enqueue(frame("bulk", 1));

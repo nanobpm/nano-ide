@@ -17,12 +17,17 @@ import type { Frame, QosLane } from "./protocol.ts";
  *     The ordering is DERIVED from S0's canonical {@link compareFrameOrder}, not
  *     re-specified here (see {@link toArray}'s invariant test).
  *
- *  2. **Overflow drops the least important frame.** When the ring is full, the
- *     next enqueue evicts the oldest frame from the LOWEST-priority non-empty
- *     lane (bulk, then interactive, then control). Bulk backlog is shed first;
- *     a control-lane frame is only ever dropped when nothing less important is
- *     buffered. This bounds memory during a long outage without silently losing
- *     liveness/coordination traffic to a relay storm.
+ *  2. **Overflow sheds the single least important frame.** When the ring is
+ *     full, the next enqueue drops the lowest-priority frame among the buffer
+ *     AND the incoming frame: the oldest frame from the lowest-priority
+ *     non-empty lane is evicted (bulk before interactive before control) —
+ *     UNLESS the incoming frame is itself strictly lower priority than
+ *     everything buffered, in which case the incoming frame is dropped and the
+ *     buffer is left untouched. A higher-priority buffered frame (e.g. control)
+ *     is therefore never evicted to admit a lower-priority one (e.g. bulk):
+ *     bulk/interactive traffic can never displace buffered control frames. This
+ *     bounds memory during a long outage without ever losing liveness/
+ *     coordination traffic to a relay storm.
  */
 export interface OutboundRingOptions {
   /** Maximum number of buffered frames. Must be a positive integer. */
@@ -30,7 +35,14 @@ export interface OutboundRingOptions {
 }
 
 export interface EnqueueResult {
-  /** The frame evicted to make room, or `null` if the ring had spare capacity. */
+  /**
+   * The frame shed by this enqueue, or `null` if the ring had spare capacity.
+   * Usually the oldest frame from the lowest-priority non-empty lane, evicted to
+   * make room; but when the ring is full of strictly higher-priority frames the
+   * INCOMING frame is itself the least important — it is dropped rather than
+   * displace higher-priority traffic, and is returned here with the buffer left
+   * unchanged.
+   */
   readonly evicted: Frame | null;
 }
 
@@ -38,6 +50,15 @@ export interface EnqueueResult {
 // bucket walk is O(number-of-lanes) and independent of insertion.
 const LANES_BY_PRIORITY: readonly QosLane[] = [...QOS_LANES];
 const LANES_BY_EVICTION: readonly QosLane[] = [...QOS_LANES].reverse();
+
+// Priority rank per lane (0 = highest), derived from the canonical QOS_LANES
+// order so lane comparison has a single source of truth. A LARGER rank means
+// lower priority (evicted sooner).
+const LANE_RANK: ReadonlyMap<QosLane, number> = new Map(LANES_BY_PRIORITY.map((lane, index) => [lane, index]));
+
+function laneRank(lane: QosLane): number {
+  return LANE_RANK.get(lane) ?? Number.POSITIVE_INFINITY;
+}
 
 export class OutboundRing {
   readonly capacity: number;
@@ -63,49 +84,59 @@ export class OutboundRing {
   }
 
   /**
-   * Buffer a frame. When the ring is already at capacity, the oldest frame from
-   * the lowest-priority non-empty lane is evicted first (bulk before
-   * interactive before control) and returned in {@link EnqueueResult.evicted}.
+   * Buffer a frame. When the ring is already at capacity, the least important
+   * frame among the buffer and this one is shed (see {@link EnqueueResult.evicted}
+   * and the class-level overflow contract).
    */
   enqueue(frame: Frame): EnqueueResult {
-    let evicted: Frame | null = null;
-    if (this.count >= this.capacity) {
-      evicted = this.evictLowest();
-    }
-    const bucket = this.buckets.get(frame.lane);
-    if (bucket === undefined) {
-      // Restore the just-evicted frame rather than lose it to a bad lane.
-      if (evicted !== null) {
-        this.buckets.get(evicted.lane)?.unshift(evicted);
-        this.count += 1;
-      }
-      throw new RangeError(`unknown QoS lane: ${String(frame.lane)}`);
-    }
-    bucket.push(frame);
-    this.count += 1;
-    return { evicted };
+    return this.admit(frame, false);
   }
 
   /**
    * Buffer a frame at the FRONT of its lane (drains before frames already
    * queued in that lane). Used to make a reconnect's re-`register` precede any
-   * backlog buffered during the outage. Overflow still evicts the
-   * lowest-priority oldest frame.
+   * backlog buffered during the outage. Overflow follows the same QoS-correct
+   * policy as {@link enqueue}: the incoming frame is dropped rather than
+   * displace strictly higher-priority buffered traffic.
    */
   enqueueFront(frame: Frame): EnqueueResult {
-    let evicted: Frame | null = null;
-    if (this.count >= this.capacity) {
-      evicted = this.evictLowest();
-    }
+    return this.admit(frame, true);
+  }
+
+  /**
+   * Shared admission path for {@link enqueue} / {@link enqueueFront}.
+   *
+   * Overflow is QoS-correct: when the ring is full we shed the single
+   * least-important frame among the buffer ∪ the incoming frame. If the incoming
+   * frame is strictly lower priority than every buffered frame, IT is the least
+   * important, so it is dropped (and returned as `evicted`) and the buffer is
+   * untouched — a bulk/interactive frame never evicts buffered control traffic.
+   * Otherwise the oldest frame from the lowest-priority non-empty lane is
+   * evicted to make room.
+   */
+  private admit(frame: Frame, toFront: boolean): EnqueueResult {
     const bucket = this.buckets.get(frame.lane);
     if (bucket === undefined) {
-      if (evicted !== null) {
-        this.buckets.get(evicted.lane)?.unshift(evicted);
-        this.count += 1;
-      }
       throw new RangeError(`unknown QoS lane: ${String(frame.lane)}`);
     }
-    bucket.unshift(frame);
+    let evicted: Frame | null = null;
+    if (this.count >= this.capacity) {
+      const victimLane = this.lowestNonEmptyLane();
+      if (victimLane === undefined || laneRank(frame.lane) > laneRank(victimLane)) {
+        // The incoming frame is the least important thing in play — drop it
+        // rather than evict a higher-priority buffered frame.
+        return { evicted: frame };
+      }
+      evicted = this.buckets.get(victimLane)?.shift() ?? null;
+      if (evicted !== null) {
+        this.count -= 1;
+      }
+    }
+    if (toFront) {
+      bucket.unshift(frame);
+    } else {
+      bucket.push(frame);
+    }
     this.count += 1;
     return { evicted };
   }
@@ -177,15 +208,14 @@ export class OutboundRing {
     this.count = 0;
   }
 
-  private evictLowest(): Frame | null {
+  private lowestNonEmptyLane(): QosLane | undefined {
     for (const lane of LANES_BY_EVICTION) {
       const bucket = this.buckets.get(lane);
       if (bucket !== undefined && bucket.length > 0) {
-        this.count -= 1;
-        return bucket.shift() ?? null;
+        return lane;
       }
     }
-    return null;
+    return undefined;
   }
 }
 

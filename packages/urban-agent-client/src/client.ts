@@ -195,7 +195,7 @@ export class AgenticClient {
     // AND drop any REGISTER still buffered in the ring, so a reconnect drains
     // only the newest capability (and never a stale duplicate ahead of it).
     this.rejectPendingServe(new Error("superseded by a newer register"));
-    this.ring.remove((frame) => frame.family === "register");
+    this.removeBufferedRegisters();
 
     const promise = new Promise<RegisterResult>((resolve, reject) => {
       const timer =
@@ -255,9 +255,21 @@ export class AgenticClient {
     this.closedByCaller = true;
     this.stopHeartbeatTimer();
     this.rejectPendingServe(new Error("client closed"));
-    this.transport?.close();
+    // Best-effort transport close, then own the state transition + close event
+    // ourselves. A real transport's close is asynchronous (a WebSocket fires its
+    // own onClose on a later tick), so if we set state="closed" inline the
+    // eventual onClose would compute wasOpen=false and skip emitClose — meaning
+    // onClose subscribers never learn about a normal caller-initiated shutdown.
+    // Routing through handleClose (idempotent per connection attempt) fixes that
+    // and de-duplicates against any onClose the transport also fires.
+    const transport = this.transport;
     this.transport = undefined;
-    this.state = "closed";
+    try {
+      transport?.close();
+    } catch {
+      // An already-broken transport may throw on close; the teardown proceeds.
+    }
+    this.handleClose({ local: true });
   }
 
   /** Subscribe to resolved SERVE tokens (fires on every SERVE, including reconnects). */
@@ -313,9 +325,13 @@ export class AgenticClient {
     this.state = "open";
     this.reconnectDelay = this.reconnectPolicy.initialDelayMs;
     // Re-announce presence first so a reconnect re-registers before draining
-    // any buffered relay backlog. Register rides the control lane, so even if
-    // the ring already holds bulk frames it drains ahead of them.
-    if (this.capability !== undefined && !this.ringHasRegister()) {
+    // any buffered relay backlog. Coalesce any REGISTER already buffered
+    // (possibly behind other control-lane frames a caller queued during the
+    // outage, e.g. a heartbeat) and enqueue a fresh one at the front of the
+    // control lane, so it drains ahead of the entire backlog — never behind a
+    // heartbeat and never as a stale duplicate.
+    if (this.capability !== undefined) {
+      this.removeBufferedRegisters();
       this.enqueueRegister(this.capability, true);
     }
     this.emitOpen();
@@ -494,8 +510,14 @@ export class AgenticClient {
     }
   }
 
-  private ringHasRegister(): boolean {
-    return this.ring.toArray().some((frame) => frame.family === "register");
+  /**
+   * Drop every REGISTER still buffered in the ring, returning them. The single
+   * source of truth for register coalescing: a superseding `register()` and a
+   * reconnect's `handleOpen()` both use it so the drain never emits a stale or
+   * mis-ordered REGISTER.
+   */
+  private removeBufferedRegisters(): Frame[] {
+    return this.ring.remove((frame) => frame.family === "register");
   }
 
   /**

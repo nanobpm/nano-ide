@@ -67,12 +67,7 @@ export const websocketTransport: TransportFactory = (url, hooks) => {
   let localClose = false;
 
   socket.addEventListener("open", () => hooks.onOpen());
-  socket.addEventListener("message", (event) => {
-    const bytes = normaliseIncoming(event.data);
-    if (bytes !== undefined) {
-      hooks.onFrame(bytes);
-    }
-  });
+  socket.addEventListener("message", (event) => deliverIncoming(event.data, hooks));
   socket.addEventListener("error", () => {
     hooks.onError(new Error("agentic channel transport error"));
   });
@@ -93,6 +88,22 @@ export const websocketTransport: TransportFactory = (url, hooks) => {
     },
   };
 };
+
+/**
+ * Route one inbound transport message: a binary frame goes to `onFrame`; a
+ * non-binary message (a protocol violation under the "one binary frame per
+ * message" contract) is surfaced via `onError` rather than silently dropped, so
+ * the client never hangs seeing no frames yet no error. This is the single
+ * source of truth for the transport's message-dispatch branch.
+ */
+export function deliverIncoming(data: unknown, hooks: Pick<TransportHooks, "onFrame" | "onError">): void {
+  const bytes = normaliseIncoming(data);
+  if (bytes !== undefined) {
+    hooks.onFrame(bytes);
+    return;
+  }
+  hooks.onError(new Error("agentic channel received a non-binary message; expected one binary frame per message"));
+}
 
 /** Normalise a WebSocket message payload to bytes, or `undefined` if it is text. */
 export function normaliseIncoming(data: unknown): Uint8Array | undefined {

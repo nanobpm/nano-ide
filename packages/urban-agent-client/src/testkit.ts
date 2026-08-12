@@ -18,6 +18,13 @@ export class FakeTransport implements Transport {
    * client's reconnect path.
    */
   throwOnSend = false;
+  /**
+   * When true, {@link close} does NOT fire `onClose` — models a transport whose
+   * close is asynchronous (a real WebSocket fires its close event on a later
+   * tick) or one that never surfaces its own close. The client must still notify
+   * its own `onClose` subscribers on a caller-initiated shutdown.
+   */
+  silentClose = false;
   private closedLocal = false;
 
   private readonly hooks: TransportHooks;
@@ -45,7 +52,9 @@ export class FakeTransport implements Transport {
     this.closedLocal = true;
     if (this.open) {
       this.open = false;
-      this.hooks.onClose({ local: true });
+      if (!this.silentClose) {
+        this.hooks.onClose({ local: true });
+      }
     }
   }
 

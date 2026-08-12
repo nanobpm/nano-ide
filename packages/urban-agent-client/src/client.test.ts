@@ -304,3 +304,56 @@ test("an invalid outbound relay payload is dropped with onError, not buffered", 
   assert.ok(errors.some((e) => /relay payload failed validation/.test(e.message)));
   client.close();
 });
+
+test("close notifies onClose subscribers even when the transport's close is silent/async", () => {
+  const { client, t } = newClient();
+  client.connect();
+  t.last().fireOpen();
+  // Model a real WebSocket: close() does not synchronously surface onClose.
+  t.last().silentClose = true;
+
+  const closes: Array<{ local?: boolean }> = [];
+  client.onClose((info) => closes.push(info));
+
+  client.close();
+
+  assert.equal(closes.length, 1, "onClose fired exactly once on caller-initiated close");
+  assert.equal(closes[0]?.local, true, "the close is reported as local (caller-initiated)");
+  assert.equal(client.connectionState, "closed");
+});
+
+test("close emits onClose exactly once even when the transport also fires its own onClose", () => {
+  const { client, t } = newClient();
+  client.connect();
+  t.last().fireOpen();
+  // FakeTransport.close() DOES fire onClose synchronously; the client also drives
+  // handleClose itself. The idempotency guard must collapse these to one emit.
+  const closes: Array<{ local?: boolean }> = [];
+  client.onClose((info) => closes.push(info));
+
+  client.close();
+
+  assert.equal(closes.length, 1, "exactly one close emitted despite two close signals");
+  assert.equal(client.connectionState, "closed");
+});
+
+test("on open, a REGISTER buffered behind other control frames is coalesced to the front", () => {
+  const { client, t } = newClient({ reconnect: { enabled: false }, capability: { cognition: "high" } });
+  client.connect(); // not open — control frames buffer
+
+  client.heartbeat(); // control lane, buffered first
+  // A register queued while down lands behind the heartbeat in the control lane.
+  client.register({ capability: { cognition: "high" } }).catch(() => {});
+  assert.equal(client.buffered, 2);
+
+  t.last().fireOpen();
+
+  const control = t.last().sentFrames.filter((f) => f.lane === "control").map((f) => f.family);
+  assert.equal(control[0], "register", "REGISTER drains ahead of the buffered heartbeat");
+  assert.equal(
+    control.filter((f) => f === "register").length,
+    1,
+    "exactly one REGISTER drains (the buffered one was coalesced, not duplicated)",
+  );
+  client.close();
+});

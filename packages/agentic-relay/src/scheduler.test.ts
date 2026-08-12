@@ -147,6 +147,23 @@ test("bulk circular buffer wraps correctly across interleaved overflow and drain
   assert.equal(s.pendingBulk, 0);
 });
 
+test("flush is a no-op when every lane is empty (guards the allocation-free empty-lane path)", () => {
+  seq = 0;
+  let sinkCalls = 0;
+  const s = new QosScheduler({ sink: () => sinkCalls++, credit: 100 });
+  // No frames enqueued: flush() must touch nothing and emit nothing. This guards
+  // the empty-lane fast path (splice(0) skipped under a length check) — draining
+  // an empty scheduler stays correct and side-effect-free.
+  s.flush();
+  assert.equal(sinkCalls, 0);
+  assert.equal(s.pending, 0);
+  // A bulk-only backlog (control/interactive empty) still flushes correctly: the
+  // guarded empty higher lanes are skipped, the bulk tail drains under credit.
+  s.enqueue(frame("bulk", "b0"));
+  assert.equal(sinkCalls, 1);
+  assert.equal(s.pending, 0);
+});
+
 test("clear discards buffered frames across all lanes", () => {
   seq = 0;
   const out: Frame[] = [];

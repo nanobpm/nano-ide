@@ -131,11 +131,20 @@ export class QosScheduler {
     // the number of frames actually emitted, not O(n²): repeated Array.shift()
     // is O(n) per element and degrades on a large bulk burst — exactly the storm
     // this scheduler exists to absorb.
-    for (const frame of this.#control.splice(0)) {
-      this.#sink(frame);
+    //
+    // Guard each splice with a length check: enqueue() calls flush() on every
+    // frame, so in the bulk-storm / zero-credit case the control and interactive
+    // lanes are usually empty. splice(0) on an empty array still allocates a new
+    // (empty) array, so skipping it keeps the empty-lane hot path allocation-free.
+    if (this.#control.length > 0) {
+      for (const frame of this.#control.splice(0)) {
+        this.#sink(frame);
+      }
     }
-    for (const frame of this.#interactive.splice(0)) {
-      this.#sink(frame);
+    if (this.#interactive.length > 0) {
+      for (const frame of this.#interactive.splice(0)) {
+        this.#sink(frame);
+      }
     }
     const take = Math.min(this.#credit, this.#bulkCount);
     if (take > 0) {

@@ -137,6 +137,38 @@ test("the hub replies on the same connection", async (t) => {
   assert.ok(data.length > 0);
 });
 
+test("a text frame is rejected with 1003 and never reaches the codec", async (t) => {
+  // The protocol is binary-only. Pre-fix, `onMessage` called `toBytes` on the
+  // string payload of a text frame — which throws (no `.buffer`) and breaks the
+  // connection handler. The transport must instead close the socket with 1003.
+  const transport = new WebSocketChannelTransport({ port: 0 });
+  const hub = new AgenticHub({
+    transport,
+    authenticator: sharedSecretAuthenticator({ secret: SECRET }),
+    sweepIntervalMs: 0,
+  });
+  t.after(() => hub.close());
+
+  let sawFrame = false;
+  hub.registerFamilyHandler("register", () => {
+    sawFrame = true;
+  });
+
+  await transport.ready();
+  const port = transport.address?.port;
+  const client = new WebSocket(`ws://127.0.0.1:${port}/agentic?token=${SECRET}&capability=cap-1`);
+  client.on("error", () => {});
+  t.after(() => client.close());
+  await once(client, "open");
+
+  // Send a TEXT frame (binary:false) — the transport must reject it.
+  client.send("not-a-binary-frame", { binary: false });
+
+  const [code] = await once(client, "close");
+  assert.equal(code, 1003);
+  assert.equal(sawFrame, false); // no text payload ever reached a family handler
+});
+
 test("ready() resolves in shared-port mode when attached to an app HTTP server", async (t) => {
   // `ws` never emits `listening` on the WebSocketServer when it shares an
   // existing HTTP server, so ready() must observe the HTTP server instead —

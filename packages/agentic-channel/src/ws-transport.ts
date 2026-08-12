@@ -26,6 +26,9 @@ export interface WebSocketChannelTransportOptions {
 
 const DEFAULT_PATH = "/agentic";
 
+/** RFC 6455 close code for a frame whose type the endpoint cannot accept. */
+const CLOSE_UNSUPPORTED_DATA = 1003;
+
 /** Normalise Node's header map to a flat, lower-cased string record. */
 function flattenHeaders(req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -95,7 +98,16 @@ class WsConnection implements ChannelConnection {
   }
 
   onMessage(listener: (bytes: Uint8Array) => void): void {
-    this.#ws.on("message", (data: RawData) => listener(toBytes(data)));
+    this.#ws.on("message", (data: RawData, isBinary: boolean) => {
+      // The channel protocol is binary-only. A text frame (`isBinary === false`,
+      // which `ws` may deliver as a `string` with no `.buffer`) is a protocol
+      // violation: reject it with 1003 rather than letting `toBytes` throw.
+      if (!isBinary) {
+        this.#ws.close(CLOSE_UNSUPPORTED_DATA, "binary frames only");
+        return;
+      }
+      listener(toBytes(data));
+    });
   }
 
   onClose(listener: (code?: CloseCode, reason?: string) => void): void {

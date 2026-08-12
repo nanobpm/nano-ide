@@ -41,7 +41,12 @@ export interface ReplaySlice {
 
 export class ReplayRing {
   readonly capacity: number;
-  readonly #entries: ReplayEntry[] = [];
+  // Fixed-size circular buffer: eviction overwrites the oldest slot and advances
+  // the head in O(1), instead of Array.shift() (O(n) on every append once the
+  // ring is at steady-state capacity — a hotspot for high-throughput streams).
+  readonly #buffer: (ReplayEntry | undefined)[] = [];
+  #head = 0;
+  #count = 0;
   #nextOffset = 0;
 
   constructor(options: ReplayRingOptions) {
@@ -49,11 +54,12 @@ export class ReplayRing {
       throw new RangeError(`ReplayRing capacity must be a positive integer, got ${options.capacity}`);
     }
     this.capacity = options.capacity;
+    this.#buffer.length = options.capacity;
   }
 
   /** Number of chunks currently retained. */
   get size(): number {
-    return this.#entries.length;
+    return this.#count;
   }
 
   /** The offset the next {@link append} will assign (also the total ever appended). */
@@ -63,7 +69,7 @@ export class ReplayRing {
 
   /** The oldest retained offset, or `undefined` when nothing is retained. */
   get firstOffset(): number | undefined {
-    return this.#entries[0]?.offset;
+    return this.#count === 0 ? undefined : this.#buffer[this.#head]?.offset;
   }
 
   /**
@@ -74,9 +80,13 @@ export class ReplayRing {
   append(chunk: string): ReplayEntry {
     const entry: ReplayEntry = { offset: this.#nextOffset, chunk };
     this.#nextOffset += 1;
-    this.#entries.push(entry);
-    if (this.#entries.length > this.capacity) {
-      this.#entries.shift();
+    if (this.#count < this.capacity) {
+      this.#buffer[(this.#head + this.#count) % this.capacity] = entry;
+      this.#count += 1;
+    } else {
+      // At capacity: overwrite the oldest slot and advance the head — O(1).
+      this.#buffer[this.#head] = entry;
+      this.#head = (this.#head + 1) % this.capacity;
     }
     return entry;
   }
@@ -101,11 +111,20 @@ export class ReplayRing {
     const gap = from < first;
     const startOffset = gap ? first : from;
     const startIndex = startOffset - first;
-    return { entries: this.#entries.slice(startIndex), gap };
+    const entries: ReplayEntry[] = [];
+    for (let i = startIndex; i < this.#count; i += 1) {
+      const entry = this.#buffer[(this.#head + i) % this.capacity];
+      if (entry !== undefined) {
+        entries.push(entry);
+      }
+    }
+    return { entries, gap };
   }
 
   /** Drop every retained chunk. The offset counter is NOT reset (offsets stay monotonic). */
   clear(): void {
-    this.#entries.length = 0;
+    this.#buffer.fill(undefined);
+    this.#head = 0;
+    this.#count = 0;
   }
 }

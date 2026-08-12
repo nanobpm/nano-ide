@@ -84,6 +84,47 @@ test("clear drops retained chunks but keeps the offset counter monotonic", () =>
   assert.equal(c.offset, 2); // not reset to 0
 });
 
+test("stays correct across multiple circular-buffer wraps (O(1) eviction)", () => {
+  const ring = new ReplayRing({ capacity: 3 });
+  // Append well past capacity so the head wraps the internal buffer several times.
+  for (let i = 0; i < 10; i += 1) {
+    ring.append(`c${i}`);
+  }
+  assert.equal(ring.size, 3);
+  assert.equal(ring.nextOffset, 10);
+  assert.equal(ring.firstOffset, 7); // offsets 0..6 evicted
+  assert.deepEqual(ring.since(0).entries, [
+    { offset: 7, chunk: "c7" },
+    { offset: 8, chunk: "c8" },
+    { offset: 9, chunk: "c9" },
+  ]);
+  assert.equal(ring.since(0).gap, true);
+  assert.deepEqual(ring.since(8).entries, [
+    { offset: 8, chunk: "c8" },
+    { offset: 9, chunk: "c9" },
+  ]);
+  assert.equal(ring.since(8).gap, false);
+});
+
+test("clear then append reuses the buffer correctly after a wrap", () => {
+  const ring = new ReplayRing({ capacity: 2 });
+  for (const c of ["a", "b", "c"]) {
+    ring.append(c); // wraps once, retains offsets 1,2
+  }
+  ring.clear();
+  assert.equal(ring.size, 0);
+  assert.equal(ring.firstOffset, undefined);
+  const d = ring.append("d");
+  const e = ring.append("e");
+  assert.equal(d.offset, 3);
+  assert.equal(e.offset, 4);
+  assert.equal(ring.firstOffset, 3);
+  assert.deepEqual(ring.since(3).entries, [
+    { offset: 3, chunk: "d" },
+    { offset: 4, chunk: "e" },
+  ]);
+});
+
 test("rejects a non-positive or non-integer capacity", () => {
   assert.throws(() => new ReplayRing({ capacity: 0 }), RangeError);
   assert.throws(() => new ReplayRing({ capacity: -1 }), RangeError);

@@ -18,8 +18,8 @@
  *    chunk; the hub assigns the authoritative offset and fences stale incarnations.
  *  - `{ op: "subscribe", stream, from?, credit? }`     — a consumer (re)attaches
  *    and resumes from `from` (default 0); the retained tail is replayed.
- *  - `{ op: "credit",    stream?, credit }`            — a consumer grants more
- *    bulk credit (backpressure).
+ *  - `{ op: "credit",    credit }`                    — a consumer grants more
+ *    bulk credit (backpressure) for its whole egress budget.
  *
  * Outbound (hub → consumer):
  *  - a `data` frame is a pure S0 {@link RelayPayload} `{ stream, offset, chunk }`

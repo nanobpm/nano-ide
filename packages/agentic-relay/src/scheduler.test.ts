@@ -24,15 +24,21 @@ function tagsOf(frames: Frame[]): string[] {
 test("drains in strict lane priority: control > interactive > bulk", () => {
   seq = 0;
   const out: Frame[] = [];
-  const s = new QosScheduler({ sink: (f) => out.push(f), credit: 100 });
+  // Credit 0 holds the bulk lane so this asserts the guarantee directly: control
+  // and interactive drain eagerly and are NOT head-of-line-blocked by buffered
+  // bulk. Once credit is granted the bulk tail follows, strictly last.
+  const s = new QosScheduler({ sink: (f) => out.push(f), credit: 0 });
   s.enqueue(frame("bulk", "b1"));
   s.enqueue(frame("control", "c1"));
   s.enqueue(frame("interactive", "i1"));
   s.enqueue(frame("bulk", "b2"));
   s.enqueue(frame("control", "c2"));
-  // enqueue flushes eagerly, but priority still holds: each higher-lane frame is
-  // emitted before any lower-lane frame that was buffered awaiting it.
-  assert.deepEqual(tagsOf(out), ["b1", "c1", "i1", "b2", "c2"]);
+  // Bulk is still buffered; every control/interactive frame has already sailed past it.
+  assert.deepEqual(tagsOf(out), ["c1", "i1", "c2"]);
+  assert.equal(s.pendingBulk, 2);
+  s.grantCredit(100);
+  // Full drain: every control/interactive frame precedes every bulk frame.
+  assert.deepEqual(tagsOf(out), ["c1", "i1", "c2", "b1", "b2"]);
 });
 
 test("bulk is strictly ranked below control/interactive and drains in S0 compareFrameOrder", () => {

@@ -111,23 +111,23 @@ export class QosScheduler {
    * are never head-of-line-blocked by bulk backlog or exhausted credit.
    */
   flush(): void {
-    let frame = this.#control.shift();
-    while (frame !== undefined) {
+    // Remove eligible frames up-front (splice) then emit, preserving the
+    // "remove before sink" semantics while keeping the drain O(n): repeated
+    // Array.shift() is O(n) per element and degrades to O(n²) on a large bulk
+    // burst — exactly the storm this scheduler exists to absorb.
+    for (const frame of this.#control.splice(0)) {
       this.#sink(frame);
-      frame = this.#control.shift();
     }
-    frame = this.#interactive.shift();
-    while (frame !== undefined) {
+    for (const frame of this.#interactive.splice(0)) {
       this.#sink(frame);
-      frame = this.#interactive.shift();
     }
-    while (this.#credit > 0 && this.#bulk.length > 0) {
-      const bulkFrame = this.#bulk.shift();
-      if (bulkFrame === undefined) {
-        break;
+    const take = Math.min(this.#credit, this.#bulk.length);
+    if (take > 0) {
+      const bulkFrames = this.#bulk.splice(0, take);
+      this.#credit -= take;
+      for (const bulkFrame of bulkFrames) {
+        this.#sink(bulkFrame);
       }
-      this.#credit -= 1;
-      this.#sink(bulkFrame);
     }
   }
 

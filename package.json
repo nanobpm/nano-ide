@@ -13,7 +13,7 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "npm run build -w @nanobpm/workflow --if-present && npm run build --workspaces --if-present",
+    "build": "npm run build -w @nanobpm/workflow -w @nanobpm/agentic-protocol --if-present && npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present && npm run test:scripts",
     "test:scripts": "node --test \"scripts/lib/**/*.test.mjs\"",

@@ -245,12 +245,18 @@ export class AgenticClient {
   }
 
   /**
-   * Deregister and close. Sends a deregister frame (best-effort — buffered if
-   * the channel is down) and then tears the client down without reconnecting.
+   * Deregister and close. Sends a deregister frame best-effort — only when the
+   * channel is currently open. `close()` is terminal and releases the buffer, so
+   * a deregister enqueued while disconnected could never drain; enqueuing it then
+   * would just pin an unsendable frame until close() drops it. When the channel
+   * is down we therefore skip the frame and tear down directly, without
+   * reconnecting.
    */
   deregister(reason?: string): void {
-    const payload: DeregisterPayload = reason === undefined ? { instance: this.instance } : { instance: this.instance, reason };
-    this.enqueue("deregister", OUTBOUND_LANE.deregister, payload);
+    if (this.state === "open") {
+      const payload: DeregisterPayload = reason === undefined ? { instance: this.instance } : { instance: this.instance, reason };
+      this.enqueue("deregister", OUTBOUND_LANE.deregister, payload);
+    }
     this.close();
   }
 
@@ -273,6 +279,12 @@ export class AgenticClient {
       // An already-broken transport may throw on close; the teardown proceeds.
     }
     this.handleClose({ local: true });
+    // Terminal: the outbound ring and per-stream relay offsets can never be
+    // drained again, so release them here rather than pinning a large outage
+    // backlog (buffered frames, many relay streams) in memory for the lifetime
+    // of the now-dead client.
+    this.ring.clear();
+    this.relayOffsets.clear();
   }
 
   /** Subscribe to resolved SERVE tokens (fires on every SERVE, including reconnects). */

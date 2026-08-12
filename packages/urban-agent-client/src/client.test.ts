@@ -85,6 +85,38 @@ test("heartbeat, relay and deregister emit correctly-shaped frames", () => {
   assert.ok(t.last().wasClosedLocally());
 });
 
+test("deregister while the channel is down sends no deregister frame (best-effort only when open)", () => {
+  const { client, t } = newClient();
+  client.connect(); // transport built but never opened
+
+  // Never fired open: the channel is down. A deregister must not enqueue an
+  // unsendable frame that close() would only drop — it is best-effort.
+  client.deregister("done");
+
+  const dereg = t.last().sentFrames.find((f) => f.family === "deregister");
+  assert.equal(dereg, undefined, "no deregister frame was sent while disconnected");
+  assert.equal(client.connectionState, "closed");
+  assert.equal(client.buffered, 0, "close() left nothing buffered");
+});
+
+test("close() releases the outbound buffer so a terminal client pins no backlog", () => {
+  const { client } = newClient({ capability: { cognition: "high" } });
+  client.connect(); // transport built but never opened
+
+  // Accumulate a backlog during the outage: buffered relay frames.
+  for (let i = 0; i < 4; i++) {
+    client.relay("stdout", `chunk-${i}`);
+  }
+  assert.ok(client.buffered > 0, "frames buffered while the channel is down");
+
+  client.close();
+
+  // Terminal close must not pin the outage backlog in memory forever — the ring
+  // (and the per-stream relay offsets) can never be drained again, so they are
+  // released.
+  assert.equal(client.buffered, 0, "close() cleared the outbound ring");
+});
+
 test("relay offset tracks UTF-8 byte length per stream, independently", () => {
   const { client, t } = newClient();
   client.connect();

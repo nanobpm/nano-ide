@@ -29,14 +29,32 @@ test("websocketTransport builds a Transport and refuses to send before the socke
     onClose: () => {},
     onError: () => {},
   };
-  // A syntactically valid but unconnected URL: the socket starts CONNECTING, so
-  // a send must throw rather than silently drop the frame (which lets the client
-  // buffer it). We never actually establish the connection.
-  const transport = websocketTransport("ws://127.0.0.1:9/agentic", hooks);
-  assert.equal(typeof transport.send, "function");
-  assert.equal(typeof transport.close, "function");
-  assert.throws(() => transport.send(new Uint8Array([1])), /not open/);
-  transport.close();
+
+  // Stub the global WebSocket with a socket that stays in CONNECTING, so the
+  // test is fully deterministic and performs no real network I/O (no dependency
+  // on the host stack / port timing). A send while CONNECTING must throw rather
+  // than silently drop the frame — that "throw, don't drop" contract is exactly
+  // what lets the client re-buffer instead of losing data.
+  class ConnectingWebSocket {
+    static readonly CONNECTING = 0;
+    static readonly OPEN = 1;
+    readonly readyState = ConnectingWebSocket.CONNECTING;
+    binaryType = "blob";
+    addEventListener(): void {}
+    send(): void {}
+    close(): void {}
+  }
+  const original = Reflect.get(globalThis, "WebSocket");
+  Reflect.set(globalThis, "WebSocket", ConnectingWebSocket);
+  try {
+    const transport = websocketTransport("ws://stub/agentic", hooks);
+    assert.equal(typeof transport.send, "function");
+    assert.equal(typeof transport.close, "function");
+    assert.throws(() => transport.send(new Uint8Array([1])), /not open/);
+    transport.close();
+  } finally {
+    Reflect.set(globalThis, "WebSocket", original);
+  }
 });
 
 test("websocketTransport surfaces a non-binary inbound message via onError instead of dropping it", () => {

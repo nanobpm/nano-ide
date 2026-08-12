@@ -1,0 +1,51 @@
+{
+  "name": "@nanobpm/agentic-protocol",
+  "version": "0.1.0",
+  "description": "Wire contract, frame codec, routing-token grammar, vocab schema and shared conformance corpus for the Nano agentic protocol (ADR 0056) — one app-tier channel carrying agent presence/registry, demand×supply, the blackboard and live terminal relay.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "nanobpm",
+    "agentic",
+    "protocol",
+    "conformance",
+    "codec"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/agentic-protocol"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./conformance": {
+      "types": "./dist/conformance/index.d.ts",
+      "default": "./dist/conformance/index.js"
+    },
+    "./source": "./src/index.ts",
+    "./source/conformance": "./src/conformance/index.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  }
+}

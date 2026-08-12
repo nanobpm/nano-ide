@@ -40,7 +40,7 @@
     "test": "node --test --experimental-strip-types \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@nanobpm/agentic-protocol": "*",
+    "@nanobpm/agentic-protocol": "^0.1.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {

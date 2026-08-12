@@ -72,13 +72,21 @@ test("construction rejects a malformed requires predicate", () => {
   assert.throws(() => new VocabResolver(doc), Error);
 });
 
-test("construction rejects two roles claiming the same routing token", () => {
-  // A self-named `decide` role collapses to bare `decide`; a second network `x`
-  // with a role `decide` stays `x.decide`, so no collision — but two self-named
-  // top-level roles both collapsing to the same bare token would collide.
+test("a self-named collapse does not collide with a network-qualified token of the same leaf", () => {
+  // A self-named top-level `decide` role collapses to the bare token `decide`,
+  // while a `decide` role under network `x` stays `x.decide`. The two are
+  // distinct routing tokens, so construction succeeds and exposes both.
+  //
+  // A genuine duplicate token is structurally unreachable through the schema:
+  // every network/subnetwork/role key is unique, and the only collapse is a
+  // top-level self-named role — which can fire at most once per bare token — so
+  // no two roles can derive the same string. The constructor's duplicate-token
+  // guard is therefore defensive, and this test pins the near-miss it protects.
   const doc = JSON.parse(
-    '{"version":1,"networks":{"decide":{"roles":{"decide":{}}},"decide2":{"subnetworks":{}}}}',
+    '{"version":1,"networks":{"decide":{"roles":{"decide":{}}},"x":{"roles":{"decide":{}}}}}',
   );
-  // Sanity: this particular doc is fine (distinct tokens).
-  assert.doesNotThrow(() => new VocabResolver(doc));
+  const resolver = new VocabResolver(doc);
+  assert.deepEqual([...resolver.tokens()].sort(), ["decide", "x.decide"]);
+  assert.equal(resolver.roleForToken("decide")?.role, "decide");
+  assert.equal(resolver.roleForToken("x.decide")?.role, "decide");
 });

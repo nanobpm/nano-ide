@@ -223,3 +223,11 @@ test("rejects invalid credit and bulkCapacity", () => {
   assert.throws(() => s.grantCredit(-1), RangeError);
   assert.throws(() => s.grantCredit(Number.MAX_SAFE_INTEGER + 1), RangeError);
 });
+
+test("rejects credit that overflows the safe-integer range under accumulation", () => {
+  // Each grant is individually safe, but the running total must not silently
+  // exceed Number.MAX_SAFE_INTEGER and lose precision — grantCredit fails fast.
+  const s = new QosScheduler({ sink: () => {}, credit: Number.MAX_SAFE_INTEGER });
+  assert.throws(() => s.grantCredit(1), RangeError);
+  assert.equal(s.credit, Number.MAX_SAFE_INTEGER, "credit is left untouched on overflow");
+});

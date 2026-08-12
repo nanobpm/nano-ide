@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isNonNegInt, isPosInt } from "./validate.ts";
+import { addSafeInt, isNonNegInt, isPosInt } from "./validate.ts";
 
 // Defect-class guard: relay integers are accumulated/decremented and round-trip
 // through JSON, so a value beyond Number.MAX_SAFE_INTEGER would silently lose
@@ -27,4 +27,17 @@ test("isPosInt accepts positive safe integers only", () => {
   for (const v of [0, UNSAFE, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "1", null, undefined]) {
     assert.equal(isPosInt(v), false, `${String(v)} should be rejected`);
   }
+});
+
+test("addSafeInt sums non-negative safe integers", () => {
+  assert.equal(addSafeInt(0, 1, "x"), 1);
+  assert.equal(addSafeInt(5, 7, "x"), 12);
+  assert.equal(addSafeInt(Number.MAX_SAFE_INTEGER - 1, 1, "x"), Number.MAX_SAFE_INTEGER);
+});
+
+test("addSafeInt fails fast when accumulation would leave the safe-integer range", () => {
+  // Both operands are individually safe, but their sum is not — a value that
+  // would silently lose precision under further arithmetic/JSON round-trips.
+  assert.throws(() => addSafeInt(Number.MAX_SAFE_INTEGER, 1, "credit"), RangeError);
+  assert.throws(() => addSafeInt(Number.MAX_SAFE_INTEGER - 1, 2, "offset"), RangeError);
 });

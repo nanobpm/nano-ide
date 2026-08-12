@@ -23,7 +23,7 @@
  */
 import { compareFrameOrder, lanePriority } from "@nanobpm/agentic-protocol";
 import type { Frame } from "@nanobpm/agentic-protocol";
-import { isNonNegInt, isPosInt } from "./validate.ts";
+import { addSafeInt, isNonNegInt, isPosInt } from "./validate.ts";
 
 export interface QosSchedulerOptions {
   /** Where drained frames are emitted (typically the connection's `send`). */
@@ -116,7 +116,7 @@ export class QosScheduler {
     if (!isNonNegInt(n)) {
       throw new RangeError(`grantCredit requires a non-negative integer, got ${n}`);
     }
-    this.#credit += n;
+    this.#credit = addSafeInt(this.#credit, n, "QosScheduler credit");
     this.flush();
   }
 

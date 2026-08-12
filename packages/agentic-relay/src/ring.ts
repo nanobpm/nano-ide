@@ -14,7 +14,7 @@
  * The stream itself survives the reconnect — the ring is the durable-enough
  * window that makes resume possible.
  */
-import { isNonNegInt, isPosInt } from "./validate.ts";
+import { addSafeInt, isNonNegInt, isPosInt } from "./validate.ts";
 
 /** A single retained chunk and the offset it was assigned. */
 export interface ReplayEntry {
@@ -79,8 +79,12 @@ export class ReplayRing {
    * advances, so offsets stay monotonic and gap-free across eviction).
    */
   append(chunk: string): ReplayEntry {
-    const entry: ReplayEntry = { offset: this.#nextOffset, chunk };
-    this.#nextOffset += 1;
+    // Fail fast before mutating any state: compute the next offset first so an
+    // overflow throws atomically (the ring is left untouched) rather than after
+    // a partial append. Offsets accumulate forever, so guard the running total.
+    const offset = this.#nextOffset;
+    const nextOffset = addSafeInt(offset, 1, "ReplayRing offset");
+    const entry: ReplayEntry = { offset, chunk };
     if (this.#count < this.capacity) {
       this.#buffer[(this.#head + this.#count) % this.capacity] = entry;
       this.#count += 1;
@@ -89,6 +93,7 @@ export class ReplayRing {
       this.#buffer[this.#head] = entry;
       this.#head = (this.#head + 1) % this.capacity;
     }
+    this.#nextOffset = nextOffset;
     return entry;
   }
 

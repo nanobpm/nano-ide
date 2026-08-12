@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { encodeFrame } from "@nanobpm/agentic-protocol";
 import type { Frame } from "@nanobpm/agentic-protocol";
 import { sharedSecretAuthenticator } from "./auth.ts";
+import type { AuthResult } from "./auth.ts";
 import type { Clock } from "./clock.ts";
 import type { ChannelConnection, ChannelTransport, CloseCode, HandshakeRequest } from "./connection.ts";
 import { AgenticHub, LIVENESS_TIMEOUT } from "./hub.ts";
@@ -246,4 +247,42 @@ test("a closed connection is removed from the registry", async () => {
   conn.close(1000, "bye");
   assert.equal(hub.connectionCount, 0);
   await hub.close();
+});
+
+test("a peer that disconnects while auth is in flight is never left tracked", async () => {
+  // The authenticator may be async (e.g. a network identity check). If the peer
+  // vanishes mid-auth, the close event must not be missed — otherwise the hub
+  // tracks a dead socket until a much later TTL sweep, inflating connectionCount.
+  const transport = new FakeTransport();
+  let release: ((r: AuthResult) => void) | undefined;
+  const pending = new Promise<AuthResult>((resolve) => {
+    release = resolve;
+  });
+  const hub = new AgenticHub({ transport, authenticator: () => pending, sweepIntervalMs: 0 });
+
+  const conn = new FakeConnection("c1", { token: "s3cret", credential: "cap-1", remote: "peer-a" });
+  transport.accept(conn); // begins #accept, awaits the pending authenticator
+  await tick();
+
+  conn.close(1001, "gone"); // peer disconnects before auth resolves
+  release?.({ ok: true, grant: { identity: "peer-a" } });
+  await tick();
+
+  assert.equal(hub.connectionCount, 0);
+  await hub.close();
+});
+
+test("close() terminates tracked connections so shutdown is deterministic", async () => {
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: goodAuth, sweepIntervalMs: 0 });
+
+  const conn = new FakeConnection("c1", { token: "s3cret", credential: "cap-1", remote: "peer-a" });
+  transport.accept(conn);
+  await tick();
+  assert.equal(hub.connectionCount, 1);
+
+  await hub.close();
+
+  assert.notEqual(conn.closed, null); // the socket was actively closed
+  assert.equal(hub.connectionCount, 0);
 });

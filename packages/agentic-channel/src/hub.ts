@@ -118,6 +118,17 @@ export class AgenticHub {
   }
 
   async #accept(conn: ChannelConnection): Promise<void> {
+    // Register the close listener BEFORE awaiting auth. The authenticator may be
+    // async, and a peer can disconnect while it is in flight; the connection
+    // contract permits only a single close listener, so this one handler covers
+    // both the mid-auth race and the connection's normal post-registration life.
+    let closed = false;
+    conn.onClose(() => {
+      closed = true;
+      this.registry.remove(conn.id);
+      this.#conns.delete(conn.id);
+    });
+
     let auth: Awaited<ReturnType<Authenticator>>;
     try {
       auth = await this.#authenticator(conn.handshake);
@@ -128,6 +139,10 @@ export class AgenticHub {
     }
     if (!auth.ok) {
       conn.close(auth.code, auth.reason);
+      return;
+    }
+    // The peer vanished while auth was in flight — never track a dead socket.
+    if (closed) {
       return;
     }
 
@@ -144,10 +159,6 @@ export class AgenticHub {
     };
 
     conn.onMessage((bytes) => this.#onMessage(conn.id, hubConn, bytes));
-    conn.onClose(() => {
-      this.registry.remove(conn.id);
-      this.#conns.delete(conn.id);
-    });
     conn.onPong?.(() => this.registry.touch(conn.id));
     conn.onPing?.(() => this.registry.touch(conn.id));
   }
@@ -189,6 +200,15 @@ export class AgenticHub {
       clearInterval(this.#sweepTimer);
       this.#sweepTimer = undefined;
     }
+    // Actively close tracked connections so shutdown is deterministic across
+    // transports: ChannelTransport.close() is only specified to stop accepting
+    // and release the port, not to terminate live connections. Each close()
+    // fires the connection's onClose handler, which clears it from the registry
+    // and #conns; snapshot first to avoid mutating the map mid-iteration.
+    for (const conn of [...this.#conns.values()]) {
+      conn.close();
+    }
+    this.#conns.clear();
     await this.#transport.close();
   }
 }

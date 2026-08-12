@@ -150,12 +150,17 @@ export class TerminalSession {
     // Idempotent apply: a reconnect resubscribes from nextOffset, so the hub may
     // re-deliver the boundary chunk; anything we have already applied is dropped.
     if (data.offset < this.#nextOffset) return;
+    // Compute the next resume point BEFORE writing so the apply is atomic: a
+    // chunk at Number.MAX_SAFE_INTEGER makes addSafeInt throw, and it must throw
+    // before we touch the sink — otherwise the chunk is written but #nextOffset
+    // is not advanced, leaving a partially-applied state that re-delivers (and
+    // so duplicates) the chunk on reconnect. Advancing via addSafeInt also fails
+    // fast rather than overflowing into an unsafe nextOffset — that value would
+    // later be echoed in subscribe.from and lose precision on any JSON
+    // round-trip, silently corrupting resume semantics.
+    const nextOffset = addSafeInt(data.offset, 1, "nextOffset");
     this.#sink.write(data.chunk);
-    // Advance via addSafeInt so a chunk at Number.MAX_SAFE_INTEGER fails fast
-    // rather than overflowing into an unsafe nextOffset — that value would later
-    // be echoed in subscribe.from and lose precision on any JSON round-trip,
-    // silently corrupting resume semantics.
-    this.#nextOffset = addSafeInt(data.offset, 1, "nextOffset");
+    this.#nextOffset = nextOffset;
   }
 
   #onSubscribed(gap: boolean, nextOffset: number): void {

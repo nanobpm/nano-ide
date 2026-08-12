@@ -57,6 +57,11 @@ test("a chunk at Number.MAX_SAFE_INTEGER fails fast instead of overflowing nextO
     RangeError,
     "a boundary chunk must reject rather than corrupt the resume offset",
   );
+  // The apply must be atomic: rejecting the boundary chunk must NOT write it to
+  // the sink. A write-then-throw would leave output applied but nextOffset not
+  // advanced, so the chunk re-delivers and duplicates on reconnect.
+  assert.deepEqual(h.writes, [], "a rejected boundary chunk must not be written");
+  assert.equal(h.session.nextOffset, 0);
 });
 
 test("a reconnect resumes from nextOffset — no lost and no duplicated output", () => {

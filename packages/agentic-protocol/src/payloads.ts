@@ -91,6 +91,13 @@ function validateInstanceOnly(family: string, p: Record<string, unknown>, errors
   }
 }
 
+function validateDeregister(p: Record<string, unknown>, errors: PayloadError[]): void {
+  validateInstanceOnly("deregister", p, errors);
+  if ("reason" in p && typeof p.reason !== "string") {
+    errors.push({ code: "bad-reason", message: "deregister.reason must be a string when present" });
+  }
+}
+
 function validateServe(p: Record<string, unknown>, errors: PayloadError[]): void {
   if (!nonEmptyString(p.instance)) {
     errors.push({ code: "bad-instance", message: "serve.instance must be a non-empty string" });
@@ -161,7 +168,7 @@ export function validatePayload(family: MessageFamily, payload: unknown): Payloa
       validateInstanceOnly("heartbeat", payload, errors);
       break;
     case "deregister":
-      validateInstanceOnly("deregister", payload, errors);
+      validateDeregister(payload, errors);
       break;
     case "serve":
       validateServe(payload, errors);

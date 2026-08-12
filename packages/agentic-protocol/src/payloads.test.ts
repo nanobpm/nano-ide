@@ -44,6 +44,14 @@ test("relay requires stream, non-negative integer offset, and string chunk", () 
   assert.ok(!validatePayload("relay", { stream: "", offset: 0, chunk: "" }).ok);
 });
 
+test("deregister accepts optional string reason and rejects non-string reason", () => {
+  assert.ok(validatePayload("deregister", { instance: "w" }).ok);
+  assert.ok(validatePayload("deregister", { instance: "w", reason: "shutdown" }).ok);
+  const bad = validatePayload("deregister", { instance: "w", reason: 42 });
+  assert.ok(!bad.ok);
+  if (!bad.ok) assert.ok(bad.errors.some((e) => e.code === "bad-reason"));
+});
+
 test("non-object payloads are rejected for every family", () => {
   assert.ok(!validatePayload("heartbeat", null).ok);
   assert.ok(!validatePayload("heartbeat", "w").ok);

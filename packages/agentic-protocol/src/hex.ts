@@ -18,11 +18,11 @@ export function hexToBytes(hex: string): Uint8Array {
   }
   const out = new Uint8Array(hex.length / 2);
   for (let i = 0; i < out.length; i++) {
-    const byte = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-    if (Number.isNaN(byte)) {
+    const pair = hex.slice(i * 2, i * 2 + 2);
+    if (!/^[0-9a-fA-F]{2}$/.test(pair)) {
       throw new Error(`invalid hex byte at index ${i * 2}`);
     }
-    out[i] = byte;
+    out[i] = Number.parseInt(pair, 16);
   }
   return out;
 }

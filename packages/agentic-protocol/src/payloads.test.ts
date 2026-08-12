@@ -56,6 +56,19 @@ test("blackboard op must be append or read", () => {
   assert.ok(!validatePayload("blackboard", { op: "read", since: -1 }).ok);
 });
 
+test("blackboard files must be an array of only strings when present", () => {
+  assert.ok(validatePayload("blackboard", { op: "append", files: [] }).ok);
+  assert.ok(validatePayload("blackboard", { op: "append", files: ["a.rs", "b.rs"] }).ok);
+  const notArray = validatePayload("blackboard", { op: "append", files: "a.rs" });
+  assert.ok(!notArray.ok);
+  if (!notArray.ok) assert.ok(notArray.errors.some((e) => e.code === "bad-files"));
+  // A mixed array must be rejected outright, not silently coerced to its string subset:
+  // dropping the non-string element would store an incomplete file-claim and skew conflict detection.
+  const mixed = validatePayload("blackboard", { op: "append", files: ["a.rs", 123] });
+  assert.ok(!mixed.ok);
+  if (!mixed.ok) assert.ok(mixed.errors.some((e) => e.code === "bad-files"));
+});
+
 test("relay requires stream, non-negative integer offset, and string chunk", () => {
   assert.ok(validatePayload("relay", { stream: "s", offset: 0, chunk: "" }).ok);
   assert.ok(!validatePayload("relay", { stream: "s", offset: -1, chunk: "" }).ok);

@@ -1,0 +1,33 @@
+{
+	"schemaVersion": "1.0",
+	"title": "Cockpit",
+	"nodes": [
+		{
+			"type": "nav",
+			"id": "nav",
+			"props": {
+				"variant": "bar",
+				"title": "Agent cockpit",
+				"items": [{ "label": "Cockpit", "page": "cockpit" }]
+			}
+		},
+		{
+			"type": "text",
+			"id": "intro",
+			"props": {
+				"text": "Live demand×supply across the agent networks, missing-agent lights, the diversity SLO, and a drill-into-a-worker live terminal over the relay. The same view renders embedded in the console (App View) and standalone on a phone.",
+				"variant": "sub"
+			}
+		},
+		{
+			"type": "appView",
+			"id": "cockpit",
+			"props": {
+				"title": "Agent networks",
+				"embed": "./embed.html",
+				"standalone": "./standalone.html",
+				"fill": true
+			}
+		}
+	]
+}

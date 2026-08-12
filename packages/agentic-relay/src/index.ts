@@ -30,3 +30,5 @@ export {
   RELAY_FAMILY,
 } from "./relay-family.ts";
 export type { RelayConnection, RelayHubOptions } from "./relay-family.ts";
+
+export { addSafeInt, isNonNegInt, isPosInt } from "./validate.ts";

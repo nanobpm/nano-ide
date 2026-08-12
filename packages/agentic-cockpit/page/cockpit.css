@@ -1,0 +1,114 @@
+/* The cockpit stylesheet — a compact, phone-friendly dark cockpit shared by the
+   standalone shell and the console App-View embed, so the two render identically.
+   The three-state SLO lights key off `data-status` (green | amber | red). */
+
+:root {
+  --cockpit-bg: #0b0f14;
+  --cockpit-panel: #131a22;
+  --cockpit-edge: #223041;
+  --cockpit-text: #e6edf3;
+  --cockpit-muted: #8b98a5;
+  --cockpit-green: #2ea043;
+  --cockpit-amber: #d29922;
+  --cockpit-red: #f85149;
+}
+
+.cockpit-shell {
+  color: var(--cockpit-text);
+  background: var(--cockpit-bg);
+  font: 14px/1.4 ui-sans-serif, system-ui, sans-serif;
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  min-height: 100%;
+}
+
+.cockpit-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.cockpit-title {
+  font-size: 16px;
+  margin: 0;
+}
+
+.cockpit-status {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--cockpit-edge);
+  font-variant: small-caps;
+}
+
+.cockpit-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--cockpit-muted);
+  vertical-align: middle;
+}
+
+[data-status="green"] > .cockpit-dot,
+.cockpit-dot[data-status="green"] { background: var(--cockpit-green); }
+[data-status="amber"] > .cockpit-dot,
+.cockpit-dot[data-status="amber"] { background: var(--cockpit-amber); }
+[data-status="red"] > .cockpit-dot,
+.cockpit-dot[data-status="red"] { background: var(--cockpit-red); }
+
+.cockpit-status[data-status="green"] { color: var(--cockpit-green); }
+.cockpit-status[data-status="amber"] { color: var(--cockpit-amber); }
+.cockpit-status[data-status="red"] { color: var(--cockpit-red); }
+
+.cockpit-missing {
+  background: var(--cockpit-panel);
+  border: 1px solid var(--cockpit-edge);
+  border-radius: 8px;
+  padding: 10px;
+}
+.cockpit-missing[data-empty="true"] { opacity: 0.7; }
+.cockpit-panel-title { font-size: 13px; margin: 0 0 8px; color: var(--cockpit-muted); }
+.cockpit-light { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.cockpit-light-detail { color: var(--cockpit-muted); font-size: 12px; }
+
+.cockpit-matrix { display: grid; gap: 10px; }
+.cockpit-network {
+  background: var(--cockpit-panel);
+  border: 1px solid var(--cockpit-edge);
+  border-left: 3px solid var(--cockpit-muted);
+  border-radius: 8px;
+  padding: 10px;
+}
+.cockpit-network[data-status="green"] { border-left-color: var(--cockpit-green); }
+.cockpit-network[data-status="red"] { border-left-color: var(--cockpit-red); }
+.cockpit-network-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.cockpit-network-name { font-weight: 600; }
+.cockpit-network-missing { color: var(--cockpit-red); font-size: 12px; }
+
+.cockpit-tokens { width: 100%; border-collapse: collapse; }
+.cockpit-th { text-align: left; color: var(--cockpit-muted); font-weight: 500; font-size: 12px; padding: 2px 6px; }
+.cockpit-td { padding: 3px 6px; border-top: 1px solid var(--cockpit-edge); vertical-align: top; }
+.cockpit-token[data-status="red"] .cockpit-token-name { color: var(--cockpit-red); }
+.cockpit-workers { display: flex; flex-wrap: wrap; gap: 4px; }
+.cockpit-worker {
+  background: #1c2733;
+  color: var(--cockpit-text);
+  border: 1px solid var(--cockpit-edge);
+  border-radius: 6px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.cockpit-worker:hover { border-color: var(--cockpit-green); }
+
+.cockpit-terminal {
+  background: #000;
+  border: 1px solid var(--cockpit-edge);
+  border-radius: 8px;
+  padding: 8px;
+}
+.cockpit-terminal-host { min-height: 220px; }
+.cockpit-nonagentic { color: var(--cockpit-muted); font-size: 12px; }

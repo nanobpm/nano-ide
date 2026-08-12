@@ -50,11 +50,17 @@ test("REGISTER → SERVE resolves the register promise with the resolved tokens"
 });
 
 test("a SERVE addressed to a different instance is ignored", async () => {
-  const { client, t } = newClient({ serveTimeoutMs: 100 });
+  const scheduled: Array<() => void> = [];
+  const { client, t } = newClient({ serveTimeoutMs: 100, schedule: (fn) => scheduled.push(fn) });
   client.connect();
   t.last().fireOpen();
   const pending = client.register({ capability: { cognition: "high" } });
   t.last().deliver(serveFrame("someone-else", ["planning.spar#red"]));
+  // Drive the serve-timeout deterministically rather than depending on a real
+  // (unref'd) timer, which Node's test runner may never fire before it drains
+  // the loop and cancels the awaited rejection.
+  assert.equal(scheduled.length, 1, "a serve-timeout was scheduled");
+  scheduled.forEach((fn) => fn());
   await assert.rejects(pending, /SERVE not received/);
   client.close();
 });

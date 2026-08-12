@@ -13,7 +13,7 @@
  * `db/migrations/002_agentic_transcript.sql`, mirrored by {@link TRANSCRIPT_SCHEMA_SQL}
  * and kept in lockstep by a drift-guard test.
  */
-export { TranscriptStore, TranscriptLifecycleError, systemClock } from "./store.ts";
+export { TranscriptStore, TranscriptCorruptionError, TranscriptLifecycleError, systemClock } from "./store.ts";
 export type {
   Clock,
   SqliteDb,

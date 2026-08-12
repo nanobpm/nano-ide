@@ -123,6 +123,17 @@ function isNonNegInt(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
+/**
+ * A recordable offset must be a non-negative safe integer that still leaves room
+ * for its successor: `#refreshWindow` derives `next_offset = maxOffset + 1`, so an
+ * offset of `Number.MAX_SAFE_INTEGER` would make `next_offset` a non-safe integer
+ * and break the resume contract (`since()` rejects non-safe integers). Cap one
+ * below the safe-integer ceiling.
+ */
+function isRecordableOffset(value: unknown): value is number {
+  return isNonNegInt(value) && value < Number.MAX_SAFE_INTEGER;
+}
+
 /** The raw stream metadata row shape (snake_case columns) as read from SQLite. */
 interface DbStreamRow {
   stream: string;
@@ -141,11 +152,13 @@ interface DbChunkRow {
 }
 
 function toLifecycle(value: string): TranscriptLifecycle {
-  return value === "ephemeral" ? "ephemeral" : "long-lived";
+  if (value === "ephemeral" || value === "long-lived") return value;
+  throw new TranscriptCorruptionError(`invalid transcript lifecycle in DB: ${JSON.stringify(value)}`);
 }
 
 function toStatus(value: string): TranscriptStatus {
-  return value === "completed" ? "completed" : "open";
+  if (value === "open" || value === "completed") return value;
+  throw new TranscriptCorruptionError(`invalid transcript status in DB: ${JSON.stringify(value)}`);
 }
 
 function toStream(row: DbStreamRow): TranscriptStream {
@@ -167,6 +180,19 @@ function toStream(row: DbStreamRow): TranscriptStream {
   if (row.completed_at !== null) out.completedAt = row.completed_at;
   if (row.first_offset !== null) out.firstOffset = row.first_offset;
   return out;
+}
+
+/**
+ * Raised when a transcript row read back from storage holds a value outside its
+ * domain (e.g. an unknown `lifecycle`/`status`), signalling schema corruption or a
+ * bad manual write. Fail fast rather than silently coercing to a default, which
+ * would mask the corruption and skew retention decisions.
+ */
+export class TranscriptCorruptionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TranscriptCorruptionError";
+  }
 }
 
 /**
@@ -232,7 +258,10 @@ export class TranscriptStore {
    * Record chunks into a stream's durable transcript, idempotently. Each chunk is
    * keyed `(stream, offset)`, so re-recording an already-stored offset (a retry, a
    * re-flush, an overlapping reattach) is a no-op — never a duplicate. Auto-opens
-   * the stream with `lifecycle` (default `long-lived`) if it is not open yet.
+   * the stream with `lifecycle` (default `long-lived`) if it is not open yet; if the
+   * stream already exists under a different lifecycle this throws a
+   * {@link TranscriptLifecycleError} before writing anything (lifecycle is
+   * first-wins), so a mismatched flush cannot leave a partial write.
    * Returns the number of newly-persisted chunks.
    *
    * This is the incremental path a long-lived stream uses; {@link flush} builds on
@@ -243,12 +272,20 @@ export class TranscriptStore {
     entries: Iterable<TranscriptChunk>,
     lifecycle: TranscriptLifecycle = "long-lived",
   ): number {
-    this.open(stream, lifecycle);
+    const meta = this.open(stream, lifecycle);
+    if (meta.lifecycle !== lifecycle) {
+      throw new TranscriptLifecycleError(
+        stream,
+        `refusing to record into "${stream}" with lifecycle=${lifecycle}; the stream is ${meta.lifecycle} (lifecycle is first-wins)`,
+      );
+    }
     const at = new Date(this.#clock.now()).toISOString();
     let written = 0;
     for (const entry of entries) {
-      if (!isNonNegInt(entry.offset)) {
-        throw new RangeError(`transcript offset must be a non-negative safe integer, got ${entry.offset}`);
+      if (!isRecordableOffset(entry.offset)) {
+        throw new RangeError(
+          `transcript offset must be a non-negative safe integer below Number.MAX_SAFE_INTEGER, got ${entry.offset}`,
+        );
       }
       const { changes } = this.#db.run(
         `INSERT INTO ${TRANSCRIPT_CHUNK_TABLE} (stream, chunk_offset, chunk, appended_at)

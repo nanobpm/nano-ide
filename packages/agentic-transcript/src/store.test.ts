@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { TranscriptLifecycleError, TranscriptStore } from "./store.ts";
+import { TRANSCRIPT_STREAM_TABLE } from "./schema.ts";
 import { openTestDb, type TestDb } from "./test-db.ts";
 
 /** A hand-driven clock so retention/timestamps are deterministic. */
@@ -69,6 +70,44 @@ test("record rejects a non-integer / negative offset", () => {
   const store = newStore();
   assert.throws(() => store.record("s", [{ offset: -1, chunk: "x" }]), RangeError);
   assert.throws(() => store.record("s", [{ offset: 1.5, chunk: "x" }]), RangeError);
+});
+
+test("record rejects an offset at MAX_SAFE_INTEGER (nextOffset would overflow safe range)", () => {
+  const store = newStore();
+  assert.throws(
+    () => store.record("s", [{ offset: Number.MAX_SAFE_INTEGER, chunk: "x" }]),
+    RangeError,
+  );
+  // The rejection is before any write — the stream stays empty.
+  assert.equal(store.read("s").length, 0);
+});
+
+test("record refuses a lifecycle that mismatches an already-open stream, before writing", () => {
+  const store = newStore();
+  store.record("s", chunks(2), "long-lived");
+  // A mismatched lifecycle must fail fast and persist nothing new.
+  assert.throws(
+    () => store.record("s", chunks(2, 2), "ephemeral"),
+    TranscriptLifecycleError,
+  );
+  assert.equal(store.read("s").length, 2, "no chunks written on lifecycle mismatch");
+  assert.equal(store.get("s")?.lifecycle, "long-lived");
+});
+
+test("reading a stream row with a corrupt lifecycle/status fails fast", () => {
+  const store = newStore();
+  db.run(
+    `INSERT INTO ${TRANSCRIPT_STREAM_TABLE} (stream, lifecycle, status, created_at, next_offset)
+     VALUES (?, ?, ?, ?, 0)`,
+    ["bad", "bogus-lifecycle", "open", "2020-01-01T00:00:00.000Z"],
+  );
+  assert.throws(() => store.get("bad"), /lifecycle/);
+  db.run(
+    `INSERT INTO ${TRANSCRIPT_STREAM_TABLE} (stream, lifecycle, status, created_at, next_offset)
+     VALUES (?, ?, ?, ?, 0)`,
+    ["bad2", "ephemeral", "bogus-status", "2020-01-01T00:00:00.000Z"],
+  );
+  assert.throws(() => store.get("bad2"), /status/);
 });
 
 test("since reattaches from an offset with the live nextOffset", () => {

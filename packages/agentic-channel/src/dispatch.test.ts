@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { encodeFrame } from "@nanobpm/agentic-protocol";
+import { decodeFrame, encodeFrame } from "@nanobpm/agentic-protocol";
 import type { Frame } from "@nanobpm/agentic-protocol";
 import {
   DuplicateFamilyHandlerError,
@@ -40,12 +40,16 @@ test("the routing table is derived, not hard-coded — encode/decode round-trips
     ctx.push(f);
   });
 
-  // Prove the table (not a switch) drives dispatch by feeding a real wire frame.
+  // Prove the table (not a switch) drives dispatch by feeding a real wire frame:
+  // encode to bytes, decode back, then route the decoded frame so the full
+  // wire->frame->table path is exercised (not a freshly constructed frame).
   const bytes = encodeFrame(frame("heartbeat", 7));
   assert.ok(bytes.length > 0);
-  await router.route(frame("heartbeat", 7), seen);
+  const decoded = decodeFrame(bytes);
+  await router.route(decoded, seen);
   assert.equal(seen.length, 1);
   assert.equal(seen[0]?.family, "heartbeat");
+  assert.equal(seen[0]?.seq, 7);
 });
 
 test("a second handler for the same family is refused", () => {

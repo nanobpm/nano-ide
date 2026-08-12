@@ -143,8 +143,16 @@ export class WebSocketChannelTransport implements ChannelTransport {
       return Promise.resolve();
     }
     return new Promise((resolve, reject) => {
-      this.#wss.once("listening", () => resolve());
-      this.#wss.once("error", reject);
+      const onListening = () => {
+        this.#wss.off("error", onError);
+        resolve();
+      };
+      const onError = (err: Error) => {
+        this.#wss.off("listening", onListening);
+        reject(err);
+      };
+      this.#wss.once("listening", onListening);
+      this.#wss.once("error", onError);
     });
   }
 

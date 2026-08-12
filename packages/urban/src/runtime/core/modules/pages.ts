@@ -557,6 +557,8 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-badge-warn { background:var(--nano-warn); color:#3a2a00; }
 .pc-badge-ok { background:var(--nano-ok); }
 .pc-badge-info { background:var(--nano-info); }
+:root[data-appearance="light"] .pc-badge-warn { color:#fff; }
+@media (prefers-color-scheme: light) { :root:not([data-appearance]) .pc-badge-warn { color:#fff; } }
 .pc-child { margin:.6rem 0; }
 .pc-child-title { font-size:.8rem; font-weight:600; color:var(--nano-text-muted); margin-bottom:.25rem; }
 .pc-transcript { white-space:pre-wrap; max-height:22rem; overflow:auto; background:var(--nano-inset); padding:.5rem; border-radius:.4rem; font-size:.8rem; margin-top:.4rem; }

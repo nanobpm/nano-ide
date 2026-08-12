@@ -138,6 +138,22 @@ test("the shell styles the app through the shared --nano-* token contract", asyn
   assert.match(html, /:root:not\(\[data-appearance\]\)/);
 });
 
+test("the warn badge stays legible in light appearance", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  // The warn badge sits on --nano-warn, which is a bright amber in dark mode
+  // (dark text reads well) but a dark orange in light mode (#b45309), where the
+  // same dark text collapses to near-zero contrast. Both light paths — the
+  // console-themed [data-appearance="light"] and the standalone
+  // prefers-color-scheme fallback — must flip the warn label to white so it
+  // stays readable.
+  assert.match(html, /:root\[data-appearance="light"\]\s*\.pc-badge-warn\s*\{\s*color:#fff;\s*\}/);
+  assert.match(
+    html,
+    /@media \(prefers-color-scheme: light\)\s*\{\s*:root:not\(\[data-appearance\]\)\s*\.pc-badge-warn\s*\{\s*color:#fff;\s*\}\s*\}/,
+  );
+});
+
 test("grid cells wrap long, space-less values so one cell can't overflow the table", async () => {
   // Regression: a dataGrid cell holding a long space-less value (e.g. a JSON
   // blob or a 40-char SHA) has no soft-wrap opportunity, so with table-layout

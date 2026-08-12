@@ -11,7 +11,7 @@
  * It is deliberately a small, dependency-free regex scan over the same surface
  * the Urban toolkit's worker-io deriver reads, so it stays app-tier and never
  * touches the engine internals — the XML arrives from the C8 REST API
- * ({@link ../c8-rest.ts}).
+ * ({@link ./c8-rest.ts}).
  */
 
 /** One deployed `taskDefinition` leaf: a job type demanded by a model element. */
@@ -25,12 +25,12 @@ export interface TaskDefinitionLeaf {
 }
 
 function attr(tag: string, name: string): string {
-  const match = tag.match(new RegExp(`\\b${name}="([^"]*)"`));
+  const match = tag.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`));
   return match ? match[1] : "";
 }
 
 function processId(xml: string): string {
-  const match = xml.match(/<bpmn:process\b[^>]*\bid="([^"]*)"/);
+  const match = xml.match(/<bpmn:process\b[^>]*\bid\s*=\s*"([^"]*)"/);
   return match ? match[1] : "";
 }
 

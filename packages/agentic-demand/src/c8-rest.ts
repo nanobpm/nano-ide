@@ -142,7 +142,7 @@ export function httpC8RestReader(options: HttpC8RestReaderOptions): C8RestReader
  *
  * Enumerates the deployed definitions, fetches each one's BPMN XML, and scans out
  * its service-task task-definition leaves. The result is the raw demand corpus the
- * {@link ../model.ts} model buckets and diffs against supply.
+ * {@link ./model.ts} model buckets and diffs against supply.
  */
 export async function readDeployedTaskDefinitions(reader: C8RestReader): Promise<TaskDefinitionLeaf[]> {
   const keys = await reader.searchProcessDefinitionKeys();

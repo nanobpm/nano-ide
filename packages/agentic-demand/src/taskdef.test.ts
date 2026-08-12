@@ -59,6 +59,20 @@ test("returns an empty process id when none is present", () => {
   assert.equal(leaves[0].process, "");
 });
 
+test("tolerates whitespace around attribute equals signs (id / type / process id)", () => {
+  const xml = `<bpmn:definitions xmlns:bpmn="x" xmlns:zeebe="y">
+    <bpmn:process id = "spaced-proc">
+      <bpmn:serviceTask id = "t">
+        <zeebe:taskDefinition type = "ci.runner" retries="1" />
+      </bpmn:serviceTask>
+    </bpmn:process>
+  </bpmn:definitions>`;
+  const leaves = scanTaskDefinitions(xml);
+  assert.deepEqual(leaves, [
+    { taskType: "ci.runner", process: "spaced-proc", elementId: "t" },
+  ]);
+});
+
 test("distinctTaskTypes de-duplicates in first-occurrence order", () => {
   assert.deepEqual(
     distinctTaskTypes([

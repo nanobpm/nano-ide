@@ -53,6 +53,12 @@ export interface ChannelConnection {
   onClose(listener: (code?: CloseCode, reason?: string) => void): void;
   /** Register a keepalive pong listener, if the transport supports ping/pong. */
   onPong?(listener: () => void): void;
+  /**
+   * Register an inbound-ping listener, if the transport supports ping/pong. A
+   * peer-driven keepalive typically arrives as an inbound ping (the transport
+   * auto-replies with a pong), so an inbound ping is also proof of life.
+   */
+  onPing?(listener: () => void): void;
   /** Send a keepalive ping, if the transport supports it. */
   ping?(): void;
 }

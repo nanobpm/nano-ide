@@ -35,7 +35,11 @@ export type AuthResult =
 /** Verifies a handshake and either grants or rejects the connection. */
 export type Authenticator = (req: HandshakeRequest) => AuthResult | Promise<AuthResult>;
 
-/** Constant-time string comparison that tolerates unequal lengths. */
+/**
+ * Constant-time string comparison. Unequal-length inputs short-circuit to
+ * `false` (length is not itself secret here); equal-length inputs are compared
+ * in constant time via {@link timingSafeEqual}.
+ */
 function safeEqual(a: string, b: string): boolean {
   const ab = new TextEncoder().encode(a);
   const bb = new TextEncoder().encode(b);

@@ -17,6 +17,7 @@ class FakeConnection implements ChannelConnection {
   #onMessage: ((bytes: Uint8Array) => void) | undefined;
   #onClose: ((code?: CloseCode, reason?: string) => void) | undefined;
   #onPong: (() => void) | undefined;
+  #onPing: (() => void) | undefined;
 
   constructor(id: string, handshake: HandshakeRequest) {
     this.id = id;
@@ -39,6 +40,9 @@ class FakeConnection implements ChannelConnection {
   onPong(listener: () => void): void {
     this.#onPong = listener;
   }
+  onPing(listener: () => void): void {
+    this.#onPing = listener;
+  }
 
   // Test drivers:
   receive(bytes: Uint8Array): void {
@@ -46,6 +50,9 @@ class FakeConnection implements ChannelConnection {
   }
   pong(): void {
     this.#onPong?.();
+  }
+  ping(): void {
+    this.#onPing?.();
   }
 }
 
@@ -210,6 +217,23 @@ test("a keepalive pong refreshes liveness", async () => {
   await hub.close();
 });
 
+test("an inbound keepalive ping refreshes liveness", async () => {
+  const clock = fakeClock(1000);
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: goodAuth, clock, sweepIntervalMs: 0 });
+
+  const conn = new FakeConnection("c1", { token: "s3cret", credential: "cap-1", remote: "peer-a" });
+  transport.accept(conn);
+  await tick();
+
+  clock.set(1000 + 20_000);
+  conn.ping();
+  clock.set(1000 + 40_000);
+  hub.sweepNow();
+
+  assert.equal(hub.connectionCount, 1);
+  await hub.close();
+});
 test("a closed connection is removed from the registry", async () => {
   const transport = new FakeTransport();
   const hub = new AgenticHub({ transport, authenticator: goodAuth, sweepIntervalMs: 0 });

@@ -149,6 +149,7 @@ export class AgenticHub {
       this.#conns.delete(conn.id);
     });
     conn.onPong?.(() => this.registry.touch(conn.id));
+    conn.onPing?.(() => this.registry.touch(conn.id));
   }
 
   #onMessage(id: string, hubConn: HubConnection, bytes: Uint8Array): void {

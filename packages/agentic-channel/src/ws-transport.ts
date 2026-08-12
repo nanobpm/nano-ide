@@ -30,10 +30,11 @@ const DEFAULT_PATH = "/agentic";
 function flattenHeaders(req: IncomingMessage): Record<string, string> {
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.headers)) {
+    const name = key.toLowerCase();
     if (typeof value === "string") {
-      headers[key] = value;
+      headers[name] = value;
     } else if (Array.isArray(value)) {
-      headers[key] = value.join(", ");
+      headers[name] = value.join(", ");
     }
   }
   return headers;
@@ -103,6 +104,10 @@ class WsConnection implements ChannelConnection {
 
   onPong(listener: () => void): void {
     this.#ws.on("pong", () => listener());
+  }
+
+  onPing(listener: () => void): void {
+    this.#ws.on("ping", () => listener());
   }
 
   ping(): void {

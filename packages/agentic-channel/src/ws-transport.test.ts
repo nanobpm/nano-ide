@@ -55,6 +55,42 @@ test("a client connects, authenticates, is tracked, and its frame routes to a fa
   assert.equal(hub.registry.get(ctx.id)?.presence.instance, "w-1");
 });
 
+test("a client may present its capability credential via a mixed-case header", async (t) => {
+  const transport = new WebSocketChannelTransport({ port: 0 });
+  const hub = new AgenticHub({
+    transport,
+    authenticator: sharedSecretAuthenticator({ secret: SECRET }),
+    sweepIntervalMs: 0,
+  });
+  t.after(() => hub.close());
+
+  let resolveRouted: (conn: HubConnection) => void = () => {};
+  const routed = new Promise<HubConnection>((resolve) => {
+    resolveRouted = resolve;
+  });
+  hub.registerFamilyHandler("register", (_frame, ctx) => resolveRouted(ctx));
+
+  await transport.ready();
+  const port = transport.address?.port;
+  assert.ok(port !== undefined && port > 0);
+
+  // Credential arrives only in a mixed-case header (no `capability` query param);
+  // header lookup must be case-insensitive for the handshake to grant.
+  const client = new WebSocket(`ws://127.0.0.1:${port}/agentic?token=${SECRET}`, {
+    headers: { "X-Capability-Credential": "cap-1" },
+  });
+  client.on("error", () => {});
+  t.after(() => client.close());
+  await once(client, "open");
+  client.send(registerBytes("w-1"), { binary: true });
+
+  const ctx = await routed;
+  // Reaching the family handler proves the required credential was found via the
+  // header (a case-sensitive lookup would have rejected with AUTH_FORBIDDEN).
+  assert.ok(ctx.identity.length > 0);
+  assert.equal(hub.connectionCount, 1);
+});
+
 test("an unauthenticated client is closed with the unauthorized code and never tracked", async (t) => {
   const transport = new WebSocketChannelTransport({ port: 0 });
   const hub = new AgenticHub({

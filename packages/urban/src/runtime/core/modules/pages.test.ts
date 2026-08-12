@@ -413,7 +413,7 @@ test("renderer groups a dataGrid by a field into persisted collapsible bands (wa
   // members as a unit and the collapsed state is persisted (survives poll+reload).
   assert.match(js, /function appendRows\(rows\)/);
   assert.match(js, /const groupBy = p\.groupBy/);
-  assert.match(js, /if \(!groupBy\) \{ for \(const row of rows\) renderRow\(row, null\); return; \}/);
+  assert.match(js, /if \(!groupBy \|\| typeof groupBy !== "string"\) \{ for \(const row of rows\) renderRow\(row, null\); return; \}/);
   // Numeric-aware ascending group order (waves 1,2,10 sort naturally).
   assert.match(js, /const na = Number\(a\), nb = Number\(b\)/);
   // Collapsed state persisted per page + node + group value via the shared helpers.
@@ -571,7 +571,11 @@ test("the renderer routes between pages by hash and tears down grid polls", asyn
   // segment is decoded and safe-id-validated (falling back to HOME).
   assert.match(js, /function parseRoute\(\)/);
   assert.match(js, /const raw = \(location\.hash \|\| ""\)\.replace/s);
-  assert.match(js, /if \(safePageId\(p\)\) page = p;/s);
+  assert.match(js, /if \(safePageId\(p\)\) \{ page = p; pageOk = true; \}/s);
+  // A stray param is only carried when the page segment resolved to a real page,
+  // so a malformed/unknown page (#/not-a-page/x) falls back to HOME without
+  // inheriting x (which would otherwise silently scope home's eqParam grids).
+  assert.match(js, /if \(pageOk\) \{ try \{ param = paramRaw \? decodeURIComponent\(paramRaw\) : ""; \}/s);
   assert.match(js, /location\.hash/);
   assert.match(js, /window\.addEventListener\("hashchange", renderPage\)/);
   assert.match(js, /async function renderPage\(\)/);

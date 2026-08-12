@@ -638,9 +638,13 @@ function parseRoute() {
   const slash = raw.indexOf("/");
   const pageRaw = slash >= 0 ? raw.slice(0, slash) : raw;
   const paramRaw = slash >= 0 ? raw.slice(slash + 1) : "";
-  let page = HOME, param = "";
-  try { const p = decodeURIComponent(pageRaw); if (safePageId(p)) page = p; } catch (e) { /* keep HOME */ }
-  try { param = paramRaw ? decodeURIComponent(paramRaw) : ""; } catch (e) { param = ""; }
+  let page = HOME, param = "", pageOk = false;
+  try { const p = decodeURIComponent(pageRaw); if (safePageId(p)) { page = p; pageOk = true; } } catch (e) { /* keep HOME */ }
+  // Only carry the param when the page segment resolved to a real (safe-id) page.
+  // A malformed/unknown page like #/not-a-page/x falls back to HOME and must NOT
+  // inherit x, or that stray param would silently scope every eqParam grid and
+  // {{param}} on the home page to an entity the user never selected.
+  if (pageOk) { try { param = paramRaw ? decodeURIComponent(paramRaw) : ""; } catch (e) { param = ""; } }
   return { page, param };
 }
 function currentPage() { return parseRoute().page; }
@@ -1404,7 +1408,10 @@ function renderDataGrid(node) {
   // keys. 'groupDefaultCollapsed' seeds each group collapsed until toggled.
   function appendRows(rows) {
     const groupBy = p.groupBy;
-    if (!groupBy) { for (const row of rows) renderRow(row, null); return; }
+    // Treat a non-string groupBy as "no grouping": labelBase calls groupBy.charAt()
+    // below, so a truthy non-string (number/object from a malformed page schema)
+    // would throw at render time and break the whole page instead of one grid.
+    if (!groupBy || typeof groupBy !== "string") { for (const row of rows) renderRow(row, null); return; }
     const order = [];
     const groups = new Map();
     for (const row of rows) {

@@ -214,8 +214,14 @@ export class TranscriptStore {
   readonly #clock: Clock;
 
   constructor(db: SqliteDb, options: TranscriptStoreOptions = {}) {
+    const retentionMs = options.ephemeralRetentionMs ?? DEFAULT_EPHEMERAL_RETENTION_MS;
+    if (!(typeof retentionMs === "number" && Number.isFinite(retentionMs) && retentionMs >= 0)) {
+      throw new RangeError(
+        `ephemeralRetentionMs must be a finite non-negative number, got ${retentionMs}`,
+      );
+    }
     this.#db = db;
-    this.#ephemeralRetentionMs = options.ephemeralRetentionMs ?? DEFAULT_EPHEMERAL_RETENTION_MS;
+    this.#ephemeralRetentionMs = retentionMs;
     this.#clock = options.clock ?? systemClock;
   }
 
@@ -262,6 +268,8 @@ export class TranscriptStore {
    * stream already exists under a different lifecycle this throws a
    * {@link TranscriptLifecycleError} before writing anything (lifecycle is
    * first-wins), so a mismatched flush cannot leave a partial write.
+   * The batch is atomic: if any entry has an invalid offset (or a write fails)
+   * partway through, the whole call rolls back — it records every chunk or none.
    * Returns the number of newly-persisted chunks.
    *
    * This is the incremental path a long-lived stream uses; {@link flush} builds on
@@ -280,23 +288,29 @@ export class TranscriptStore {
       );
     }
     const at = new Date(this.#clock.now()).toISOString();
-    let written = 0;
-    for (const entry of entries) {
-      if (!isRecordableOffset(entry.offset)) {
-        throw new RangeError(
-          `transcript offset must be a non-negative safe integer below Number.MAX_SAFE_INTEGER, got ${entry.offset}`,
+    // Make the batch write + window refresh all-or-nothing. If a later entry is
+    // invalid (or any write throws) partway through, the SAVEPOINT rolls back so
+    // record() never leaves partially-persisted chunks or stale first/next-offset
+    // metadata — it either records the whole batch or nothing.
+    return this.#atomic(() => {
+      let written = 0;
+      for (const entry of entries) {
+        if (!isRecordableOffset(entry.offset)) {
+          throw new RangeError(
+            `transcript offset must be a non-negative safe integer below Number.MAX_SAFE_INTEGER, got ${entry.offset}`,
+          );
+        }
+        const { changes } = this.#db.run(
+          `INSERT INTO ${TRANSCRIPT_CHUNK_TABLE} (stream, chunk_offset, chunk, appended_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(stream, chunk_offset) DO NOTHING`,
+          [stream, entry.offset, entry.chunk, at],
         );
+        written += changes;
       }
-      const { changes } = this.#db.run(
-        `INSERT INTO ${TRANSCRIPT_CHUNK_TABLE} (stream, chunk_offset, chunk, appended_at)
-         VALUES (?, ?, ?, ?)
-         ON CONFLICT(stream, chunk_offset) DO NOTHING`,
-        [stream, entry.offset, entry.chunk, at],
-      );
-      written += changes;
-    }
-    this.#refreshWindow(stream);
-    return written;
+      this.#refreshWindow(stream);
+      return written;
+    });
   }
 
   /**
@@ -486,5 +500,24 @@ export class TranscriptStore {
       `UPDATE ${TRANSCRIPT_STREAM_TABLE} SET next_offset = MAX(next_offset, ?) WHERE stream = ?`,
       [nextOffset, stream],
     );
+  }
+
+  /**
+   * Run `body` inside a SQLite SAVEPOINT so its writes are atomic: on any throw
+   * the savepoint is rolled back (nothing it wrote persists) and the error is
+   * re-raised; on success it is released. SAVEPOINTs nest, so this is safe
+   * whether or not an outer transaction is already open.
+   */
+  #atomic<T>(body: () => T): T {
+    this.#db.exec("SAVEPOINT nano_record");
+    try {
+      const result = body();
+      this.#db.exec("RELEASE SAVEPOINT nano_record");
+      return result;
+    } catch (err) {
+      this.#db.exec("ROLLBACK TO SAVEPOINT nano_record");
+      this.#db.exec("RELEASE SAVEPOINT nano_record");
+      throw err;
+    }
   }
 }

@@ -82,6 +82,54 @@ test("record rejects an offset at MAX_SAFE_INTEGER (nextOffset would overflow sa
   assert.equal(store.read("s").length, 0);
 });
 
+test("record is atomic — an invalid offset after a valid one persists nothing", () => {
+  const store = newStore();
+  // A later invalid entry must roll back the whole batch (SAVEPOINT), so the
+  // earlier valid chunk is never partially persisted and the offset window
+  // metadata (first/next-offset) stays pristine.
+  assert.throws(
+    () =>
+      store.record("s", [
+        { offset: 0, chunk: "c0" },
+        { offset: Number.MAX_SAFE_INTEGER, chunk: "bad" },
+      ]),
+    RangeError,
+  );
+  assert.equal(store.read("s").length, 0, "no chunk persisted from a batch that later throws");
+  const meta = store.get("s");
+  assert.equal(meta?.firstOffset, undefined);
+  assert.equal(meta?.nextOffset, 0);
+});
+
+test("record atomicity holds on an already-populated stream", () => {
+  const store = newStore();
+  store.record("s", chunks(2)); // offsets 0,1
+  assert.throws(
+    () =>
+      store.record("s", [
+        { offset: 2, chunk: "c2" },
+        { offset: -1, chunk: "bad" },
+      ]),
+    RangeError,
+  );
+  // The new valid chunk (offset 2) is rolled back with the failed batch; the
+  // stream is left exactly as it was before the call.
+  assert.deepEqual(
+    store.read("s").map((c) => c.offset),
+    [0, 1],
+  );
+  assert.equal(store.get("s")?.nextOffset, 2);
+});
+
+test("constructor rejects a non-finite / negative ephemeralRetentionMs", () => {
+  assert.throws(() => new TranscriptStore(db, { ephemeralRetentionMs: Number.NaN }), RangeError);
+  assert.throws(
+    () => new TranscriptStore(db, { ephemeralRetentionMs: Number.POSITIVE_INFINITY }),
+    RangeError,
+  );
+  assert.throws(() => new TranscriptStore(db, { ephemeralRetentionMs: -1 }), RangeError);
+});
+
 test("record refuses a lifecycle that mismatches an already-open stream, before writing", () => {
   const store = newStore();
   store.record("s", chunks(2), "long-lived");

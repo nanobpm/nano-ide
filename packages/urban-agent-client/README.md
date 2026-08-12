@@ -8,7 +8,8 @@ A worker uses it — on a connection **separate from the C8 job protocol** — t
 join the one app-tier agentic channel: declare a capability and receive its
 resolved routing tokens, heartbeat/deregister for presence, and stream live
 terminal / command-stream bytes. It speaks the
-[`@nanobpm/agentic-protocol`](../agentic-protocol) wire contract (S0) and is held
+[`@nanobpm/agentic-protocol`](https://www.npmjs.com/package/@nanobpm/agentic-protocol)
+wire contract (S0) and is held
 to its shared conformance corpus; it never redefines the contract.
 
 ## What it does

@@ -1,9 +1,10 @@
 /**
  * Conformance: the worker client is held to the SAME shared adversarial corpus
- * (`@nanobpm/agentic-protocol/conformance`) as the S0 codec and the cross-repo
- * c8ctl client. A shared prose spec does not stop divergence — shared vectors
- * do. This test file is the package's `test:conformance` entry point and runs
- * with no build step (source-only imports), so the CI `conformance` job
+ * (`@nanobpm/agentic-protocol/source/conformance`) as the S0 codec and the
+ * cross-repo c8ctl client. A shared prose spec does not stop divergence — shared
+ * vectors do. This test file is the package's `test:conformance` entry point and
+ * runs with no build step (source-only imports, hence the `/source/conformance`
+ * subpath), so the CI `conformance` job
  * exercises the real vectors against this client.
  */
 import assert from "node:assert/strict";

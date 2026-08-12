@@ -328,12 +328,25 @@ export class AgenticClient {
   private openTransport(): void {
     this.state = "connecting";
     this.closeHandled = false;
-    this.transport = this.transportFactory(this.url, {
-      onOpen: () => this.handleOpen(),
-      onFrame: (bytes) => this.handleFrame(bytes),
-      onClose: (info) => this.handleClose(info),
-      onError: (error) => this.emitError(error),
-    });
+    try {
+      this.transport = this.transportFactory(this.url, {
+        onOpen: () => this.handleOpen(),
+        onFrame: (bytes) => this.handleFrame(bytes),
+        onClose: (info) => this.handleClose(info),
+        onError: (error) => this.emitError(error),
+      });
+    } catch (error) {
+      // A transport factory can throw synchronously — e.g. the default
+      // websocketTransport when no global WebSocket is available. Without this
+      // guard the exception escapes openTransport() and the client wedges in
+      // "connecting" with no transport and no signal. Surface it as a non-fatal
+      // error and drive handleClose so the client leaves "connecting" the same
+      // way a failed connection would: scheduling a reconnect when enabled, or
+      // going idle/closed otherwise.
+      this.transport = undefined;
+      this.emitError(error instanceof Error ? error : new Error(String(error)));
+      this.handleClose({ reason: "transport factory failed" });
+    }
   }
 
   private handleOpen(): void {

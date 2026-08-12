@@ -85,6 +85,33 @@ test("heartbeat, relay and deregister emit correctly-shaped frames", () => {
   assert.ok(t.last().wasClosedLocally());
 });
 
+test("a transport factory that throws surfaces onError and leaves 'connecting' instead of wedging", () => {
+  const failure = new Error("no global WebSocket available");
+  const errors: Error[] = [];
+  const closes: number[] = [];
+  const client = new AgenticClient({
+    url: "ws://test/agentic",
+    instance: "worker-1",
+    reconnect: { enabled: false },
+    serveTimeoutMs: 0,
+    transport: () => {
+      throw failure;
+    },
+  });
+  client.onError((e) => errors.push(e));
+  client.onClose(() => closes.push(1));
+
+  client.connect();
+
+  // The synchronous factory failure must not escape connect(): it is surfaced as
+  // a non-fatal error and drives a close, so the client leaves "connecting"
+  // (reconnect disabled → idle) instead of wedging with no transport and no signal.
+  assert.deepEqual(errors, [failure], "the factory failure surfaced via onError");
+  assert.equal(closes.length, 1, "onClose fired once for the failed attempt");
+  assert.equal(client.connectionState, "idle", "client did not wedge in 'connecting'");
+});
+
+
 test("deregister while the channel is down sends no deregister frame (best-effort only when open)", () => {
   const { client, t } = newClient();
   client.connect(); // transport built but never opened

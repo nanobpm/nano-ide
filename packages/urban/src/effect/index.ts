@@ -118,9 +118,16 @@ export const match = <R extends Result<unknown, unknown>, T>(
 
 export type Tagged<Tag extends string> = { readonly _tag: Tag };
 
-export const tag = <Tag extends string, P extends object = {}>(t: Tag, props?: P): Tagged<Tag> & P =>
-  // biome-ignore lint/plugin: spreading the optional `props` widens to `Partial<P>`; the tag + props are present by construction, so we assert the exact `Tagged<Tag> & P`.
-  ({ _tag: t, ...props }) as Tagged<Tag> & P;
+// A distributive `Tagged<Tag> & P`: when `Tag` is a union (e.g. a
+// `"merged" | "queued" | "blocked"` outcome), this expands to a discriminated
+// UNION of tagged objects — `({_tag:"merged"} & P) | ({_tag:"queued"} & P) | …`
+// — not a single object with a union-typed `_tag`. That is what lets `matchTags`
+// `Extract` each variant and force an exhaustive handler per case.
+export type TagUnion<Tag extends string, P> = Tag extends string ? Tagged<Tag> & P : never;
+
+export const tag = <Tag extends string, P extends object = {}>(t: Tag, props?: P): TagUnion<Tag, P> =>
+  // biome-ignore lint/plugin: spreading the optional `props` widens to `Partial<P>`; the tag + props are present by construction, so we assert the exact `TagUnion<Tag, P>`.
+  ({ _tag: t, ...props }) as TagUnion<Tag, P>;
 
 // Handle every tag in the union — the handlers object is keyed by `E["_tag"]`,
 // so omitting a variant is a COMPILE error (no accidental dropped failure mode).

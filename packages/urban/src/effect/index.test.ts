@@ -101,6 +101,20 @@ test("matchTags dispatches on the tag", () => {
   assert.equal(describe(tag("Denied", { who: "bob" })), "denied:bob");
 });
 
+test("tag distributes a union tag into a discriminated union for matchTags", () => {
+  // `outcome` is a plain string union, as returned by e.g. a land/merge step.
+  const dispatch = (outcome: "merged" | "queued" | "blocked", detail: string) =>
+    matchTags(tag(outcome, { detail }), {
+      merged: () => "done",
+      queued: () => "waiting",
+      // The shared `detail` prop is present on every variant.
+      blocked: (b) => `blocked:${b.detail}`,
+    });
+  assert.equal(dispatch("merged", "x"), "done");
+  assert.equal(dispatch("queued", "x"), "waiting");
+  assert.equal(dispatch("blocked", "perms"), "blocked:perms");
+});
+
 test("scoped releases resources LIFO on success", async () => {
   const released: string[] = [];
   const out = await scoped(async (scope) => {

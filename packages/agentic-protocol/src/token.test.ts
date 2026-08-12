@@ -16,6 +16,13 @@ test("valid tokens round-trip through formatToken", () => {
   }
 });
 
+test("formatToken rejects subnetworks without a network", () => {
+  assert.throws(
+    () => formatToken({ subnetworks: ["sub"], role: "decide" }),
+    /subnetworks present without a network/,
+  );
+});
+
 test("invalid tokens reject with the specified error code", () => {
   for (const vector of INVALID_TOKENS) {
     assert.throws(

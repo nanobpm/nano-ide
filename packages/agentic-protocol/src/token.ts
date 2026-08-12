@@ -104,6 +104,9 @@ export function isValidToken(token: string): boolean {
 }
 
 export function formatToken(token: RoutingToken): string {
+  if (token.network === undefined && token.subnetworks.length > 0) {
+    throw new Error("invalid RoutingToken: subnetworks present without a network");
+  }
   const segments = token.network === undefined
     ? [token.role]
     : [token.network, ...token.subnetworks, token.role];

@@ -172,7 +172,8 @@ function validateNetwork(network: unknown, path: string, errors: VocabError[]): 
 
 /**
  * Validate an unknown value against the vocab-artifact schema. On success the
- * returned `value` is the same object narrowed to {@link VocabDocument}.
+ * returned `value` is a newly constructed {@link VocabDocument} normalized from
+ * the input — it does not share referential identity with `input`.
  */
 export function validateVocabDocument(input: unknown): VocabValidationResult {
   const errors: VocabError[] = [];

@@ -31,18 +31,21 @@ test("golden frames cover both channel directions", () => {
 });
 
 test("malformed corpus covers every decode-error code", () => {
-  const allCodes: readonly FrameDecodeErrorCode[] = [
-    "empty",
-    "short-header",
-    "bad-magic",
-    "unsupported-version",
-    "unknown-lane",
-    "unknown-family",
-    "truncated-payload",
-    "trailing-bytes",
-    "invalid-payload-json",
-  ];
-  const covered = new Set(MALFORMED_FRAMES.map((m) => m.expected));
+  // Derived from the FrameDecodeErrorCode union via an exhaustive Record so tsc
+  // fails when the union grows without a covering key — no hand-maintained list.
+  const ALL_CODES: Record<FrameDecodeErrorCode, true> = {
+    empty: true,
+    "short-header": true,
+    "bad-magic": true,
+    "unsupported-version": true,
+    "unknown-lane": true,
+    "unknown-family": true,
+    "truncated-payload": true,
+    "trailing-bytes": true,
+    "invalid-payload-json": true,
+  };
+  const allCodes = Object.keys(ALL_CODES);
+  const covered = new Set<string>(MALFORMED_FRAMES.map((m) => m.expected));
   for (const code of allCodes) {
     assert.ok(covered.has(code), `no malformed vector covers code: ${code}`);
   }

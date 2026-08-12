@@ -145,6 +145,30 @@ export class OutboundRing {
     return out;
   }
 
+  /**
+   * Remove every buffered frame matching `predicate`, returning the removed
+   * frames. Used to coalesce superseded control frames (e.g. an in-flight
+   * REGISTER replaced by a newer one) so the drain never emits a stale duplicate.
+   */
+  remove(predicate: (frame: Frame) => boolean): Frame[] {
+    const removed: Frame[] = [];
+    for (const lane of LANES_BY_PRIORITY) {
+      const bucket = this.buckets.get(lane);
+      if (bucket === undefined) {
+        continue;
+      }
+      for (let i = bucket.length - 1; i >= 0; i--) {
+        const frame = bucket[i];
+        if (frame !== undefined && predicate(frame)) {
+          removed.push(frame);
+          bucket.splice(i, 1);
+          this.count -= 1;
+        }
+      }
+    }
+    return removed;
+  }
+
   /** Discard all buffered frames. */
   clear(): void {
     for (const bucket of this.buckets.values()) {

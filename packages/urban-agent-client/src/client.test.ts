@@ -221,3 +221,86 @@ test("close stops the client and rejects an in-flight register", async () => {
   await assert.rejects(pending, /client closed/);
   assert.equal(client.connectionState, "closed");
 });
+
+test("a superseding register coalesces the buffered REGISTER — only the newest capability drains", async () => {
+  const { client, t } = newClient({ reconnect: { enabled: false }, serveTimeoutMs: 1000 });
+  client.connect(); // not open — registers buffer
+
+  const first = client.register({ capability: { cognition: "low" } });
+  const second = client.register({ capability: { cognition: "high" } });
+
+  // The stale REGISTER is dropped from the ring, not left to drain alongside the new one.
+  assert.equal(client.buffered, 1, "only one REGISTER is buffered after superseding");
+  await assert.rejects(first, /superseded/);
+
+  t.last().fireOpen();
+  const registers = t.last().sentFrames.filter((f) => f.family === "register");
+  assert.equal(registers.length, 1, "exactly one REGISTER drains on open");
+  assert.deepEqual(registers[0]?.payload, { instance: "worker-1", capability: { cognition: "high" } });
+
+  t.last().deliver(serveFrame("worker-1", ["ci.gate"]));
+  const { serve } = await second;
+  assert.deepEqual(serve, ["ci.gate"]);
+  client.close();
+});
+
+test("a throw-only transport (no onClose) still drives reconnect instead of wedging", () => {
+  const scheduled: Array<() => void> = [];
+  const { client, t } = newClient({
+    reconnect: { enabled: true, initialDelayMs: 10 },
+    schedule: (fn) => scheduled.push(fn),
+  });
+  client.connect();
+  t.last().fireOpen();
+
+  // The transport now fails every send WITHOUT firing onClose (contract-minimal).
+  t.last().throwOnSend = true;
+  const errors: Error[] = [];
+  client.onError((e) => errors.push(e));
+
+  client.relay("stdout", "boom"); // enqueue → pump → send throws
+
+  // The client must not sit "open" with a full buffer waiting for an onClose
+  // that never comes: it forces the disconnect and schedules a reconnect.
+  assert.equal(client.connected, false, "client left the open state on send failure");
+  assert.equal(scheduled.length, 1, "a reconnect was scheduled");
+  assert.ok(errors.some((e) => /send fail/.test(e.message)), "the send failure was surfaced");
+  assert.equal(client.buffered, 1, "the unsent frame stays buffered for the reconnect drain");
+
+  // Reconnect and confirm the buffered frame drains on the fresh channel.
+  scheduled[0]?.();
+  assert.equal(t.transports.length, 2);
+  t.last().fireOpen();
+  assert.equal(client.buffered, 0, "buffered frame drained after reconnect");
+  assert.ok(t.last().sentFrames.some((f) => f.family === "relay"));
+  client.close();
+});
+
+test("an invalid outbound register payload rejects the promise fast without buffering", async () => {
+  // An empty instance id fails the S0 register contract (bad-instance).
+  const { client, t } = newClient({ instance: "", serveTimeoutMs: 0 });
+  client.connect();
+  t.last().fireOpen();
+
+  await assert.rejects(
+    client.register({ capability: { cognition: "high" } }),
+    /register payload failed validation/,
+  );
+  // The unsendable frame was never buffered, and none was sent.
+  assert.equal(client.buffered, 0);
+  assert.equal(t.last().sentFrames.filter((f) => f.family === "register").length, 0);
+  client.close();
+});
+
+test("an invalid outbound relay payload is dropped with onError, not buffered", () => {
+  const { client, t } = newClient({ reconnect: { enabled: false } });
+  client.connect(); // not open
+
+  const errors: Error[] = [];
+  client.onError((e) => errors.push(e));
+  client.relay("", "data"); // empty stream fails the S0 relay contract
+
+  assert.equal(client.buffered, 0, "the invalid relay was not buffered");
+  assert.ok(errors.some((e) => /relay payload failed validation/.test(e.message)));
+  client.close();
+});

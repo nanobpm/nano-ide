@@ -11,6 +11,13 @@ import type { Transport, TransportFactory, TransportHooks } from "./transport.ts
 export class FakeTransport implements Transport {
   readonly sent: Uint8Array[] = [];
   open = false;
+  /**
+   * When true, {@link send} throws synchronously WITHOUT firing `onClose` — the
+   * minimum a transport is required to do per its contract. Models a channel
+   * that signals disconnect solely by throwing, which must still drive the
+   * client's reconnect path.
+   */
+  throwOnSend = false;
   private closedLocal = false;
 
   private readonly hooks: TransportHooks;
@@ -25,6 +32,9 @@ export class FakeTransport implements Transport {
   }
 
   send(bytes: Uint8Array): void {
+    if (this.throwOnSend) {
+      throw new Error("fake transport send failure (no onClose)");
+    }
     if (!this.open) {
       throw new Error("fake transport not open");
     }

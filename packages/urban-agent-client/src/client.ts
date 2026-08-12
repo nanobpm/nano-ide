@@ -116,6 +116,7 @@ export class AgenticClient {
   private reconnectDelay: number;
   private reconnecting = false;
   private closedByCaller = false;
+  private closeHandled = false;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private pendingServe: PendingServe | undefined;
   private lastServe: readonly string[] = [];
@@ -190,8 +191,11 @@ export class AgenticClient {
     }
     this.capability = capability;
 
-    // A fresh register supersedes any in-flight one.
+    // A fresh register supersedes any in-flight one: reject the prior promise
+    // AND drop any REGISTER still buffered in the ring, so a reconnect drains
+    // only the newest capability (and never a stale duplicate ahead of it).
     this.rejectPendingServe(new Error("superseded by a newer register"));
+    this.ring.remove((frame) => frame.family === "register");
 
     const promise = new Promise<RegisterResult>((resolve, reject) => {
       const timer =
@@ -296,6 +300,7 @@ export class AgenticClient {
 
   private openTransport(): void {
     this.state = "connecting";
+    this.closeHandled = false;
     this.transport = this.transportFactory(this.url, {
       onOpen: () => this.handleOpen(),
       onFrame: (bytes) => this.handleFrame(bytes),
@@ -318,6 +323,12 @@ export class AgenticClient {
   }
 
   private handleClose(info: TransportCloseInfo): void {
+    // Idempotent per connection attempt: a send failure may route us here
+    // directly AND the transport may still fire its own onClose. Handle once.
+    if (this.closeHandled) {
+      return;
+    }
+    this.closeHandled = true;
     const wasOpen = this.state === "open";
     this.transport = undefined;
     if (this.closedByCaller) {
@@ -391,6 +402,10 @@ export class AgenticClient {
 
   private enqueueRegister(capability: Capability, front = false): void {
     const payload: RegisterPayload = { instance: this.instance, capability };
+    const invalid = this.rejectInvalidOutbound("register", payload);
+    if (invalid) {
+      return;
+    }
     if (front) {
       const frame: Frame = { lane: OUTBOUND_LANE.register, family: "register", seq: this.nextSeq(), payload };
       this.ring.enqueueFront(frame);
@@ -401,9 +416,35 @@ export class AgenticClient {
   }
 
   private enqueue(family: MessageFamily, lane: QosLane, payload: unknown): void {
+    if (this.rejectInvalidOutbound(family, payload)) {
+      return;
+    }
     const frame: Frame = { lane, family, seq: this.nextSeq(), payload };
     this.ring.enqueue(frame);
     this.pump();
+  }
+
+  /**
+   * Validate an outbound payload against the S0 contract before it is buffered.
+   * An unsendable frame is never enqueued (so it can't silently occupy buffer
+   * space and then be dropped at encode time); the error is surfaced and, when
+   * it is the REGISTER we are awaiting a SERVE for, the register promise is
+   * failed fast instead of hanging until the serve timeout (or forever when the
+   * timeout is disabled). Returns true when the payload was rejected.
+   */
+  private rejectInvalidOutbound(family: MessageFamily, payload: unknown): boolean {
+    const check = validatePayload(family, payload);
+    if (check.ok) {
+      return false;
+    }
+    const error = new Error(
+      `outbound ${family} payload failed validation: ${check.errors.map((e) => e.code).join(",")}`,
+    );
+    if (family === "register") {
+      this.rejectPendingServe(error);
+    }
+    this.emitError(error);
+    return true;
   }
 
   /** Drain the ring to the transport in strict QoS order until it empties or a send fails. */
@@ -422,17 +463,27 @@ export class AgenticClient {
         bytes = encodeFrame(frame);
       } catch (error) {
         // An unencodable frame can never be sent — drop it rather than wedge the
-        // drain, and report it.
+        // drain, and report it. If it was the REGISTER we are awaiting a SERVE
+        // for, fail that promise fast instead of leaving it pending until (or
+        // beyond) the serve timeout.
         this.ring.dequeue();
-        this.emitError(asError(error, "failed to encode outbound frame; dropped"));
+        const err = asError(error, "failed to encode outbound frame; dropped");
+        if (frame.family === "register") {
+          this.rejectPendingServe(err);
+        }
+        this.emitError(err);
         continue;
       }
       try {
         this.transport.send(bytes);
-      } catch {
+      } catch (error) {
         // The channel went away mid-drain: leave the frame buffered and stop.
-        // The reconnect path resumes the drain.
-        this.state = "connecting";
+        // The transport is not required to also fire onClose (the send contract
+        // only mandates a synchronous throw), so drive the disconnect/reconnect
+        // ourselves rather than relying on an onClose that may never arrive —
+        // otherwise a throw-only transport wedges the client with a full buffer.
+        this.emitError(asError(error, "transport send failed; reconnecting"));
+        this.forceReconnect({ local: false });
         break;
       }
       this.ring.dequeue();
@@ -445,6 +496,23 @@ export class AgenticClient {
 
   private ringHasRegister(): boolean {
     return this.ring.toArray().some((frame) => frame.family === "register");
+  }
+
+  /**
+   * Tear down the current transport and route through the normal close/reconnect
+   * path when a send throws but the transport does not (or has not yet) fired its
+   * own onClose. `handleClose` is idempotent for this connection attempt, so if
+   * the transport DOES also emit onClose the second pass is a no-op.
+   */
+  private forceReconnect(info: TransportCloseInfo): void {
+    const transport = this.transport;
+    this.transport = undefined;
+    try {
+      transport?.close();
+    } catch {
+      // A transport that is already broken may throw on close; ignore it.
+    }
+    this.handleClose(info);
   }
 
   private nextSeq(): number {

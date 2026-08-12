@@ -1434,6 +1434,7 @@ function renderDataGrid(node) {
       for (const row of groupRows) renderRow(row, members);
       const applyGroup = () => {
         chevron.textContent = gcollapsed ? "▸" : "▾";
+        btn.setAttribute("aria-expanded", String(!gcollapsed));
         for (const m of members) {
           m.tr.hidden = gcollapsed
             ? true

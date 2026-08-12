@@ -424,6 +424,9 @@ test("renderer groups a dataGrid by a field into persisted collapsible bands (wa
   // leaves detail rows at their own expansion state.
   assert.match(js, /m\.tr\.hidden = gcollapsed/);
   assert.match(js, /class: "pc-group-header"/);
+  // The group toggle exposes its expanded/collapsed state to assistive tech,
+  // mirroring makeCollapsible's header (screen readers announce the change).
+  assert.match(js, /btn\.setAttribute\("aria-expanded", String\(!gcollapsed\)\)/);
   // refresh() renders through appendRows so grouping applies on every poll.
   assert.match(js, /tbody\.replaceChildren\(\);\s*appendRows\(rows\);/s);
 });

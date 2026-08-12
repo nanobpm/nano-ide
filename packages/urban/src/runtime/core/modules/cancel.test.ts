@@ -312,7 +312,7 @@ test("a thrown cancel whose verify read also fails is reported as an honest fail
   }
 });
 
-test("a thrown cancel whose verify read comes back empty (gone) is an UNVERIFIED failure, not a false success", async () => {
+test("a thrown cancel whose verify read comes back empty (gone) is an unverified failure, not a false success", async () => {
   // The engine-restart trap: the cancel POST throws (dead keep-alive socket / the brief window
   // the gateway is down), then the verify search hits the just-restarted engine whose query store
   // has NOT yet rehydrated the still-running instance — so the read comes back empty ("gone").

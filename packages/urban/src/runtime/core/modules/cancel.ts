@@ -45,7 +45,8 @@ type CancelApi = Pick<AppApi, "engine" | "data" | "log">;
  *  - `cancelInstance` returns without throwing → the engine accepted the termination (a committed
  *    204); trust it even if the read model still lags at ACTIVE.
  *  - `cancelInstance` throws but the instance reads back positively terminal (TERMINATED/COMPLETED)
- *    → the cancel was effectively idempotent; treat as success (and reconcile a TERMINATED row).
+ *    → the cancel was effectively idempotent; treat as success. Only a TERMINATED read reconciles a
+ *    row here (see below); a COMPLETED read intentionally reconciles nothing.
  *  - `cancelInstance` throws and the read is NOT positively terminal — still ACTIVE, or "gone"
  *    (absent from the read model, which after an engine restart can transiently lack a live
  *    instance) → an honest failure: report it and do NOT touch any row (the instance may still be

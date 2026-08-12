@@ -85,9 +85,14 @@ export function encodeFrame(frame: Frame): Uint8Array {
     throw new FrameEncodeError("invalid-seq", `seq must be a uint32, got: ${String(frame.seq)}`);
   }
 
+  // Encode `payload` as-is: a top-level `undefined` is NOT valid JSON
+  // (`JSON.stringify(undefined) === undefined`), so it is rejected rather than
+  // silently coerced to `null` — that keeps the codec invertible and surfaces a
+  // caller that forgot to set a payload. A `null` payload is valid JSON and
+  // round-trips.
   let json: string | undefined;
   try {
-    json = JSON.stringify(frame.payload ?? null);
+    json = JSON.stringify(frame.payload);
   } catch {
     json = undefined;
   }

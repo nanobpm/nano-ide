@@ -92,6 +92,22 @@ test("encode: rejects an unserialisable payload (bigint)", () => {
   );
 });
 
+test("encode: rejects a top-level undefined payload (not coerced to null)", () => {
+  // A top-level `undefined` is not valid JSON; the codec must reject it rather
+  // than silently coerce it to `null`, which would mask a caller that forgot to
+  // set a payload and make the encoding non-invertible.
+  const frame: Frame = { lane: "bulk", family: "relay", seq: 0, payload: undefined };
+  assert.throws(
+    () => encodeFrame(frame),
+    (error: unknown) => error instanceof FrameEncodeError && error.code === "unserialisable-payload",
+  );
+});
+
+test("encode: a null payload round-trips (null is valid JSON)", () => {
+  const frame: Frame = { lane: "control", family: "heartbeat", seq: 0, payload: null };
+  assert.deepEqual(decodeFrame(encodeFrame(frame)), frame);
+});
+
 test("encode: seq boundaries 0 and uint32 max round-trip", () => {
   for (const seq of [0, MAX_SEQ]) {
     const frame: Frame = { lane: "control", family: "heartbeat", seq, payload: { instance: "w" } };

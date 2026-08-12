@@ -1,0 +1,51 @@
+{
+  "name": "@nanobpm/agentic-demand",
+  "version": "0.1.0",
+  "description": "Demand x supply model for the Nano agentic protocol (ADR 0056, S4): reads deployed taskDefinition leaves from the engine's C8 REST API, buckets them by network prefix, computes demand minus supply ('missing agent type') against the live S2 registry and the resolved S3 vocabulary, and surfaces the diversity SLO state. Read-only mirror + enrolment gate; no matchmaking. Built on @nanobpm/agentic-protocol and @nanobpm/agentic-vocab.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "nanobpm",
+    "agentic",
+    "demand",
+    "supply",
+    "registry",
+    "slo"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/agentic-demand"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./source": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@nanobpm/agentic-protocol": "^0.1.0",
+    "@nanobpm/agentic-vocab": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  }
+}

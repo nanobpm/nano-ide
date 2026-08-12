@@ -552,6 +552,13 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-detail-field { display:flex; gap:.5rem; font-size:.85rem; margin:.15rem 0; }
 .pc-detail-label { color:var(--nano-text-muted); min-width:8rem; }
 .pc-link { color:var(--nano-accent); }
+.pc-badge { display:inline-flex; align-items:center; justify-content:center; min-width:1.35rem; height:1.35rem; box-sizing:border-box; padding:0 .4rem; border-radius:999px; font-size:.72rem; font-weight:700; line-height:1; color:#fff; background:var(--nano-danger); }
+.pc-badge-danger { background:var(--nano-danger); }
+.pc-badge-warn { background:var(--nano-warn); color:#3a2a00; }
+.pc-badge-ok { background:var(--nano-ok); }
+.pc-badge-info { background:var(--nano-info); }
+:root[data-appearance="light"] .pc-badge-warn { color:#fff; }
+@media (prefers-color-scheme: light) { :root:not([data-appearance]) .pc-badge-warn { color:#fff; } }
 .pc-child { margin:.6rem 0; }
 .pc-child-title { font-size:.8rem; font-weight:600; color:var(--nano-text-muted); margin-bottom:.25rem; }
 .pc-transcript { white-space:pre-wrap; max-height:22rem; overflow:auto; background:var(--nano-inset); padding:.5rem; border-radius:.4rem; font-size:.8rem; margin-top:.4rem; }
@@ -929,11 +936,13 @@ function renderButton(node) {
   return el("div", { class: "pc-buttonrow" }, btn);
 }
 
-// A grid td cell. Two column-declared linking modes, checked in order:
-//   1. linkField — the cell text becomes a link to the URL held in that other
+// A grid td cell with three column-declared rendering modes, checked in order:
+//   1. badge — a compact status indicator, gated on a non-empty field value
+//      (see the detailed note at the check below).
+//   2. linkField — the cell text becomes a link to the URL held in that other
 //      field. Only http(s) hrefs are linked (a javascript:/other-scheme URL
 //      smuggled through row data falls back to plain text).
-//   2. link: { kind: "processExplorer", keyField } — a structured, engine-aware
+//   3. link: { kind: "processExplorer", keyField } — a structured, engine-aware
 //      link: the cell text links to the Nano console's explorer view for the
 //      process instance whose key is held in the row's keyField. The console
 //      path is constructed HERE (never taken from row data) and the key is
@@ -949,6 +958,27 @@ function renderButton(node) {
 // grid and child grids.
 function gridCell(col, row) {
   const text = row[col.field] == null ? "" : String(row[col.field]);
+  // 1. badge — a compact status indicator. When the row's field value is
+  //    non-empty (truthy after trimming) render a small circular badge (e.g. a
+  //    red "1" dot flagging an incident) whose tooltip is the full field text;
+  //    when empty the cell stays blank so the column is unobtrusive until it
+  //    matters. tone (danger|warn|ok|info, default danger) picks the color and
+  //    label the glyph inside (default "1"). Label/tone come from the app
+  //    schema (trusted); the tooltip is row data set via title/textContent
+  //    (DOM-escaped by the platform, so no HTML/attribute injection). The full
+  //    field text is also mirrored into aria-label so assistive tech announces
+  //    the incident/status text (the visible "1" glyph alone is not meaningful).
+  if (col.badge) {
+    if (text.trim() === "") return el("td", {});
+    const t = col.badge.tone;
+    const tone = t === "warn" || t === "ok" || t === "info" ? t : "danger";
+    const label = col.badge.label == null ? "1" : String(col.badge.label);
+    return el(
+      "td",
+      {},
+      el("span", { class: "pc-badge pc-badge-" + tone, title: text, "aria-label": text }, label),
+    );
+  }
   if (col.linkField) {
     const href = row[col.linkField] == null ? "" : String(row[col.linkField]);
     if (text !== "" && /^https?:\/\//i.test(href)) {

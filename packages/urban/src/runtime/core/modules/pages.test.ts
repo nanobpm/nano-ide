@@ -138,6 +138,22 @@ test("the shell styles the app through the shared --nano-* token contract", asyn
   assert.match(html, /:root:not\(\[data-appearance\]\)/);
 });
 
+test("the warn badge stays legible in light appearance", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  // The warn badge sits on --nano-warn, which is a bright amber in dark mode
+  // (dark text reads well) but a dark orange in light mode (#b45309), where the
+  // same dark text collapses to near-zero contrast. Both light paths — the
+  // console-themed [data-appearance="light"] and the standalone
+  // prefers-color-scheme fallback — must flip the warn label to white so it
+  // stays readable.
+  assert.match(html, /:root\[data-appearance="light"\]\s*\.pc-badge-warn\s*\{\s*color:#fff;\s*\}/);
+  assert.match(
+    html,
+    /@media \(prefers-color-scheme: light\)\s*\{\s*:root:not\(\[data-appearance\]\)\s*\.pc-badge-warn\s*\{\s*color:#fff;\s*\}\s*\}/,
+  );
+});
+
 test("grid cells wrap long, space-less values so one cell can't overflow the table", async () => {
   // Regression: a dataGrid cell holding a long space-less value (e.g. a JSON
   // blob or a 40-char SHA) has no soft-wrap opportunity, so with table-layout
@@ -302,6 +318,24 @@ test("renderer wires a column's linkField to a new-tab anchor", async () => {
   assert.match(js, /\^https\?:/);
   assert.match(js, /target: "_blank"/);
   assert.match(js, /rel: "noopener noreferrer"/);
+});
+
+test("renderer wires a column's badge to a tone-classed pill shown only when present", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A column declaring `badge` renders a compact circular pill (e.g. a red "1"
+  // flagging an incident) only when the field value is non-empty; an empty value
+  // leaves the cell blank so the column is unobtrusive until it matters. Guard
+  // the shape: presence-gated on the trimmed field, tone is allow-listed
+  // (default danger), the label defaults to "1", and the full field text becomes
+  // the tooltip.
+  assert.match(js, /if\s*\(col\.badge\)/);
+  assert.match(js, /text\.trim\(\)\s*===\s*""/);
+  assert.match(js, /t\s*===\s*"warn"\s*\|\|\s*t\s*===\s*"ok"\s*\|\|\s*t\s*===\s*"info"\s*\?\s*t\s*:\s*"danger"/);
+  assert.match(js, /col\.badge\.label\s*==\s*null\s*\?\s*"1"/);
+  assert.match(js, /class:\s*"pc-badge pc-badge-"\s*\+\s*tone/);
+  assert.match(js, /title:\s*text/);
+  assert.match(js, /"aria-label":\s*text/);
 });
 
 test("renderer wires a column's processExplorer link to the console explorer", async () => {

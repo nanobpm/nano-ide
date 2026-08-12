@@ -148,7 +148,16 @@ export class RelayChannelClient {
     }
     this.#socket = socket;
     socket.onMessage((bytes) => this.#receive(bytes));
-    socket.onOpen(() => this.#onOpen?.());
+    // Guard the consumer callback the same way #receive() does: a consumer
+    // onOpen handler can throw, and an unguarded throw escapes the socket open
+    // callback. Route it to onError so a bad handler can't wedge the client.
+    socket.onOpen(() => {
+      try {
+        this.#onOpen?.();
+      } catch (err) {
+        this.#onError?.(err);
+      }
+    });
     socket.onClose(() => this.#handleClose());
   }
 
@@ -205,7 +214,15 @@ export class RelayChannelClient {
 
   #handleClose(): void {
     this.#socket = undefined;
-    this.#onClose?.();
+    // Guard the consumer onClose: if it throws, an unguarded exception here
+    // skips the reconnect scheduling below and breaks the "survives reconnect"
+    // invariant for reasons unrelated to transport. Route it to onError, then
+    // continue with reconnect regardless.
+    try {
+      this.#onClose?.();
+    } catch (err) {
+      this.#onError?.(err);
+    }
     if (this.#closed || !this.#autoReconnect) return;
     this.#schedule(() => this.#reconnect());
   }

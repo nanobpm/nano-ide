@@ -305,3 +305,55 @@ test("a synchronous connect() failure with autoReconnect:false does not reschedu
   assert.deepEqual(errors, [boom], "the failure was surfaced to onError");
   assert.equal(scheduled, false, "no retry scheduled when autoReconnect is disabled");
 });
+
+test("a throwing onOpen consumer is routed to onError, not escaped to the socket handler", () => {
+  const socket = new FakeSocket();
+  const boom = new Error("onOpen handler threw");
+  const errors: unknown[] = [];
+  const client = new RelayChannelClient({
+    connect: () => socket,
+    onRelay: () => {},
+    onOpen: () => {
+      throw boom;
+    },
+    onError: (e) => errors.push(e),
+  });
+  client.open();
+
+  // A consumer onOpen that throws (e.g. a resume/re-subscribe handler) must not
+  // escape the socket open callback — it is routed to onError like #receive does.
+  assert.doesNotThrow(() => socket.fireOpen());
+  assert.deepEqual(errors, [boom], "the throwing onOpen was surfaced to onError");
+});
+
+test("a throwing onClose consumer is routed to onError and still schedules reconnect", () => {
+  const sockets: FakeSocket[] = [];
+  const boom = new Error("onClose handler threw");
+  const errors: unknown[] = [];
+  let pending: (() => void) | undefined;
+  const client = new RelayChannelClient({
+    connect: () => {
+      const s = new FakeSocket();
+      sockets.push(s);
+      return s;
+    },
+    onRelay: () => {},
+    onClose: () => {
+      throw boom;
+    },
+    onError: (e) => errors.push(e),
+    schedule: (run) => {
+      pending = run;
+    },
+  });
+  client.open();
+
+  // A consumer onClose that throws must not skip the reconnect scheduling below
+  // it — the "survives reconnect" invariant must hold regardless of the handler.
+  assert.doesNotThrow(() => sockets[0]?.fireClose());
+  assert.deepEqual(errors, [boom], "the throwing onClose was surfaced to onError");
+  assert.ok(pending !== undefined, "a reconnect was still scheduled despite the onClose throw");
+
+  pending?.();
+  assert.equal(sockets.length, 2, "the scheduled reconnect opened a fresh socket");
+});

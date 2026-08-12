@@ -67,10 +67,11 @@ The shells expect the hosting Urban app to serve two endpoints:
 
 The browser shells wire the cockpit through the plain-JS `page/mount.js` adapter,
 which passes the real `document`/host at runtime. `ElementLike`/`DocumentLike` are
-a minimal structural subset (not lib.dom types), so a **TypeScript** caller passes
-the real DOM through a thin structural adapter:
+a minimal structural subset (not lib.dom types). In **plain JavaScript** (as
+`mount.js` does) you pass the real DOM straight through — there is no compile-time
+check, so no adapter is needed:
 
-```ts
+```js
 import { bootCockpit } from "@nanobpm/agentic-cockpit";
 
 const cockpit = bootCockpit({
@@ -82,3 +83,7 @@ const cockpit = bootCockpit({
 });
 cockpit.start();              // self-scheduling poll; cockpit.dispose() to stop
 ```
+
+A **TypeScript** caller cannot pass the real `document`/`HTMLElement` directly —
+they are intentionally not assignable to `DocumentLike`/`ElementLike` (see the note
+in `render.ts`) — and must wrap the real DOM in a thin structural adapter.

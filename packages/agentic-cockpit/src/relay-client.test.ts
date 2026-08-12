@@ -111,7 +111,7 @@ test("the hub's boolean-gap subscribed ack is accepted (matches the S5 wire)", (
   assert.equal(errors.length, 0);
 });
 
-test("a non-integer or negative offset/nextOffset is rejected as malformed", () => {
+test("a non-integer, negative, or unsafe offset/nextOffset is rejected as malformed", () => {
   const socket = new FakeSocket();
   const received: RelayInbound[] = [];
   const errors: unknown[] = [];
@@ -124,8 +124,12 @@ test("a non-integer or negative offset/nextOffset is rejected as malformed", () 
   socket.deliver({ lane: "bulk", family: "relay", seq: 0, payload: { stream: "w1", offset: 1.5, chunk: "x" } });
   socket.deliver({ lane: "bulk", family: "relay", seq: 1, payload: { stream: "w1", offset: -1, chunk: "x" } });
   socket.deliver({ lane: "control", family: "relay", seq: 2, payload: { op: "subscribed", stream: "w1", gap: false, nextOffset: -1 } });
+  // Unsafe integers (beyond Number.MAX_SAFE_INTEGER) round-trip through JSON with
+  // silent precision loss, so they must be rejected like fractional/negative ones.
+  socket.deliver({ lane: "bulk", family: "relay", seq: 3, payload: { stream: "w1", offset: Number.MAX_SAFE_INTEGER + 1, chunk: "x" } });
+  socket.deliver({ lane: "control", family: "relay", seq: 4, payload: { op: "subscribed", stream: "w1", gap: false, nextOffset: Number.MAX_SAFE_INTEGER + 1 } });
   assert.equal(received.length, 0);
-  assert.equal(errors.length, 3);
+  assert.equal(errors.length, 5);
 });
 
 test("a payload with an unknown op is rejected, even if it also carries a data shape", () => {

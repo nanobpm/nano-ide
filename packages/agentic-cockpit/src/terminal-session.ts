@@ -21,6 +21,7 @@
  *  - inbound  {@link RelayPayload} `{ stream, offset, chunk }` — a data chunk.
  */
 import type { RelayPayload } from "@nanobpm/agentic-protocol";
+import { isNonNegInt, isPosInt } from "@nanobpm/agentic-relay";
 
 /** The terminal sink the session writes decoded output to (xterm.js satisfies this). */
 export interface TerminalSink {
@@ -83,10 +84,13 @@ export class TerminalSession {
     this.#sink = options.sink;
     this.#send = options.send;
     this.#credit = options.credit ?? DEFAULT_CREDIT;
+    if (!isPosInt(this.#credit)) {
+      throw new RangeError(`TerminalSession.credit must be a positive safe integer, got ${this.#credit}`);
+    }
     this.#onGap = options.onGap;
     const from = options.from ?? 0;
-    if (!Number.isInteger(from) || from < 0) {
-      throw new RangeError(`TerminalSession.from must be a non-negative integer, got ${from}`);
+    if (!isNonNegInt(from)) {
+      throw new RangeError(`TerminalSession.from must be a non-negative safe integer, got ${from}`);
     }
     this.#nextOffset = from;
   }
@@ -119,8 +123,8 @@ export class TerminalSession {
 
   /** Grant additional bulk credit (backpressure release) mid-stream. */
   grant(credit: number): void {
-    if (!Number.isInteger(credit) || credit <= 0) {
-      throw new RangeError(`TerminalSession.grant credit must be a positive integer, got ${credit}`);
+    if (!isPosInt(credit)) {
+      throw new RangeError(`TerminalSession.grant credit must be a positive safe integer, got ${credit}`);
     }
     this.#send({ op: "credit", credit });
   }

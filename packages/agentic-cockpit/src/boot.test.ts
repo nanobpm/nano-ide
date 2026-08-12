@@ -273,3 +273,14 @@ test("injecting setTimer without clearTimer (or vice versa) fails fast", () => {
     /setTimer and clearTimer must be provided together/,
   );
 });
+
+test("an invalid refreshMs fails fast at construction", () => {
+  const base = rig().env;
+  for (const refreshMs of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN]) {
+    assert.throws(
+      () => bootCockpit({ ...base, refreshMs }),
+      /refreshMs must be a positive safe integer/,
+      `refreshMs ${refreshMs} should be rejected`,
+    );
+  }
+});

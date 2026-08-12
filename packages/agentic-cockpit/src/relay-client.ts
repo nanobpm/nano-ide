@@ -16,7 +16,7 @@
  * deterministically in tests with a fake socket and a manual scheduler — no real
  * timers, no real network (AGENTS.md: no flaky tests, no test retries).
  */
-import { RELAY_FAMILY } from "@nanobpm/agentic-relay";
+import { isNonNegInt, RELAY_FAMILY } from "@nanobpm/agentic-relay";
 import { decodeFrame, encodeFrame, MAX_SEQ } from "@nanobpm/agentic-protocol";
 import type { Frame, RelayPayload } from "@nanobpm/agentic-protocol";
 import type { RelayInbound, RelayOutbound } from "./terminal-session.ts";
@@ -68,10 +68,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
 /**
  * Narrow a decoded `relay`-family payload to the inbound sub-protocol without an
  * unchecked cast (the repo bans `as`): a data chunk `{ stream, offset, chunk }`
@@ -87,13 +83,13 @@ function asRelayInbound(payload: unknown): RelayInbound | null {
       payload.op === "subscribed" &&
       typeof payload.stream === "string" &&
       typeof payload.gap === "boolean" &&
-      isNonNegativeInteger(payload.nextOffset)
+      isNonNegInt(payload.nextOffset)
     ) {
       return { op: "subscribed", stream: payload.stream, gap: payload.gap, nextOffset: payload.nextOffset };
     }
     return null;
   }
-  if (typeof payload.stream === "string" && isNonNegativeInteger(payload.offset) && typeof payload.chunk === "string") {
+  if (typeof payload.stream === "string" && isNonNegInt(payload.offset) && typeof payload.chunk === "string") {
     const data: RelayPayload = { stream: payload.stream, offset: payload.offset, chunk: payload.chunk };
     return data;
   }

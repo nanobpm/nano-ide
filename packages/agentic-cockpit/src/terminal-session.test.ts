@@ -181,3 +181,34 @@ test("an invalid from offset is rejected at construction", () => {
     RangeError,
   );
 });
+
+test("an unsafe-integer from offset is rejected at construction", () => {
+  assert.throws(
+    () =>
+      new TerminalSession({
+        stream: "s",
+        sink: { write: () => {} },
+        send: () => {},
+        from: Number.MAX_SAFE_INTEGER + 1,
+      }),
+    RangeError,
+  );
+});
+
+test("a non-positive or unsafe credit is rejected at construction", () => {
+  for (const credit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN]) {
+    assert.throws(
+      () => new TerminalSession({ stream: "s", sink: { write: () => {} }, send: () => {}, credit }),
+      RangeError,
+      `credit ${credit} should be rejected`,
+    );
+  }
+});
+
+test("grant rejects a non-positive or unsafe credit", () => {
+  const h = harness();
+  for (const credit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN]) {
+    assert.throws(() => h.session.grant(credit), RangeError, `grant(${credit}) should be rejected`);
+  }
+});
+

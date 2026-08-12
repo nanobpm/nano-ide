@@ -18,6 +18,7 @@
  *    terminal **survives a cockpit reconnect** via resume-from-offset.
  */
 import type { DemandSupplyReport } from "@nanobpm/agentic-demand";
+import { isPosInt } from "@nanobpm/agentic-relay";
 import { RelayChannelClient, type Scheduler, type SocketFactory } from "./relay-client.ts";
 import { type DocumentLike, type ElementLike, renderCockpit } from "./render.ts";
 import { TerminalSession, type TerminalSink } from "./terminal-session.ts";
@@ -94,6 +95,13 @@ class Cockpit implements CockpitHandle {
   constructor(env: CockpitEnv) {
     this.#env = env;
     this.#refreshMs = env.refreshMs ?? DEFAULT_REFRESH_MS;
+    // refreshMs feeds setTimeout as a poll delay. A negative/NaN/fractional/unsafe
+    // value silently collapses to a ~0ms delay, turning the poll into a hot loop
+    // that hammers the demand endpoint and burns CPU. Require a positive safe
+    // integer up-front so a bad env option fails loudly instead.
+    if (!isPosInt(this.#refreshMs)) {
+      throw new RangeError(`CockpitEnv.refreshMs must be a positive safe integer, got ${this.#refreshMs}`);
+    }
     // setTimer/clearTimer are a matched pair: a caller-supplied setTimer returns
     // opaque handles the default clearTimer (which only understands the internal
     // numeric-handle Map) cannot cancel, leaving an un-stoppable poll loop. Fail

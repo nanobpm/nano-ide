@@ -57,7 +57,7 @@ export type TransportFactory = (url: string, hooks: TransportHooks) => Transport
 export const websocketTransport: TransportFactory = (url, hooks) => {
   if (typeof WebSocket !== "function") {
     throw new Error(
-      "No global WebSocket is available. Run on Node >= 22 (which provides a global WebSocket) " +
+      "No global WebSocket is available. Run on Node >= 22.6 (which provides a global WebSocket) " +
         "or pass a custom `transport` factory to connectAgenticChannel().",
     );
   }

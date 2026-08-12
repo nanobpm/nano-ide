@@ -93,6 +93,6 @@ the S0 codec and the cross-repo c8ctl client are held to. It runs from source
 
 ## Runtime
 
-Node ≥ 22 (which provides a global `WebSocket`). Ships as source `.ts` plus a
+Node ≥ 22.6 (which provides a global `WebSocket`). Ships as source `.ts` plus a
 built `dist`; runs under `node --experimental-strip-types` like the rest of the
 Urban stack.

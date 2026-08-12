@@ -684,3 +684,26 @@ test("close() releases the outbound buffer BEFORE the transport's synchronous on
   );
   assert.equal(client.buffered, 0, "close() cleared the outbound ring");
 });
+
+test("construction rejects timing/backoff options Node would coerce into a 0ms hot loop", () => {
+  // Node's setTimeout/setInterval treat a negative or NaN delay as 0, which would
+  // turn a misconfigured heartbeat or reconnect backoff into an event-loop-saturating
+  // tight loop. The client must fail fast at construction — the same fail-fast
+  // contract OutboundRing enforces on capacity — rather than degrade silently.
+  const base = { url: "ws://test/agentic", transport: fakeTransportFactory().factory };
+
+  assert.throws(() => new AgenticClient({ ...base, heartbeatIntervalMs: -1 }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, heartbeatIntervalMs: Number.NaN }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, serveTimeoutMs: -5 }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, serveTimeoutMs: Number.NaN }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, reconnect: { initialDelayMs: -1 } }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, reconnect: { initialDelayMs: Number.NaN } }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, reconnect: { maxDelayMs: -1 } }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, reconnect: { maxDelayMs: Number.POSITIVE_INFINITY } }), RangeError);
+  // A backoff factor < 1 shrinks the delay toward 0 on every retry — also a hot loop.
+  assert.throws(() => new AgenticClient({ ...base, reconnect: { factor: 0.5 } }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, reconnect: { factor: Number.NaN } }), RangeError);
+
+  // The disabling sentinels stay legal: heartbeat 0 (off) and serveTimeout 0 (no timeout).
+  assert.doesNotThrow(() => new AgenticClient({ ...base, heartbeatIntervalMs: 0, serveTimeoutMs: 0 }));
+});

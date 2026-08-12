@@ -42,6 +42,19 @@ const DEFAULT_RECONNECT = {
   factor: 2,
 } as const;
 
+/**
+ * Guard a resolved timing/backoff option. Node's setTimeout/setInterval coerce a
+ * negative or NaN delay to 0, which would turn a misconfigured heartbeat or
+ * reconnect backoff into a tight, event-loop-saturating loop. Reject such values
+ * at construction — the same fail-fast contract OutboundRing applies to capacity —
+ * instead of silently degrading into a hot loop at runtime.
+ */
+function assertFiniteAtLeast(name: string, value: number, min: number): void {
+  if (!Number.isFinite(value) || value < min) {
+    throw new RangeError(`${name} must be a finite number >= ${min}, got ${value}`);
+  }
+}
+
 export interface ReconnectOptions {
   readonly enabled?: boolean;
   readonly initialDelayMs?: number;
@@ -150,6 +163,12 @@ export class AgenticClient {
       factor: options.reconnect?.factor ?? DEFAULT_RECONNECT.factor,
     };
     this.reconnectDelay = this.reconnectPolicy.initialDelayMs;
+    // Reject timing/backoff options that Node would coerce into a 0ms hot loop.
+    assertFiniteAtLeast("heartbeatIntervalMs", this.heartbeatIntervalMs, 0);
+    assertFiniteAtLeast("serveTimeoutMs", this.serveTimeoutMs, 0);
+    assertFiniteAtLeast("reconnect.initialDelayMs", this.reconnectPolicy.initialDelayMs, 0);
+    assertFiniteAtLeast("reconnect.maxDelayMs", this.reconnectPolicy.maxDelayMs, 0);
+    assertFiniteAtLeast("reconnect.factor", this.reconnectPolicy.factor, 1);
     this.schedule =
       options.schedule ??
       ((fn, ms) => {

@@ -55,7 +55,7 @@ export interface HttpC8RestReaderOptions {
   readonly token?: string;
   /** Injected `fetch` (defaults to the global). */
   readonly fetch?: FetchLike;
-  /** Search page size (C8 caps the result set; the reader pages until drained). */
+  /** Search page size (C8 caps the result set; the reader pages until drained). Must be a positive integer. */
   readonly pageSize?: number;
 }
 
@@ -92,6 +92,9 @@ export function httpC8RestReader(options: HttpC8RestReaderOptions): C8RestReader
   const base = trimSlash(options.restAddress);
   const doFetch: FetchLike = options.fetch ?? ((input, init) => globalThis.fetch(input, init));
   const pageSize = options.pageSize ?? 100;
+  if (!Number.isInteger(pageSize) || pageSize <= 0) {
+    throw new Error(`httpC8RestReader: pageSize must be a positive integer, got ${pageSize}`);
+  }
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (options.token !== undefined) headers.authorization = `Bearer ${options.token}`;
 

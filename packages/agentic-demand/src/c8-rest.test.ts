@@ -129,3 +129,12 @@ test("a non-2xx xml fetch fails loudly", async () => {
   const reader = httpC8RestReader({ restAddress: "http://x/v2", fetch });
   await assert.rejects(() => readDeployedTaskDefinitions(reader), /404 Not Found/);
 });
+
+test("rejects a non-positive-integer pageSize instead of spinning forever", () => {
+  const fetch: FetchLike = async () => jsonResponse({ items: [] });
+  // pageSize is the loop's termination condition (items.length < pageSize); a
+  // zero/negative/NaN/fractional value could never break, so reject it up front.
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, 1.5]) {
+    assert.throws(() => httpC8RestReader({ restAddress: "http://x/v2", fetch, pageSize: bad }), /pageSize must be a positive integer/);
+  }
+});

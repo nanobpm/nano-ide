@@ -138,6 +138,20 @@ test("the shell styles the app through the shared --nano-* token contract", asyn
   assert.match(html, /:root:not\(\[data-appearance\]\)/);
 });
 
+test("grid cells wrap long, space-less values so one cell can't overflow the table", async () => {
+  // Regression: a dataGrid cell holding a long space-less value (e.g. a JSON
+  // blob or a 40-char SHA) has no soft-wrap opportunity, so with table-layout
+  // auto it forces its column to the value's full width and pushes the whole
+  // table past the page. The shared grid CSS must let such a cell break so the
+  // column can shrink to fit its container.
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  const rule = (html.match(/table\.pc-grid th, table\.pc-grid td \{[^}]*\}/) ?? [""])[0];
+  assert.ok(rule, "grid th/td rule must be present");
+  assert.match(rule, /overflow-wrap:anywhere/);
+  assert.match(rule, /max-width:/);
+});
+
 test("GET /app/runtime.js serves the renderer module", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   assert.match(res.headers?.["content-type"] ?? "", /javascript/);

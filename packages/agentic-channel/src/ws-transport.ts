@@ -1,0 +1,212 @@
+/**
+ * The production WebSocket transport for the agentic hub.
+ *
+ * A thin adapter over the `ws` server that binds the app's OWN port (or attaches
+ * to an existing app HTTP server so it shares that port), captures the ADR 0028
+ * identity token + capability credential from the upgrade request, and hands the
+ * hub a transport-agnostic {@link ChannelConnection} per peer. The Camunda-8
+ * engine transport is a separate connection and is never touched here.
+ */
+import { randomUUID } from "node:crypto";
+import type { IncomingMessage, Server as HttpServer } from "node:http";
+import { WebSocketServer } from "ws";
+import type { RawData, WebSocket } from "ws";
+import type { ChannelConnection, ChannelTransport, CloseCode, HandshakeRequest } from "./connection.ts";
+
+export interface WebSocketChannelTransportOptions {
+  /** Port to bind (the app's own port). Use 0 for an ephemeral port. Ignored if `server` is set. */
+  port?: number;
+  /** Host/interface to bind. Ignored if `server` is set. */
+  host?: string;
+  /** Path the channel is served on. Default `/agentic`. */
+  path?: string;
+  /** Attach to an existing app HTTP server (share the app's port) instead of binding a new one. */
+  server?: HttpServer;
+}
+
+const DEFAULT_PATH = "/agentic";
+
+/** RFC 6455 close code for a frame whose type the endpoint cannot accept. */
+const CLOSE_UNSUPPORTED_DATA = 1003;
+
+/**
+ * Grace period for the shutdown close handshake before a still-open peer is
+ * force-terminated, so `close()` stays bounded even if a peer stalls.
+ */
+const GRACEFUL_CLOSE_TIMEOUT_MS = 250;
+
+/** Normalise Node's header map to a flat, lower-cased string record. */
+function flattenHeaders(req: IncomingMessage): Record<string, string> {
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(req.headers)) {
+    const name = key.toLowerCase();
+    if (typeof value === "string") {
+      headers[name] = value;
+    } else if (Array.isArray(value)) {
+      headers[name] = value.join(", ");
+    }
+  }
+  return headers;
+}
+
+/** Parse the upgrade request into the handshake the authenticator reads. */
+function handshakeFrom(req: IncomingMessage): HandshakeRequest {
+  const url = new URL(req.url ?? "/", "http://localhost");
+  const query: Record<string, string> = {};
+  for (const [key, value] of url.searchParams) {
+    query[key] = value;
+  }
+  const headers = flattenHeaders(req);
+  return {
+    token: query.token,
+    credential: query.capability ?? headers["x-capability-credential"],
+    remote: req.socket.remoteAddress ?? undefined,
+    headers,
+    query,
+  };
+}
+
+/** Coerce `ws` RawData into a single contiguous byte view for the codec. */
+function toBytes(data: RawData): Uint8Array {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data);
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+}
+
+/** One `ws` socket wrapped as a {@link ChannelConnection}. */
+class WsConnection implements ChannelConnection {
+  readonly id: string;
+  readonly handshake: HandshakeRequest;
+  readonly #ws: WebSocket;
+
+  constructor(id: string, ws: WebSocket, handshake: HandshakeRequest) {
+    this.id = id;
+    this.#ws = ws;
+    this.handshake = handshake;
+  }
+
+  send(bytes: Uint8Array): void {
+    if (this.#ws.readyState === this.#ws.OPEN) {
+      this.#ws.send(bytes, { binary: true });
+    }
+  }
+
+  close(code?: CloseCode, reason?: string): void {
+    if (code === undefined) {
+      this.#ws.close();
+    } else {
+      this.#ws.close(code, reason);
+    }
+  }
+
+  onMessage(listener: (bytes: Uint8Array) => void): void {
+    this.#ws.on("message", (data: RawData, isBinary: boolean) => {
+      // The channel protocol is binary-only. A text frame (`isBinary === false`,
+      // which `ws` may deliver as a `string` with no `.buffer`) is a protocol
+      // violation: reject it with 1003 rather than letting `toBytes` throw.
+      if (!isBinary) {
+        this.#ws.close(CLOSE_UNSUPPORTED_DATA, "binary frames only");
+        return;
+      }
+      listener(toBytes(data));
+    });
+  }
+
+  onClose(listener: (code?: CloseCode, reason?: string) => void): void {
+    this.#ws.on("close", (code: number, reason: Buffer) => listener(code, reason.toString()));
+  }
+
+  onPong(listener: () => void): void {
+    this.#ws.on("pong", () => listener());
+  }
+
+  onPing(listener: () => void): void {
+    this.#ws.on("ping", () => listener());
+  }
+
+  ping(): void {
+    if (this.#ws.readyState === this.#ws.OPEN) {
+      this.#ws.ping();
+    }
+  }
+}
+
+export class WebSocketChannelTransport implements ChannelTransport {
+  readonly #wss: WebSocketServer;
+  readonly #server: HttpServer | undefined;
+  #listener: ((conn: ChannelConnection) => void) | undefined;
+
+  constructor(options: WebSocketChannelTransportOptions = {}) {
+    const path = options.path ?? DEFAULT_PATH;
+    this.#server = options.server;
+    this.#wss = options.server
+      ? new WebSocketServer({ server: options.server, path })
+      : new WebSocketServer({ port: options.port ?? 0, host: options.host, path });
+
+    this.#wss.on("connection", (ws: WebSocket, req: IncomingMessage) => {
+      const conn = new WsConnection(randomUUID(), ws, handshakeFrom(req));
+      this.#listener?.(conn);
+    });
+  }
+
+  onConnection(listener: (conn: ChannelConnection) => void): void {
+    this.#listener = listener;
+  }
+
+  /** Resolve once the server is listening on its port. */
+  ready(): Promise<void> {
+    // In shared-port mode the app owns the HTTP server: `ws` never emits
+    // `listening` on the WebSocketServer, so wait on the HTTP server instead
+    // (or resolve at once if it is already listening) to avoid hanging forever.
+    const source = this.#server ?? this.#wss;
+    if (this.#server ? this.#server.listening : this.#wss.address() !== null) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve, reject) => {
+      const onListening = () => {
+        source.off("error", onError);
+        resolve();
+      };
+      const onError = (err: Error) => {
+        source.off("listening", onListening);
+        reject(err);
+      };
+      source.once("listening", onListening);
+      source.once("error", onError);
+    });
+  }
+
+  get address(): { readonly port: number } | null {
+    const addr = this.#wss.address();
+    if (addr !== null && typeof addr === "object" && "port" in addr) {
+      return { port: addr.port };
+    }
+    return null;
+  }
+
+  close(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      // Prefer a graceful close handshake so peers observe a normal closure
+      // (with any application close code/reason) instead of an abnormal 1006.
+      // Fall back to terminate() for any peer that doesn't complete the
+      // handshake promptly, keeping shutdown bounded and deterministic.
+      for (const client of this.#wss.clients) {
+        client.close();
+      }
+      const fallback = setTimeout(() => {
+        for (const client of this.#wss.clients) {
+          client.terminate();
+        }
+      }, GRACEFUL_CLOSE_TIMEOUT_MS);
+      fallback.unref?.();
+      this.#wss.close((err) => {
+        clearTimeout(fallback);
+        err ? reject(err) : resolve();
+      });
+    });
+  }
+}

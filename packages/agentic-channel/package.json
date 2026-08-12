@@ -1,0 +1,51 @@
+{
+  "name": "@nanobpm/agentic-channel",
+  "version": "0.1.0",
+  "description": "App-tier channel & hub for the Nano agentic protocol (ADR 0056, S1): a WebSocket server bound on the app's own port, a connection registry with liveness, identity + capability-credential auth, and the registerFamilyHandler(family, handler) seam every family module attaches to. Built on @nanobpm/agentic-protocol; the Camunda-8 engine transport is untouched.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "nanobpm",
+    "agentic",
+    "channel",
+    "hub",
+    "websocket"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/agentic-channel"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./source": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@nanobpm/agentic-protocol": "^0.1.0",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.9.3"
+  }
+}

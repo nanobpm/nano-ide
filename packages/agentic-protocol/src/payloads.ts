@@ -144,6 +144,9 @@ function validateBlackboard(p: Record<string, unknown>, errors: PayloadError[]):
   if ("since" in p && (typeof p.since !== "number" || !Number.isInteger(p.since) || p.since < 0)) {
     errors.push({ code: "bad-since", message: "blackboard.since must be a non-negative integer when present" });
   }
+  if ("files" in p && (!Array.isArray(p.files) || !p.files.every((f) => typeof f === "string"))) {
+    errors.push({ code: "bad-files", message: "blackboard.files must be an array of strings when present" });
+  }
 }
 
 function validateRelay(p: Record<string, unknown>, errors: PayloadError[]): void {

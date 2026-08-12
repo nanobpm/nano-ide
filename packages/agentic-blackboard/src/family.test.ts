@@ -234,8 +234,16 @@ test("a malformed blackboard payload is rejected and never touches the store", a
   conn.receive(frame("blackboard", { op: "append", body: "   " }, 2));
   await tick();
 
+  // file-claim whose files[] carries a non-string: must be rejected outright, not
+  // silently coerced to its string subset (which would store an incomplete claim
+  // and skew conflict detection).
+  conn.receive(
+    frame("blackboard", { op: "append", authorTask: "t1", kind: "file-claim", files: ["a.rs", 123], body: "t1" }, 3),
+  );
+  await tick();
+
   assert.equal(store.count("board-cap"), 0);
-  assert.equal(errors.length, 2);
+  assert.equal(errors.length, 3);
   assert.ok(errors.every((e) => e instanceof BlackboardPayloadError));
 
   await hub.close();

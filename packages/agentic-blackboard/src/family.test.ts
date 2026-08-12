@@ -53,7 +53,9 @@ class FakeTransport implements ChannelTransport {
 }
 
 function frame(family: MessageFamily, payload: unknown, seq = 1): Uint8Array {
-  const f: Frame = { lane: "control", family, seq, payload };
+  // Blackboard requests ride the `interactive` lane per the protocol conformance
+  // corpus; replies still come back on the `control`/facts lane (see `lastReply`).
+  const f: Frame = { lane: "interactive", family, seq, payload };
   return encodeFrame(f);
 }
 

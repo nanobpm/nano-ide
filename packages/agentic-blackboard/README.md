@@ -34,7 +34,7 @@ head-of-line-blocked behind a bulk-output storm (invariant 5).
   "files": ["db/migrations/003_agentic_blackboard.sql"], "body": "why",
   "wave": 4, "dedupeKey": "optional-idempotency-key" }
 // reply (control lane, echoes the request seq)
-{ "op": "append", "scope": "<board>", "inserted": true, "id": 7, "conflicts": [] }
+{ "op": "append", "inserted": true, "id": 7, "conflicts": [] }
 ```
 
 - `kind` is one of `file-claim`, `constraint-change`, `scope-change`, `learning`,
@@ -53,7 +53,7 @@ head-of-line-blocked behind a bulk-output storm (invariant 5).
 // request
 { "op": "read", "since": 12 }   // `since` optional
 // reply
-{ "op": "read", "scope": "<board>", "cursor": 20, "entries": [ /* id > since, write order */ ] }
+{ "op": "read", "cursor": 20, "entries": [ /* id > since, write order */ ] }
 ```
 
 `cursor` is the board's head id (the true head even when `since` filters every

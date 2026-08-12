@@ -1,0 +1,50 @@
+{
+  "name": "@nanobpm/agentic-vocab",
+  "version": "0.1.0",
+  "description": "Vocab resolver + core vocabulary for the Nano agentic protocol (ADR 0056, S3): the capability-declaration handshake (REGISTER {capability} -> SERVE [leaf tokens]), the opinionated core vocabulary (planning.*/qa.*/implementation.*/ci.*/decide + seats), author-extension merge in the same S0 schema, and the diversity SLO (family(#red) != family(#blue), warn-default with strict opt-in per role). Built on @nanobpm/agentic-protocol.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "nanobpm",
+    "agentic",
+    "vocab",
+    "resolver",
+    "serve",
+    "diversity"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/agentic-vocab"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./source": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@nanobpm/agentic-protocol": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  }
+}

@@ -64,8 +64,8 @@ urban run        # start workers and serve surfaces
 ## Library API
 
 Everything the CLI does is available programmatically. Import the whole surface
-from `@nanobpm/urban`, or the focused subpaths `@nanobpm/urban/runtime` and
-`@nanobpm/urban/toolkit`.
+from `@nanobpm/urban`, or the focused subpaths `@nanobpm/urban/runtime`,
+`@nanobpm/urban/toolkit`, and `@nanobpm/urban/effect`.
 
 ### Runtime — run an app
 
@@ -243,6 +243,48 @@ so it warns and degrades to `skip`. For **durable, clustered** scheduling that
 survives restarts, model a timer **start**/**intermediate** event instead with
 `w.startOn(...)` / `w.timer(...)` from [`@nanobpm/workflow`](../workflow) — the
 engine owns those.
+
+## Effect — typed errors & scoped resources (`@nanobpm/urban/effect`)
+
+A tiny, **zero-dependency**, Effect-like core for the imperative seams (workers,
+provisioning, resource lifecycles) — without pulling in the `effect` package or
+its viral paradigm. It gives you the three ergonomics you actually reach for:
+
+- **Typed-error `Result<A, E>` with generator do-notation.** `gen(function* … )`
+  + `yield*` threads success values and short-circuits on the first failure,
+  automatically inferring the union of every failure type into `E` — like
+  `Effect.gen` + `yield*`.
+- **Tagged errors + exhaustive matching.** `tag("NotFound")` builds a discriminated
+  error; `matchTags` forces you to handle **every** variant (omitting one is a
+  compile error), like `Data.TaggedError` + `catchTags`.
+- **Scoped resources.** `scoped` + `acquireRelease` run every release on every exit
+  — success, failure, or thrown — LIFO, like `Effect.scoped`.
+
+```ts
+import { gen, ok, fail, tag, matchTags, scoped, acquireRelease } from "@nanobpm/urban/effect";
+
+const parse = (s: string) => (s ? ok(s.length) : fail(tag("Empty")));
+const check = (n: number) => (n > 3 ? fail(tag("TooLong", { n })) : ok(n));
+
+const run = (s: string) =>
+  gen(function* () {
+    const n = yield* parse(s);        // E gains "Empty"
+    return yield* check(n);           // E gains "TooLong"
+  });                                 // Result<number, {_tag:"Empty"} | {_tag:"TooLong", n:number}>
+
+const r = run("hello");
+if (r._tag === "Fail") {
+  matchTags(r.error, {                // must handle both — omit one and it won't compile
+    Empty: () => "was empty",
+    TooLong: (e) => `too long: ${e.n}`,
+  });
+}
+
+await scoped(async (scope) => {
+  const dir = acquireRelease(scope, () => mkdtemp(), (d) => rm(d)); // released on any exit
+  // …use dir…
+});
+```
 
 ## Related packages
 

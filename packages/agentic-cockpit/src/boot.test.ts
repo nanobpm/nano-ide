@@ -226,6 +226,49 @@ test("drilling the same stream twice does not re-open; a different stream switch
   assert.equal(cockpit.currentStream, "ci-b");
 });
 
+test("a synchronous failure building a new drill is reported and leaves no stale current stream", async () => {
+  const r = rig();
+  let mounts = 0;
+  const flaky: CockpitEnv = {
+    ...r.env,
+    createTerminal: (terminalHost) => {
+      mounts += 1;
+      // The second drill's terminal fails to build.
+      if (mounts === 2) throw new Error("terminal boom");
+      return r.env.createTerminal(terminalHost);
+    },
+  };
+  const cockpit = bootCockpit(flaky);
+  await cockpit.refresh();
+
+  cockpit.drill("ci-a");
+  assert.equal(cockpit.currentStream, "ci-a");
+  assert.equal(r.sockets.length, 1);
+
+  // Switching streams: building the new drill throws synchronously. The prior
+  // client is still closed, the error is routed to onError, and currentStream
+  // reports no live drill — never the stale, already-closed "ci-a".
+  cockpit.drill("ci-b");
+  assert.equal(r.sockets[0]?.closed, true, "the previous connection was closed");
+  assert.equal(r.sockets.length, 1, "no socket opened for the failed drill");
+  assert.equal(cockpit.currentStream, undefined, "no stale current stream after a failed drill");
+  assert.match(String(r.errors.at(-1)), /terminal boom/);
+});
+
+test("an invalid credit fails the drill into onError instead of escaping the handler", async () => {
+  const r = rig();
+  const badCredit: CockpitEnv = { ...r.env, credit: 0 };
+  const cockpit = bootCockpit(badCredit);
+  await cockpit.refresh();
+
+  // TerminalSession construction rejects a non-positive credit; the throw is
+  // caught, routed to onError, and no drill/socket is left dangling.
+  cockpit.drill("ci-a");
+  assert.equal(cockpit.currentStream, undefined);
+  assert.equal(r.sockets.length, 0, "connect never ran, so no socket was opened");
+  assert.match(String(r.errors.at(-1)), /credit must be a positive safe integer/);
+});
+
 test("start runs a pass and self-schedules the next; stop halts it", async () => {
   const r = rig();
   const cockpit = bootCockpit(r.env);

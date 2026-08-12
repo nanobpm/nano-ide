@@ -206,30 +206,42 @@ class Cockpit implements CockpitHandle {
   drill(stream: string): void {
     if (this.#disposed) return;
     if (this.#drill?.stream === stream) return;
+    // Close and drop the prior drill up-front so a synchronous failure while
+    // building the new one (e.g. createTerminal, an invalid TerminalSession
+    // credit, or connect throwing) can't leave #drill pointing at an
+    // already-closed client — currentStream would then report a dead stream.
+    // #drill is re-set only once the new client is fully wired and opened, so
+    // state stays consistent even when the new drill fails to initialize; the
+    // failure is routed to onError like every other relay/terminal error.
     this.#drill?.client.close();
+    this.#drill = undefined;
 
-    // Fresh terminal for the newly selected worker.
-    this.#terminalHost.replaceChildren();
-    const sink = this.#env.createTerminal(this.#terminalHost);
+    try {
+      // Fresh terminal for the newly selected worker.
+      this.#terminalHost.replaceChildren();
+      const sink = this.#env.createTerminal(this.#terminalHost);
 
-    let session: TerminalSession | undefined;
-    const client = new RelayChannelClient({
-      connect: this.#env.connectRelay,
-      onRelay: (message) => session?.handle(message),
-      // Re-attach on EVERY (re)connect → resume-from-offset: the terminal
-      // survives a cockpit reconnect without losing or double-writing output.
-      onOpen: () => session?.attach(),
-      schedule: this.#env.schedule,
-      onError: (err) => this.#env.onError?.(err),
-    });
-    session = new TerminalSession({
-      stream,
-      sink,
-      send: (message) => client.sendRelay(message),
-      credit: this.#env.credit,
-    });
-    this.#drill = { stream, client };
-    client.open();
+      let session: TerminalSession | undefined;
+      const client = new RelayChannelClient({
+        connect: this.#env.connectRelay,
+        onRelay: (message) => session?.handle(message),
+        // Re-attach on EVERY (re)connect → resume-from-offset: the terminal
+        // survives a cockpit reconnect without losing or double-writing output.
+        onOpen: () => session?.attach(),
+        schedule: this.#env.schedule,
+        onError: (err) => this.#env.onError?.(err),
+      });
+      session = new TerminalSession({
+        stream,
+        sink,
+        send: (message) => client.sendRelay(message),
+        credit: this.#env.credit,
+      });
+      client.open();
+      this.#drill = { stream, client };
+    } catch (err) {
+      this.#env.onError?.(err);
+    }
   }
 
   dispose(): void {

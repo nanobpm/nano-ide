@@ -164,10 +164,14 @@ export class AgenticClient {
     };
     this.reconnectDelay = this.reconnectPolicy.initialDelayMs;
     // Reject timing/backoff options that Node would coerce into a 0ms hot loop.
+    // heartbeat/serveTimeout accept 0 as a "disabled" sentinel (guarded with > 0
+    // at use), but reconnect delays have no such sentinel — enabled:false disables
+    // reconnect — so a 0ms initial/max delay is only ever a hot loop (0 * factor
+    // stays 0, and maxDelayMs clamps every backoff back to 0): require >= 1.
     assertFiniteAtLeast("heartbeatIntervalMs", this.heartbeatIntervalMs, 0);
     assertFiniteAtLeast("serveTimeoutMs", this.serveTimeoutMs, 0);
-    assertFiniteAtLeast("reconnect.initialDelayMs", this.reconnectPolicy.initialDelayMs, 0);
-    assertFiniteAtLeast("reconnect.maxDelayMs", this.reconnectPolicy.maxDelayMs, 0);
+    assertFiniteAtLeast("reconnect.initialDelayMs", this.reconnectPolicy.initialDelayMs, 1);
+    assertFiniteAtLeast("reconnect.maxDelayMs", this.reconnectPolicy.maxDelayMs, 1);
     assertFiniteAtLeast("reconnect.factor", this.reconnectPolicy.factor, 1);
     this.schedule =
       options.schedule ??
@@ -297,9 +301,11 @@ export class AgenticClient {
     const offset = this.relayOffsets.get(stream) ?? 0;
     const payload: RelayPayload = { stream, offset, chunk };
     // Advance the per-stream offset only if the frame was actually accepted
-    // for sending. A rejected relay (invalid payload) must not consume offset
-    // space, or every subsequent relay's offset would be inconsistent with the
-    // bytes the hub actually received.
+    // for sending. A relay rejected for invalid payload, refused because the
+    // client is closed, OR dropped by the QoS overflow policy (ring full of
+    // higher-priority traffic) must not consume offset space, or every
+    // subsequent relay's offset would be inconsistent with the bytes the hub
+    // actually received.
     if (this.enqueue("relay", OUTBOUND_LANE.relay, payload)) {
       this.relayOffsets.set(stream, offset + byteLength(chunk));
     }
@@ -554,9 +560,13 @@ export class AgenticClient {
       return false;
     }
     const frame: Frame = { lane, family, seq: this.nextSeq(), payload };
-    this.ring.enqueue(frame);
+    // The QoS overflow policy can drop the INCOMING frame when the ring is full
+    // of strictly higher-priority traffic (it returns the frame as `evicted` and
+    // leaves the buffer untouched). Report that as not-accepted so offset-tracking
+    // callers (relay) don't advance past bytes that never entered the buffer.
+    const { evicted } = this.ring.enqueue(frame);
     this.pump();
-    return true;
+    return evicted !== frame;
   }
 
   /** True once close() has been called — the terminal state (see {@link close}). */

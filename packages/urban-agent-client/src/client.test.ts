@@ -192,6 +192,31 @@ test("relay offset tracks UTF-8 byte length per stream, independently", () => {
   client.close();
 });
 
+test("a relay dropped by the QoS overflow policy does not advance the stream offset", () => {
+  // With a single ring slot, the register buffered while the hub is down (control
+  // lane) fills the ring. A relay (bulk) enqueued now is the least-important frame
+  // in play, so the overflow policy DROPS the incoming relay rather than evict the
+  // higher-priority register. A dropped relay must consume no offset space, or the
+  // hub-side resume-from-offset (S5) would see a phantom gap for bytes never sent.
+  const { client, t } = newClient({ bufferCapacity: 1 });
+  client.connect(); // transport built, hub still down
+  client.register({ capability: { cognition: "high" } }).catch(() => {}); // control frame fills the slot; rejected on close()
+  assert.equal(client.buffered, 1, "the buffered register occupies the single ring slot");
+
+  client.relay("s", "dropped"); // bulk into a control-full ring → dropped
+  assert.equal(client.buffered, 1, "the dropped relay never entered the ring");
+
+  t.last().fireOpen(); // hub up: register drains, freeing the ring
+  client.relay("s", "sent"); // first relay actually accepted for stream "s"
+  const relays = t.last().sentFrames.filter((f) => f.family === "relay");
+  assert.deepEqual(
+    relays.map((f) => f.payload),
+    [{ stream: "s", offset: 0, chunk: "sent" }],
+    "offset starts at 0 — the earlier dropped relay consumed no offset space",
+  );
+  client.close();
+});
+
 test("buffers while the hub is down and drains in QoS order on reconnect", () => {
   const { client, t } = newClient({ reconnect: { enabled: false }, capability: { cognition: "high" } });
   client.connect(); // transport built but not yet open
@@ -710,6 +735,11 @@ test("construction rejects timing/backoff options Node would coerce into a 0ms h
   // A backoff factor < 1 shrinks the delay toward 0 on every retry — also a hot loop.
   assert.throws(() => new AgenticClient({ ...base, reconnect: { factor: 0.5 } }), RangeError);
   assert.throws(() => new AgenticClient({ ...base, reconnect: { factor: Number.NaN } }), RangeError);
+  // Reconnect delays have no "disabled" sentinel (enabled:false disables reconnect),
+  // so 0ms is only ever a hot loop: 0 * factor stays 0, and a 0ms maxDelayMs clamps
+  // every backoff back to 0. Both must be rejected (>= 1), unlike heartbeat/serveTimeout.
+  assert.throws(() => new AgenticClient({ ...base, reconnect: { initialDelayMs: 0 } }), RangeError);
+  assert.throws(() => new AgenticClient({ ...base, reconnect: { maxDelayMs: 0 } }), RangeError);
 
   // The disabling sentinels stay legal: heartbeat 0 (off) and serveTimeout 0 (no timeout).
   assert.doesNotThrow(() => new AgenticClient({ ...base, heartbeatIntervalMs: 0, serveTimeoutMs: 0 }));

@@ -146,7 +146,7 @@ test("grid cells wrap long, space-less values so one cell can't overflow the tab
   // column can shrink to fit its container.
   const res = await dispatch("GET", "/");
   const html = res.body ?? "";
-  const rule = (html.match(/table\.pc-grid th, table\.pc-grid td \{[^}]*\}/) ?? [""])[0];
+  const rule = (html.match(/table\.pc-grid th,\s*table\.pc-grid td\s*\{[^}]*\}/) ?? [""])[0];
   assert.ok(rule, "grid th/td rule must be present");
   assert.match(rule, /overflow-wrap:anywhere/);
   assert.match(rule, /max-width:/);

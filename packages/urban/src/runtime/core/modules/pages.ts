@@ -540,7 +540,7 @@ table.pc-grid { width:100%; border-collapse:collapse; font-size:.9rem; }
    layout can shrink it to fit; max-width caps a single column when there is
    ample room. vertical-align:top keeps a multi-line cell aligned with its
    single-line neighbours. */
-table.pc-grid th, table.pc-grid td { text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--nano-edge); overflow-wrap:anywhere; word-break:break-word; max-width:32rem; vertical-align:top; }
+table.pc-grid th, table.pc-grid td { text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--nano-edge); overflow-wrap:anywhere; word-wrap:break-word; max-width:32rem; vertical-align:top; }
 table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-tabs { display:flex; gap:.5rem; margin-bottom:.75rem; }
 .pc-tab { padding:.35rem .8rem; border:1px solid var(--nano-edge); border-radius:.4rem; background:transparent; color:inherit; font:inherit; cursor:pointer; }

@@ -146,13 +146,21 @@ export class QosScheduler {
         this.#sink(frame);
       }
     }
-    const take = Math.min(this.#credit, this.#bulkCount);
-    if (take > 0) {
-      this.#credit -= take;
-      const bulkFrames = this.#takeBulk(take);
-      for (const bulkFrame of bulkFrames) {
-        this.#sink(bulkFrame);
+    // Drain the bulk lane one frame at a time rather than removing the whole
+    // credit-worth up-front. Removing the frame (and spending its credit) only
+    // as it is emitted keeps "remove before sink" — a re-entrant flush() from
+    // within sink() still cannot re-emit an in-flight frame — while making the
+    // drain robust to a throwing sink: if #sink() throws mid-drain, the un-taken
+    // tail stays buffered in the ring and its credit is untouched, so a transient
+    // send failure sheds at most the one frame it was called with instead of
+    // silently dropping the rest of the backlog and burning their credit.
+    while (this.#credit > 0 && this.#bulkCount > 0) {
+      const bulkFrame = this.#shiftBulk();
+      if (bulkFrame === undefined) {
+        continue;
       }
+      this.#credit -= 1;
+      this.#sink(bulkFrame);
     }
   }
 
@@ -181,19 +189,13 @@ export class QosScheduler {
     this.#bulkCount += 1;
   }
 
-  /** Remove and return the oldest `n` bulk frames from the circular buffer. */
-  #takeBulk(n: number): Frame[] {
-    const frames: Frame[] = [];
-    for (let i = 0; i < n; i += 1) {
-      const frame = this.#bulk[this.#bulkHead];
-      this.#bulk[this.#bulkHead] = undefined;
-      this.#bulkHead = (this.#bulkHead + 1) % this.#bulkCapacity;
-      this.#bulkCount -= 1;
-      if (frame !== undefined) {
-        frames.push(frame);
-      }
-    }
-    return frames;
+  /** Remove and return the oldest bulk frame from the circular buffer (O(1)). */
+  #shiftBulk(): Frame | undefined {
+    const frame = this.#bulk[this.#bulkHead];
+    this.#bulk[this.#bulkHead] = undefined;
+    this.#bulkHead = (this.#bulkHead + 1) % this.#bulkCapacity;
+    this.#bulkCount -= 1;
+    return frame;
   }
 }
 

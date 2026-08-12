@@ -164,6 +164,43 @@ test("flush is a no-op when every lane is empty (guards the allocation-free empt
   assert.equal(s.pending, 0);
 });
 
+test("a throwing sink mid bulk-drain preserves the un-emitted tail and its credit", () => {
+  seq = 0;
+  const out: Frame[] = [];
+  // Defect-class guard: flush() removes a bulk frame and spends its credit only
+  // as it emits it. If #sink() throws mid-drain, the not-yet-taken tail must stay
+  // buffered with its credit intact — a transient send failure must not silently
+  // drop the rest of the backlog or burn credit for frames that never went out.
+  let fail = true;
+  const s = new QosScheduler({
+    sink: (f) => {
+      if (fail && tagsOf([f])[0] === "b2") {
+        throw new Error("send failed");
+      }
+      out.push(f);
+    },
+    credit: 0,
+  });
+  for (const t of ["b0", "b1", "b2", "b3", "b4"]) {
+    s.enqueue(frame("bulk", t));
+  }
+  assert.equal(s.pendingBulk, 5);
+  // Grant enough credit to drain all five; the sink throws on b2 mid-drain.
+  assert.throws(() => s.grantCredit(5), /send failed/);
+  // remove-before-sink means the failed frame (b2) is gone, but the not-yet-
+  // emitted tail (b3, b4) is still buffered — never silently dropped.
+  assert.deepEqual(tagsOf(out), ["b0", "b1"]);
+  assert.equal(s.pendingBulk, 2);
+  // Credit was spent only for the frames actually taken (b0, b1, and the
+  // attempted b2); the un-emitted tail keeps its credit, so 5 - 3 = 2 remains.
+  assert.equal(s.credit, 2);
+  // A subsequent flush with a working sink drains the preserved tail, in order.
+  fail = false;
+  s.flush();
+  assert.deepEqual(tagsOf(out), ["b0", "b1", "b3", "b4"]);
+  assert.equal(s.pendingBulk, 0);
+});
+
 test("clear discards buffered frames across all lanes", () => {
   seq = 0;
   const out: Frame[] = [];

@@ -569,6 +569,12 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-collapse-header { display:flex; align-items:center; gap:.5rem; width:100%; margin:0 0 .75rem; padding:0; background:transparent; border:0; color:inherit; font:inherit; font-size:1rem; font-weight:600; cursor:pointer; text-align:left; }
 .pc-chevron-inline { color:var(--nano-text-faint); font-size:.75rem; width:1em; }
 .pc-card-body[hidden] { display:none; }
+/* Grid group headers (dataGrid groupBy): a full-width, clickable band that
+   collapses/expands its member rows; the collapsed state is persisted. */
+.pc-group-header td { padding:0; background:var(--nano-inset); border-top:1px solid var(--nano-edge); }
+.pc-group-toggle { display:flex; align-items:center; gap:.5rem; width:100%; padding:.4rem .6rem; background:transparent; border:0; color:inherit; font:inherit; font-weight:600; cursor:pointer; text-align:left; }
+.pc-group-toggle:hover { background:var(--nano-hover); }
+.pc-group-title { font-size:.9rem; }
 /* A standalone button node + the modal it opens (e.g. a copy-pasteable prompt). */
 .pc-buttonrow { margin:1rem 0; }
 .pc-btn-ghost { background:transparent; color:var(--nano-text-muted); border:1px solid var(--nano-edge); }
@@ -585,6 +591,11 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-main-col { flex:1 1 auto; min-width:0; }
 .pc-nav-title { font-weight:650; }
 .pc-bar { display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; border-bottom:1px solid var(--nano-edge); padding-bottom:.6rem; margin-bottom:1.25rem; }
+/* Opt-in sticky bar: stays pinned to the viewport top while the page scrolls.
+   The negative inline margin + matching padding lets its background span the
+   body's 2rem inline padding so scrolled content never shows beside it, and a
+   solid app-colored background hides content passing underneath. */
+.pc-bar.pc-sticky { position:sticky; top:0; z-index:20; background:var(--nano-app); margin-inline:-2rem; padding-inline:2rem; padding-top:.6rem; }
 .pc-bar .pc-nav-title { margin-right:.5rem; }
 .pc-bar .pc-nav-items { display:flex; gap:.25rem; flex-wrap:wrap; }
 .pc-rail { display:flex; flex-direction:column; gap:.5rem; }
@@ -615,15 +626,34 @@ const PAGE_ID = /^[A-Za-z0-9_-]+$/;
 function safePageId(value) {
   return typeof value === "string" && PAGE_ID.test(value);
 }
-function currentPage() {
-  try {
-    const raw = decodeURIComponent((location.hash || "").replace(/^#\/?/, ""));
-    return safePageId(raw) ? raw : HOME;
-  } catch (e) {
-    return HOME;
-  }
+// A route is #/<page> or #/<page>/<url-encoded-param>. We split on the FIRST
+// "/" *before* decoding, so a param that itself contains encoded slashes or
+// hashes (e.g. a plan_key "owner/repo#123" carried as "owner%2Frepo%23123")
+// survives intact instead of the inner "%2F" being decoded into a second
+// segment. The page segment is still restricted to the safe id charset; the
+// param is opaque free text (bound only as a whitelisted '?' SQL value, or
+// interpolated as DOM text — never as HTML/markup).
+function parseRoute() {
+  const raw = (location.hash || "").replace(/^#\/?/, "");
+  const slash = raw.indexOf("/");
+  const pageRaw = slash >= 0 ? raw.slice(0, slash) : raw;
+  const paramRaw = slash >= 0 ? raw.slice(slash + 1) : "";
+  let page = HOME, param = "", pageOk = false;
+  try { const p = decodeURIComponent(pageRaw); if (safePageId(p)) { page = p; pageOk = true; } } catch (e) { /* keep HOME */ }
+  // Only carry the param when the page segment resolved to a real (safe-id) page.
+  // A malformed/unknown page like #/not-a-page/x falls back to HOME and must NOT
+  // inherit x, or that stray param would silently scope every eqParam grid and
+  // {{param}} on the home page to an entity the user never selected.
+  if (pageOk) { try { param = paramRaw ? decodeURIComponent(paramRaw) : ""; } catch (e) { param = ""; } }
+  return { page, param };
 }
+function currentPage() { return parseRoute().page; }
 let CURRENT = currentPage();
+// The current route param (the "/<param>" tail, or "" when absent). Exposed to a
+// page's datasource filters (a filter with { eqParam: true } binds its value to
+// this) and to {{param}} text interpolation, so one page template can scope
+// every section to a selected entity (e.g. an epic's plan_key).
+let PARAM = parseRoute().param;
 
 // Per-render teardown. Each dataGrid registers its poll interval + pc:refresh
 // listener here; navigating to another page runs every disposer before the new
@@ -792,10 +822,19 @@ function el(tag, attrs = {}, ...kids) {
   return n;
 }
 
+// Interpolate the {{param}} token in a schema-supplied string with the current
+// route param. The result is only ever set as DOM text (textContent), so the
+// substituted value cannot inject markup. Other tokens are left untouched.
+// A function replacement inserts PARAM literally; a plain string replacement would
+// treat replacement patterns inside PARAM (an id like the dollar-one token) as
+// special and render the wrong text.
+function interpParam(s) {
+  return typeof s === "string" ? s.replace(/\{\{param\}\}/g, () => PARAM) : s;
+}
 function renderText(node) {
   const v = node.props.variant;
   const cls = v === "heading" ? "pc-heading" : v === "sub" ? "pc-sub" : "pc-body";
-  return el(v === "heading" ? "h1" : "p", { class: cls }, node.props.text || "");
+  return el(v === "heading" ? "h1" : "p", { class: cls }, interpParam(node.props.text) || "");
 }
 
 // Copy text to the clipboard, resiliently. The async Clipboard API is tried
@@ -989,6 +1028,20 @@ function gridCell(col, row) {
       );
     }
   }
+  if (col.link && col.link.kind === "page" && col.link.page && col.link.keyField) {
+    // An in-app link to another page, scoped to this row: #/<page>/<key>. The
+    // key (e.g. a plan_key "owner/repo#123") is URL-encoded into the route's
+    // param tail, which parseRoute() decodes back verbatim; the page id is
+    // validated against the safe-id charset and the key must be non-empty, so a
+    // blank/keyless cell stays plain text. Navigation is a pure hash change
+    // (no new tab, no server hit) — the SPA router re-renders in place.
+    const key = row[col.link.keyField];
+    const keyStr = key == null ? "" : String(key).trim();
+    if (text !== "" && safePageId(col.link.page) && keyStr !== "") {
+      const href = "#/" + encodeURIComponent(col.link.page) + "/" + encodeURIComponent(keyStr);
+      return el("td", {}, el("a", { class: "pc-link", href }, text));
+    }
+  }
   if (col.link && col.link.kind === "processExplorer" && col.link.keyField) {
     const key = row[col.link.keyField];
     const keyStr = key == null ? "" : String(key).trim();
@@ -1161,6 +1214,7 @@ function renderDataGrid(node) {
     const qs = [];
     for (const f of filters || []) {
       if (Array.isArray(f.in)) qs.push("where=" + encodeURIComponent(f.field + ":in:" + f.in.join(",")));
+      else if (f.eqParam) qs.push("where=" + encodeURIComponent(f.field + ":" + PARAM));
       else qs.push("where=" + encodeURIComponent(f.field + ":" + f.eq));
     }
     if (order && order.field) qs.push("order=" + encodeURIComponent(order.field + ":" + (order.dir || "asc")));
@@ -1291,7 +1345,7 @@ function renderDataGrid(node) {
     return box;
   }
 
-  function renderRow(row) {
+  function renderRow(row, sink) {
     const cells = cols.map((c) => gridCell(c, row));
     const key = rowKeyOf(row);
     let toggle = null;
@@ -1309,6 +1363,9 @@ function renderDataGrid(node) {
     }
     const tr = el("tr", {}, ...cells);
     tbody.append(tr);
+    // When grouping, the caller collects every <tr> this row produced (the data
+    // row plus any detail row) so a group header can hide/show them as one unit.
+    if (sink) sink.push({ tr, isDetail: false, key });
     if (detail && toggle) {
       const isOpen = key != null && expanded.has(key);
       // Reuse an already-built detail row for an open PR across refreshes so its
@@ -1336,6 +1393,67 @@ function renderDataGrid(node) {
         }
       });
       tbody.append(dtr);
+      if (sink) sink.push({ tr: dtr, isDetail: true, key });
+    }
+  }
+
+  // Append the fetched rows into the tbody, either flat (default) or partitioned
+  // into collapsible groups when the grid declares 'groupBy: "<field>"'. Each
+  // group renders a clickable header row ("<Label> <value> (<count>)") that
+  // collapses/expands its member rows as one unit; the collapsed state is
+  // persisted (localStorage, keyed by page + node + group value) so it survives
+  // both the refresh poll and a full reload — the same durability the top-level
+  // 'collapsible' node wrapper gives. Group order is numeric-aware ascending
+  // (so waves 1,2,10 sort naturally), falling back to lexical for non-numeric
+  // keys. 'groupDefaultCollapsed' seeds each group collapsed until toggled.
+  function appendRows(rows) {
+    const groupBy = p.groupBy;
+    // Treat a non-string groupBy as "no grouping": labelBase calls groupBy.charAt()
+    // below, so a truthy non-string (number/object from a malformed page schema)
+    // would throw at render time and break the whole page instead of one grid.
+    if (!groupBy || typeof groupBy !== "string") { for (const row of rows) renderRow(row, null); return; }
+    const order = [];
+    const groups = new Map();
+    for (const row of rows) {
+      const gvRaw = row[groupBy];
+      const gv = gvRaw == null ? "" : String(gvRaw);
+      if (!groups.has(gv)) { groups.set(gv, []); order.push(gv); }
+      groups.get(gv).push(row);
+    }
+    order.sort((a, b) => {
+      const na = Number(a), nb = Number(b);
+      if (a !== "" && b !== "" && !Number.isNaN(na) && !Number.isNaN(nb)) return na - nb;
+      return a < b ? -1 : a > b ? 1 : 0;
+    });
+    const labelBase = p.groupLabel != null
+      ? String(p.groupLabel)
+      : groupBy.charAt(0).toUpperCase() + groupBy.slice(1);
+    for (const gv of order) {
+      const groupRows = groups.get(gv);
+      const gkey = "pc:collapsed:" + CURRENT + ":" + (node.id || p.title || "grid") + ":g:" + gv;
+      let gcollapsed = readCollapsed(gkey, !!p.groupDefaultCollapsed);
+      const chevron = el("span", { class: "pc-chevron-inline" }, gcollapsed ? "▸" : "▾");
+      const label = (gv === "" ? labelBase + " —" : labelBase + " " + gv) + " (" + groupRows.length + ")";
+      const btn = el("button", { class: "pc-group-toggle", type: "button" },
+        chevron, el("span", { class: "pc-group-title" }, label));
+      tbody.append(el("tr", { class: "pc-group-header" }, el("td", { colspan: span }, btn)));
+      const members = [];
+      for (const row of groupRows) renderRow(row, members);
+      const applyGroup = () => {
+        chevron.textContent = gcollapsed ? "▸" : "▾";
+        btn.setAttribute("aria-expanded", String(!gcollapsed));
+        for (const m of members) {
+          m.tr.hidden = gcollapsed
+            ? true
+            : (m.isDetail ? !(m.key != null && expanded.has(m.key)) : false);
+        }
+      };
+      btn.addEventListener("click", () => {
+        gcollapsed = !gcollapsed;
+        writeCollapsed(gkey, gcollapsed);
+        applyGroup();
+      });
+      applyGroup();
     }
   }
 
@@ -1351,7 +1469,15 @@ function renderDataGrid(node) {
 
   async function refresh() {
     try {
-      const { rows } = await getJSON(dataUrl(p.data.source, p.data.table, activeFilter, p.data.orderBy));
+      // A grid scoped to a route param (any eqParam filter) means "show the rows
+      // for the selected entity". With no param present, PARAM is empty and emitting
+      // a where clause of field-colon-empty would read server-side as field equals
+      // empty string and surface empty-valued rows. That is not the selected entity's
+      // rows (there is no selection), so short-circuit to zero rows without a request.
+      const paramScoped = (activeFilter || []).some((f) => f && f.eqParam);
+      const { rows } = paramScoped && PARAM === ""
+        ? { rows: [] }
+        : await getJSON(dataUrl(p.data.source, p.data.table, activeFilter, p.data.orderBy));
       // Forget expansion / cached detail nodes for rows no longer present so the maps
       // don't grow without bound and a stale answer can't resurface on a key reuse.
       if (p.rowKey) {
@@ -1390,7 +1516,7 @@ function renderDataGrid(node) {
         }
       }
       tbody.replaceChildren();
-      for (const row of rows) renderRow(row);
+      appendRows(rows);
       if (!rows.length) tbody.append(el("tr", {}, el("td", { colspan: span }, "No rows")));
       if (keepFocus && active.isConnected) {
         active.focus();
@@ -1457,7 +1583,14 @@ function fillNav(list, items) {
 function renderNav(node) {
   const p = node.props || {};
   const rail = p.variant === "rail";
-  const nav = el("nav", { class: rail ? "pc-nav pc-rail" : "pc-nav pc-bar" });
+  // A bar nav can opt into staying pinned to the top of the viewport while the
+  // page scrolls (sticky) — useful on the long, multi-section operator pages so
+  // the page switcher is always reachable. Rails are already full-height, so the
+  // flag only applies to the bar variant.
+  const barSticky = !rail && p.sticky === true;
+  const nav = el("nav", {
+    class: (rail ? "pc-nav pc-rail" : "pc-nav pc-bar") + (barSticky ? " pc-sticky" : ""),
+  });
   if (p.title != null) nav.append(el("div", { class: "pc-nav-title" }, String(p.title)));
   const list = el("div", { class: "pc-nav-items" });
   nav.append(list);
@@ -1551,7 +1684,9 @@ function makeCollapsible(node, card) {
 // tearing down the previous page's grid polls first.
 async function renderPage() {
   teardown();
-  CURRENT = currentPage();
+  const route = parseRoute();
+  CURRENT = route.page;
+  PARAM = route.param;
   try {
     const doc = await getJSON("/app/pages/" + encodeURIComponent(CURRENT));
     document.title = (doc && doc.title) || "Urban App";

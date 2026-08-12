@@ -523,6 +523,16 @@ test("the renderer ships a button node that opens a copy-pasteable modal", async
   assert.match(js, /if \(ev\.key !== "Tab"\) return/);
   assert.match(js, /ev\.preventDefault\(\); last\.focus\(\)/);
   assert.match(js, /ev\.preventDefault\(\); first\.focus\(\)/);
+  // Only one modal opens at a time: a second open (e.g. double-click) is dropped
+  // so overlays and document-level keydown listeners never stack.
+  assert.match(js, /let modalOpen = false/);
+  assert.match(js, /if \(modalOpen\) return/);
+  assert.match(js, /modalOpen = true/);
+  assert.match(js, /modalOpen = false/);
+  // The aria-labelledby title id is unique per modal instance so it can't
+  // collide with a pre-existing page id and mis-associate the label.
+  assert.match(js, /let modalSeq = 0/);
+  assert.match(js, /"pc-modal-title-" \+ \(\+\+modalSeq\)/);
 });
 
 

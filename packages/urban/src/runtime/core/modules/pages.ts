@@ -623,6 +623,15 @@ function teardown() {
   }
 }
 
+// Monotonic counter for per-modal element ids. aria-labelledby needs a unique
+// title id: a fixed id would clash if the page already contains that id, and
+// mis-associate the label for assistive tech.
+let modalSeq = 0;
+// At most one modal is open at a time. A double-click (or two rapid button
+// clicks) would otherwise stack multiple overlays + document-level keydown
+// listeners; this guard keeps a single dialog + handler live.
+let modalOpen = false;
+
 // Theme bridge for the Nano console embed. The app runs in a sandboxed,
 // same-origin iframe, so the console's --nano-* custom properties and its
 // data-appearance never cascade in. Instead the console postMessages its
@@ -821,11 +830,16 @@ function resolveCopyText(text) {
 // carries copyText it renders a scrollable code block plus a Copy button (see
 // copyToClipboard for the sandbox-safe fallback).
 function openModal(m) {
+  // Only one modal at a time — drop a second (e.g. double-click) open so we
+  // never stack overlays or register duplicate document-level keydown handlers.
+  if (modalOpen) return;
+  modalOpen = true;
   const overlay = el("div", { class: "pc-modal-overlay" });
   // role="dialog" + aria-modal need an accessible name: label by the visible
   // title when present, else fall back to a generic aria-label so screen readers
-  // don't announce an unnamed dialog.
-  const titleId = m.title ? "pc-modal-title" : null;
+  // don't announce an unnamed dialog. The title id is unique per instance so it
+  // can't collide with a pre-existing page id.
+  const titleId = m.title ? "pc-modal-title-" + (++modalSeq) : null;
   const dialog = el("div", titleId
     ? { class: "pc-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId }
     : { class: "pc-modal", role: "dialog", "aria-modal": "true", "aria-label": "Dialog" });
@@ -841,6 +855,7 @@ function openModal(m) {
   function close() {
     if (closed) return;
     closed = true;
+    modalOpen = false;
     document.removeEventListener("keydown", onKey);
     overlay.remove();
     // A manual close (button / Escape / backdrop) never pops the disposers

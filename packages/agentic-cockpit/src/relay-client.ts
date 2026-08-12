@@ -68,6 +68,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
 /**
  * Narrow a decoded `relay`-family payload to the inbound sub-protocol without an
  * unchecked cast (the repo bans `as`): a data chunk `{ stream, offset, chunk }`
@@ -76,12 +80,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function asRelayInbound(payload: unknown): RelayInbound | null {
   if (!isRecord(payload)) return null;
   if (payload.op === "subscribed") {
-    if (typeof payload.stream === "string" && typeof payload.gap === "number" && typeof payload.nextOffset === "number") {
+    if (
+      typeof payload.stream === "string" &&
+      typeof payload.gap === "boolean" &&
+      isNonNegativeInteger(payload.nextOffset)
+    ) {
       return { op: "subscribed", stream: payload.stream, gap: payload.gap, nextOffset: payload.nextOffset };
     }
     return null;
   }
-  if (typeof payload.stream === "string" && typeof payload.offset === "number" && typeof payload.chunk === "string") {
+  if (typeof payload.stream === "string" && isNonNegativeInteger(payload.offset) && typeof payload.chunk === "string") {
     const data: RelayPayload = { stream: payload.stream, offset: payload.offset, chunk: payload.chunk };
     return data;
   }

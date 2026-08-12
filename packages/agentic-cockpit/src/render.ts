@@ -12,15 +12,25 @@
  * {@link DocumentLike}) rather than the global `document`, for two reasons that
  * matter to this slice:
  *  1. it is the *same* function the standalone shell and the embedded (App View)
- *     host both call — passing the browser's real `document` and their own host
- *     element — so the two render **identically** by construction (one code path,
- *     no standalone/embedded branch); and
+ *     host both call — via the plain-JS `page/mount.js` adapter, which passes the
+ *     browser's real `document` and their own host element — so the two render
+ *     **identically** by construction (one code path, no standalone/embedded
+ *     branch); and
  *  2. a plain in-memory fake satisfies the structural type, so the renderer is
  *     unit-tested on Node with no DOM library and no `as` cast.
+ *
+ * These interfaces are a deliberately *minimal* subset, NOT lib.dom's `Element`/
+ * `Document`: the real DOM satisfies them at runtime (as `page/mount.js` — plain
+ * JS, untyped — relies on), but a real `HTMLElement` is not TS-assignable to
+ * {@link ElementLike} (lib.dom's `appendChild` is `Node`-constrained). Keeping the
+ * subset this narrow — rather than widening to lib.dom, which the in-memory fake
+ * could not satisfy without a banned `as` cast — is the tradeoff that buys the
+ * DOM-free Node tests. A TypeScript browser caller wanting to invoke
+ * {@link bootCockpit} directly supplies a thin structural adapter over the real DOM.
  */
 import type { CockpitLight, CockpitView, SloStatus } from "./view.ts";
 
-/** The minimal element surface the renderer builds against (a DOM `Element` satisfies it). */
+/** The minimal element surface the renderer builds against (the in-memory fake, and the real DOM at runtime, satisfy it — see file header). */
 export interface ElementLike {
   className: string;
   textContent: string | null;
@@ -30,7 +40,7 @@ export interface ElementLike {
   addEventListener(type: string, handler: () => void): void;
 }
 
-/** The minimal document surface the renderer builds against (a DOM `Document` satisfies it). */
+/** The minimal document surface the renderer builds against (the in-memory fake, and the real DOM at runtime, satisfy it — see file header). */
 export interface DocumentLike {
   createElement(tagName: string): ElementLike;
 }

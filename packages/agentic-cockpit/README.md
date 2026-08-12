@@ -30,7 +30,7 @@ one code path.
 | `view.ts` | Pure projection: S4 `DemandSupplyReport` → `CockpitView` (matrix rows, missing lights, diversity light). Deterministic, side-effect-free. |
 | `terminal-session.ts` | The relay consumer with **resume-from-offset**. Tracks `nextOffset`; re-attaches from it on every reconnect; drops already-applied replays (no loss, no dup). |
 | `relay-client.ts` | Encodes/decodes S0 frames over an injected socket; **re-opens on drop and re-fires `onOpen` on every (re)connect** so the session resumes. Timer- and transport-injected. |
-| `render.ts` | Renders a `CockpitView` against a **structural** DOM subset (`ElementLike`/`DocumentLike`), so the browser passes real DOM and tests pass a fake — one render path, no DOM library, no `as`. |
+| `render.ts` | Renders a `CockpitView` against a **structural** DOM subset (`ElementLike`/`DocumentLike`) — a deliberately minimal subset (not lib.dom) the fake and the real DOM both satisfy at runtime, so the browser passes real DOM (via the plain-JS `mount.js` adapter) and tests pass a fake — one render path, no DOM library, no `as`. |
 | `boot.ts` | Orchestration: a **self-scheduling** poll of the report + matrix render, plus drill-in wiring the terminal into a **persistent** region (a matrix refresh never wipes it). |
 
 ### Invariants honoured
@@ -65,12 +65,17 @@ The shells expect the hosting Urban app to serve two endpoints:
 
 ## Usage (embedding the core directly)
 
+The browser shells wire the cockpit through the plain-JS `page/mount.js` adapter,
+which passes the real `document`/host at runtime. `ElementLike`/`DocumentLike` are
+a minimal structural subset (not lib.dom types), so a **TypeScript** caller passes
+the real DOM through a thin structural adapter:
+
 ```ts
 import { bootCockpit } from "@nanobpm/agentic-cockpit";
 
 const cockpit = bootCockpit({
   host,                       // ElementLike — document.body or the App-View host
-  doc: document,              // DocumentLike
+  doc: document,              // DocumentLike (real DOM satisfies it at runtime)
   fetchReport: () => fetch("/app/api/agentic/demand").then((r) => r.json()),
   connectRelay: () => openRelaySocket("/agentic?token=…&capability=…"),
   createTerminal: (el) => mountXterm(el),

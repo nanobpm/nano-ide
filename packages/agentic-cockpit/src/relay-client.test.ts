@@ -64,11 +64,11 @@ test("inbound relay data and ack frames are routed to onRelay", () => {
   client.open();
 
   socket.deliver({ lane: "bulk", family: "relay", seq: 0, payload: { stream: "w1", offset: 7, chunk: "hi" } });
-  socket.deliver({ lane: "control", family: "relay", seq: 1, payload: { op: "subscribed", stream: "w1", gap: 0, nextOffset: 8 } });
+  socket.deliver({ lane: "control", family: "relay", seq: 1, payload: { op: "subscribed", stream: "w1", gap: false, nextOffset: 8 } });
 
   assert.deepEqual(received, [
     { stream: "w1", offset: 7, chunk: "hi" },
-    { op: "subscribed", stream: "w1", gap: 0, nextOffset: 8 },
+    { op: "subscribed", stream: "w1", gap: false, nextOffset: 8 },
   ]);
 });
 
@@ -94,6 +94,38 @@ test("a malformed relay payload reports an error and is not routed", () => {
   socket.deliver({ lane: "bulk", family: "relay", seq: 0, payload: { stream: "w1" } });
   assert.equal(received.length, 0);
   assert.equal(errors.length, 1);
+});
+
+test("the hub's boolean-gap subscribed ack is accepted (matches the S5 wire)", () => {
+  const socket = new FakeSocket();
+  const received: RelayInbound[] = [];
+  const errors: unknown[] = [];
+  const client = new RelayChannelClient({
+    connect: () => socket,
+    onRelay: (m) => received.push(m),
+    onError: (e) => errors.push(e),
+  });
+  client.open();
+  socket.deliver({ lane: "control", family: "relay", seq: 0, payload: { op: "subscribed", stream: "w1", gap: true, nextOffset: 3 } });
+  assert.deepEqual(received, [{ op: "subscribed", stream: "w1", gap: true, nextOffset: 3 }]);
+  assert.equal(errors.length, 0);
+});
+
+test("a non-integer or negative offset/nextOffset is rejected as malformed", () => {
+  const socket = new FakeSocket();
+  const received: RelayInbound[] = [];
+  const errors: unknown[] = [];
+  const client = new RelayChannelClient({
+    connect: () => socket,
+    onRelay: (m) => received.push(m),
+    onError: (e) => errors.push(e),
+  });
+  client.open();
+  socket.deliver({ lane: "bulk", family: "relay", seq: 0, payload: { stream: "w1", offset: 1.5, chunk: "x" } });
+  socket.deliver({ lane: "bulk", family: "relay", seq: 1, payload: { stream: "w1", offset: -1, chunk: "x" } });
+  socket.deliver({ lane: "control", family: "relay", seq: 2, payload: { op: "subscribed", stream: "w1", gap: false, nextOffset: -1 } });
+  assert.equal(received.length, 0);
+  assert.equal(errors.length, 3);
 });
 
 test("onOpen fires on every (re)connect so the session re-attaches and resumes", () => {

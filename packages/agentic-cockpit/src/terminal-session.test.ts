@@ -91,29 +91,45 @@ test("data for another stream is ignored", () => {
 });
 
 test("a subscribed ack reporting a gap fires onGap and records it", () => {
-  const gaps: number[] = [];
+  let gaps = 0;
   const session = new TerminalSession({
     stream: "worker-1",
     sink: { write: () => {} },
     send: () => {},
-    onGap: (gap) => gaps.push(gap),
+    onGap: () => {
+      gaps += 1;
+    },
   });
-  session.handle({ op: "subscribed", stream: "worker-1", gap: 5, nextOffset: 5 });
-  assert.deepEqual(gaps, [5]);
-  assert.equal(session.gap, 5);
+  session.handle({ op: "subscribed", stream: "worker-1", gap: true, nextOffset: 5 });
+  assert.equal(gaps, 1);
+  assert.equal(session.gap, true);
 });
 
 test("a subscribed ack with no gap does not fire onGap", () => {
-  const gaps: number[] = [];
+  let gaps = 0;
   const session = new TerminalSession({
     stream: "worker-1",
     sink: { write: () => {} },
     send: () => {},
-    onGap: (gap) => gaps.push(gap),
+    onGap: () => {
+      gaps += 1;
+    },
   });
-  session.handle({ op: "subscribed", stream: "worker-1", gap: 0, nextOffset: 0 });
-  assert.deepEqual(gaps, []);
-  assert.equal(session.gap, 0);
+  session.handle({ op: "subscribed", stream: "worker-1", gap: false, nextOffset: 0 });
+  assert.equal(gaps, 0);
+  assert.equal(session.gap, false);
+});
+
+test("a later no-gap ack clears a gap recorded by an earlier ack", () => {
+  const session = new TerminalSession({
+    stream: "worker-1",
+    sink: { write: () => {} },
+    send: () => {},
+  });
+  session.handle({ op: "subscribed", stream: "worker-1", gap: true, nextOffset: 5 });
+  assert.equal(session.gap, true);
+  session.handle({ op: "subscribed", stream: "worker-1", gap: false, nextOffset: 5 });
+  assert.equal(session.gap, false);
 });
 
 test("resuming from a non-zero offset subscribes there and drops earlier replays", () => {

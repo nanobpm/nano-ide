@@ -42,9 +42,9 @@ export interface CockpitEnv {
   readonly createTerminal: CreateTerminal;
   /** Reconnect scheduler for the relay client. Default `setTimeout(run, 0)`. */
   readonly schedule?: Scheduler;
-  /** Poll scheduler. Default `setTimeout`. Injected so tests drive it by hand. */
+  /** Poll scheduler. Default `setTimeout`. Injected so tests drive it by hand. Must be paired with {@link clearTimer}. */
   readonly setTimer?: (run: () => void, ms: number) => TimerHandle;
-  /** Cancels a poll timer. Default `clearTimeout`. */
+  /** Cancels a poll timer. Default `clearTimeout`. Must be paired with {@link setTimer}. */
   readonly clearTimer?: (handle: TimerHandle) => void;
   /** Poll interval in ms. Default 2000. */
   readonly refreshMs?: number;
@@ -94,6 +94,13 @@ class Cockpit implements CockpitHandle {
   constructor(env: CockpitEnv) {
     this.#env = env;
     this.#refreshMs = env.refreshMs ?? DEFAULT_REFRESH_MS;
+    // setTimer/clearTimer are a matched pair: a caller-supplied setTimer returns
+    // opaque handles the default clearTimer (which only understands the internal
+    // numeric-handle Map) cannot cancel, leaving an un-stoppable poll loop. Fail
+    // fast rather than silently accept one without the other.
+    if ((env.setTimer === undefined) !== (env.clearTimer === undefined)) {
+      throw new Error("CockpitEnv.setTimer and clearTimer must be provided together (or neither)");
+    }
     // Default timer path uses numeric handles backed by a Map, so no unchecked
     // cast is needed to feed an opaque handle back to clearTimeout (`as` is banned).
     this.#setTimer =

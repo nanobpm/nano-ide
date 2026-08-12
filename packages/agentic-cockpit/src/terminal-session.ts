@@ -13,7 +13,8 @@
  * The S5 relay wire (see `@nanobpm/agentic-relay`):
  *  - outbound `{ op: "subscribe", stream, from, credit }` — (re)attach and resume,
  *  - outbound `{ op: "credit", credit }`                  — grant more bulk credit,
- *  - inbound  `{ op: "subscribed", stream, gap, nextOffset }` — the resume ack,
+ *  - inbound  `{ op: "subscribed", stream, gap, nextOffset }` — the resume ack
+ *             (`gap: boolean` — the S5 wire flags whether chunks aged out),
  *  - inbound  {@link RelayPayload} `{ stream, offset, chunk }` — a data chunk.
  */
 import type { RelayPayload } from "@nanobpm/agentic-protocol";
@@ -32,7 +33,7 @@ export type RelayOutbound =
 /** An inbound relay message the session consumes (a data chunk or a resume ack). */
 export type RelayInbound =
   | RelayPayload
-  | { readonly op: "subscribed"; readonly stream: string; readonly gap: number; readonly nextOffset: number };
+  | { readonly op: "subscribed"; readonly stream: string; readonly gap: boolean; readonly nextOffset: number };
 
 /** Sends one outbound relay message over the channel. */
 export type RelaySend = (message: RelayOutbound) => void;
@@ -49,7 +50,7 @@ export interface TerminalSessionOptions {
   /** Offset to resume from on first attach. Default 0 (from the start). */
   readonly from?: number;
   /** Notified when the resume ack reports a gap (chunks aged out of the ring). */
-  readonly onGap?: (gap: number) => void;
+  readonly onGap?: () => void;
 }
 
 const DEFAULT_CREDIT = 1024;
@@ -71,8 +72,8 @@ export class TerminalSession {
   readonly #onGap: TerminalSessionOptions["onGap"];
   /** The next offset we still need — everything below it has been applied. */
   #nextOffset: number;
-  /** The gap reported by the most recent resume ack (retained window overrun). */
-  #gap = 0;
+  /** Whether the most recent resume ack reported a gap (retained window overrun). */
+  #gap = false;
 
   constructor(options: TerminalSessionOptions) {
     this.#stream = options.stream;
@@ -97,8 +98,8 @@ export class TerminalSession {
     return this.#nextOffset;
   }
 
-  /** The gap reported by the most recent resume ack (0 when none was lost). */
-  get gap(): number {
+  /** Whether the most recent resume ack reported a gap (false when none was lost). */
+  get gap(): boolean {
     return this.#gap;
   }
 
@@ -145,10 +146,11 @@ export class TerminalSession {
     this.#nextOffset = data.offset + 1;
   }
 
-  #onSubscribed(gap: number): void {
-    if (gap > 0) {
-      this.#gap = gap;
-      this.#onGap?.(gap);
+  #onSubscribed(gap: boolean): void {
+    // Record the gap on every ack so a later no-gap resume clears a prior gap.
+    this.#gap = gap;
+    if (gap) {
+      this.#onGap?.();
     }
   }
 }

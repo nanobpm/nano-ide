@@ -260,3 +260,16 @@ test("dispose stops polling and closes the terminal connection", async () => {
   cockpit.dispose();
   assert.equal(r.sockets[0]?.closed, true);
 });
+
+test("injecting setTimer without clearTimer (or vice versa) fails fast", () => {
+  const base = rig().env;
+  const noop = () => 0;
+  assert.throws(
+    () => bootCockpit({ ...base, setTimer: noop, clearTimer: undefined }),
+    /setTimer and clearTimer must be provided together/,
+  );
+  assert.throws(
+    () => bootCockpit({ ...base, setTimer: undefined, clearTimer: () => {} }),
+    /setTimer and clearTimer must be provided together/,
+  );
+});

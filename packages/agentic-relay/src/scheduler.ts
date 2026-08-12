@@ -22,7 +22,7 @@
  *     later resume-from-offset.
  */
 import { compareFrameOrder, lanePriority } from "@nanobpm/agentic-protocol";
-import type { Frame, QosLane } from "@nanobpm/agentic-protocol";
+import type { Frame } from "@nanobpm/agentic-protocol";
 
 export interface QosSchedulerOptions {
   /** Where drained frames are emitted (typically the connection's `send`). */
@@ -44,7 +44,14 @@ export class QosScheduler {
   readonly #bulkCapacity: number;
   readonly #control: Frame[] = [];
   readonly #interactive: Frame[] = [];
-  readonly #bulk: Frame[] = [];
+  // The bulk lane is a fixed-size circular buffer: both overflow shedding and
+  // credit-gated draining advance a head index in O(1)/O(k) rather than
+  // Array.shift() (O(n) per frame). Under the sustained "bulk storm" this
+  // scheduler exists to absorb, shift() would degrade to O(n²). Same eviction
+  // discipline as ReplayRing: overwrite the oldest slot, advance the head.
+  readonly #bulk: (Frame | undefined)[] = [];
+  #bulkHead = 0;
+  #bulkCount = 0;
   #credit: number;
   #shed = 0;
 
@@ -59,6 +66,7 @@ export class QosScheduler {
     this.#sink = options.sink;
     this.#credit = options.credit ?? 0;
     this.#bulkCapacity = bulkCapacity;
+    this.#bulk.length = bulkCapacity;
   }
 
   /** Remaining bulk credit. */
@@ -68,12 +76,12 @@ export class QosScheduler {
 
   /** Frames buffered but not yet emitted (across all lanes). */
   get pending(): number {
-    return this.#control.length + this.#interactive.length + this.#bulk.length;
+    return this.#control.length + this.#interactive.length + this.#bulkCount;
   }
 
   /** Bulk frames buffered awaiting credit. */
   get pendingBulk(): number {
-    return this.#bulk.length;
+    return this.#bulkCount;
   }
 
   /** How many bulk frames have been shed on overflow over this scheduler's life. */
@@ -88,10 +96,16 @@ export class QosScheduler {
    * bulk frame if the bulk buffer is full).
    */
   enqueue(frame: Frame): void {
-    this.#bucketFor(frame.lane).push(frame);
-    if (frame.lane === "bulk" && this.#bulk.length > this.#bulkCapacity) {
-      this.#bulk.shift();
-      this.#shed += 1;
+    switch (frame.lane) {
+      case "control":
+        this.#control.push(frame);
+        break;
+      case "interactive":
+        this.#interactive.push(frame);
+        break;
+      case "bulk":
+        this.#pushBulk(frame);
+        break;
     }
     this.flush();
   }
@@ -111,20 +125,22 @@ export class QosScheduler {
    * are never head-of-line-blocked by bulk backlog or exhausted credit.
    */
   flush(): void {
-    // Remove eligible frames up-front (splice) then emit, preserving the
-    // "remove before sink" semantics while keeping the drain O(n): repeated
-    // Array.shift() is O(n) per element and degrades to O(n²) on a large bulk
-    // burst — exactly the storm this scheduler exists to absorb.
+    // Remove eligible frames up-front, then emit. Removing before the sink call
+    // preserves "remove before sink" semantics (a re-entrant flush() from within
+    // sink() cannot re-emit an already-taken frame) and keeps the drain O(k) in
+    // the number of frames actually emitted, not O(n²): repeated Array.shift()
+    // is O(n) per element and degrades on a large bulk burst — exactly the storm
+    // this scheduler exists to absorb.
     for (const frame of this.#control.splice(0)) {
       this.#sink(frame);
     }
     for (const frame of this.#interactive.splice(0)) {
       this.#sink(frame);
     }
-    const take = Math.min(this.#credit, this.#bulk.length);
+    const take = Math.min(this.#credit, this.#bulkCount);
     if (take > 0) {
-      const bulkFrames = this.#bulk.splice(0, take);
       this.#credit -= take;
+      const bulkFrames = this.#takeBulk(take);
       for (const bulkFrame of bulkFrames) {
         this.#sink(bulkFrame);
       }
@@ -135,18 +151,40 @@ export class QosScheduler {
   clear(): void {
     this.#control.length = 0;
     this.#interactive.length = 0;
-    this.#bulk.length = 0;
+    this.#bulk.fill(undefined);
+    this.#bulkHead = 0;
+    this.#bulkCount = 0;
   }
 
-  #bucketFor(lane: QosLane): Frame[] {
-    switch (lane) {
-      case "control":
-        return this.#control;
-      case "interactive":
-        return this.#interactive;
-      case "bulk":
-        return this.#bulk;
+  /**
+   * Append a bulk frame to the circular buffer, shedding the oldest buffered
+   * bulk frame first when already at capacity (safe: the ReplayRing retains it
+   * for resume). All O(1) — no Array.shift().
+   */
+  #pushBulk(frame: Frame): void {
+    if (this.#bulkCount === this.#bulkCapacity) {
+      this.#bulk[this.#bulkHead] = undefined;
+      this.#bulkHead = (this.#bulkHead + 1) % this.#bulkCapacity;
+      this.#bulkCount -= 1;
+      this.#shed += 1;
     }
+    this.#bulk[(this.#bulkHead + this.#bulkCount) % this.#bulkCapacity] = frame;
+    this.#bulkCount += 1;
+  }
+
+  /** Remove and return the oldest `n` bulk frames from the circular buffer. */
+  #takeBulk(n: number): Frame[] {
+    const frames: Frame[] = [];
+    for (let i = 0; i < n; i += 1) {
+      const frame = this.#bulk[this.#bulkHead];
+      this.#bulk[this.#bulkHead] = undefined;
+      this.#bulkHead = (this.#bulkHead + 1) % this.#bulkCapacity;
+      this.#bulkCount -= 1;
+      if (frame !== undefined) {
+        frames.push(frame);
+      }
+    }
+    return frames;
   }
 }
 

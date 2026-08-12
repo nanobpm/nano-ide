@@ -205,3 +205,32 @@ test("a credit grant before subscribe pre-loads the consumer's budget", () => {
   relay.handle(produce("t", 1, "x"), prod);
   assert.deepEqual(dataChunks(cons), ["x"]); // pre-loaded credit let it flow
 });
+
+test("the subscribed ack is emitted before a previously buffered bulk tail flushes", () => {
+  const relay = new RelayHub();
+  const reg = new FakeRegistry();
+  const prod = new FakeConn("p", reg);
+  const cons = new FakeConn("c", reg);
+  // Subscribe to A with zero credit, then produce bulk that stays buffered.
+  relay.handle(subscribe("A", 0, 0), cons);
+  relay.handle(produce("A", 1, "a0"), prod);
+  relay.handle(produce("A", 1, "a1"), prod);
+  assert.deepEqual(dataChunks(cons), []); // starved of credit → buffered
+  const before = cons.sent.length;
+  // Subscribe to B WITH credit. Releasing that credit must NOT flush A's buffered
+  // bulk tail out ahead of B's control ack — the ack rides first.
+  relay.handle(subscribe("B", 0, 100), cons);
+  const emitted = cons.sent.slice(before);
+  const ackIndex = emitted.findIndex((f) => field(f.payload, "op") === "subscribed");
+  const firstBulkIndex = emitted.findIndex((f) => f.lane === "bulk" && field(f.payload, "op") === undefined);
+  assert.ok(ackIndex >= 0, "B's control ack was emitted");
+  assert.ok(firstBulkIndex >= 0, "A's buffered bulk flushed once credit was granted");
+  assert.ok(ackIndex < firstBulkIndex, "the ack precedes the flushed bulk tail");
+});
+
+test("RelayHub validates capacity/credit options up-front and fails fast", () => {
+  assert.throws(() => new RelayHub({ ringCapacity: 0 }), RangeError);
+  assert.throws(() => new RelayHub({ ringCapacity: 1.5 }), RangeError);
+  assert.throws(() => new RelayHub({ bulkCapacity: 0 }), RangeError);
+  assert.throws(() => new RelayHub({ defaultCredit: -1 }), RangeError);
+});

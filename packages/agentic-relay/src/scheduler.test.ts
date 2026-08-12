@@ -121,6 +121,32 @@ test("bulk overflow sheds the OLDEST bulk frame; control is never shed", () => {
   assert.deepEqual(tagsOf(out), ["b1", "b2", "b3"]);
 });
 
+test("bulk circular buffer wraps correctly across interleaved overflow and draining", () => {
+  seq = 0;
+  const out: Frame[] = [];
+  // Exercises the ring's head wrap-around (defect-class guard for the O(1)
+  // circular buffer that replaced Array.shift()): fill past capacity, drain a
+  // partial slice so the head advances, then refill past capacity again so the
+  // write index wraps around the buffer.
+  const s = new QosScheduler({ sink: (f) => out.push(f), credit: 0, bulkCapacity: 3 });
+  for (const t of ["b0", "b1", "b2", "b3", "b4"]) {
+    s.enqueue(frame("bulk", t)); // b0, b1 shed → holds b2, b3, b4
+  }
+  assert.equal(s.shed, 2);
+  assert.equal(s.pendingBulk, 3);
+  s.grantCredit(2); // drain b2, b3 → head advances, b4 remains
+  assert.deepEqual(tagsOf(out), ["b2", "b3"]);
+  assert.equal(s.pendingBulk, 1);
+  for (const t of ["b5", "b6", "b7"]) {
+    s.enqueue(frame("bulk", t)); // holds b4,b5,b6 then b4 shed → b5,b6,b7 (write index wraps)
+  }
+  assert.equal(s.shed, 3); // b4 was shed on the third refill
+  assert.equal(s.pendingBulk, 3);
+  s.grantCredit(100);
+  assert.deepEqual(tagsOf(out), ["b2", "b3", "b5", "b6", "b7"]); // b4 evicted, never emitted
+  assert.equal(s.pendingBulk, 0);
+});
+
 test("clear discards buffered frames across all lanes", () => {
   seq = 0;
   const out: Frame[] = [];

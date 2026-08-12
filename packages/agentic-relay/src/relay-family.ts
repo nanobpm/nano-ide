@@ -70,6 +70,7 @@ interface Subscriber {
 }
 
 const DEFAULT_RING_CAPACITY = 1024;
+const DEFAULT_BULK_CAPACITY = 1024;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -106,8 +107,20 @@ export class RelayHub {
 
   constructor(options: RelayHubOptions = {}) {
     this.#ringCapacity = options.ringCapacity ?? DEFAULT_RING_CAPACITY;
-    this.#bulkCapacity = options.bulkCapacity ?? 1024;
+    this.#bulkCapacity = options.bulkCapacity ?? DEFAULT_BULK_CAPACITY;
     this.#defaultCredit = options.defaultCredit ?? 0;
+    // Validate up-front so misconfiguration fails fast at construction, rather
+    // than throwing lazily from inside #ringFor/#subscriberFor on the first
+    // frame (where the throw would escape handle() and bypass onError).
+    if (!Number.isInteger(this.#ringCapacity) || this.#ringCapacity < 1) {
+      throw new RangeError(`RelayHub ringCapacity must be a positive integer, got ${this.#ringCapacity}`);
+    }
+    if (!Number.isInteger(this.#bulkCapacity) || this.#bulkCapacity < 1) {
+      throw new RangeError(`RelayHub bulkCapacity must be a positive integer, got ${this.#bulkCapacity}`);
+    }
+    if (!Number.isInteger(this.#defaultCredit) || this.#defaultCredit < 0) {
+      throw new RangeError(`RelayHub defaultCredit must be a non-negative integer, got ${this.#defaultCredit}`);
+    }
     this.#onFenced = options.onFenced;
     this.#onError = options.onError;
   }
@@ -177,19 +190,22 @@ export class RelayHub {
   #onSubscribe(conn: RelayConnection, stream: string, from: number, credit: number): void {
     const sub = this.#subscriberFor(conn);
     sub.streams.add(stream);
-    if (credit > 0) {
-      sub.scheduler.grantCredit(credit);
-    }
     const ring = this.#ringFor(stream);
     const slice = ring.since(from);
-    // Control-lane ack: tells the consumer where the resume actually started and
-    // whether it lost chunks (gap) — it rides ahead of the replayed bulk tail.
+    // Control-lane ack FIRST — before granting credit. It tells the consumer
+    // where the resume actually started and whether it lost chunks (gap), and it
+    // must ride ahead of the replayed bulk tail. Emitting it before grantCredit
+    // ensures a bulk tail buffered from an earlier subscription on this same
+    // connection cannot flush out ahead of this ack when credit is released.
     this.#emit(sub, "control", {
       op: "subscribed",
       stream,
       gap: slice.gap,
       nextOffset: ring.nextOffset,
     });
+    if (credit > 0) {
+      sub.scheduler.grantCredit(credit);
+    }
     for (const entry of slice.entries) {
       this.#emitData(sub, stream, entry.offset, entry.chunk);
     }

@@ -494,6 +494,62 @@ test("the renderer ships a nav node (menu bar / rail) with in-app + external lin
   assert.match(js, /pc-main-col/);
 });
 
+test("the renderer ships a button node that opens a copy-pasteable modal", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // button is a first-class node type.
+  assert.match(js, /button: renderButton/);
+  assert.match(js, /function renderButton\(node\)/);
+  // A ghost variant renders the muted outline style; a button carries its modal.
+  assert.match(js, /p\.variant === "ghost"/);
+  assert.match(js, /btn\.addEventListener\("click", \(\) => openModal\(m\)\)/);
+  // The modal is appended to <body>, is dismissable, and cleans up its keydown.
+  assert.match(js, /function openModal\(m\)/);
+  assert.match(js, /class: "pc-modal-overlay"/);
+  assert.match(js, /"aria-modal": "true"/);
+  assert.match(js, /if \(ev\.key === "Escape"\) \{ close\(\); return; \}/);
+  assert.match(js, /document\.removeEventListener\("keydown", onKey\)/);
+  // {{appBase}} in copy text is rebased onto the absolute mount root so an
+  // external agent gets a fetchable URL.
+  assert.match(js, /function resolveCopyText\(text\)/);
+  assert.match(js, /split\("\{\{appBase\}\}"\)\.join\(APP_BASE\.toString\(\)\)/);
+  // Copy is clipboard-first with a sandbox-safe execCommand fallback.
+  assert.match(js, /async function copyToClipboard\(text\)/);
+  assert.match(js, /navigator\.clipboard\.writeText/);
+  assert.match(js, /document\.execCommand\("copy"\)/);
+  // The fallback textarea is torn down in a finally so a throwing select()/
+  // execCommand never leaves a detached node accreting in <body> on retry.
+  assert.match(js, /finally \{ ta\.remove\(\); \}/);
+  // The dialog carries an accessible name (labelled by its title, or a fallback
+  // aria-label) so screen readers don't announce an unnamed dialog.
+  assert.match(js, /"aria-labelledby": titleId/);
+  assert.match(js, /"aria-label": "Dialog"/);
+  // An open modal is registered with teardown() so a page switch disposes it
+  // instead of leaking a stale overlay + document-level keydown listener.
+  assert.match(js, /disposers\.push\(close\)/);
+  // A manual close removes its own disposer entry, so repeated open/close cycles
+  // don't accrete dead close() closures on the disposers stack.
+  assert.match(js, /disposers\.indexOf\(close\)/);
+  assert.match(js, /disposers\.splice\(i, 1\)/);
+  // Focus is restored to the previously-focused element on close, and Tab is
+  // trapped inside the dialog so it can't reach the inert page behind the overlay.
+  assert.match(js, /const prevFocus = document\.activeElement/);
+  assert.match(js, /if \(ev\.key !== "Tab"\) return/);
+  assert.match(js, /ev\.preventDefault\(\); last\.focus\(\)/);
+  assert.match(js, /ev\.preventDefault\(\); first\.focus\(\)/);
+  // Only one modal opens at a time: a second open (e.g. double-click) is dropped
+  // so overlays and document-level keydown listeners never stack.
+  assert.match(js, /let modalOpen = false/);
+  assert.match(js, /if \(modalOpen\) return/);
+  assert.match(js, /modalOpen = true/);
+  assert.match(js, /modalOpen = false/);
+  // The aria-labelledby title id is unique per modal instance so it can't
+  // collide with a pre-existing page id and mis-associate the label.
+  assert.match(js, /let modalSeq = 0/);
+  assert.match(js, /"pc-modal-title-" \+ \(\+\+modalSeq\)/);
+});
+
+
 test("GET /app/data/<source>/<table> returns rows", async () => {
   const res = await dispatch("GET", "/app/data/app/orders");
   assert.equal(res.status, 200);

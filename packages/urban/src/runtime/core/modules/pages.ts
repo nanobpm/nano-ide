@@ -934,11 +934,13 @@ function renderButton(node) {
   return el("div", { class: "pc-buttonrow" }, btn);
 }
 
-// A grid td cell. Two column-declared linking modes, checked in order:
-//   1. linkField — the cell text becomes a link to the URL held in that other
+// A grid td cell with three column-declared rendering modes, checked in order:
+//   1. badge — a compact status indicator, gated on a non-empty field value
+//      (see the detailed note at the check below).
+//   2. linkField — the cell text becomes a link to the URL held in that other
 //      field. Only http(s) hrefs are linked (a javascript:/other-scheme URL
 //      smuggled through row data falls back to plain text).
-//   2. link: { kind: "processExplorer", keyField } — a structured, engine-aware
+//   3. link: { kind: "processExplorer", keyField } — a structured, engine-aware
 //      link: the cell text links to the Nano console's explorer view for the
 //      process instance whose key is held in the row's keyField. The console
 //      path is constructed HERE (never taken from row data) and the key is
@@ -954,7 +956,7 @@ function renderButton(node) {
 // grid and child grids.
 function gridCell(col, row) {
   const text = row[col.field] == null ? "" : String(row[col.field]);
-  // 3. badge — a compact status indicator. When the row's field value is
+  // 1. badge — a compact status indicator. When the row's field value is
   //    non-empty (truthy after trimming) render a small circular badge (e.g. a
   //    red "1" dot flagging an incident) whose tooltip is the full field text;
   //    when empty the cell stays blank so the column is unobtrusive until it

@@ -1,0 +1,108 @@
+{
+  "name": "@nanobpm/agentic",
+  "version": "0.1.0",
+  "description": "The Nano agentic protocol (ADR 0056): one app-tier channel carrying agent presence/registry, demand×supply, a shared blackboard and live terminal relay — with the wire contract, channel/hub, family modules and the operator cockpit, as subpath exports.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "nanobpm",
+    "agentic",
+    "protocol",
+    "channel",
+    "presence",
+    "demand",
+    "relay",
+    "transcript",
+    "blackboard",
+    "cockpit",
+    "conformance"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/agentic"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./source": "./src/index.ts",
+    "./protocol": {
+      "types": "./dist/protocol/index.d.ts",
+      "default": "./dist/protocol/index.js"
+    },
+    "./source/protocol": "./src/protocol/index.ts",
+    "./channel": {
+      "types": "./dist/channel/index.d.ts",
+      "default": "./dist/channel/index.js"
+    },
+    "./source/channel": "./src/channel/index.ts",
+    "./presence": {
+      "types": "./dist/presence/index.d.ts",
+      "default": "./dist/presence/index.js"
+    },
+    "./source/presence": "./src/presence/index.ts",
+    "./vocab": {
+      "types": "./dist/vocab/index.d.ts",
+      "default": "./dist/vocab/index.js"
+    },
+    "./source/vocab": "./src/vocab/index.ts",
+    "./demand": {
+      "types": "./dist/demand/index.d.ts",
+      "default": "./dist/demand/index.js"
+    },
+    "./source/demand": "./src/demand/index.ts",
+    "./relay": {
+      "types": "./dist/relay/index.d.ts",
+      "default": "./dist/relay/index.js"
+    },
+    "./source/relay": "./src/relay/index.ts",
+    "./transcript": {
+      "types": "./dist/transcript/index.d.ts",
+      "default": "./dist/transcript/index.js"
+    },
+    "./source/transcript": "./src/transcript/index.ts",
+    "./blackboard": {
+      "types": "./dist/blackboard/index.d.ts",
+      "default": "./dist/blackboard/index.js"
+    },
+    "./source/blackboard": "./src/blackboard/index.ts",
+    "./cockpit": {
+      "types": "./dist/cockpit/index.d.ts",
+      "default": "./dist/cockpit/index.js"
+    },
+    "./source/cockpit": "./src/cockpit/index.ts",
+    "./protocol/conformance": {
+      "types": "./dist/protocol/conformance/index.d.ts",
+      "default": "./dist/protocol/conformance/index.js"
+    },
+    "./source/protocol/conformance": "./src/protocol/conformance/index.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "page",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+    "test:conformance": "node --test --experimental-strip-types \"src/protocol/conformance/corpus.test.ts\""
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.9.3"
+  }
+}

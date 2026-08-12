@@ -45,7 +45,7 @@
     "test:conformance": "node --test --experimental-strip-types \"src/conformance.test.ts\""
   },
   "dependencies": {
-    "@nanobpm/agentic-protocol": "^0.1.0"
+    "@nanobpm/agentic": "^0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

@@ -10,7 +10,7 @@
  *    QoS-aware {@link OutboundRing} and drained, control-before-bulk, on
  *    reconnect (hub-down tolerance, invariant #6).
  *
- * The wire contract itself is owned by `@nanobpm/agentic-protocol` (S0); this
+ * The wire contract itself is owned by `@nanobpm/agentic/protocol` (S0); this
  * package imports and is held to it (including its shared conformance corpus),
  * never redefining it.
  *
@@ -54,7 +54,7 @@ export type {
 
 // Re-export the S0 contract surface a worker needs so consumers can build and
 // inspect frames without a second dependency line. Sourced from
-// @nanobpm/agentic-protocol (the single source of truth).
+// @nanobpm/agentic/protocol (the single source of truth).
 export {
   MESSAGE_FAMILIES,
   QOS_LANES,

@@ -9,7 +9,7 @@
  * under strip-types (ADR 0052/0053), so a published consumer resolves the same
  * source. Keeping the import in one module gives a single swap point.
  *
- * The contract itself is owned by `@nanobpm/agentic-protocol` (S0, #126) — this
+ * The contract itself is owned by `@nanobpm/agentic/protocol` (S0, #126) — this
  * client imports it, it never redefines it.
  */
 export {
@@ -28,7 +28,7 @@ export {
   validatePayload,
   bytesToHex,
   hexToBytes,
-} from "@nanobpm/agentic-protocol/source";
+} from "@nanobpm/agentic/source/protocol";
 
 export type {
   MessageFamily,
@@ -43,4 +43,4 @@ export type {
   RelayPayload,
   BlackboardPayload,
   DemandPayload,
-} from "@nanobpm/agentic-protocol/source";
+} from "@nanobpm/agentic/source/protocol";

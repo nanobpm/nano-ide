@@ -244,7 +244,7 @@ survives restarts, model a timer **start**/**intermediate** event instead with
 `w.startOn(...)` / `w.timer(...)` from [`@nanobpm/workflow`](../workflow) — the
 engine owns those.
 
-## Effect — typed errors & scoped resources (`@nanobpm/urban/effect`)
+### Effect — typed errors & scoped resources (`@nanobpm/urban/effect`)
 
 A tiny, **zero-dependency**, Effect-like core for the imperative seams (workers,
 provisioning, resource lifecycles) — without pulling in the `effect` package or
@@ -262,6 +262,9 @@ its viral paradigm. It gives you the three ergonomics you actually reach for:
 
 ```ts
 import { gen, ok, fail, tag, matchTags, scoped, acquireRelease } from "@nanobpm/urban/effect";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const parse = (s: string) => (s ? ok(s.length) : fail(tag("Empty")));
 const check = (n: number) => (n > 3 ? fail(tag("TooLong", { n })) : ok(n));
@@ -280,8 +283,14 @@ if (r._tag === "Fail") {
   });
 }
 
+// `acquireRelease`'s `acquire` is synchronous, so use sync fs APIs (or `await`
+// the acquisition yourself and register the disposer with `scope.add`).
 await scoped(async (scope) => {
-  const dir = acquireRelease(scope, () => mkdtemp(), (d) => rm(d)); // released on any exit
+  const dir = acquireRelease(
+    scope,
+    () => mkdtempSync(join(tmpdir(), "urban-")),
+    (d) => rmSync(d, { recursive: true, force: true }),
+  ); // released on any exit
   // …use dir…
 });
 ```

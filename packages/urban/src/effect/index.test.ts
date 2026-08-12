@@ -76,6 +76,25 @@ test("gen unions error types from multiple failure sources", () => {
   if (isFail(long)) assert.equal(long.error._tag, "TooLong");
 });
 
+test("gen closes the generator so try/finally runs on short-circuit", () => {
+  const events: string[] = [];
+  const r = gen(function* () {
+    try {
+      events.push("enter");
+      yield* fail("boom");
+      events.push("after-fail"); // must not run
+      return 1;
+    } finally {
+      events.push("cleanup"); // must run even though we short-circuited
+    }
+  });
+  assert.equal(isFail(r), true);
+  if (isFail(r)) assert.equal(r.error, "boom");
+  // The failure short-circuits before "after-fail", but the generator is closed
+  // so its `finally` still releases (LIFO: enter → cleanup, no after-fail).
+  assert.deepEqual(events, ["enter", "cleanup"]);
+});
+
 test("map/mapError/match", () => {
   assert.equal(match(map(ok(2), (n) => n * 10), (a) => a, () => -1), 20);
   const failed: Result<number, string> = fail("e");
@@ -88,6 +107,12 @@ test("tag builds tagged errors with props", () => {
   const e = tag("Http", { status: 404 });
   assert.equal(e._tag, "Http");
   assert.equal(e.status, 404);
+});
+
+test("tag without props carries only the tag (no phantom prop keys)", () => {
+  const e = tag("Empty");
+  assert.equal(e._tag, "Empty");
+  assert.deepEqual(Object.keys(e), ["_tag"]);
 });
 
 test("matchTags dispatches on the tag", () => {

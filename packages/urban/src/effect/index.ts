@@ -57,18 +57,21 @@ export const isFail = <A, E>(r: Result<A, E>): r is Fail<E> => r._tag === "Fail"
 
 // Run a generator that `yield*`s Results. Because only `Fail` yields to us, a
 // single `next()` either lands on the first failure or on the final return.
-// `Y` is inferred as the UNION of every yielded `Fail<…>`, and its error types
-// are unpacked into the Result's error channel (non-distributive `[Y]` so a
-// union unpacks to a union rather than one branch).
+// `Y` captures the UNION of every yielded `Fail<…>`; `Y["error"]` distributes
+// that index access into the Result's error channel (a union in ⇒ a union out).
 export function gen<Y extends Fail<unknown>, A>(
   body: () => Generator<Y, A, unknown>,
-): Result<A, [Y] extends [Fail<infer E>] ? E : never> {
-  const it = body();
+): Result<A, Y["error"]> {
+  // Typed as `Iterator` (not `Generator`) so `return` is the optional-arg
+  // variant — lets us close a short-circuited body without inventing a return value.
+  const it: Iterator<Y, A> = body();
   const step = it.next();
   if (step.done) return ok(step.value);
-  // Not done ⇒ a `Fail` yielded to short-circuit; hand it back as the failure.
-  // biome-ignore lint/plugin: the yielded `Fail<Y>` is the failure channel, but TS can't equate `Y` with the unpacked conditional error type at the return site.
-  return step.value as Result<A, [Y] extends [Fail<infer E>] ? E : never>;
+  // Not done ⇒ a `Fail` yielded to short-circuit. Close the generator first so
+  // any `try/finally` in the body runs and captured resources aren't retained,
+  // then surface its error on the failure channel.
+  it.return?.();
+  return fail(step.value.error);
 }
 
 // ---------------------------------------------------------------------------
@@ -81,36 +84,39 @@ export function gen<Y extends Fail<unknown>, A>(
 export type OkOf<R> = R extends Ok<infer A> ? A : never;
 export type ErrOf<R> = R extends Fail<infer E> ? E : never;
 
+// Narrowing guards that carry the *extracted* channel type, so `r.value` /
+// `r.error` land as `OkOf<R>` / `ErrOf<R>` (not `unknown`) with no assertion —
+// keeping the combinators within the repo's no-type-assertion convention.
+const isOkOf = <R extends Result<unknown, unknown>>(r: R): r is R & Ok<OkOf<R>> => r._tag === "Ok";
+const isFailOf = <R extends Result<unknown, unknown>>(r: R): r is R & Fail<ErrOf<R>> => r._tag === "Fail";
+
 export const map = <R extends Result<unknown, unknown>, B>(
   r: R,
   f: (a: OkOf<R>) => B,
-): Result<B, ErrOf<R>> =>
-  isOk(r)
-    // biome-ignore lint/plugin: guarded by isOk; r.value is the Ok channel, re-typed to the distributed OkOf<R>.
-    ? ok(f(r.value as OkOf<R>))
-    // biome-ignore lint/plugin: guarded !isOk; r is the Fail channel, re-typed to the distributed ErrOf<R>.
-    : (r as Fail<ErrOf<R>>);
+): Result<B, ErrOf<R>> => {
+  if (isOkOf(r)) return ok(f(r.value));
+  if (isFailOf(r)) return r;
+  throw new Error("effectlite: Result was neither Ok nor Fail");
+};
 
 export const mapError = <R extends Result<unknown, unknown>, E2>(
   r: R,
   f: (e: ErrOf<R>) => E2,
-): Result<OkOf<R>, E2> =>
-  isFail(r)
-    // biome-ignore lint/plugin: guarded by isFail; r.error is the Fail channel, re-typed to the distributed ErrOf<R>.
-    ? fail(f(r.error as ErrOf<R>))
-    // biome-ignore lint/plugin: guarded !isFail; r is the Ok channel, re-typed to the distributed OkOf<R>.
-    : (r as Ok<OkOf<R>>);
+): Result<OkOf<R>, E2> => {
+  if (isFailOf(r)) return fail(f(r.error));
+  if (isOkOf(r)) return r;
+  throw new Error("effectlite: Result was neither Ok nor Fail");
+};
 
 export const match = <R extends Result<unknown, unknown>, T>(
   r: R,
   onOk: (a: OkOf<R>) => T,
   onFail: (e: ErrOf<R>) => T,
-): T =>
-  isOk(r)
-    // biome-ignore lint/plugin: guarded by isOk; r.value is the Ok channel, re-typed to the distributed OkOf<R>.
-    ? onOk(r.value as OkOf<R>)
-    // biome-ignore lint/plugin: guarded !isOk; r.error is the Fail channel, re-typed to the distributed ErrOf<R>.
-    : onFail(r.error as ErrOf<R>);
+): T => {
+  if (isOkOf(r)) return onOk(r.value);
+  if (isFailOf(r)) return onFail(r.error);
+  throw new Error("effectlite: Result was neither Ok nor Fail");
+};
 
 // ---------------------------------------------------------------------------
 // Tagged errors + exhaustive matching
@@ -125,9 +131,15 @@ export type Tagged<Tag extends string> = { readonly _tag: Tag };
 // `Extract` each variant and force an exhaustive handler per case.
 export type TagUnion<Tag extends string, P> = Tag extends string ? Tagged<Tag> & P : never;
 
-export const tag = <Tag extends string, P extends object = {}>(t: Tag, props?: P): TagUnion<Tag, P> =>
-  // biome-ignore lint/plugin: spreading the optional `props` widens to `Partial<P>`; the tag + props are present by construction, so we assert the exact `TagUnion<Tag, P>`.
-  ({ _tag: t, ...props }) as TagUnion<Tag, P>;
+// Overloaded so the extra props type only appears when props are actually
+// passed: `tag("X")` is exactly `Tagged<"X">` (no phantom `& P` that could read
+// as `undefined` at runtime), while `tag("X", props)` carries them. Both return
+// the distributive `TagUnion`, so a union `Tag` expands to a discriminated union.
+export function tag<Tag extends string>(t: Tag): TagUnion<Tag, {}>;
+export function tag<Tag extends string, P extends object>(t: Tag, props: P): TagUnion<Tag, P>;
+export function tag(t: string, props?: object): Tagged<string> {
+  return { _tag: t, ...props };
+}
 
 // Handle every tag in the union — the handlers object is keyed by `E["_tag"]`,
 // so omitting a variant is a COMPILE error (no accidental dropped failure mode).

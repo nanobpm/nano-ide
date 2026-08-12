@@ -315,9 +315,9 @@ test("renderer wires a column's badge to a tone-classed pill shown only when pre
   // the tooltip.
   assert.match(js, /if \(col\.badge\)/);
   assert.match(js, /text\.trim\(\) === ""/);
-  assert.match(js, /"warn" \|\| t === "ok" \|\| t === "info" \? t : "danger"/);
+  assert.match(js, /t === "warn" \|\| t === "ok" \|\| t === "info" \? t : "danger"/);
   assert.match(js, /col\.badge\.label == null \? "1"/);
-  assert.match(js, /class: "pc-badge pc-badge-" \+ tone, title: text/);
+  assert.match(js, /class: "pc-badge pc-badge-" \+ tone, title: text, "aria-label": text/);
 });
 
 test("renderer wires a column's processExplorer link to the console explorer", async () => {

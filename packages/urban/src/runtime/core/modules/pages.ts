@@ -961,7 +961,9 @@ function gridCell(col, row) {
   //    matters. tone (danger|warn|ok|info, default danger) picks the color and
   //    label the glyph inside (default "1"). Label/tone come from the app
   //    schema (trusted); the tooltip is row data set via title/textContent
-  //    (DOM-escaped by the platform, so no HTML/attribute injection).
+  //    (DOM-escaped by the platform, so no HTML/attribute injection). The full
+  //    field text is also mirrored into aria-label so assistive tech announces
+  //    the incident/status text (the visible "1" glyph alone is not meaningful).
   if (col.badge) {
     if (text.trim() === "") return el("td", {});
     const t = col.badge.tone;
@@ -970,7 +972,7 @@ function gridCell(col, row) {
     return el(
       "td",
       {},
-      el("span", { class: "pc-badge pc-badge-" + tone, title: text }, label),
+      el("span", { class: "pc-badge pc-badge-" + tone, title: text, "aria-label": text }, label),
     );
   }
   if (col.linkField) {

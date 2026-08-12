@@ -320,13 +320,16 @@ export class AgenticClient {
     } catch {
       // An already-broken transport may throw on close; the teardown proceeds.
     }
-    this.handleClose({ local: true });
     // Terminal: the outbound ring and per-stream relay offsets can never be
     // drained again, so release them here rather than pinning a large outage
     // backlog (buffered frames, many relay streams) in memory for the lifetime
-    // of the now-dead client.
+    // of the now-dead client. Clear BEFORE emitting the close event: handleClose
+    // fires onClose synchronously, and a subscriber that reads `buffered` (or the
+    // relay-offset state) must observe the released, self-consistent terminal
+    // state that close() documents — not a stale non-zero backlog.
     this.ring.clear();
     this.relayOffsets.clear();
+    this.handleClose({ local: true });
   }
 
   /** Subscribe to resolved SERVE tokens (fires on every SERVE, including reconnects). */

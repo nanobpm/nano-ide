@@ -606,3 +606,26 @@ test("the default reconnect scheduler unrefs its backoff timer so it can't pin t
     unrefSpy.mock.restore();
   }
 });
+
+test("close() releases the outbound buffer BEFORE it emits onClose, so subscribers see a self-consistent terminal state", () => {
+  const { client } = newClient({ capability: { cognition: "high" } });
+  client.connect(); // transport built but never opened
+
+  // Accumulate an outage backlog: buffered relay frames + per-stream offsets.
+  for (let i = 0; i < 4; i++) {
+    client.relay("stdout", `chunk-${i}`);
+  }
+  assert.ok(client.buffered > 0, "frames buffered while the channel is down");
+
+  // An onClose subscriber must observe the released buffers close() documents,
+  // not a stale non-zero backlog. Capture what `buffered` reads at emit time.
+  let bufferedAtClose = -1;
+  client.onClose(() => {
+    bufferedAtClose = client.buffered;
+  });
+
+  client.close();
+
+  assert.equal(bufferedAtClose, 0, "onClose observed a released, self-consistent outbound buffer");
+  assert.equal(client.buffered, 0, "close() cleared the outbound ring");
+});

@@ -82,6 +82,11 @@ describe("app e2e (urban-testkit)", () => {
     // separate test) keeps the check self-contained: it doesn't depend on another test having
     // run first. Scope it with `assertFullCoverage({ surfaces: ["operations"] })` to gate only
     // some surfaces.
-    app.coverage?.assertFullCoverage();
+    //
+    // Assert the gate is actually present before invoking it (no optional chaining): we booted
+    // with `coverage: true`, so a missing `app.coverage` means the gate silently vanished
+    // (misconfig or API drift). Fail loudly here rather than let the coverage check no-op away.
+    assert.ok(app.coverage, "coverage gate is enabled (bootTestApp was called with { coverage: true })");
+    app.coverage.assertFullCoverage();
   });
 });

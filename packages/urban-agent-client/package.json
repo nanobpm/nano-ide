@@ -1,0 +1,54 @@
+{
+  "name": "@nanobpm/urban-agent-client",
+  "version": "0.1.0",
+  "description": "Worker-side client for the Nano agentic channel (ADR 0056, S9): REGISTER→SERVE, heartbeat/deregister, produce relay bytes, and a local buffer / flush-on-reconnect ring that tolerates a hub outage. Speaks the @nanobpm/agentic-protocol wire contract and is held to its shared conformance corpus.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "nanobpm",
+    "agentic",
+    "worker",
+    "client",
+    "relay",
+    "reconnect"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/urban-agent-client"
+  },
+  "engines": {
+    "node": ">=22.6"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./source": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+    "test:conformance": "node --test --experimental-strip-types \"src/conformance.test.ts\""
+  },
+  "dependencies": {
+    "@nanobpm/agentic-protocol": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  }
+}

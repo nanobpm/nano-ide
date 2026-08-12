@@ -1,0 +1,562 @@
+import { OutboundRing } from "./ring.ts";
+import {
+  MAX_SEQ,
+  decodeFrame,
+  encodeFrame,
+  isMessageFamily,
+  validatePayload,
+} from "./protocol.ts";
+import type {
+  Capability,
+  DeregisterPayload,
+  Frame,
+  HeartbeatPayload,
+  MessageFamily,
+  QosLane,
+  RegisterPayload,
+  RelayPayload,
+  ServePayload,
+} from "./protocol.ts";
+import { websocketTransport } from "./transport.ts";
+import type { Transport, TransportCloseInfo, TransportFactory } from "./transport.ts";
+
+/**
+ * The lane each outbound family rides. Presence, coordination and vocab are
+ * control/facts; relay bytes are bulk. This is the client's contribution to
+ * invariant #5 — a relay storm on the bulk lane can never head-of-line-block a
+ * heartbeat or deregister on the control lane.
+ */
+const OUTBOUND_LANE: Record<"register" | "heartbeat" | "deregister" | "relay", QosLane> = {
+  register: "control",
+  heartbeat: "control",
+  deregister: "control",
+  relay: "bulk",
+};
+
+const DEFAULT_BUFFER_CAPACITY = 1024;
+const DEFAULT_SERVE_TIMEOUT_MS = 30_000;
+const DEFAULT_RECONNECT = {
+  enabled: true,
+  initialDelayMs: 250,
+  maxDelayMs: 10_000,
+  factor: 2,
+} as const;
+
+export interface ReconnectOptions {
+  readonly enabled?: boolean;
+  readonly initialDelayMs?: number;
+  readonly maxDelayMs?: number;
+  readonly factor?: number;
+}
+
+export interface AgenticClientOptions {
+  /** The agentic channel URL (the app's own bound port). Ignored when a custom `transport` is supplied. */
+  readonly url: string;
+  /** Stable instance id, carried on every presence frame. Defaults to a random UUID. */
+  readonly instance?: string;
+  /**
+   * Capability declared at REGISTER. Stored so a reconnect re-registers
+   * automatically. May be supplied here or later via {@link AgenticClient.register}.
+   */
+  readonly capability?: Capability;
+  /** Transport factory; defaults to a binary WebSocket. Injected in tests. */
+  readonly transport?: TransportFactory;
+  /** Outbound buffer size in frames (hub-down tolerance). Default 1024. */
+  readonly bufferCapacity?: number;
+  /** Auto-heartbeat period in ms; 0/undefined disables the timer (call {@link AgenticClient.heartbeat} manually). */
+  readonly heartbeatIntervalMs?: number;
+  /** How long {@link AgenticClient.register} waits for its SERVE before rejecting. Default 30s. */
+  readonly serveTimeoutMs?: number;
+  /** Reconnect/backoff policy. Enabled by default. */
+  readonly reconnect?: ReconnectOptions;
+  /** Injectable scheduler for reconnect backoff (tests). Defaults to setTimeout. */
+  readonly schedule?: (fn: () => void, ms: number) => void;
+}
+
+export interface RegisterResult {
+  /** The resolved leaf routing tokens from the vocab handshake (S3). */
+  readonly serve: readonly string[];
+}
+
+export type AgenticClientState = "idle" | "connecting" | "open" | "closed";
+
+type Listener<T> = (value: T) => void;
+
+interface PendingServe {
+  resolve: (result: RegisterResult) => void;
+  reject: (error: Error) => void;
+  timer: ReturnType<typeof setTimeout> | undefined;
+}
+
+/**
+ * Worker-side client for the Nano agentic channel (S9).
+ *
+ * Speaks the S0 wire contract on a connection SEPARATE from the C8 job protocol
+ * (invariants #1/#2): it registers a capability, receives its resolved `SERVE`
+ * tokens, heartbeats/deregisters, and produces relay bytes. Everything the
+ * worker produces goes through a bounded {@link OutboundRing}, so the worker
+ * keeps producing across a hub outage and drains — in strict QoS order — on
+ * reconnect (invariants #5/#6). Capability is an enrolment attribute, never a
+ * routing token (invariant #3).
+ */
+export class AgenticClient {
+  readonly instance: string;
+  private readonly url: string;
+  private readonly transportFactory: TransportFactory;
+  private readonly ring: OutboundRing;
+  private readonly heartbeatIntervalMs: number;
+  private readonly serveTimeoutMs: number;
+  private readonly reconnectPolicy: Required<ReconnectOptions>;
+  private readonly schedule: (fn: () => void, ms: number) => void;
+
+  private capability: Capability | undefined;
+  private transport: Transport | undefined;
+  private state: AgenticClientState = "idle";
+  private seq = 0;
+  private reconnectDelay: number;
+  private reconnecting = false;
+  private closedByCaller = false;
+  private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
+  private pendingServe: PendingServe | undefined;
+  private lastServe: readonly string[] = [];
+  private readonly relayOffsets = new Map<string, number>();
+
+  private readonly serveListeners = new Set<Listener<ServePayload>>();
+  private readonly frameListeners = new Set<Listener<Frame>>();
+  private readonly openListeners = new Set<Listener<void>>();
+  private readonly closeListeners = new Set<Listener<TransportCloseInfo>>();
+  private readonly errorListeners = new Set<Listener<Error>>();
+  private readonly drainListeners = new Set<Listener<void>>();
+
+  constructor(options: AgenticClientOptions) {
+    this.url = options.url;
+    this.instance = options.instance ?? crypto.randomUUID();
+    this.capability = options.capability;
+    this.transportFactory = options.transport ?? websocketTransport;
+    this.ring = new OutboundRing({ capacity: options.bufferCapacity ?? DEFAULT_BUFFER_CAPACITY });
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 0;
+    this.serveTimeoutMs = options.serveTimeoutMs ?? DEFAULT_SERVE_TIMEOUT_MS;
+    this.reconnectPolicy = {
+      enabled: options.reconnect?.enabled ?? DEFAULT_RECONNECT.enabled,
+      initialDelayMs: options.reconnect?.initialDelayMs ?? DEFAULT_RECONNECT.initialDelayMs,
+      maxDelayMs: options.reconnect?.maxDelayMs ?? DEFAULT_RECONNECT.maxDelayMs,
+      factor: options.reconnect?.factor ?? DEFAULT_RECONNECT.factor,
+    };
+    this.reconnectDelay = this.reconnectPolicy.initialDelayMs;
+    this.schedule = options.schedule ?? ((fn, ms) => void setTimeout(fn, ms));
+  }
+
+  /** Current connection state. */
+  get connectionState(): AgenticClientState {
+    return this.state;
+  }
+
+  /** True when the transport is open and draining live. */
+  get connected(): boolean {
+    return this.state === "open";
+  }
+
+  /** Number of frames currently buffered awaiting a live channel. */
+  get buffered(): number {
+    return this.ring.size;
+  }
+
+  /** The most recently resolved SERVE token set (empty until the first SERVE). */
+  get serve(): readonly string[] {
+    return this.lastServe;
+  }
+
+  /** Open the transport. Safe to call once; reconnects are automatic. */
+  connect(): void {
+    if (this.state === "connecting" || this.state === "open") {
+      return;
+    }
+    this.closedByCaller = false;
+    this.openTransport();
+  }
+
+  /**
+   * Declare a capability and await the resolved SERVE tokens.
+   *
+   * The REGISTER frame is buffered like any other outbound frame, so calling
+   * `register` while the hub is down does not fail — it enqueues and resolves
+   * once the channel comes back and the hub answers with SERVE. Capability is an
+   * enrolment attribute; it never becomes part of a routing token (invariant #3).
+   */
+  register(input?: { capability?: Capability }): Promise<RegisterResult> {
+    const capability = input?.capability ?? this.capability;
+    if (capability === undefined) {
+      return Promise.reject(new Error("register requires a capability (pass one, or set it in the client options)"));
+    }
+    this.capability = capability;
+
+    // A fresh register supersedes any in-flight one.
+    this.rejectPendingServe(new Error("superseded by a newer register"));
+
+    const promise = new Promise<RegisterResult>((resolve, reject) => {
+      const timer =
+        this.serveTimeoutMs > 0
+          ? setTimeout(() => {
+              this.pendingServe = undefined;
+              reject(new Error(`SERVE not received within ${this.serveTimeoutMs}ms`));
+            }, this.serveTimeoutMs)
+          : undefined;
+      if (timer !== undefined && typeof timer.unref === "function") {
+        timer.unref();
+      }
+      this.pendingServe = { resolve, reject, timer };
+    });
+
+    this.enqueueRegister(capability);
+    if (this.state === "idle") {
+      this.connect();
+    }
+    if (this.heartbeatIntervalMs > 0) {
+      this.startHeartbeatTimer();
+    }
+    return promise;
+  }
+
+  /** Produce a single liveness heartbeat (control lane). Ages out on TTL if it stops (S2). */
+  heartbeat(): void {
+    const payload: HeartbeatPayload = { instance: this.instance };
+    this.enqueue("heartbeat", OUTBOUND_LANE.heartbeat, payload);
+  }
+
+  /**
+   * Produce relay bytes on the bulk lane. `chunk` is the terminal/command output
+   * for `stream`; the client tracks a monotonic per-stream byte offset so the
+   * hub-side ring can resume-from-offset after a consumer reconnect (S5). Bytes
+   * are UTF-8-encoded on the wire as the payload's `chunk` string.
+   */
+  relay(stream: string, chunk: string): void {
+    const offset = this.relayOffsets.get(stream) ?? 0;
+    const payload: RelayPayload = { stream, offset, chunk };
+    this.relayOffsets.set(stream, offset + byteLength(chunk));
+    this.enqueue("relay", OUTBOUND_LANE.relay, payload);
+  }
+
+  /**
+   * Deregister and close. Sends a deregister frame (best-effort — buffered if
+   * the channel is down) and then tears the client down without reconnecting.
+   */
+  deregister(reason?: string): void {
+    const payload: DeregisterPayload = reason === undefined ? { instance: this.instance } : { instance: this.instance, reason };
+    this.enqueue("deregister", OUTBOUND_LANE.deregister, payload);
+    this.close();
+  }
+
+  /** Tear down the client: stop the heartbeat, close the transport, stop reconnecting. */
+  close(): void {
+    this.closedByCaller = true;
+    this.stopHeartbeatTimer();
+    this.rejectPendingServe(new Error("client closed"));
+    this.transport?.close();
+    this.transport = undefined;
+    this.state = "closed";
+  }
+
+  /** Subscribe to resolved SERVE tokens (fires on every SERVE, including reconnects). */
+  onServe(listener: Listener<ServePayload>): () => void {
+    this.serveListeners.add(listener);
+    return () => this.serveListeners.delete(listener);
+  }
+
+  /** Subscribe to every validated inbound frame. */
+  onFrame(listener: Listener<Frame>): () => void {
+    this.frameListeners.add(listener);
+    return () => this.frameListeners.delete(listener);
+  }
+
+  /** Subscribe to channel-open events (fires on first connect and each reconnect). */
+  onOpen(listener: Listener<void>): () => void {
+    this.openListeners.add(listener);
+    return () => this.openListeners.delete(listener);
+  }
+
+  /** Subscribe to channel-close events. */
+  onClose(listener: Listener<TransportCloseInfo>): () => void {
+    this.closeListeners.add(listener);
+    return () => this.closeListeners.delete(listener);
+  }
+
+  /** Subscribe to transport / decode / validation errors (never thrown; always non-fatal). */
+  onError(listener: Listener<Error>): () => void {
+    this.errorListeners.add(listener);
+    return () => this.errorListeners.delete(listener);
+  }
+
+  /** Subscribe to buffer-drained events (fires when the outbound ring empties after sending). */
+  onDrain(listener: Listener<void>): () => void {
+    this.drainListeners.add(listener);
+    return () => this.drainListeners.delete(listener);
+  }
+
+  // ---- internals -----------------------------------------------------------
+
+  private openTransport(): void {
+    this.state = "connecting";
+    this.transport = this.transportFactory(this.url, {
+      onOpen: () => this.handleOpen(),
+      onFrame: (bytes) => this.handleFrame(bytes),
+      onClose: (info) => this.handleClose(info),
+      onError: (error) => this.emitError(error),
+    });
+  }
+
+  private handleOpen(): void {
+    this.state = "open";
+    this.reconnectDelay = this.reconnectPolicy.initialDelayMs;
+    // Re-announce presence first so a reconnect re-registers before draining
+    // any buffered relay backlog. Register rides the control lane, so even if
+    // the ring already holds bulk frames it drains ahead of them.
+    if (this.capability !== undefined && !this.ringHasRegister()) {
+      this.enqueueRegister(this.capability, true);
+    }
+    this.emitOpen();
+    this.pump();
+  }
+
+  private handleClose(info: TransportCloseInfo): void {
+    const wasOpen = this.state === "open";
+    this.transport = undefined;
+    if (this.closedByCaller) {
+      this.state = "closed";
+    } else if (this.reconnectPolicy.enabled) {
+      this.state = "connecting";
+    } else {
+      // No auto-reconnect: go idle so the caller can reconnect manually.
+      this.state = "idle";
+    }
+    if (wasOpen || !this.closedByCaller) {
+      this.emitClose(info);
+    }
+    if (!this.closedByCaller && this.reconnectPolicy.enabled) {
+      this.scheduleReconnect();
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.reconnecting) {
+      return;
+    }
+    this.reconnecting = true;
+    const delay = this.reconnectDelay;
+    this.reconnectDelay = Math.min(this.reconnectDelay * this.reconnectPolicy.factor, this.reconnectPolicy.maxDelayMs);
+    this.schedule(() => {
+      this.reconnecting = false;
+      if (!this.closedByCaller) {
+        this.openTransport();
+      }
+    }, delay);
+  }
+
+  private handleFrame(bytes: Uint8Array): void {
+    let frame: Frame;
+    try {
+      frame = decodeFrame(bytes);
+    } catch (error) {
+      // Malformed input from the wire must never crash the worker — surface it
+      // and keep the channel alive. This is what the conformance corpus's
+      // malformed vectors exercise.
+      this.emitError(asError(error, "failed to decode inbound frame"));
+      return;
+    }
+    const check = validatePayload(frame.family, frame.payload);
+    if (!check.ok) {
+      this.emitError(new Error(`inbound ${frame.family} payload failed validation: ${check.errors.map((e) => e.code).join(",")}`));
+      return;
+    }
+    this.emitFrame(frame);
+    if (frame.family === "serve") {
+      this.handleServe(frame.payload);
+    }
+  }
+
+  private handleServe(payload: unknown): void {
+    if (!isServePayload(payload) || payload.instance !== this.instance) {
+      return;
+    }
+    this.lastServe = payload.tokens;
+    if (this.pendingServe !== undefined) {
+      const pending = this.pendingServe;
+      this.pendingServe = undefined;
+      if (pending.timer !== undefined) {
+        clearTimeout(pending.timer);
+      }
+      pending.resolve({ serve: payload.tokens });
+    }
+    this.emitServe(payload);
+  }
+
+  private enqueueRegister(capability: Capability, front = false): void {
+    const payload: RegisterPayload = { instance: this.instance, capability };
+    if (front) {
+      const frame: Frame = { lane: OUTBOUND_LANE.register, family: "register", seq: this.nextSeq(), payload };
+      this.ring.enqueueFront(frame);
+      this.pump();
+      return;
+    }
+    this.enqueue("register", OUTBOUND_LANE.register, payload);
+  }
+
+  private enqueue(family: MessageFamily, lane: QosLane, payload: unknown): void {
+    const frame: Frame = { lane, family, seq: this.nextSeq(), payload };
+    this.ring.enqueue(frame);
+    this.pump();
+  }
+
+  /** Drain the ring to the transport in strict QoS order until it empties or a send fails. */
+  private pump(): void {
+    if (this.state !== "open" || this.transport === undefined) {
+      return;
+    }
+    let sentAny = false;
+    while (!this.ring.isEmpty) {
+      const frame = this.ring.peek();
+      if (frame === undefined) {
+        break;
+      }
+      let bytes: Uint8Array;
+      try {
+        bytes = encodeFrame(frame);
+      } catch (error) {
+        // An unencodable frame can never be sent — drop it rather than wedge the
+        // drain, and report it.
+        this.ring.dequeue();
+        this.emitError(asError(error, "failed to encode outbound frame; dropped"));
+        continue;
+      }
+      try {
+        this.transport.send(bytes);
+      } catch {
+        // The channel went away mid-drain: leave the frame buffered and stop.
+        // The reconnect path resumes the drain.
+        this.state = "connecting";
+        break;
+      }
+      this.ring.dequeue();
+      sentAny = true;
+    }
+    if (sentAny && this.ring.isEmpty) {
+      this.emitDrain();
+    }
+  }
+
+  private ringHasRegister(): boolean {
+    return this.ring.toArray().some((frame) => frame.family === "register");
+  }
+
+  private nextSeq(): number {
+    const value = this.seq;
+    this.seq = this.seq >= MAX_SEQ ? 0 : this.seq + 1;
+    return value;
+  }
+
+  private startHeartbeatTimer(): void {
+    if (this.heartbeatTimer !== undefined || this.heartbeatIntervalMs <= 0) {
+      return;
+    }
+    const timer = setInterval(() => this.heartbeat(), this.heartbeatIntervalMs);
+    if (typeof timer.unref === "function") {
+      timer.unref();
+    }
+    this.heartbeatTimer = timer;
+  }
+
+  private stopHeartbeatTimer(): void {
+    if (this.heartbeatTimer !== undefined) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+  }
+
+  private rejectPendingServe(error: Error): void {
+    if (this.pendingServe !== undefined) {
+      const pending = this.pendingServe;
+      this.pendingServe = undefined;
+      if (pending.timer !== undefined) {
+        clearTimeout(pending.timer);
+      }
+      pending.reject(error);
+    }
+  }
+
+  private emitServe(value: ServePayload): void {
+    for (const listener of this.serveListeners) {
+      listener(value);
+    }
+  }
+
+  private emitFrame(value: Frame): void {
+    for (const listener of this.frameListeners) {
+      listener(value);
+    }
+  }
+
+  private emitOpen(): void {
+    for (const listener of this.openListeners) {
+      listener();
+    }
+  }
+
+  private emitClose(value: TransportCloseInfo): void {
+    for (const listener of this.closeListeners) {
+      listener(value);
+    }
+  }
+
+  private emitError(value: Error): void {
+    for (const listener of this.errorListeners) {
+      listener(value);
+    }
+  }
+
+  private emitDrain(): void {
+    for (const listener of this.drainListeners) {
+      listener();
+    }
+  }
+}
+
+
+/**
+ * Connect a worker to the Nano agentic channel and return the client. The
+ * transport begins connecting immediately; because everything the worker
+ * produces is buffered, callers may `register`/`relay` straight away even before
+ * the channel is open (invariant #6).
+ */
+export function connectAgenticChannel(options: AgenticClientOptions): AgenticClient {
+  const client = new AgenticClient(options);
+  client.connect();
+  return client;
+}
+
+function byteLength(text: string): number {
+  return new TextEncoder().encode(text).length;
+}
+
+function isServePayload(payload: unknown): payload is ServePayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+  if (!("instance" in payload) || !("tokens" in payload)) {
+    return false;
+  }
+  const { instance, tokens } = payload;
+  return (
+    typeof instance === "string" &&
+    Array.isArray(tokens) &&
+    tokens.every((token: unknown) => typeof token === "string")
+  );
+}
+
+function asError(error: unknown, fallback: string): Error {
+  if (error instanceof Error) {
+    return error;
+  }
+  return new Error(fallback);
+}
+
+/** Re-exported so `isMessageFamily` is available to callers narrowing frames. */
+export { isMessageFamily };

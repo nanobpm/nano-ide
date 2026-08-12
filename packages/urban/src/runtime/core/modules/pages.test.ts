@@ -480,6 +480,32 @@ test("the renderer ships a nav node (menu bar / rail) with in-app + external lin
   assert.match(js, /pc-main-col/);
 });
 
+test("the renderer ships a button node that opens a copy-pasteable modal", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // button is a first-class node type.
+  assert.match(js, /button: renderButton/);
+  assert.match(js, /function renderButton\(node\)/);
+  // A ghost variant renders the muted outline style; a button carries its modal.
+  assert.match(js, /p\.variant === "ghost"/);
+  assert.match(js, /btn\.addEventListener\("click", \(\) => openModal\(m\)\)/);
+  // The modal is appended to <body>, is dismissable, and cleans up its keydown.
+  assert.match(js, /function openModal\(m\)/);
+  assert.match(js, /class: "pc-modal-overlay"/);
+  assert.match(js, /"aria-modal": "true"/);
+  assert.match(js, /if \(ev\.key === "Escape"\) close\(\)/);
+  assert.match(js, /document\.removeEventListener\("keydown", onKey\)/);
+  // {{appBase}} in copy text is rebased onto the absolute mount root so an
+  // external agent gets a fetchable URL.
+  assert.match(js, /function resolveCopyText\(text\)/);
+  assert.match(js, /split\("\{\{appBase\}\}"\)\.join\(APP_BASE\.toString\(\)\)/);
+  // Copy is clipboard-first with a sandbox-safe execCommand fallback.
+  assert.match(js, /async function copyToClipboard\(text\)/);
+  assert.match(js, /navigator\.clipboard\.writeText/);
+  assert.match(js, /document\.execCommand\("copy"\)/);
+});
+
+
 test("GET /app/data/<source>/<table> returns rows", async () => {
   const res = await dispatch("GET", "/app/data/app/orders");
   assert.equal(res.status, 200);

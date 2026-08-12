@@ -556,6 +556,16 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-collapse-header { display:flex; align-items:center; gap:.5rem; width:100%; margin:0 0 .75rem; padding:0; background:transparent; border:0; color:inherit; font:inherit; font-size:1rem; font-weight:600; cursor:pointer; text-align:left; }
 .pc-chevron-inline { color:var(--nano-text-faint); font-size:.75rem; width:1em; }
 .pc-card-body[hidden] { display:none; }
+/* A standalone button node + the modal it opens (e.g. a copy-pasteable prompt). */
+.pc-buttonrow { margin:1rem 0; }
+.pc-btn-ghost { background:transparent; color:var(--nano-text-muted); border:1px solid var(--nano-edge); }
+.pc-btn-ghost:hover { color:var(--nano-text); border-color:var(--nano-accent); }
+.pc-modal-overlay { position:fixed; inset:0; z-index:1000; display:flex; align-items:center; justify-content:center; padding:1.5rem; background:rgba(0,0,0,.55); }
+.pc-modal { background:var(--nano-panel); border:1px solid var(--nano-edge-strong); border-radius:.6rem; padding:1.25rem 1.35rem; max-width:44rem; width:100%; max-height:85vh; overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,.45); }
+.pc-modal-title { font-size:1.15rem; margin:0 0 .5rem; }
+.pc-modal-desc { color:var(--nano-text-muted); margin:0 0 .75rem; font-size:.9rem; white-space:pre-wrap; }
+.pc-modal-code { white-space:pre-wrap; word-break:break-word; background:var(--nano-inset); border:1px solid var(--nano-edge); border-radius:.4rem; padding:.75rem; font:.82rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; max-height:45vh; overflow:auto; margin:0 0 .85rem; color:var(--nano-text); }
+.pc-modal-actions { display:flex; gap:.5rem; justify-content:flex-end; }
 /* Multi-page navigation: a horizontal menu bar or a vertical side rail. */
 .pc-layout { display:flex; gap:1.5rem; align-items:flex-start; }
 .pc-rail-wrap { flex:0 0 12rem; position:sticky; top:1rem; align-self:flex-start; }
@@ -764,6 +774,96 @@ function renderText(node) {
   const v = node.props.variant;
   const cls = v === "heading" ? "pc-heading" : v === "sub" ? "pc-sub" : "pc-body";
   return el(v === "heading" ? "h1" : "p", { class: cls }, node.props.text || "");
+}
+
+// Copy text to the clipboard, resiliently. The async Clipboard API is tried
+// first, but it can reject inside a sandboxed console iframe (no clipboard-write
+// permission) — so fall back to a hidden <textarea> + execCommand("copy"), which
+// works under a user gesture with only allow-scripts. Returns whether a copy
+// succeeded so the caller can nudge the user to ⌘/Ctrl+C when both paths fail.
+async function copyToClipboard(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_e) { /* fall through to the execCommand path */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.top = "-1000px";
+    ta.style.opacity = "0";
+    document.body.append(ta);
+    ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch (_e) { return false; }
+}
+
+// Rebase the sole {{appBase}} token in author-supplied copy text onto the app's
+// absolute mount root (always ends in "/"), so a prompt like
+// "read {{appBase}}app/api/agent" resolves to a URL an external agent can fetch —
+// the console proxy path when embedded, the app origin when standalone. No other
+// interpolation happens: copy text is otherwise emitted verbatim.
+function resolveCopyText(text) {
+  return typeof text === "string" ? text.split("{{appBase}}").join(APP_BASE.toString()) : "";
+}
+
+// Open a lightweight modal appended to <body>. Closes on the ✕/Close button, a
+// backdrop click, or Escape; the keydown listener is removed on close so it never
+// leaks. When it carries copyText it renders a scrollable code block plus a Copy
+// button (see copyToClipboard for the sandbox-safe fallback).
+function openModal(m) {
+  const overlay = el("div", { class: "pc-modal-overlay" });
+  const dialog = el("div", { class: "pc-modal", role: "dialog", "aria-modal": "true" });
+  if (m.title) dialog.append(el("h2", { class: "pc-modal-title" }, m.title));
+  if (m.description) dialog.append(el("p", { class: "pc-modal-desc" }, m.description));
+  const copyText = resolveCopyText(m.copyText);
+  if (copyText) dialog.append(el("pre", { class: "pc-modal-code" }, copyText));
+  const actions = el("div", { class: "pc-modal-actions" });
+  function close() {
+    document.removeEventListener("keydown", onKey);
+    overlay.remove();
+  }
+  function onKey(ev) { if (ev.key === "Escape") close(); }
+  if (copyText) {
+    const label = m.copyLabel || "Copy";
+    const copyBtn = el("button", { class: "pc-btn pc-btn-sm", type: "button" }, label);
+    copyBtn.addEventListener("click", async () => {
+      const ok = await copyToClipboard(copyText);
+      copyBtn.textContent = ok ? "Copied ✓" : "Press ⌘/Ctrl+C";
+      setTimeout(() => { copyBtn.textContent = label; }, 2200);
+    });
+    actions.append(copyBtn);
+  }
+  const closeBtn = el("button", { class: "pc-btn pc-btn-sm pc-btn-ghost", type: "button" }, m.closeLabel || "Close");
+  closeBtn.addEventListener("click", close);
+  actions.append(closeBtn);
+  dialog.append(actions);
+  overlay.append(dialog);
+  // A click on the backdrop (never the dialog itself) dismisses.
+  overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
+  document.addEventListener("keydown", onKey);
+  document.body.append(overlay);
+  closeBtn.focus();
+}
+
+// A standalone button node. Clicking it opens props.modal — used e.g. to surface
+// a copy-pasteable "point your agent here" prompt. props.variant === "ghost"
+// renders the muted outline style. A button without a modal is inert.
+function renderButton(node) {
+  const p = node.props || {};
+  const btn = el(
+    "button",
+    { class: "pc-btn" + (p.variant === "ghost" ? " pc-btn-ghost" : ""), type: "button" },
+    p.label || "Open",
+  );
+  const m = p.modal && typeof p.modal === "object" ? p.modal : null;
+  if (m) btn.addEventListener("click", () => openModal(m));
+  return el("div", { class: "pc-buttonrow" }, btn);
 }
 
 // A grid td cell. Two column-declared linking modes, checked in order:
@@ -1280,7 +1380,7 @@ function renderNav(node) {
   return nav;
 }
 
-const RENDERERS = { text: renderText, actionForm: renderActionForm, dataGrid: renderDataGrid, nav: renderNav };
+const RENDERERS = { text: renderText, actionForm: renderActionForm, dataGrid: renderDataGrid, nav: renderNav, button: renderButton };
 
 // Durable per-node UI state. localStorage is keyed by the home page id + node
 // id so two grids on the same page (or the same grid across pages) don't clash,

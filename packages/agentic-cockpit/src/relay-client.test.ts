@@ -128,6 +128,28 @@ test("a non-integer or negative offset/nextOffset is rejected as malformed", () 
   assert.equal(errors.length, 3);
 });
 
+test("a payload with an unknown op is rejected, even if it also carries a data shape", () => {
+  const socket = new FakeSocket();
+  const received: RelayInbound[] = [];
+  const errors: unknown[] = [];
+  const client = new RelayChannelClient({
+    connect: () => socket,
+    onRelay: (m) => received.push(m),
+    onError: (e) => errors.push(e),
+  });
+  client.open();
+  // An op-message with an unrecognised op must never fall through to the data-chunk
+  // shape check, even when it happens to also carry { stream, offset, chunk }.
+  socket.deliver({
+    lane: "bulk",
+    family: "relay",
+    seq: 0,
+    payload: { op: "evil", stream: "w1", offset: 0, chunk: "x" },
+  });
+  assert.equal(received.length, 0);
+  assert.equal(errors.length, 1);
+});
+
 test("onOpen fires on every (re)connect so the session re-attaches and resumes", () => {
   const sockets: FakeSocket[] = [];
   let pending: (() => void) | undefined;

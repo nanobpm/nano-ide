@@ -75,12 +75,16 @@ function isNonNegativeInteger(value: unknown): value is number {
 /**
  * Narrow a decoded `relay`-family payload to the inbound sub-protocol without an
  * unchecked cast (the repo bans `as`): a data chunk `{ stream, offset, chunk }`
- * or a resume ack `{ op: "subscribed", stream, gap, nextOffset }`.
+ * or a resume ack `{ op: "subscribed", stream, gap, nextOffset }`. Any payload
+ * carrying an `op` field is treated as an op-message and rejected unless it is a
+ * well-formed known op, so a malformed/unknown op can never fall through and be
+ * mistaken for a data chunk.
  */
 function asRelayInbound(payload: unknown): RelayInbound | null {
   if (!isRecord(payload)) return null;
-  if (payload.op === "subscribed") {
+  if ("op" in payload) {
     if (
+      payload.op === "subscribed" &&
       typeof payload.stream === "string" &&
       typeof payload.gap === "boolean" &&
       isNonNegativeInteger(payload.nextOffset)

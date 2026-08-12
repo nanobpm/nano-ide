@@ -88,11 +88,14 @@ function statusBadge(doc: DocumentLike, id: string, label: string, status: SloSt
 
 function tokenCell(doc: DocumentLike, network: CockpitView["networks"][number], options: RenderOptions): ElementLike {
   const table = el(doc, "table", "cockpit-tokens");
+  const thead = el(doc, "thead", "cockpit-tokens-thead");
   const head = el(doc, "tr", "cockpit-tokens-head");
   head.appendChild(el(doc, "th", "cockpit-th", "token"));
   head.appendChild(el(doc, "th", "cockpit-th", "supply"));
   head.appendChild(el(doc, "th", "cockpit-th", "workers"));
-  table.appendChild(head);
+  thead.appendChild(head);
+  table.appendChild(thead);
+  const tbody = el(doc, "tbody", "cockpit-tokens-tbody");
   for (const token of network.tokens) {
     const row = el(doc, "tr", "cockpit-token");
     row.setAttribute("data-status", token.status);
@@ -116,8 +119,9 @@ function tokenCell(doc: DocumentLike, network: CockpitView["networks"][number], 
       workers.appendChild(chip);
     }
     row.appendChild(workers);
-    table.appendChild(row);
+    tbody.appendChild(row);
   }
+  table.appendChild(tbody);
   return table;
 }
 

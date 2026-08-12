@@ -46,6 +46,32 @@ test("renders one section per network with a demand×supply row per token", () =
   );
 });
 
+test("token tables use valid <thead>/<tbody> structure (rows are never direct <table> children)", () => {
+  const doc = new FakeDocument();
+  const host = new FakeElement("body");
+  renderCockpit(host, doc, view());
+
+  const tables = host.byClass("cockpit-tokens");
+  assert.ok(tables.length >= 1, "at least one token table is rendered");
+  for (const table of tables) {
+    // A <table> must only contain section elements (<thead>/<tbody>), never a bare <tr>.
+    assert.deepEqual(
+      table.children.map((c) => c.tagName),
+      ["thead", "tbody"],
+      "table children are the section wrappers, not rows",
+    );
+    const [thead, tbody] = table.children;
+    assert.deepEqual(
+      thead?.children.map((c) => c.tagName),
+      ["tr"],
+      "the header row lives inside <thead>",
+    );
+    for (const row of tbody?.children ?? []) {
+      assert.equal(row.tagName, "tr", "every data row lives inside <tbody>");
+    }
+  }
+});
+
 test("a missing agent type renders a RED token, a RED network and a red missing light", () => {
   const doc = new FakeDocument();
   const host = new FakeElement("body");

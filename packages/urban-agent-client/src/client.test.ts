@@ -707,3 +707,47 @@ test("construction rejects timing/backoff options Node would coerce into a 0ms h
   // The disabling sentinels stay legal: heartbeat 0 (off) and serveTimeout 0 (no timeout).
   assert.doesNotThrow(() => new AgenticClient({ ...base, heartbeatIntervalMs: 0, serveTimeoutMs: 0 }));
 });
+
+test("a throwing onError subscriber can't crash internal error handling or starve siblings", () => {
+  // emitError runs inside internal error handling (e.g. a malformed inbound
+  // frame). A subscriber that throws there must be contained: it must neither
+  // propagate out of the handler (which could take the worker down) nor stop
+  // sibling subscribers from receiving the error.
+  const { client, t } = newClient();
+  client.connect();
+  t.last().fireOpen();
+
+  const seen: Error[] = [];
+  client.onError(() => {
+    throw new Error("subscriber blew up");
+  });
+  client.onError((e) => seen.push(e));
+
+  // Deliver garbage: decode fails and the client calls emitError internally.
+  assert.doesNotThrow(() => t.last().deliver(new Uint8Array([0x00, 0x01, 0x02])));
+
+  // The well-behaved sibling still received the decode error despite the
+  // earlier subscriber throwing, and the client is still usable afterwards.
+  assert.equal(seen.length, 1);
+  client.heartbeat();
+  assert.ok(t.last().sentFrames.some((f) => f.family === "heartbeat"));
+  client.close();
+});
+
+test("a throwing non-error subscriber is contained and doesn't starve siblings", () => {
+  // The containment contract is uniform across every emit* fan-out, not just
+  // onError: one bad frame subscriber must not break dispatch to the rest.
+  const { client, t } = newClient({ serveTimeoutMs: 1000 });
+  client.connect();
+  t.last().fireOpen();
+
+  const frames: Frame[] = [];
+  client.onFrame(() => {
+    throw new Error("frame subscriber blew up");
+  });
+  client.onFrame((f) => frames.push(f));
+
+  assert.doesNotThrow(() => t.last().deliver(serveFrame("worker-1", ["planning.spar"])));
+  assert.equal(frames.length, 1);
+  client.close();
+});

@@ -706,40 +706,52 @@ export class AgenticClient {
     }
   }
 
-  private emitServe(value: ServePayload): void {
-    for (const listener of this.serveListeners) {
-      listener(value);
+  /**
+   * Fan a value out to a set of subscribers, isolating each one's failures.
+   *
+   * A subscriber that throws must never break dispatch to the remaining
+   * subscribers, and — critically — must never propagate out of internal
+   * plumbing that emits events. `emitError` in particular runs inside error
+   * handling (e.g. a malformed inbound frame), so an `onError` subscriber that
+   * throws would otherwise escape that handler and can take the worker down.
+   * Containing throws here is the single canonical dispatch contract for every
+   * `emit*` below, so no individual emitter can reintroduce that failure mode.
+   */
+  private dispatch<T>(listeners: Set<Listener<T>>, value: T): void {
+    for (const listener of listeners) {
+      try {
+        listener(value);
+      } catch {
+        // A subscriber's failure is its own problem; contain it so event
+        // reporting can neither break sibling subscribers nor crash internal
+        // handling. We deliberately do not re-emit onError here — an onError
+        // subscriber that throws must not trigger unbounded re-entry.
+      }
     }
+  }
+
+  private emitServe(value: ServePayload): void {
+    this.dispatch(this.serveListeners, value);
   }
 
   private emitFrame(value: Frame): void {
-    for (const listener of this.frameListeners) {
-      listener(value);
-    }
+    this.dispatch(this.frameListeners, value);
   }
 
   private emitOpen(): void {
-    for (const listener of this.openListeners) {
-      listener();
-    }
+    this.dispatch(this.openListeners, undefined);
   }
 
   private emitClose(value: TransportCloseInfo): void {
-    for (const listener of this.closeListeners) {
-      listener(value);
-    }
+    this.dispatch(this.closeListeners, value);
   }
 
   private emitError(value: Error): void {
-    for (const listener of this.errorListeners) {
-      listener(value);
-    }
+    this.dispatch(this.errorListeners, value);
   }
 
   private emitDrain(): void {
-    for (const listener of this.drainListeners) {
-      listener();
-    }
+    this.dispatch(this.drainListeners, undefined);
   }
 }
 

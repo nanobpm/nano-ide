@@ -15,7 +15,7 @@ import type {
   CloseCode,
   HandshakeRequest,
 } from "@nanobpm/agentic-channel";
-import { attachPresenceFamily } from "./family.ts";
+import { attachPresenceFamily, PresencePayloadError } from "./family.ts";
 import { PresenceStore } from "./store.ts";
 import { openTestDb } from "./test-db.ts";
 
@@ -192,6 +192,29 @@ test("a malformed register frame is rejected and never touches the store", async
 
   assert.equal(store.count(), 0);
   assert.equal(errors.length, 1);
+
+  await hub.close();
+});
+
+test("a non-object register payload is rejected with a payload error and never touches the store", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb());
+  attachPresenceFamily(hub, store, { sweepIntervalMs: 0, onError: (e) => errors.push(e) });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  // A non-object payload (array) — validatePayload rejects it before it can
+  // narrow to a record, so the store is never reached.
+  conn.receive(frame("register", ["not", "an", "object"]));
+  await tick();
+
+  assert.equal(store.count(), 0);
+  assert.equal(errors.length, 1);
+  const err = errors[0];
+  assert(err instanceof PresencePayloadError);
+  assert.match(err.message, /must be an object/);
 
   await hub.close();
 });

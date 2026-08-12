@@ -108,8 +108,12 @@ export function attachPresenceFamily(
   hub.registerFamilyHandler("register", (frame: Frame, ctx: HubConnection) => {
     const payload = frame.payload;
     const result = validatePayload("register", payload);
-    if (!result.ok || !isPlainObject(payload)) {
-      reject("register", ctx.id, result.ok ? "not an object" : result.errors.map((e) => e.message).join("; "));
+    if (!result.ok) {
+      reject("register", ctx.id, result.errors.map((e) => e.message).join("; "));
+      return;
+    }
+    if (!isPlainObject(payload)) {
+      reject("register", ctx.id, "not an object");
       return;
     }
     const instance = readString(payload, "instance");
@@ -137,8 +141,12 @@ export function attachPresenceFamily(
   hub.registerFamilyHandler("heartbeat", (frame: Frame, ctx: HubConnection) => {
     const payload = frame.payload;
     const result = validatePayload("heartbeat", payload);
-    if (!result.ok || !isPlainObject(payload)) {
-      reject("heartbeat", ctx.id, result.ok ? "not an object" : result.errors.map((e) => e.message).join("; "));
+    if (!result.ok) {
+      reject("heartbeat", ctx.id, result.errors.map((e) => e.message).join("; "));
+      return;
+    }
+    if (!isPlainObject(payload)) {
+      reject("heartbeat", ctx.id, "not an object");
       return;
     }
     const instance = readString(payload, "instance");
@@ -152,8 +160,12 @@ export function attachPresenceFamily(
   hub.registerFamilyHandler("deregister", (frame: Frame, ctx: HubConnection) => {
     const payload = frame.payload;
     const result = validatePayload("deregister", payload);
-    if (!result.ok || !isPlainObject(payload)) {
-      reject("deregister", ctx.id, result.ok ? "not an object" : result.errors.map((e) => e.message).join("; "));
+    if (!result.ok) {
+      reject("deregister", ctx.id, result.errors.map((e) => e.message).join("; "));
+      return;
+    }
+    if (!isPlainObject(payload)) {
+      reject("deregister", ctx.id, "not an object");
       return;
     }
     const instance = readString(payload, "instance");

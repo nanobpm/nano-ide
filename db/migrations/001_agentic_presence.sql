@@ -5,10 +5,12 @@
 -- channel appears here with its presence + host/family capability, its liveness
 -- (`last_seen`) refreshed on every heartbeat, and ages out on the presence TTL.
 --
--- This is the SINGLE canonical source of the presence DDL: the app applies it on
--- boot via the DataLayer migration runner, and @nanobpm/agentic-presence's
--- PresenceStore.ensureSchema() applies the identical statements. A drift-guard
--- test (schema.test.ts) fails if the two ever diverge.
+-- This migration MIRRORS the canonical presence DDL — `PRESENCE_SCHEMA_SQL` in
+-- @nanobpm/agentic-presence's `schema.ts`, which is the single source of truth
+-- and is applied by PresenceStore.ensureSchema(). The app applies this identical
+-- statement set on boot via the DataLayer migration runner. A drift-guard test
+-- (schema.test.ts) fails if the two ever diverge — edit the canonical schema.ts
+-- and update this mirror together.
 --
 -- Expand-and-contract: additive only. Later epic slices that add migrations
 -- (S6 transcript store #132, S7 blackboard #133) are sequenced into later waves

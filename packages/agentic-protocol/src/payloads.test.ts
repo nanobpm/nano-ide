@@ -23,6 +23,25 @@ test("register requires a non-empty instance and a capability object", () => {
   assert.ok(!validatePayload("register", { instance: "w", capability: "opus" }).ok);
 });
 
+test("register validates known capability field types when present", () => {
+  assert.ok(
+    validatePayload("register", {
+      instance: "w",
+      capability: { cognition: "reason", weight: 3, family: "opus", host: "h1" },
+    }).ok,
+  );
+  for (const capability of [
+    { weight: "3" },
+    { cognition: 1 },
+    { family: true },
+    { host: 0 },
+  ]) {
+    const bad = validatePayload("register", { instance: "w", capability });
+    assert.ok(!bad.ok, JSON.stringify(capability));
+    if (!bad.ok) assert.ok(bad.errors.some((e) => e.code === "bad-capability"));
+  }
+});
+
 test("serve rejects an invalid routing token in tokens[]", () => {
   assert.ok(validatePayload("serve", { instance: "w", tokens: ["planning.decide"] }).ok);
   const bad = validatePayload("serve", { instance: "w", tokens: ["Bad Token"] });

@@ -1,5 +1,10 @@
 import type { Frame } from "../frame.ts";
 
+/** The channels a golden frame may travel on. Single source of truth for the
+ * direction contract — the corpus completeness test derives its coverage from
+ * this union so a new variant cannot be added without a covering vector. */
+export type FrameDirection = "worker->hub" | "hub->worker" | "hub->observers";
+
 /**
  * Golden frame vectors: canonical (frame ↔ bytes) pairs the codec must satisfy
  * in BOTH directions. `hex` is the exact wire encoding of `frame`. These are
@@ -13,7 +18,7 @@ import type { Frame } from "../frame.ts";
 export interface GoldenFrame {
   readonly name: string;
   /** Informational: which way the frame travels on the channel. */
-  readonly direction: "worker->hub" | "hub->worker" | "hub->observers";
+  readonly direction: FrameDirection;
   readonly frame: Frame;
   /** Exact wire encoding of `frame`, as a lowercase hex string. */
   readonly hex: string;

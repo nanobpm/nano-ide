@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { MESSAGE_FAMILIES } from "../families.ts";
 import { QOS_LANES } from "../lanes.ts";
 import { GOLDEN_FRAMES } from "./frames.ts";
+import type { FrameDirection } from "./frames.ts";
 import { MALFORMED_FRAMES } from "./malformed.ts";
 import type { FrameDecodeErrorCode } from "../frame.ts";
 
@@ -24,10 +25,18 @@ test("golden frames cover every QoS lane", () => {
   }
 });
 
-test("golden frames cover both channel directions", () => {
-  const covered = new Set(GOLDEN_FRAMES.map((g) => g.direction));
-  assert.ok(covered.has("worker->hub"));
-  assert.ok(covered.has("hub->worker"));
+test("golden frames cover every channel direction", () => {
+  // Derived from the FrameDirection union via an exhaustive Record so tsc fails
+  // when the union grows without a covering golden — no hand-maintained list.
+  const ALL_DIRECTIONS: Record<FrameDirection, true> = {
+    "worker->hub": true,
+    "hub->worker": true,
+    "hub->observers": true,
+  };
+  const covered = new Set<string>(GOLDEN_FRAMES.map((g) => g.direction));
+  for (const direction of Object.keys(ALL_DIRECTIONS)) {
+    assert.ok(covered.has(direction), `no golden frame covers direction: ${direction}`);
+  }
 });
 
 test("malformed corpus covers every decode-error code", () => {

@@ -110,6 +110,14 @@ export function formatToken(token: RoutingToken): string {
   const segments = token.network === undefined
     ? [token.role]
     : [token.network, ...token.subnetworks, token.role];
+  for (const segment of segments) {
+    if (!isSegmentName(segment)) {
+      throw new Error(`invalid RoutingToken: invalid segment: ${segment}`);
+    }
+  }
+  if (token.seat !== undefined && !isSeatLabel(token.seat)) {
+    throw new Error(`invalid RoutingToken: invalid seat label: ${token.seat}`);
+  }
   const path = segments.join(".");
   return token.seat === undefined ? path : `${path}#${token.seat}`;
 }

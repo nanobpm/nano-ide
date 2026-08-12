@@ -82,6 +82,16 @@ function validateRegister(p: Record<string, unknown>, errors: PayloadError[]): v
   }
   if (!isPlainObject(p.capability)) {
     errors.push({ code: "bad-capability", message: "register.capability must be an object" });
+    return;
+  }
+  const cap = p.capability;
+  for (const field of ["cognition", "family", "host"] as const) {
+    if (field in cap && typeof cap[field] !== "string") {
+      errors.push({ code: "bad-capability", message: `register.capability.${field} must be a string when present` });
+    }
+  }
+  if ("weight" in cap && typeof cap.weight !== "number") {
+    errors.push({ code: "bad-capability", message: "register.capability.weight must be a number when present" });
   }
 }
 

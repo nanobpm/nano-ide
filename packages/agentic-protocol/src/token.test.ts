@@ -23,6 +23,24 @@ test("formatToken rejects subnetworks without a network", () => {
   );
 });
 
+test("formatToken rejects a RoutingToken with an invalid segment", () => {
+  assert.throws(
+    () => formatToken({ network: "Net", subnetworks: [], role: "decide" }),
+    /invalid segment: Net/,
+  );
+  assert.throws(
+    () => formatToken({ network: "mesh", subnetworks: ["Bad_Sub"], role: "decide" }),
+    /invalid segment: Bad_Sub/,
+  );
+});
+
+test("formatToken rejects a RoutingToken with an invalid seat label", () => {
+  assert.throws(
+    () => formatToken({ subnetworks: [], role: "decide", seat: "Seat#1" }),
+    /invalid seat label: Seat#1/,
+  );
+});
+
 test("invalid tokens reject with the specified error code", () => {
   for (const vector of INVALID_TOKENS) {
     assert.throws(

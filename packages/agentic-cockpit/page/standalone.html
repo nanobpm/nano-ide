@@ -10,15 +10,17 @@
       html, body { margin: 0; height: 100%; background: #0b0f14; }
     </style>
     <!--
-      Resolve the cockpit ESM + xterm.js. In a real deployment the Urban runtime
-      serves the built package; this import map points a bare standalone page at a
-      CDN so it runs unchanged on a phone with no bundler. The SAME page/mount.js
-      the console App-View embed uses is loaded here.
+      Resolve the cockpit ESM + xterm.js. The cockpit is mapped RELATIVE to this
+      page (../dist/index.js) — exactly like ./mount.js and ./cockpit.css above —
+      so it resolves against whatever origin/version served the page (a CDN pin,
+      the Urban runtime, or a local checkout) with no hard-coded version to drift
+      out of sync with package.json. xterm.js stays a pinned third-party CDN dep.
+      The SAME page/mount.js the console App-View embed uses is loaded here.
     -->
     <script type="importmap">
       {
         "imports": {
-          "@nanobpm/agentic-cockpit": "https://cdn.jsdelivr.net/npm/@nanobpm/agentic-cockpit@0.1.0/dist/index.js",
+          "@nanobpm/agentic-cockpit": "../dist/index.js",
           "@xterm/xterm": "https://cdn.jsdelivr.net/npm/@xterm/xterm@5/+esm"
         }
       }

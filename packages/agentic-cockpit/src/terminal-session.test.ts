@@ -132,6 +132,33 @@ test("a later no-gap ack clears a gap recorded by an earlier ack", () => {
   assert.equal(session.gap, false);
 });
 
+test("an ack whose head is below our resume point clamps nextOffset down so fresh chunks are not dropped", () => {
+  // Consumer resumed from 10, but the hub restarted/reset and its head is now 3
+  // (we are ahead of the stream). Without a clamp, offsets 3,4,… stay below our
+  // resume point and every fresh chunk is dropped as a stale replay — output lost.
+  const h = harness({ from: 10 });
+  h.session.attach();
+  h.session.handle({ op: "subscribed", stream: "worker-1", gap: false, nextOffset: 3 });
+  assert.equal(h.session.nextOffset, 3);
+  // Chunks from the restarted hub now apply instead of being dropped.
+  h.session.handle(h.data(3, "fresh"));
+  h.session.handle(h.data(4, "output"));
+  assert.deepEqual(h.writes, ["fresh", "output"]);
+  assert.equal(h.session.nextOffset, 5);
+});
+
+test("an ack whose head is at or above our resume point never advances nextOffset (no skipped chunks)", () => {
+  // The normal case: the hub has more data than we have applied. The ack must
+  // NOT bump nextOffset up to the head, or the un-applied tail would be skipped.
+  const h = harness({ from: 2 });
+  h.session.attach();
+  h.session.handle({ op: "subscribed", stream: "worker-1", gap: false, nextOffset: 9 });
+  assert.equal(h.session.nextOffset, 2);
+  h.session.handle(h.data(2, "tail"));
+  assert.deepEqual(h.writes, ["tail"]);
+  assert.equal(h.session.nextOffset, 3);
+});
+
 test("resuming from a non-zero offset subscribes there and drops earlier replays", () => {
   const h = harness({ from: 10 });
   h.session.attach();

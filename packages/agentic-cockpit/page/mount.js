@@ -45,6 +45,13 @@ function relaySocketFactory(url) {
  * @returns the CockpitHandle (call `.dispose()` to tear down).
  */
 export function mountCockpit(host, opts = {}) {
+  if (host == null || typeof host.replaceChildren !== "function") {
+    throw new Error(
+      "mountCockpit(host): host must be a mounted DOM element (got " +
+        (host === null ? "null" : typeof host) +
+        "). Check that the cockpit root element exists before mounting.",
+    );
+  }
   const reportUrl = opts.reportUrl ?? "/app/api/agentic/demand";
   const relayUrl = opts.relayUrl ?? defaultRelayUrl();
   const cockpit = bootCockpit({

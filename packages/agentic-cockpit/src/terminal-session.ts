@@ -8,7 +8,10 @@
  * of durable state — `nextOffset`, the offset to resume from. On any (re)attach
  * it re-subscribes from `nextOffset`, and it drops any replayed chunk it has
  * already applied, so a reconnect neither loses nor double-writes output (within
- * the relay ring's retained window).
+ * the relay ring's retained window). If the hub's `subscribed` ack reports a
+ * `nextOffset` (stream head) *below* our resume point — a hub restart/reset left
+ * us ahead of the stream — it clamps `nextOffset` back down so fresh chunks are
+ * not dropped as stale.
  *
  * The S5 relay wire (see `@nanobpm/agentic-relay`):
  *  - outbound `{ op: "subscribe", stream, from, credit }` — (re)attach and resume,
@@ -125,7 +128,8 @@ export class TerminalSession {
   /**
    * Process one inbound relay message. A data chunk at or beyond `nextOffset` is
    * written and advances the resume point; a chunk below it (a duplicate replay
-   * after a reconnect) is dropped. A resume ack records any gap.
+   * after a reconnect) is dropped. A resume ack records any gap and clamps the
+   * resume point down to the hub's head when we are ahead of it.
    */
   handle(message: RelayInbound): void {
     if (isRelayData(message)) {
@@ -133,7 +137,7 @@ export class TerminalSession {
       return;
     }
     if (message.op === "subscribed" && message.stream === this.#stream) {
-      this.#onSubscribed(message.gap);
+      this.#onSubscribed(message.gap, message.nextOffset);
     }
   }
 
@@ -146,7 +150,16 @@ export class TerminalSession {
     this.#nextOffset = data.offset + 1;
   }
 
-  #onSubscribed(gap: boolean): void {
+  #onSubscribed(gap: boolean, nextOffset: number): void {
+    // Clamp our resume point down to the hub's current head when we are ahead of
+    // it. Without this, a hub restart/reset (or a `from` seeded past the head)
+    // leaves #nextOffset above every offset the hub will now emit, so #onData
+    // silently drops all fresh chunks until the stream catches back up — losing
+    // terminal output, possibly indefinitely. Only clamp DOWN: a head at or above
+    // #nextOffset is the normal case and must not skip un-applied chunks.
+    if (nextOffset < this.#nextOffset) {
+      this.#nextOffset = nextOffset;
+    }
     // Record the gap on every ack so a later no-gap resume clears a prior gap.
     this.#gap = gap;
     if (gap) {

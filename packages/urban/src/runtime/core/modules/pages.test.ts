@@ -379,10 +379,18 @@ test("renderer binds a route param: parseRoute splits page/param, filters + text
   // A datasource filter with { eqParam: true } binds its value to the live PARAM,
   // so one page template scopes every section to the selected entity.
   assert.match(js, /else if \(f\.eqParam\) qs\.push\("where=" \+ encodeURIComponent\(f\.field \+ ":" \+ PARAM\)\)/);
-  // {{param}} interpolates into text nodes as DOM text (never markup).
+  // {{param}} interpolates into text nodes as DOM text (never markup). A function
+  // replacement inserts PARAM literally, so replacement patterns inside a param id
+  // can't be reinterpreted.
   assert.match(js, /function interpParam\(s\)/);
-  assert.match(js, /replace\(\/\\\{\\\{param\\\}\\\}\/g, PARAM\)/);
+  assert.match(js, /replace\(\/\\\{\\\{param\\\}\\\}\/g, \(\) => PARAM\)/);
   assert.match(js, /interpParam\(node\.props\.text\)/);
+  // A grid whose active filter binds to the route param renders zero rows (no data
+  // request) when no param is present, rather than emitting a where clause of
+  // field-colon-empty (server reads that as field equals empty string and would
+  // surface empty-valued rows).
+  assert.match(js, /const paramScoped = \(activeFilter \|\| \[\]\)\.some\(\(f\) => f && f\.eqParam\)/);
+  assert.match(js, /paramScoped && PARAM === ""\s*\?\s*\{ rows: \[\] \}/s);
 });
 
 test("renderer wires a column's page link to an in-app scoped hash route", async () => {

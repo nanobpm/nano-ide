@@ -821,8 +821,11 @@ function el(tag, attrs = {}, ...kids) {
 // Interpolate the {{param}} token in a schema-supplied string with the current
 // route param. The result is only ever set as DOM text (textContent), so the
 // substituted value cannot inject markup. Other tokens are left untouched.
+// A function replacement inserts PARAM literally; a plain string replacement would
+// treat replacement patterns inside PARAM (an id like the dollar-one token) as
+// special and render the wrong text.
 function interpParam(s) {
-  return typeof s === "string" ? s.replace(/\{\{param\}\}/g, PARAM) : s;
+  return typeof s === "string" ? s.replace(/\{\{param\}\}/g, () => PARAM) : s;
 }
 function renderText(node) {
   const v = node.props.variant;
@@ -1458,7 +1461,15 @@ function renderDataGrid(node) {
 
   async function refresh() {
     try {
-      const { rows } = await getJSON(dataUrl(p.data.source, p.data.table, activeFilter, p.data.orderBy));
+      // A grid scoped to a route param (any eqParam filter) means "show the rows
+      // for the selected entity". With no param present, PARAM is empty and emitting
+      // a where clause of field-colon-empty would read server-side as field equals
+      // empty string and surface empty-valued rows. That is not the selected entity's
+      // rows (there is no selection), so short-circuit to zero rows without a request.
+      const paramScoped = (activeFilter || []).some((f) => f && f.eqParam);
+      const { rows } = paramScoped && PARAM === ""
+        ? { rows: [] }
+        : await getJSON(dataUrl(p.data.source, p.data.table, activeFilter, p.data.orderBy));
       // Forget expansion / cached detail nodes for rows no longer present so the maps
       // don't grow without bound and a stale answer can't resurface on a key reuse.
       if (p.rowKey) {

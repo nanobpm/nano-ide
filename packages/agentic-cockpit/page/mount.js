@@ -16,7 +16,7 @@ import { Terminal } from "@xterm/xterm";
 function xtermSink(host) {
   const term = new Terminal({ convertEol: true, fontFamily: "ui-monospace, monospace", fontSize: 13 });
   term.open(host);
-  return { write: (chunk) => term.write(chunk) };
+  return { write: (chunk) => term.write(chunk), dispose: () => term.dispose() };
 }
 
 /** A WebSocket relay socket factory for the agentic channel at `url`. */

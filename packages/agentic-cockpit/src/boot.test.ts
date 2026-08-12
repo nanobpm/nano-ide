@@ -65,6 +65,7 @@ interface Rig {
   readonly sockets: FakeSocket[];
   readonly terminalWrites: string[];
   terminalMounts: number;
+  terminalDisposes: number;
   readonly timers: Array<{ run: () => void; ms: number }>;
   reconnect: (() => void) | undefined;
   report: DemandSupplyReport;
@@ -81,6 +82,7 @@ function rig(): Rig {
     sockets,
     terminalWrites,
     terminalMounts: 0,
+    terminalDisposes: 0,
     timers,
     reconnect: undefined,
     report: served,
@@ -97,7 +99,12 @@ function rig(): Rig {
       createTerminal: (terminalHost) => {
         state.terminalMounts += 1;
         terminalHost.appendChild(new FakeElement("pre"));
-        return { write: (chunk) => terminalWrites.push(chunk) };
+        return {
+          write: (chunk) => terminalWrites.push(chunk),
+          dispose: () => {
+            state.terminalDisposes += 1;
+          },
+        };
       },
       schedule: (run) => {
         state.reconnect = run;
@@ -326,4 +333,42 @@ test("an invalid refreshMs fails fast at construction", () => {
       `refreshMs ${refreshMs} should be rejected`,
     );
   }
+});
+
+test("switching streams disposes the prior terminal, and dispose tears the last one down", async () => {
+  const r = rig();
+  const cockpit = bootCockpit(r.env);
+  await cockpit.refresh();
+
+  cockpit.drill("ci-a");
+  assert.equal(r.terminalMounts, 1);
+  assert.equal(r.terminalDisposes, 0, "nothing to dispose on the first drill");
+
+  // Switching streams must tear down the previous xterm instance before mounting
+  // the next — replaceChildren only drops the DOM node, so without an explicit
+  // dispose the widget + its listeners would leak on every drill.
+  cockpit.drill("ci-b");
+  assert.equal(r.terminalMounts, 2);
+  assert.equal(r.terminalDisposes, 1, "prior terminal disposed on stream switch");
+
+  cockpit.dispose();
+  assert.equal(r.terminalDisposes, 2, "the live terminal is disposed on dispose()");
+});
+
+test("a stop→start race does not leave two overlapping poll chains scheduling", async () => {
+  const r = rig();
+  const cockpit = bootCockpit(r.env);
+
+  // First start's tick has an in-flight refresh (suspended at the fetch await),
+  // whose finally has not run yet. Stopping then restarting before it settles
+  // must invalidate that stale tick so only the new start's chain schedules —
+  // otherwise the stale finally re-arms a second, overlapping timer.
+  cockpit.start();
+  cockpit.stop();
+  cockpit.start();
+  await flush();
+
+  assert.equal(r.timers.length, 1, "exactly one poll chain scheduled after the race");
+
+  cockpit.stop();
 });

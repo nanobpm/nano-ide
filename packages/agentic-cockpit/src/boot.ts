@@ -91,6 +91,13 @@ class Cockpit implements CockpitHandle {
   #running = false;
   #disposed = false;
   #drill: Drill | undefined;
+  // The currently mounted terminal, tracked so switching streams (and dispose)
+  // tears down the prior xterm instance instead of leaking it + its listeners.
+  #terminal: TerminalSink | undefined;
+  // Bumped by every start()/stop() so an in-flight #tick() from a previous
+  // start cycle can't reschedule after a stop→start race and leave two
+  // overlapping poll chains running against the same cockpit.
+  #generation = 0;
 
   constructor(env: CockpitEnv) {
     this.#env = env;
@@ -183,23 +190,28 @@ class Cockpit implements CockpitHandle {
   start(): void {
     if (this.#disposed || this.#running) return;
     this.#running = true;
-    this.#tick();
+    const generation = ++this.#generation;
+    this.#tick(generation);
   }
 
   stop(): void {
     this.#running = false;
+    // Invalidate any in-flight tick so its finally can't reschedule after this.
+    this.#generation++;
     if (this.#timer !== undefined) {
       this.#clearTimer(this.#timer);
       this.#timer = undefined;
     }
   }
 
-  #tick(): void {
+  #tick(generation: number): void {
     // Self-scheduling: schedule the NEXT pass only after this one settles, so a
-    // slow fetch can never overlap its successor.
+    // slow fetch can never overlap its successor. The generation guard drops a
+    // stale tick whose start cycle was already stopped (and possibly restarted),
+    // so a stop→start race never leaves two poll chains scheduling in parallel.
     void this.refresh().finally(() => {
-      if (!this.#running || this.#disposed) return;
-      this.#timer = this.#setTimer(() => this.#tick(), this.#refreshMs);
+      if (generation !== this.#generation || !this.#running || this.#disposed) return;
+      this.#timer = this.#setTimer(() => this.#tick(generation), this.#refreshMs);
     });
   }
 
@@ -215,11 +227,18 @@ class Cockpit implements CockpitHandle {
     // failure is routed to onError like every other relay/terminal error.
     this.#drill?.client.close();
     this.#drill = undefined;
+    // Tear down the prior terminal before mounting a fresh one so repeated
+    // drills don't leak xterm instances/listeners (replaceChildren only drops
+    // the DOM node, not the widget). Tracked in #terminal so a failed (re)drill
+    // still cleans it up on the next drill or on dispose().
+    this.#terminal?.dispose?.();
+    this.#terminal = undefined;
 
     try {
       // Fresh terminal for the newly selected worker.
       this.#terminalHost.replaceChildren();
       const sink = this.#env.createTerminal(this.#terminalHost);
+      this.#terminal = sink;
 
       let session: TerminalSession | undefined;
       const client = new RelayChannelClient({
@@ -250,6 +269,8 @@ class Cockpit implements CockpitHandle {
     this.stop();
     this.#drill?.client.close();
     this.#drill = undefined;
+    this.#terminal?.dispose?.();
+    this.#terminal = undefined;
   }
 }
 

@@ -27,6 +27,8 @@ import { addSafeInt, isNonNegInt, isPosInt } from "@nanobpm/agentic-relay";
 export interface TerminalSink {
   /** Append a chunk of terminal output. */
   write(chunk: string): void;
+  /** Tear down the underlying terminal widget and its listeners, if any. */
+  dispose?(): void;
 }
 
 /** An outbound relay message the session asks its transport to send. */

@@ -364,6 +364,73 @@ test("renderer wires a column's processExplorer link to the console explorer", a
   assert.match(js, /ev\.preventDefault\(\)/);
 });
 
+test("renderer binds a route param: parseRoute splits page/param, filters + text consume it (#134)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A route is #/<page>/<url-encoded-param>. parseRoute splits on the FIRST "/"
+  // BEFORE decoding so a param carrying encoded slashes/hashes (a plan_key like
+  // "owner/repo#123") survives; the param segment is decoded verbatim into PARAM.
+  assert.match(js, /const slash = raw\.indexOf\("\/"\)/);
+  assert.match(js, /const paramRaw = slash >= 0 \? raw\.slice\(slash \+ 1\) : ""/);
+  assert.match(js, /param = paramRaw \? decodeURIComponent\(paramRaw\) : ""/);
+  assert.match(js, /let PARAM = parseRoute\(\)\.param/);
+  // renderPage refreshes PARAM from the current route on every (re)render.
+  assert.match(js, /const route = parseRoute\(\);\s*CURRENT = route\.page;\s*PARAM = route\.param;/s);
+  // A datasource filter with { eqParam: true } binds its value to the live PARAM,
+  // so one page template scopes every section to the selected entity.
+  assert.match(js, /else if \(f\.eqParam\) qs\.push\("where=" \+ encodeURIComponent\(f\.field \+ ":" \+ PARAM\)\)/);
+  // {{param}} interpolates into text nodes as DOM text (never markup).
+  assert.match(js, /function interpParam\(s\)/);
+  assert.match(js, /replace\(\/\\\{\\\{param\\\}\\\}\/g, PARAM\)/);
+  assert.match(js, /interpParam\(node\.props\.text\)/);
+});
+
+test("renderer wires a column's page link to an in-app scoped hash route", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // link: { kind: "page", page, keyField } → an in-app #/<page>/<key> hash link
+  // (no new tab, no server hit). The page id is safe-id-validated, the key is
+  // trimmed + URL-encoded into the param tail, and a blank/keyless cell stays text.
+  assert.match(js, /col\.link && col\.link\.kind === "page" && col\.link\.page && col\.link\.keyField/);
+  assert.match(js, /safePageId\(col\.link\.page\)/);
+  assert.match(js, /"#\/" \+ encodeURIComponent\(col\.link\.page\) \+ "\/" \+ encodeURIComponent\(keyStr\)/);
+  // In-app: NOT a new-tab link (no target/rel on this anchor).
+  assert.match(js, /el\("a", \{ class: "pc-link", href \}, text\)/);
+});
+
+test("renderer groups a dataGrid by a field into persisted collapsible bands (waves)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // groupBy partitions rows into collapsible groups; each header toggles its
+  // members as a unit and the collapsed state is persisted (survives poll+reload).
+  assert.match(js, /function appendRows\(rows\)/);
+  assert.match(js, /const groupBy = p\.groupBy/);
+  assert.match(js, /if \(!groupBy\) \{ for \(const row of rows\) renderRow\(row, null\); return; \}/);
+  // Numeric-aware ascending group order (waves 1,2,10 sort naturally).
+  assert.match(js, /const na = Number\(a\), nb = Number\(b\)/);
+  // Collapsed state persisted per page + node + group value via the shared helpers.
+  assert.match(js, /readCollapsed\(gkey, !!p\.groupDefaultCollapsed\)/);
+  assert.match(js, /writeCollapsed\(gkey, gcollapsed\)/);
+  assert.match(js, /"pc:collapsed:" \+ CURRENT \+ ":" \+ \(node\.id \|\| p\.title \|\| "grid"\) \+ ":g:" \+ gv/);
+  // A collapsed group hides every member row; expanded restores data rows and
+  // leaves detail rows at their own expansion state.
+  assert.match(js, /m\.tr\.hidden = gcollapsed/);
+  assert.match(js, /class: "pc-group-header"/);
+  // refresh() renders through appendRows so grouping applies on every poll.
+  assert.match(js, /tbody\.replaceChildren\(\);\s*appendRows\(rows\);/s);
+});
+
+test("renderer supports an opt-in sticky nav bar", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  const css = (await dispatch("GET", "/")).body ?? "";
+  // A bar nav with { sticky: true } gets the pc-sticky class (rails are excluded).
+  assert.match(js, /const barSticky = !rail && p\.sticky === true/);
+  assert.match(js, /\(barSticky \? " pc-sticky" : ""\)/);
+  // The CSS pins it to the viewport top with a solid background.
+  assert.match(css, /\.pc-bar\.pc-sticky \{[^}]*position:sticky[^}]*top:0/);
+});
+
 test("renderer exposes an embed-gated host-navigation bridge", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
@@ -489,8 +556,11 @@ test("the renderer routes between pages by hash and tears down grid polls", asyn
   assert.match(js, /const PAGE_ID = \/\^\[A-Za-z0-9_-/);
   assert.match(js, /function safePageId\(value\)/);
   assert.match(js, /function currentPage\(\)/);
-  assert.match(js, /try \{\s*const raw = decodeURIComponent/s);
-  assert.match(js, /catch \(e\) \{\s*return HOME;/s);
+  // The hash is parsed into a page + optional param by parseRoute(); the page
+  // segment is decoded and safe-id-validated (falling back to HOME).
+  assert.match(js, /function parseRoute\(\)/);
+  assert.match(js, /const raw = \(location\.hash \|\| ""\)\.replace/s);
+  assert.match(js, /if \(safePageId\(p\)\) page = p;/s);
   assert.match(js, /location\.hash/);
   assert.match(js, /window\.addEventListener\("hashchange", renderPage\)/);
   assert.match(js, /async function renderPage\(\)/);

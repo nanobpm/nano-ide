@@ -4,7 +4,7 @@
 // NOT want the `effect` package (bundle weight + viral paradigm) in the runtime.
 // But the imperative seams — workers, provisioning, resource lifecycles — still
 // benefit from the three Effect ergonomics we actually reach for. effectlite
-// gives us those, in ~90 lines with no runtime dependencies:
+// gives us those, in ~100 LOC of implementation with no runtime dependencies:
 //
 //   1. A typed-error `Result<A, E>` whose `E` composes automatically through
 //      generator do-notation (`gen(function*(){ const x = yield* step })`),

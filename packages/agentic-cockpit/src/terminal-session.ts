@@ -21,7 +21,7 @@
  *  - inbound  {@link RelayPayload} `{ stream, offset, chunk }` — a data chunk.
  */
 import type { RelayPayload } from "@nanobpm/agentic-protocol";
-import { isNonNegInt, isPosInt } from "@nanobpm/agentic-relay";
+import { addSafeInt, isNonNegInt, isPosInt } from "@nanobpm/agentic-relay";
 
 /** The terminal sink the session writes decoded output to (xterm.js satisfies this). */
 export interface TerminalSink {
@@ -151,7 +151,11 @@ export class TerminalSession {
     // re-deliver the boundary chunk; anything we have already applied is dropped.
     if (data.offset < this.#nextOffset) return;
     this.#sink.write(data.chunk);
-    this.#nextOffset = data.offset + 1;
+    // Advance via addSafeInt so a chunk at Number.MAX_SAFE_INTEGER fails fast
+    // rather than overflowing into an unsafe nextOffset — that value would later
+    // be echoed in subscribe.from and lose precision on any JSON round-trip,
+    // silently corrupting resume semantics.
+    this.#nextOffset = addSafeInt(data.offset, 1, "nextOffset");
   }
 
   #onSubscribed(gap: boolean, nextOffset: number): void {

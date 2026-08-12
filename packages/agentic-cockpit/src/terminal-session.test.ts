@@ -46,6 +46,19 @@ test("data chunks are written in order and advance the resume offset", () => {
   assert.equal(h.session.nextOffset, 2);
 });
 
+test("a chunk at Number.MAX_SAFE_INTEGER fails fast instead of overflowing nextOffset", () => {
+  // Advancing nextOffset past MAX_SAFE_INTEGER would produce an unsafe integer
+  // that loses precision on any JSON round-trip when echoed back in subscribe.from,
+  // silently corrupting resume semantics. Guard the increment so it throws instead.
+  const h = harness();
+  h.session.attach();
+  assert.throws(
+    () => h.session.handle(h.data(Number.MAX_SAFE_INTEGER, "x")),
+    RangeError,
+    "a boundary chunk must reject rather than corrupt the resume offset",
+  );
+});
+
 test("a reconnect resumes from nextOffset — no lost and no duplicated output", () => {
   const h = harness();
   h.session.attach(); // subscribe from 0

@@ -146,6 +146,17 @@ test("detectFileClaimConflicts never reports a writer's own earlier claim", () =
   assert.deepEqual(conflicts, []);
 });
 
+test("detectFileClaimConflicts never reports a host/'system' writer's own earlier claim", () => {
+  // A host write leaves authorTask undefined/blank; `append` stores it as "system".
+  // Conflict detection must default the querying author to the SAME "system", or a
+  // host writer falsely conflicts with its own prior host claims.
+  const store = freshStore();
+  store.append("b", { kind: "file-claim", files: ["state.rs"], body: "host earlier" });
+  const mine = store.append("b", { authorTask: "  ", kind: "file-claim", files: ["state.rs"], body: "host again" });
+  const conflicts = store.detectFileClaimConflicts("b", { files: ["state.rs"], beforeId: mine.id });
+  assert.deepEqual(conflicts, []);
+});
+
 test("detectFileClaimConflicts ignores non-file-claim kinds and other scopes", () => {
   const store = freshStore();
   store.append("b", { authorTask: "t1", kind: "note", files: ["state.rs"], body: "just a note" });

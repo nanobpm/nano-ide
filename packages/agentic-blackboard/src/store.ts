@@ -141,6 +141,16 @@ function normaliseFiles(files: readonly string[] | undefined): string[] {
   return (files ?? []).map((f) => String(f).trim()).filter((s) => s !== "");
 }
 
+/**
+ * Canonical author identity for a write. A blank/omitted `authorTask` is a host
+ * write and normalises to "system". This is the single source of truth for the
+ * default so `append` (what gets stored) and `detectFileClaimConflicts` (whose
+ * claim to self-exclude) can never drift and falsely self-conflict.
+ */
+function normaliseAuthor(authorTask: string | undefined): string {
+  return authorTask?.trim() || "system";
+}
+
 function toEntry(r: DbRow): BlackboardEntry {
   return {
     id: r.id,
@@ -210,7 +220,7 @@ export class BlackboardStore {
          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           scope,
-          input.authorTask?.trim() || "system",
+          normaliseAuthor(input.authorTask),
           normalizeKind(input.kind),
           files.length ? JSON.stringify(files) : null,
           body,
@@ -278,7 +288,7 @@ export class BlackboardStore {
   ): ClaimConflict[] {
     const want = new Set(normaliseFiles(opts.files));
     if (want.size === 0) return [];
-    const me = opts.authorTask?.trim() || "";
+    const me = normaliseAuthor(opts.authorTask);
     const beforeId = opts.beforeId;
     // Push `id < beforeId` into SQL (the common path per the docstring) so we
     // scan only strictly-prior claims via the (scope, id) index rather than

@@ -42,7 +42,9 @@ test("the boot migration is forward-only and additive (IF NOT EXISTS, no drops/a
 test("the migration takes prefix 003, after S2's 001 and S6's 002", () => {
   // Numbering is a shared epic surface (see migration header). Guard the prefix so
   // a rebase that renumbers is caught here rather than at merge time.
-  assert.match(migrationPath, /\/003_agentic_blackboard\.sql$/);
+  // `fileURLToPath` yields OS-native separators (backslashes on Windows), so match
+  // either separator to keep this prefix guard portable.
+  assert.match(migrationPath, /[/\\]003_agentic_blackboard\.sql$/);
 });
 
 test("ensureSchema creates the blackboard table idempotently", () => {

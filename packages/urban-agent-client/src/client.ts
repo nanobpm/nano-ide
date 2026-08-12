@@ -352,6 +352,16 @@ export class AgenticClient {
       // An already-broken transport may throw on close; the teardown proceeds.
     }
     this.handleClose({ local: true });
+    // Enforce the terminal state unconditionally. handleClose sets "closed" on
+    // the normal path, but it early-returns on its closeHandled guard when a
+    // prior close already fired for this connection attempt — e.g. a send-failure
+    // forceReconnect() left us "connecting" with a reconnect scheduled. Without
+    // this, close() would leave a non-terminal state: isClosed stays false, and
+    // (closedByCaller now set) the scheduled reconnect skips openTransport,
+    // wedging the client in "connecting". Own the terminal transition here so
+    // close() always honors its contract regardless of which path handled the
+    // close first.
+    this.state = "closed";
   }
 
   /** Subscribe to resolved SERVE tokens (fires on every SERVE, including reconnects). */

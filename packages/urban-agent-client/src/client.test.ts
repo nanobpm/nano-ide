@@ -751,3 +751,36 @@ test("a throwing non-error subscriber is contained and doesn't starve siblings",
   assert.equal(frames.length, 1);
   client.close();
 });
+
+test("close() is terminal even when a prior send-failure already consumed the close guard", () => {
+  // A send failure routes through forceReconnect({ local: false }) → handleClose,
+  // which sets closeHandled = true and (with reconnect enabled) leaves the client
+  // in "connecting" while a reconnect is scheduled. If the caller then calls
+  // close() during that window, handleClose early-returns on the closeHandled
+  // guard — so close() must enforce the terminal "closed" state itself. Otherwise
+  // isClosed stays false, post-close calls could buffer frames again, and (since
+  // closedByCaller is now set) the scheduled reconnect skips openTransport, wedging
+  // the client in "connecting" forever.
+  const scheduled: Array<() => void> = [];
+  const { client, t } = newClient({
+    reconnect: { enabled: true, initialDelayMs: 10 },
+    schedule: (fn) => scheduled.push(fn),
+  });
+  client.connect();
+  t.last().fireOpen();
+
+  // Arm and trigger a send failure: forceReconnect drives handleClose, which
+  // consumes the closeHandled guard and schedules a reconnect (captured, unfired).
+  t.last().throwOnSend = true;
+  client.relay("stdout", "boom");
+  assert.equal(client.connectionState, "connecting", "send failure left the client reconnecting");
+  assert.equal(scheduled.length, 1, "a reconnect was scheduled");
+
+  // Now the caller closes during the reconnect window.
+  client.close();
+  assert.equal(client.connectionState, "closed", "close() enforces the terminal state");
+
+  // Firing the previously-scheduled reconnect must not resurrect the closed client.
+  scheduled[0]?.();
+  assert.equal(client.connectionState, "closed", "a scheduled reconnect can't reopen a closed client");
+});

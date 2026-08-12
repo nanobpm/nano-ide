@@ -311,3 +311,31 @@ test("a thrown cancel whose verify read also fails is reported as an honest fail
     await h.close();
   }
 });
+
+test("a thrown cancel whose verify read comes back empty (gone) is an unverified failure, not a false success", async () => {
+  // The engine-restart trap: the cancel POST throws (dead keep-alive socket / the brief window
+  // the gateway is down), then the verify search hits the just-restarted engine whose query store
+  // has NOT yet rehydrated the still-running instance — so the read comes back empty ("gone").
+  // A throw is not a committed 204, and absence from the read model is not proof of termination, so
+  // reporting success here is the "worst possible lie": the button says cancelled while the run
+  // keeps going. It must be an honest ok:false so the caller surfaces it and the user retries.
+  const { engine } = cancelEngine({
+    states: {}, // read model transiently empty (mid-restart), though instance "100" is still live
+    onCancel: () => {
+      throw new Error("fetch failed");
+    },
+  });
+  const h = await withHarness(engine);
+  try {
+    const r = await cancelInstanceReconciling(h.api, [PR_BINDING], "100");
+    assert.equal(r.ok, false); // NOT a false success
+    assert.equal(r.state, "gone");
+    assert.equal(r.reconciled, 0);
+    assert.match(r.error ?? "", /fetch failed/);
+    const row = await h.table.get("100");
+    assert.equal(row?.status, "converging"); // never flip a possibly-live run to a terminal status
+    assert.ok(h.logs.some((l) => l.level === "error"));
+  } finally {
+    await h.close();
+  }
+});

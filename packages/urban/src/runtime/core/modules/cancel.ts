@@ -13,9 +13,9 @@
 //
 // This primitive keys success on the engine's response, then reconciles off the read model: a
 // non-throwing `cancelInstance` is a committed termination (trusted even if the read model still
-// lags at ACTIVE), while a throw whose instance reads back still-ACTIVE is an honest failure. It
-// reuses the instanceTracking bindings' `onTerminated.set` patch, so the immediate reconcile can
-// never drift from the poll reconciler's.
+// lags at ACTIVE), while a throw that does not read back a positively-terminal state (still ACTIVE,
+// or absent from the read model) is an honest failure. It reuses the instanceTracking bindings'
+// `onTerminated.set` patch, so the immediate reconcile can never drift from the poll reconciler's.
 
 import type { AppApi } from "../context.ts";
 import type { InstanceTracking } from "../manifest.ts";
@@ -44,10 +44,14 @@ type CancelApi = Pick<AppApi, "engine" | "data" | "log">;
  * Outcome rules:
  *  - `cancelInstance` returns without throwing → the engine accepted the termination (a committed
  *    204); trust it even if the read model still lags at ACTIVE.
- *  - `cancelInstance` throws but the instance reads back non-ACTIVE (already TERMINATED/COMPLETED
- *    /gone) → the cancel was effectively idempotent; treat as success.
- *  - `cancelInstance` throws and the instance is still ACTIVE → an honest failure: report it and
- *    do NOT touch any row (the instance is still running).
+ *  - `cancelInstance` throws but the instance reads back positively terminal (TERMINATED/COMPLETED)
+ *    → the cancel was effectively idempotent; treat as success. Only a TERMINATED read reconciles a
+ *    row here (see below); a COMPLETED read intentionally reconciles nothing.
+ *  - `cancelInstance` throws and the read is NOT positively terminal — still ACTIVE, or "gone"
+ *    (absent from the read model, which after an engine restart can transiently lack a live
+ *    instance) → an honest failure: report it and do NOT touch any row (the instance may still be
+ *    running). A throw is not a committed cancel, and absence from the read model is not proof of
+ *    termination, so success is never inferred from it.
  *
  * Reconcile only on `TERMINATED`: a COMPLETED instance's terminal row-write is owned by the app's
  * own finalize logic, and a gone/ACTIVE instance has nothing to flip here.
@@ -68,11 +72,19 @@ export async function cancelInstanceReconciling(
 
   const state = await readState(api, key, threw);
 
-  if (threw && state === "ACTIVE") {
-    // The cancel genuinely failed and the instance is still running — never flip a row to a
-    // terminal status while the engine keeps executing it.
-    api.log("error", "cancel: engine termination failed, instance still active", {
+  if (threw && state !== "TERMINATED" && state !== "COMPLETED") {
+    // The cancel threw, so we never got a committed 204 — and the verify read did NOT positively
+    // confirm a terminal state. Two shapes land here, both honest failures:
+    //   • state === "ACTIVE": the instance is demonstrably still running.
+    //   • state === "gone":   the read model has no record of the key. A throw makes this
+    //     ambiguous — after an engine restart the query store can transiently lack a live instance
+    //     before it rehydrates, so "gone" is absence-of-evidence, NOT proof of termination.
+    // Trust neither as success: claiming a cancel that may not have happened (while the run keeps
+    // executing) is the worst possible lie for a cancel button. Report ok:false so the caller
+    // surfaces it and retries; never flip a tracked row to terminal while the instance may live.
+    api.log("error", "cancel: engine termination not confirmed, instance may still be active", {
       processInstanceKey: key,
+      state,
       error: errorMessage(threw),
     });
     return { ok: false, processInstanceKey: key, state, reconciled: 0, error: errorMessage(threw) };

@@ -788,8 +788,8 @@ async function copyToClipboard(text) {
       return true;
     }
   } catch (_e) { /* fall through to the execCommand path */ }
+  const ta = document.createElement("textarea");
   try {
-    const ta = document.createElement("textarea");
     ta.value = text;
     ta.setAttribute("readonly", "");
     ta.style.position = "fixed";
@@ -797,10 +797,11 @@ async function copyToClipboard(text) {
     ta.style.opacity = "0";
     document.body.append(ta);
     ta.select();
-    const ok = document.execCommand("copy");
-    ta.remove();
-    return ok;
+    return document.execCommand("copy");
   } catch (_e) { return false; }
+  // Always remove the hidden textarea, even if select()/execCommand threw, so a
+  // failed copy never leaves a detached node accreting in <body> on retry.
+  finally { ta.remove(); }
 }
 
 // Rebase the sole {{appBase}} token in author-supplied copy text onto the app's
@@ -813,18 +814,30 @@ function resolveCopyText(text) {
 }
 
 // Open a lightweight modal appended to <body>. Closes on the ✕/Close button, a
-// backdrop click, or Escape; the keydown listener is removed on close so it never
-// leaks. When it carries copyText it renders a scrollable code block plus a Copy
-// button (see copyToClipboard for the sandbox-safe fallback).
+// backdrop click, Escape, or a page switch; the keydown listener is removed on
+// close so it never leaks, and close() is registered with teardown() so
+// navigating away (hashchange → renderPage → teardown) tears down any open modal
+// instead of leaving a stale overlay + document-level listener alive. When it
+// carries copyText it renders a scrollable code block plus a Copy button (see
+// copyToClipboard for the sandbox-safe fallback).
 function openModal(m) {
   const overlay = el("div", { class: "pc-modal-overlay" });
-  const dialog = el("div", { class: "pc-modal", role: "dialog", "aria-modal": "true" });
-  if (m.title) dialog.append(el("h2", { class: "pc-modal-title" }, m.title));
+  // role="dialog" + aria-modal need an accessible name: label by the visible
+  // title when present, else fall back to a generic aria-label so screen readers
+  // don't announce an unnamed dialog.
+  const titleId = m.title ? "pc-modal-title" : null;
+  const dialog = el("div", titleId
+    ? { class: "pc-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": titleId }
+    : { class: "pc-modal", role: "dialog", "aria-modal": "true", "aria-label": "Dialog" });
+  if (m.title) dialog.append(el("h2", { class: "pc-modal-title", id: titleId }, m.title));
   if (m.description) dialog.append(el("p", { class: "pc-modal-desc" }, m.description));
   const copyText = resolveCopyText(m.copyText);
   if (copyText) dialog.append(el("pre", { class: "pc-modal-code" }, copyText));
   const actions = el("div", { class: "pc-modal-actions" });
+  let closed = false;
   function close() {
+    if (closed) return;
+    closed = true;
     document.removeEventListener("keydown", onKey);
     overlay.remove();
   }
@@ -848,6 +861,9 @@ function openModal(m) {
   overlay.addEventListener("click", (ev) => { if (ev.target === overlay) close(); });
   document.addEventListener("keydown", onKey);
   document.body.append(overlay);
+  // A page switch runs teardown() before the next render — dispose the modal
+  // there too so navigating away never leaves a stale overlay + keydown listener.
+  disposers.push(close);
   closeBtn.focus();
 }
 

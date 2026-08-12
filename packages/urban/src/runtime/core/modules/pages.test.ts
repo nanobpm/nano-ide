@@ -503,6 +503,16 @@ test("the renderer ships a button node that opens a copy-pasteable modal", async
   assert.match(js, /async function copyToClipboard\(text\)/);
   assert.match(js, /navigator\.clipboard\.writeText/);
   assert.match(js, /document\.execCommand\("copy"\)/);
+  // The fallback textarea is torn down in a finally so a throwing select()/
+  // execCommand never leaves a detached node accreting in <body> on retry.
+  assert.match(js, /finally \{ ta\.remove\(\); \}/);
+  // The dialog carries an accessible name (labelled by its title, or a fallback
+  // aria-label) so screen readers don't announce an unnamed dialog.
+  assert.match(js, /"aria-labelledby": titleId/);
+  assert.match(js, /"aria-label": "Dialog"/);
+  // An open modal is registered with teardown() so a page switch disposes it
+  // instead of leaking a stale overlay + document-level keydown listener.
+  assert.match(js, /disposers\.push\(close\)/);
 });
 
 

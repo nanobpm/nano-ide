@@ -1,0 +1,47 @@
+{
+  "name": "@nanobpm/agentic-transcript",
+  "version": "0.1.0",
+  "description": "Transcript store for the Nano agentic protocol (ADR 0056, S6): retention-by-lifecycle over the app DataLayer/SQLite. Ephemeral runs flush the S5 relay ring to a durable, readable transcript on job completion; long-lived streams support resumable reattach from offset. New schema ships as a forward-only, additive migration. Built on @nanobpm/agentic-relay's resume-from-offset semantics.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "keywords": [
+    "nanobpm",
+    "agentic",
+    "transcript",
+    "retention",
+    "relay"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/agentic-transcript"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./source": "./src/index.ts"
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test --experimental-strip-types \"src/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@nanobpm/agentic-relay": "^0.1.0",
+    "@types/node": "^22.20.1",
+    "typescript": "^5.9.3"
+  }
+}

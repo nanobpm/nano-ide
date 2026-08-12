@@ -1,0 +1,180 @@
+import assert from "node:assert/strict";
+import { setImmediate as tick } from "node:timers/promises";
+import { test } from "node:test";
+import { encodeFrame } from "@nanobpm/agentic-protocol";
+import type { Frame, MessageFamily } from "@nanobpm/agentic-protocol";
+import {
+  AgenticHub,
+  DuplicateFamilyHandlerError,
+  sharedSecretAuthenticator,
+} from "@nanobpm/agentic-channel";
+import type {
+  ChannelConnection,
+  ChannelTransport,
+  Clock,
+  CloseCode,
+  HandshakeRequest,
+} from "@nanobpm/agentic-channel";
+import { attachPresenceFamily } from "./family.ts";
+import { PresenceStore } from "./store.ts";
+import { openTestDb } from "./test-db.ts";
+
+/** In-memory connection the test drives directly — public-API fakes only. */
+class FakeConnection implements ChannelConnection {
+  readonly id: string;
+  readonly handshake: HandshakeRequest;
+  closed: { code?: CloseCode; reason?: string } | null = null;
+  #onMessage: ((bytes: Uint8Array) => void) | undefined;
+  #onClose: ((code?: CloseCode, reason?: string) => void) | undefined;
+
+  constructor(id: string, handshake: HandshakeRequest) {
+    this.id = id;
+    this.handshake = handshake;
+  }
+  send(): void {}
+  close(code?: CloseCode, reason?: string): void {
+    this.closed = { code, reason };
+    this.#onClose?.(code, reason);
+  }
+  onMessage(listener: (bytes: Uint8Array) => void): void {
+    this.#onMessage = listener;
+  }
+  onClose(listener: (code?: CloseCode, reason?: string) => void): void {
+    this.#onClose = listener;
+  }
+  receive(bytes: Uint8Array): void {
+    this.#onMessage?.(bytes);
+  }
+}
+
+class FakeTransport implements ChannelTransport {
+  readonly address = { port: 0 };
+  #onConnection: ((conn: ChannelConnection) => void) | undefined;
+  onConnection(listener: (conn: ChannelConnection) => void): void {
+    this.#onConnection = listener;
+  }
+  close(): Promise<void> {
+    return Promise.resolve();
+  }
+  accept(conn: ChannelConnection): void {
+    this.#onConnection?.(conn);
+  }
+}
+
+function fakeClock(start = 1000): Clock & { set(t: number): void } {
+  let t = start;
+  return { now: () => t, set: (v: number) => (t = v) };
+}
+
+function frame(family: MessageFamily, payload: unknown, seq = 1): Uint8Array {
+  const f: Frame = { lane: "control", family, seq, payload };
+  return encodeFrame(f);
+}
+
+const auth = sharedSecretAuthenticator({ secret: "s3cret" });
+
+function connect(transport: FakeTransport, id: string, remote: string): FakeConnection {
+  const conn = new FakeConnection(id, { token: "s3cret", credential: "cap-1", remote });
+  transport.accept(conn);
+  return conn;
+}
+
+test("a registering worker appears in the registry with presence + host/family via the S1 seam", async () => {
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, { sweepIntervalMs: 0 });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { family: "anthropic", host: "mac-1" } }));
+  await tick();
+
+  const row = store.get("w-1");
+  assert.equal(row?.connectionId, "c1");
+  assert.equal(row?.identity, "peer-a");
+  assert.deepEqual(row?.capability, { family: "anthropic", host: "mac-1" });
+  // The enrolment is mirrored onto S1's in-memory connection registry too.
+  assert.deepEqual(hub.registry.get("c1")?.presence, { instance: "w-1", capability: { family: "anthropic", host: "mac-1" } });
+
+  await hub.close();
+});
+
+test("attaches three distinct families through the seam and routes each to the store", async () => {
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const clock = fakeClock(1000);
+  const store = new PresenceStore(openTestDb(), { clock });
+  attachPresenceFamily(hub, store, { sweepIntervalMs: 0 });
+
+  assert.deepEqual(hub.router.families().sort(), ["deregister", "heartbeat", "register"]);
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+
+  conn.receive(frame("register", { instance: "w-1", capability: { cognition: "opus" } }));
+  await tick();
+  assert.equal(store.get("w-1")?.lastSeen, 1000);
+
+  clock.set(2500);
+  conn.receive(frame("heartbeat", { instance: "w-1" }, 2));
+  await tick();
+  assert.equal(store.get("w-1")?.lastSeen, 2500, "heartbeat refreshed liveness");
+
+  conn.receive(frame("deregister", { instance: "w-1" }, 3));
+  await tick();
+  assert.equal(store.get("w-1"), undefined, "deregister removed the row");
+
+  await hub.close();
+});
+
+test("a malformed register frame is rejected and never touches the store", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb());
+  attachPresenceFamily(hub, store, { sweepIntervalMs: 0, onError: (e) => errors.push(e) });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  // Missing the required `instance` field.
+  conn.receive(frame("register", { capability: { host: "h" } }));
+  await tick();
+
+  assert.equal(store.count(), 0);
+  assert.equal(errors.length, 1);
+
+  await hub.close();
+});
+
+test("presence ages out on the TTL via the family sweep", async () => {
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const clock = fakeClock(1000);
+  const store = new PresenceStore(openTestDb(), { ttlMs: 100, clock });
+  const presence = attachPresenceFamily(hub, store, { sweepIntervalMs: 0 });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: {} }));
+  await tick();
+  assert.equal(store.count(), 1);
+
+  clock.set(1200); // age 200 > ttl 100
+  const removed = presence.sweepNow();
+  assert.deepEqual(removed.map((r) => r.instance), ["w-1"]);
+  assert.equal(store.count(), 0);
+
+  presence.stop();
+  await hub.close();
+});
+
+test("attaching a second presence module to the same hub is rejected", () => {
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  attachPresenceFamily(hub, new PresenceStore(openTestDb()), { sweepIntervalMs: 0 });
+  assert.throws(
+    () => attachPresenceFamily(hub, new PresenceStore(openTestDb()), { sweepIntervalMs: 0 }),
+    DuplicateFamilyHandlerError,
+  );
+});

@@ -67,9 +67,18 @@ test("construction rejects an invalid vocab document", () => {
   assert.throws(() => new VocabResolver(bad), VocabDocumentError);
 });
 
-test("construction rejects a malformed requires predicate", () => {
+test("construction rejects a malformed requires predicate, naming the offending token", () => {
   const doc = JSON.parse('{"version":1,"networks":{"n":{"roles":{"r":{"requires":["not a predicate"]}}}}}');
-  assert.throws(() => new VocabResolver(doc), Error);
+  assert.throws(
+    () => new VocabResolver(doc),
+    (error: unknown) => {
+      assert.ok(error instanceof VocabDocumentError);
+      assert.equal(error.errors.length, 1);
+      assert.equal(error.errors[0]?.path, "n.r");
+      assert.match(error.errors[0]?.message ?? "", /not a predicate/);
+      return true;
+    },
+  );
 });
 
 test("a self-named collapse does not collide with a network-qualified token of the same leaf", () => {

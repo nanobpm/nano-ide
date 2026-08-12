@@ -17,7 +17,7 @@
  */
 import { formatToken, parseToken, validateVocabDocument } from "@nanobpm/agentic-protocol";
 import type { Capability, VocabDocument, VocabNetwork, VocabRole } from "@nanobpm/agentic-protocol";
-import { parseRequiresList, satisfiesRequires, type RequiresPredicate } from "./requires.ts";
+import { parseRequiresList, RequiresParseError, satisfiesRequires, type RequiresPredicate } from "./requires.ts";
 
 /** A role flattened out of the vocab tree, with its derived routing token. */
 export interface ResolvedRole {
@@ -54,6 +54,22 @@ export class VocabDocumentError extends Error {
     super(`invalid vocab document: ${errors.map((e) => `${e.path}: ${e.message}`).join("; ")}`);
     this.name = "VocabDocumentError";
     this.errors = errors;
+  }
+}
+
+/**
+ * Parse a role's `requires` gate, tagging any failure with the routing token so a
+ * malformed predicate names the role that carries it (e.g. when merging author
+ * extensions) instead of surfacing a bare, context-free {@link RequiresParseError}.
+ */
+function parseRequires(token: string, requires: readonly string[] | undefined): RequiresPredicate[] {
+  try {
+    return parseRequiresList(requires);
+  } catch (error) {
+    if (error instanceof RequiresParseError) {
+      throw new VocabDocumentError([{ path: token, message: error.message }]);
+    }
+    throw error;
   }
 }
 
@@ -94,15 +110,16 @@ export class VocabResolver {
     const collect = (network: string, subnetworks: readonly string[], node: VocabNetwork): void => {
       if (node.roles !== undefined) {
         for (const [roleName, role] of Object.entries(node.roles)) {
+          const token = deriveToken(network, subnetworks, roleName);
           roles.push({
-            token: deriveToken(network, subnetworks, roleName),
+            token,
             ...(subnetworks.length === 0 && network === roleName ? {} : { network }),
             subnetworks: [...subnetworks],
             role: roleName,
             ...(role.weight === undefined ? {} : { weight: role.weight }),
             seats: normaliseSeats(role.seats),
             seatsDistinctFamily: role.seatsDistinctFamily === true,
-            requires: parseRequiresList(role.requires),
+            requires: parseRequires(token, role.requires),
           });
         }
       }

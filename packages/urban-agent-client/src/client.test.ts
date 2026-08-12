@@ -176,11 +176,18 @@ test("relay offset tracks UTF-8 byte length per stream, independently", () => {
   client.relay("a", "é"); // 2 bytes UTF-8
   client.relay("b", "x"); // separate stream, offset 0
   client.relay("a", "z"); // offset now 2
+  // Astral char (U+1F600) is 4 UTF-8 bytes but 2 UTF-16 code units, so the
+  // offset must advance by the UTF-8 byte count (4), never the JS string length
+  // (2) — guards the byte-length helper against surrogate-pair miscounting.
+  client.relay("a", "😀"); // offset now 3
+  client.relay("a", "!"); // offset now 3 + 4 = 7
   const relays = t.last().sentFrames.filter((f) => f.family === "relay");
   assert.deepEqual(relays.map((f) => f.payload), [
     { stream: "a", offset: 0, chunk: "é" },
     { stream: "b", offset: 0, chunk: "x" },
     { stream: "a", offset: 2, chunk: "z" },
+    { stream: "a", offset: 3, chunk: "😀" },
+    { stream: "a", offset: 7, chunk: "!" },
   ]);
   client.close();
 });

@@ -780,7 +780,15 @@ export function connectAgenticChannel(options: AgenticClientOptions): AgenticCli
 
 const utf8Encoder = new TextEncoder();
 
+// UTF-8 byte length of `text`. Prefer Node's `Buffer.byteLength`, which computes
+// the length without allocating, on the `relay()` hot path where the extra
+// per-call `Uint8Array` allocation from `TextEncoder.encode()` would add
+// measurable GC/CPU overhead during bulk output storms. Fall back to
+// `TextEncoder` where `Buffer` is unavailable (non-Node hosts).
 function byteLength(text: string): number {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.byteLength(text, "utf8");
+  }
   return utf8Encoder.encode(text).length;
 }
 

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { AgenticClient, connectAgenticChannel } from "./client.ts";
 import { encodeFrame } from "./protocol.ts";
 import type { Frame, ServePayload } from "./protocol.ts";
@@ -386,6 +386,59 @@ test("an invalid outbound relay payload is dropped with onError, not buffered", 
   assert.equal(client.buffered, 0, "the invalid relay was not buffered");
   assert.ok(errors.some((e) => /relay payload failed validation/.test(e.message)));
   client.close();
+});
+
+test("a rejected relay consumes no offset space (advance-only-on-accept)", () => {
+  const { client, t } = newClient({ reconnect: { enabled: false } });
+  client.connect();
+  t.last().fireOpen();
+
+  const errors: Error[] = [];
+  client.onError((e) => errors.push(e));
+
+  // An empty stream fails the S0 relay contract, so the frame is rejected at
+  // enqueue time. The offset for a real stream must be untouched by it, and a
+  // rejected relay must never advance its own (empty-stream) offset bucket.
+  client.relay("stdout", "ok"); // accepted → stdout offset advances to 2
+  client.relay("", "dropped"); // rejected: empty stream
+  client.relay("stdout", "next"); // must resume at offset 2, unaffected by the reject
+
+  assert.ok(errors.some((e) => /relay payload failed validation/.test(e.message)));
+  const relays = t.last().sentFrames.filter((f) => f.family === "relay").map((f) => f.payload);
+  assert.deepEqual(
+    relays,
+    [
+      { stream: "stdout", offset: 0, chunk: "ok" },
+      { stream: "stdout", offset: 2, chunk: "next" },
+    ],
+    "the rejected relay neither advanced nor corrupted any offset",
+  );
+  client.close();
+});
+
+test("capability set in options starts the auto-heartbeat timer on open, without an explicit register()", () => {
+  mock.timers.enable({ apis: ["setInterval"] });
+  try {
+    const { client, t } = newClient({
+      capability: { cognition: "high" },
+      heartbeatIntervalMs: 1000,
+    });
+    client.connect();
+    // Open auto-registers (capability was set in options); the documented
+    // auto-heartbeat must start here too, even though register() is never called.
+    t.last().fireOpen();
+
+    mock.timers.tick(1000);
+
+    const families = t.last().sentFrames.map((f) => f.family);
+    assert.ok(
+      families.includes("heartbeat"),
+      "auto-heartbeat fired for an auto-registered client without an explicit register()",
+    );
+    client.close();
+  } finally {
+    mock.timers.reset();
+  }
 });
 
 test("close notifies onClose subscribers even when the transport's close is silent/async", () => {

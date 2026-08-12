@@ -261,8 +261,13 @@ export class AgenticClient {
     }
     const offset = this.relayOffsets.get(stream) ?? 0;
     const payload: RelayPayload = { stream, offset, chunk };
-    this.relayOffsets.set(stream, offset + byteLength(chunk));
-    this.enqueue("relay", OUTBOUND_LANE.relay, payload);
+    // Advance the per-stream offset only if the frame was actually accepted
+    // for sending. A rejected relay (invalid payload) must not consume offset
+    // space, or every subsequent relay's offset would be inconsistent with the
+    // bytes the hub actually received.
+    if (this.enqueue("relay", OUTBOUND_LANE.relay, payload)) {
+      this.relayOffsets.set(stream, offset + byteLength(chunk));
+    }
   }
 
   /**
@@ -382,6 +387,14 @@ export class AgenticClient {
     if (this.capability !== undefined) {
       this.removeBufferedRegisters();
       this.enqueueRegister(this.capability, true);
+      // A capability set in options auto-registers here without register() ever
+      // being called, so start the documented auto-heartbeat timer on open too
+      // — otherwise heartbeatIntervalMs would silently no-op for auto-register
+      // consumers. startHeartbeatTimer() is idempotent, so an explicit
+      // register() that already started it is unaffected.
+      if (this.heartbeatIntervalMs > 0) {
+        this.startHeartbeatTimer();
+      }
     }
     this.emitOpen();
     this.pump();
@@ -482,16 +495,17 @@ export class AgenticClient {
     this.enqueue("register", OUTBOUND_LANE.register, payload);
   }
 
-  private enqueue(family: MessageFamily, lane: QosLane, payload: unknown): void {
+  private enqueue(family: MessageFamily, lane: QosLane, payload: unknown): boolean {
     if (this.refuseWhenClosed(family)) {
-      return;
+      return false;
     }
     if (this.rejectInvalidOutbound(family, payload)) {
-      return;
+      return false;
     }
     const frame: Frame = { lane, family, seq: this.nextSeq(), payload };
     this.ring.enqueue(frame);
     this.pump();
+    return true;
   }
 
   /** True once close() has been called — the terminal state (see {@link close}). */

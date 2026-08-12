@@ -32,6 +32,7 @@ import type { AgenticHub } from "@nanobpm/agentic-channel";
 import { IncarnationFence } from "./incarnation.ts";
 import { ReplayRing } from "./ring.ts";
 import { QosScheduler } from "./scheduler.ts";
+import { isNonNegInt, isPosInt } from "./validate.ts";
 
 /** The relay family key, from the S0 canonical family set (the one source of truth). */
 export const RELAY_FAMILY: MessageFamily = "relay";
@@ -80,10 +81,6 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function nonNegInt(value: unknown): value is number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0;
-}
-
 /** A parsed, validated inbound relay message. */
 type RelayInbound =
   | { readonly op: "produce"; readonly stream: string; readonly incarnation: number; readonly chunk: string }
@@ -112,13 +109,13 @@ export class RelayHub {
     // Validate up-front so misconfiguration fails fast at construction, rather
     // than throwing lazily from inside #ringFor/#subscriberFor on the first
     // frame (where the throw would escape handle() and bypass onError).
-    if (!Number.isInteger(this.#ringCapacity) || this.#ringCapacity < 1) {
+    if (!isPosInt(this.#ringCapacity)) {
       throw new RangeError(`RelayHub ringCapacity must be a positive integer, got ${this.#ringCapacity}`);
     }
-    if (!Number.isInteger(this.#bulkCapacity) || this.#bulkCapacity < 1) {
+    if (!isPosInt(this.#bulkCapacity)) {
       throw new RangeError(`RelayHub bulkCapacity must be a positive integer, got ${this.#bulkCapacity}`);
     }
-    if (!Number.isInteger(this.#defaultCredit) || this.#defaultCredit < 0) {
+    if (!isNonNegInt(this.#defaultCredit)) {
       throw new RangeError(`RelayHub defaultCredit must be a non-negative integer, got ${this.#defaultCredit}`);
     }
     this.#onFenced = options.onFenced;
@@ -285,7 +282,7 @@ export class RelayHub {
     }
     const op = payload.op;
     if (op === "produce") {
-      if (!nonEmptyString(payload.stream) || !nonNegInt(payload.incarnation) || typeof payload.chunk !== "string") {
+      if (!nonEmptyString(payload.stream) || !isNonNegInt(payload.incarnation) || typeof payload.chunk !== "string") {
         return null;
       }
       return { op, stream: payload.stream, incarnation: payload.incarnation, chunk: payload.chunk };
@@ -295,17 +292,17 @@ export class RelayHub {
         return null;
       }
       const from = payload.from === undefined ? 0 : payload.from;
-      if (!nonNegInt(from)) {
+      if (!isNonNegInt(from)) {
         return null;
       }
       const credit = payload.credit === undefined ? 0 : payload.credit;
-      if (!nonNegInt(credit)) {
+      if (!isNonNegInt(credit)) {
         return null;
       }
       return { op, stream: payload.stream, from, credit };
     }
     if (op === "credit") {
-      if (!nonNegInt(payload.credit)) {
+      if (!isNonNegInt(payload.credit)) {
         return null;
       }
       return { op, credit: payload.credit };

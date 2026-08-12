@@ -14,6 +14,8 @@
  * higher incarnation advances the mark (the takeover); a strictly lower one is
  * fenced. This mirrors the classic storage/leader fencing token pattern.
  */
+import { isNonNegInt } from "./validate.ts";
+
 export class IncarnationFence {
   readonly #current = new Map<string, number>();
 
@@ -32,7 +34,7 @@ export class IncarnationFence {
    * untouched.
    */
   admit(stream: string, incarnation: number): boolean {
-    if (!Number.isInteger(incarnation) || incarnation < 0) {
+    if (!isNonNegInt(incarnation)) {
       throw new RangeError(`incarnation must be a non-negative integer, got ${incarnation}`);
     }
     const mark = this.#current.get(stream);

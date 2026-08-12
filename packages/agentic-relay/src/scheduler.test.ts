@@ -217,6 +217,9 @@ test("clear discards buffered frames across all lanes", () => {
 test("rejects invalid credit and bulkCapacity", () => {
   assert.throws(() => new QosScheduler({ sink: () => {}, credit: -1 }), RangeError);
   assert.throws(() => new QosScheduler({ sink: () => {}, bulkCapacity: 0 }), RangeError);
+  // Unsafe integers lose precision under credit arithmetic, so they are rejected too.
+  assert.throws(() => new QosScheduler({ sink: () => {}, credit: Number.MAX_SAFE_INTEGER + 1 }), RangeError);
   const s = new QosScheduler({ sink: () => {} });
   assert.throws(() => s.grantCredit(-1), RangeError);
+  assert.throws(() => s.grantCredit(Number.MAX_SAFE_INTEGER + 1), RangeError);
 });

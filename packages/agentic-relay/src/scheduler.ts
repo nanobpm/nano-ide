@@ -23,6 +23,7 @@
  */
 import { compareFrameOrder, lanePriority } from "@nanobpm/agentic-protocol";
 import type { Frame } from "@nanobpm/agentic-protocol";
+import { isNonNegInt, isPosInt } from "./validate.ts";
 
 export interface QosSchedulerOptions {
   /** Where drained frames are emitted (typically the connection's `send`). */
@@ -56,11 +57,11 @@ export class QosScheduler {
   #shed = 0;
 
   constructor(options: QosSchedulerOptions) {
-    if (options.credit !== undefined && (!Number.isInteger(options.credit) || options.credit < 0)) {
+    if (options.credit !== undefined && !isNonNegInt(options.credit)) {
       throw new RangeError(`QosScheduler credit must be a non-negative integer, got ${options.credit}`);
     }
     const bulkCapacity = options.bulkCapacity ?? DEFAULT_BULK_CAPACITY;
-    if (!Number.isInteger(bulkCapacity) || bulkCapacity < 1) {
+    if (!isPosInt(bulkCapacity)) {
       throw new RangeError(`QosScheduler bulkCapacity must be a positive integer, got ${bulkCapacity}`);
     }
     this.#sink = options.sink;
@@ -112,7 +113,7 @@ export class QosScheduler {
 
   /** Grant `n` more bulk credits, then drain any bulk frames that credit now allows. */
   grantCredit(n: number): void {
-    if (!Number.isInteger(n) || n < 0) {
+    if (!isNonNegInt(n)) {
       throw new RangeError(`grantCredit requires a non-negative integer, got ${n}`);
     }
     this.#credit += n;

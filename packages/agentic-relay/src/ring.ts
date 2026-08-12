@@ -14,6 +14,7 @@
  * The stream itself survives the reconnect — the ring is the durable-enough
  * window that makes resume possible.
  */
+import { isNonNegInt, isPosInt } from "./validate.ts";
 
 /** A single retained chunk and the offset it was assigned. */
 export interface ReplayEntry {
@@ -50,7 +51,7 @@ export class ReplayRing {
   #nextOffset = 0;
 
   constructor(options: ReplayRingOptions) {
-    if (!Number.isInteger(options.capacity) || options.capacity < 1) {
+    if (!isPosInt(options.capacity)) {
       throw new RangeError(`ReplayRing capacity must be a positive integer, got ${options.capacity}`);
     }
     this.capacity = options.capacity;
@@ -100,7 +101,7 @@ export class ReplayRing {
    *  - `from > nextOffset` → empty (the consumer is ahead of the stream); no gap.
    */
   since(from: number): ReplaySlice {
-    if (!Number.isInteger(from) || from < 0) {
+    if (!isNonNegInt(from)) {
       throw new RangeError(`since(from) requires a non-negative integer, got ${from}`);
     }
     const first = this.firstOffset;

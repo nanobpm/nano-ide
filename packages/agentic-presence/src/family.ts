@@ -27,7 +27,13 @@ export interface PresenceFamilyOptions {
    * from the store's own clock, so liveness time has a single source of truth.
    */
   sweepIntervalMs?: number;
-  /** Notified of a malformed frame or handler fault; the connection is kept. */
+  /**
+   * Notified of a fault this module handles while keeping the connection: a
+   * malformed presence payload ({@link PresencePayloadError}), a rejected
+   * ownership takeover ({@link PresenceOwnershipError}), or a presence-sweep
+   * error. Other handler exceptions are not routed here — they propagate to
+   * {@link AgenticHub} and surface via the hub's own error handling.
+   */
   onError?: (err: unknown, connectionId?: string) => void;
 }
 

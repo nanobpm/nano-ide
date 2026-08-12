@@ -90,6 +90,26 @@ test("deregister removes an instance", () => {
   assert.equal(store.deregister("w-1"), false);
 });
 
+test("re-register with identical values from the same identity is not a false ownership violation", () => {
+  const clock = fakeClock(1000);
+  const store = freshStore({ clock });
+  const input = {
+    instance: "w-1",
+    connectionId: "c1",
+    identity: "peer-a",
+    capability: { cognition: "opus", weight: 4, family: "anthropic", host: "h1" },
+  };
+  store.register(input);
+
+  // A byte-for-byte identical re-register (a no-op UPDATE) must still succeed:
+  // ownership is decided on the stored identity, not the driver's changed-row
+  // count, so a no-op UPSERT can never masquerade as a takeover.
+  assert.doesNotThrow(() => store.register(input));
+  const row = store.register(input);
+  assert.equal(row.identity, "peer-a");
+  assert.equal(store.count(), 1);
+});
+
 test("register refuses to hijack an instance owned by a different identity", () => {
   const clock = fakeClock(1000);
   const store = freshStore({ clock });

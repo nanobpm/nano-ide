@@ -158,7 +158,7 @@ export class PresenceStore {
   register(input: RegisterInput): PresenceRow {
     const now = this.#clock.now();
     const cap = input.capability;
-    const { changes } = this.#db.run(
+    this.#db.run(
       `INSERT INTO ${PRESENCE_TABLE}
          (instance, connection_id, identity, cognition, weight, family, host, registered_at, last_seen)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -183,15 +183,19 @@ export class PresenceStore {
         now,
       ],
     );
-    // An UPSERT that neither inserts (instance already present) nor updates (the
-    // identity guard filtered the row out) reports zero changes: the instance is
-    // owned by another identity. Reject rather than silently leaving it stale.
-    if (changes === 0) {
-      throw new PresenceOwnershipError(input.instance);
-    }
+    // Enforce ownership on the *persisted* row rather than the driver's
+    // changed-row count. The identity guard in the UPSERT's `WHERE` leaves a
+    // foreign-owned row untouched, so after the statement the stored identity
+    // is authoritative: if it differs from the caller's, this register was a
+    // rejected takeover. Reading it back keeps the invariant independent of how
+    // SQLite counts UPSERT changes (which counts WHERE-matched rows, not just
+    // value-changing ones), so a same-identity no-op re-register never trips it.
     const row = this.get(input.instance);
     if (row === undefined) {
       throw new Error(`presence row vanished immediately after register: ${input.instance}`);
+    }
+    if (row.identity !== input.identity) {
+      throw new PresenceOwnershipError(input.instance);
     }
     return row;
   }

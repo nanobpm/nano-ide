@@ -304,6 +304,22 @@ test("renderer wires a column's linkField to a new-tab anchor", async () => {
   assert.match(js, /rel: "noopener noreferrer"/);
 });
 
+test("renderer wires a column's badge to a tone-classed pill shown only when present", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A column declaring `badge` renders a compact circular pill (e.g. a red "1"
+  // flagging an incident) only when the field value is non-empty; an empty value
+  // leaves the cell blank so the column is unobtrusive until it matters. Guard
+  // the shape: presence-gated on the trimmed field, tone is allow-listed
+  // (default danger), the label defaults to "1", and the full field text becomes
+  // the tooltip.
+  assert.match(js, /if \(col\.badge\)/);
+  assert.match(js, /text\.trim\(\) === ""/);
+  assert.match(js, /"warn" \|\| t === "ok" \|\| t === "info" \? t : "danger"/);
+  assert.match(js, /col\.badge\.label == null \? "1"/);
+  assert.match(js, /class: "pc-badge pc-badge-" \+ tone, title: text/);
+});
+
 test("renderer wires a column's processExplorer link to the console explorer", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";

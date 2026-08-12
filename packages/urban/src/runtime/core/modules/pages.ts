@@ -552,6 +552,11 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-detail-field { display:flex; gap:.5rem; font-size:.85rem; margin:.15rem 0; }
 .pc-detail-label { color:var(--nano-text-muted); min-width:8rem; }
 .pc-link { color:var(--nano-accent); }
+.pc-badge { display:inline-flex; align-items:center; justify-content:center; min-width:1.35rem; height:1.35rem; padding:0 .4rem; border-radius:999px; font-size:.72rem; font-weight:700; line-height:1; color:#fff; background:var(--nano-danger); }
+.pc-badge-danger { background:var(--nano-danger); }
+.pc-badge-warn { background:var(--nano-warn); color:#3a2a00; }
+.pc-badge-ok { background:var(--nano-ok); }
+.pc-badge-info { background:var(--nano-info); }
 .pc-child { margin:.6rem 0; }
 .pc-child-title { font-size:.8rem; font-weight:600; color:var(--nano-text-muted); margin-bottom:.25rem; }
 .pc-transcript { white-space:pre-wrap; max-height:22rem; overflow:auto; background:var(--nano-inset); padding:.5rem; border-radius:.4rem; font-size:.8rem; margin-top:.4rem; }
@@ -949,6 +954,25 @@ function renderButton(node) {
 // grid and child grids.
 function gridCell(col, row) {
   const text = row[col.field] == null ? "" : String(row[col.field]);
+  // 3. badge — a compact status indicator. When the row's field value is
+  //    non-empty (truthy after trimming) render a small circular badge (e.g. a
+  //    red "1" dot flagging an incident) whose tooltip is the full field text;
+  //    when empty the cell stays blank so the column is unobtrusive until it
+  //    matters. tone (danger|warn|ok|info, default danger) picks the color and
+  //    label the glyph inside (default "1"). Label/tone come from the app
+  //    schema (trusted); the tooltip is row data set via title/textContent
+  //    (DOM-escaped by the platform, so no HTML/attribute injection).
+  if (col.badge) {
+    if (text.trim() === "") return el("td", {});
+    const t = col.badge.tone;
+    const tone = t === "warn" || t === "ok" || t === "info" ? t : "danger";
+    const label = col.badge.label == null ? "1" : String(col.badge.label);
+    return el(
+      "td",
+      {},
+      el("span", { class: "pc-badge pc-badge-" + tone, title: text }, label),
+    );
+  }
   if (col.linkField) {
     const href = row[col.linkField] == null ? "" : String(row[col.linkField]);
     if (text !== "" && /^https?:\/\//i.test(href)) {

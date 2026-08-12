@@ -132,7 +132,20 @@ export class RelayChannelClient {
   /** Open the first socket and wire its lifecycle. Idempotent while connected. */
   open(): void {
     if (this.#closed || this.#socket !== undefined) return;
-    const socket = this.#connect();
+    // Guard the injected factory: connect() can throw synchronously (e.g. the
+    // browser adapter's WebSocket constructor on an invalid URL / CSP block).
+    // An unguarded throw here escapes open()/#reconnect() and kills the
+    // reconnect→resume loop with no error surfaced. Route it to onError and, if
+    // autoReconnect is enabled, schedule a retry so the loop survives a
+    // transient connect failure — the same way #handleClose recovers a drop.
+    let socket: RawSocket;
+    try {
+      socket = this.#connect();
+    } catch (err) {
+      this.#onError?.(err);
+      if (!this.#closed && this.#autoReconnect) this.#schedule(() => this.#reconnect());
+      return;
+    }
     this.#socket = socket;
     socket.onMessage((bytes) => this.#receive(bytes));
     socket.onOpen(() => this.#onOpen?.());

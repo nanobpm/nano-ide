@@ -251,3 +251,57 @@ test("autoReconnect:false does not reconnect on drop", () => {
   assert.equal(scheduled, false);
   assert.equal(sockets.length, 1);
 });
+
+test("a synchronous connect() failure is routed to onError and reschedules a retry", () => {
+  const boom = new Error("WebSocket construction failed");
+  let attempts = 0;
+  const succeedOn = 2;
+  const sockets: FakeSocket[] = [];
+  let pending: (() => void) | undefined;
+  const errors: unknown[] = [];
+  const client = new RelayChannelClient({
+    connect: () => {
+      attempts += 1;
+      if (attempts < succeedOn) throw boom;
+      const s = new FakeSocket();
+      sockets.push(s);
+      return s;
+    },
+    onRelay: () => {},
+    onError: (e) => errors.push(e),
+    schedule: (run) => {
+      pending = run;
+    },
+  });
+
+  // The first connect throws synchronously — open() must not escape the throw.
+  client.open();
+  assert.deepEqual(errors, [boom], "the synchronous connect failure reached onError");
+  assert.equal(sockets.length, 0, "no socket was wired from a failed connect");
+  assert.ok(pending !== undefined, "a retry was scheduled after the connect failure");
+
+  // The scheduled retry succeeds → the reconnect loop survived the failure.
+  pending?.();
+  assert.equal(sockets.length, 1, "the scheduled retry opened a fresh socket");
+});
+
+test("a synchronous connect() failure with autoReconnect:false does not reschedule", () => {
+  const boom = new Error("boom");
+  let scheduled = false;
+  const errors: unknown[] = [];
+  const client = new RelayChannelClient({
+    connect: () => {
+      throw boom;
+    },
+    onRelay: () => {},
+    onError: (e) => errors.push(e),
+    autoReconnect: false,
+    schedule: () => {
+      scheduled = true;
+    },
+  });
+
+  client.open();
+  assert.deepEqual(errors, [boom], "the failure was surfaced to onError");
+  assert.equal(scheduled, false, "no retry scheduled when autoReconnect is disabled");
+});

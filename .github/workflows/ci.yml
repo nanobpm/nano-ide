@@ -48,6 +48,23 @@ jobs:
       - run: npm run typecheck
       - run: npm test --if-present
 
+  # db/migrations/*.sql are forward-only and applied in lexical filename order, so
+  # the numeric prefix is load-bearing (see scripts/lib/migration-order.mjs). Two
+  # branches that fork off the same state can each pick "the next free prefix N"
+  # and both emit N_*.sql — each PR is green alone, but the pair collides on merge
+  # with a non-deterministic apply order that no single PR's CI exercises (the
+  # wave-2 collision hand-sequenced 001/002/003 in epic #124). This job catches
+  # the class mechanically. Run locally with `npm run check:migrations`.
+  migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: node scripts/check-migrations.mjs
+
   # The Nano agentic protocol's wire contract is authored once as a shared
   # conformance corpus (S0, #126) that BOTH this repo's codec and the cross-repo
   # c8ctl client are held to — a shared prose spec does not stop divergence, shared

@@ -552,7 +552,7 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-detail-field { display:flex; gap:.5rem; font-size:.85rem; margin:.15rem 0; }
 .pc-detail-label { color:var(--nano-text-muted); min-width:8rem; }
 .pc-link { color:var(--nano-accent); }
-.pc-badge { display:inline-flex; align-items:center; justify-content:center; min-width:1.35rem; height:1.35rem; padding:0 .4rem; border-radius:999px; font-size:.72rem; font-weight:700; line-height:1; color:#fff; background:var(--nano-danger); }
+.pc-badge { display:inline-flex; align-items:center; justify-content:center; min-width:1.35rem; height:1.35rem; box-sizing:border-box; padding:0 .4rem; border-radius:999px; font-size:.72rem; font-weight:700; line-height:1; color:#fff; background:var(--nano-danger); }
 .pc-badge-danger { background:var(--nano-danger); }
 .pc-badge-warn { background:var(--nano-warn); color:#3a2a00; }
 .pc-badge-ok { background:var(--nano-ok); }

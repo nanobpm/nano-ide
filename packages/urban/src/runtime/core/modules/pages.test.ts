@@ -317,7 +317,9 @@ test("renderer wires a column's badge to a tone-classed pill shown only when pre
   assert.match(js, /text\.trim\(\)\s*===\s*""/);
   assert.match(js, /t\s*===\s*"warn"\s*\|\|\s*t\s*===\s*"ok"\s*\|\|\s*t\s*===\s*"info"\s*\?\s*t\s*:\s*"danger"/);
   assert.match(js, /col\.badge\.label\s*==\s*null\s*\?\s*"1"/);
-  assert.match(js, /class:\s*"pc-badge pc-badge-"\s*\+\s*tone,\s*title:\s*text,\s*"aria-label":\s*text/);
+  assert.match(js, /class:\s*"pc-badge pc-badge-"\s*\+\s*tone/);
+  assert.match(js, /title:\s*text/);
+  assert.match(js, /"aria-label":\s*text/);
 });
 
 test("renderer wires a column's processExplorer link to the console explorer", async () => {

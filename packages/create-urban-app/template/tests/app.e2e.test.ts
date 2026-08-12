@@ -28,12 +28,16 @@ import { bootTestApp, type TestApp } from "@nanobpm/urban-testkit";
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 describe("app e2e (urban-testkit)", () => {
-  let app: TestApp;
+  // Optional because they're only assigned in `before()`. Under `strict` (the template's
+  // `typecheck` script runs `tsc --noEmit`) a non-optional `let app: TestApp;` read from a
+  // closure trips TS2454 "used before being assigned"; modelling the lifecycle as optional is
+  // the honest type. The test narrows `app` with `assert.ok` before use.
+  let app: TestApp | undefined;
   // Provision the app's SQLite in a throwaway temp dir so tests never touch (or leak into)
   // your real ./db/app.db, and every run starts from a freshly-migrated, empty schema. Created
   // in `before()` (not at module load) so a filtered/skipped run has no filesystem side effects.
   // The harness resolves the manifest's `${NANO_APP_DB_URL}` from this env overlay.
-  let dbDir: string;
+  let dbDir: string | undefined;
 
   before(async () => {
     dbDir = mkdtempSync(join(tmpdir(), "urban-e2e-"));
@@ -53,6 +57,9 @@ describe("app e2e (urban-testkit)", () => {
   });
 
   test("records a greeting through the full POST → process → worker → GET pipeline", async () => {
+    // `app` is optional (assigned in `before()`); narrow it once here so the rest of the test
+    // reads a definitely-present `TestApp` without optional chaining.
+    assert.ok(app, "app was booted in before()");
     const api = app.api;
     assert.ok(api);
 

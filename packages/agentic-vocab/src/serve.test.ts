@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { decodeFrame, encodeFrame, type Frame, validatePayload } from "@nanobpm/agentic-protocol";
+import { decodeFrame, encodeFrame, type Frame, MAX_SEQ, validatePayload } from "@nanobpm/agentic-protocol";
 import { CORE_VOCAB } from "./core-vocab.ts";
 import { VocabResolver } from "./resolver.ts";
 import { buildServeFrame, buildServePayload, serveCapability, type ServeSink } from "./serve.ts";
@@ -22,6 +22,20 @@ test("buildServeFrame rides the control lane and round-trips through the codec",
 
 test("buildServeFrame refuses an invalid routing token", () => {
   assert.throws(() => buildServeFrame("w-1", ["Not A Token"]), /invalid serve frame/);
+});
+
+test("buildServeFrame refuses a seq outside the wire's uint32 bound", () => {
+  for (const badSeq of [-1, 1.5, MAX_SEQ + 1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(() => buildServeFrame("w-1", ["planning.planner"], badSeq), /invalid seq/);
+  }
+});
+
+test("buildServeFrame accepts the seq boundary values the wire allows", () => {
+  for (const seq of [0, MAX_SEQ]) {
+    const frame = buildServeFrame("w-1", ["planning.planner"], seq);
+    assert.equal(frame.seq, seq);
+    assert.deepEqual(decodeFrame(encodeFrame(frame)).payload, { instance: "w-1", tokens: ["planning.planner"] });
+  }
 });
 
 test("serveCapability resolves a capability and emits the serve frame", () => {

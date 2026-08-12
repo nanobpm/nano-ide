@@ -128,6 +128,55 @@ test("attaches three distinct families through the seam and routes each to the s
   await hub.close();
 });
 
+test("a foreign peer cannot hijack, heartbeat, or deregister another peer's instance", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const clock = fakeClock(1000);
+  const store = new PresenceStore(openTestDb(), { clock });
+  attachPresenceFamily(hub, store, { sweepIntervalMs: 0, onError: (e) => errors.push(e) });
+
+  const owner = connect(transport, "c1", "peer-a");
+  const attacker = connect(transport, "c2", "peer-b");
+  await tick();
+
+  owner.receive(frame("register", { instance: "w-1", capability: { host: "owned" } }));
+  await tick();
+  assert.equal(store.get("w-1")?.identity, "peer-a");
+
+  // Attacker (a different authenticated identity) tries to take over the instance.
+  clock.set(2000);
+  attacker.receive(frame("register", { instance: "w-1", capability: { host: "evil" } }, 2));
+  await tick();
+  let row = store.get("w-1");
+  assert.equal(row?.identity, "peer-a", "register takeover blocked — owner keeps the row");
+  assert.equal(row?.connectionId, "c1");
+  assert.deepEqual(row?.capability, { host: "owned" });
+  assert.equal(row?.lastSeen, 1000, "blocked register does not refresh liveness");
+  assert.equal(errors.length, 1, "the blocked takeover is surfaced via onError");
+
+  // Attacker cannot keep the instance alive on the owner's behalf.
+  clock.set(5000);
+  attacker.receive(frame("heartbeat", { instance: "w-1" }, 3));
+  await tick();
+  assert.equal(store.get("w-1")?.lastSeen, 1000, "foreign heartbeat is a no-op");
+
+  // Attacker cannot deregister the owner's instance.
+  attacker.receive(frame("deregister", { instance: "w-1" }, 4));
+  await tick();
+  assert.notEqual(store.get("w-1"), undefined, "foreign deregister is a no-op");
+
+  // The genuine owner still controls its own instance.
+  owner.receive(frame("heartbeat", { instance: "w-1" }, 2));
+  await tick();
+  assert.equal(store.get("w-1")?.lastSeen, 5000, "owner heartbeat refreshes liveness");
+  owner.receive(frame("deregister", { instance: "w-1" }, 3));
+  await tick();
+  assert.equal(store.get("w-1"), undefined, "owner deregisters its own instance");
+
+  await hub.close();
+});
+
 test("a malformed register frame is rejected and never touches the store", async () => {
   const transport = new FakeTransport();
   const errors: unknown[] = [];

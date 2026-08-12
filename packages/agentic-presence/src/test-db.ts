@@ -13,12 +13,15 @@ export interface TestDb extends SqliteDb {
 
 function toParams(params: unknown[]): (string | number | bigint | null | Uint8Array)[] {
   return params.map((p) => {
-    if (p === null || p === undefined) return null;
+    if (p === null) return null;
     if (typeof p === "string" || typeof p === "number" || typeof p === "bigint" || p instanceof Uint8Array) {
       return p;
     }
     if (typeof p === "boolean") return p ? 1 : 0;
-    return String(p);
+    // Mirror wrapNodeSqlite's `sqliteParams`: unsupported types (including
+    // `undefined`) throw rather than coerce, so a test can never pass on a
+    // parameter production would reject.
+    throw new TypeError(`unsupported SQLite parameter type: ${typeof p}`);
   });
 }
 

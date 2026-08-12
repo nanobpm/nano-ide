@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { Clock } from "@nanobpm/agentic-channel";
-import { PresenceStore } from "./store.ts";
+import { PresenceOwnershipError, PresenceStore } from "./store.ts";
 import { openTestDb } from "./test-db.ts";
 
 function fakeClock(start = 1000): Clock & { set(t: number): void } {
@@ -88,6 +88,55 @@ test("deregister removes an instance", () => {
   assert.equal(store.deregister("w-1"), true);
   assert.equal(store.get("w-1"), undefined);
   assert.equal(store.deregister("w-1"), false);
+});
+
+test("register refuses to hijack an instance owned by a different identity", () => {
+  const clock = fakeClock(1000);
+  const store = freshStore({ clock });
+  store.register({ instance: "w-1", connectionId: "c1", identity: "peer-a", capability: { host: "h1" } });
+
+  clock.set(2000);
+  assert.throws(
+    () =>
+      store.register({
+        instance: "w-1",
+        connectionId: "c2",
+        identity: "peer-b",
+        capability: { host: "evil" },
+      }),
+    PresenceOwnershipError,
+  );
+
+  // The original owner's row is untouched — no connection/identity/capability takeover.
+  const row = store.get("w-1");
+  assert.equal(row?.identity, "peer-a");
+  assert.equal(row?.connectionId, "c1");
+  assert.deepEqual(row?.capability, { host: "h1" });
+  assert.equal(row?.lastSeen, 1000, "a blocked re-register does not refresh liveness");
+});
+
+test("heartbeat scoped to an identity no-ops for a foreign identity", () => {
+  const clock = fakeClock(1000);
+  const store = freshStore({ clock });
+  store.register({ instance: "w-1", connectionId: "c1", identity: "peer-a", capability: {} });
+
+  clock.set(9000);
+  assert.equal(store.heartbeat("w-1", "peer-b"), false, "a foreign identity cannot refresh liveness");
+  assert.equal(store.get("w-1")?.lastSeen, 1000, "liveness unchanged by a foreign heartbeat");
+
+  assert.equal(store.heartbeat("w-1", "peer-a"), true, "the owning identity refreshes liveness");
+  assert.equal(store.get("w-1")?.lastSeen, 9000);
+});
+
+test("deregister scoped to an identity no-ops for a foreign identity", () => {
+  const store = freshStore();
+  store.register({ instance: "w-1", connectionId: "c1", identity: "peer-a", capability: {} });
+
+  assert.equal(store.deregister("w-1", "peer-b"), false, "a foreign identity cannot deregister");
+  assert.notEqual(store.get("w-1"), undefined, "row survives a foreign deregister");
+
+  assert.equal(store.deregister("w-1", "peer-a"), true, "the owning identity deregisters");
+  assert.equal(store.get("w-1"), undefined);
 });
 
 test("sweep ages out instances past the TTL and keeps live ones", () => {

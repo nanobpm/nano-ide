@@ -17,6 +17,7 @@ import { validatePayload } from "@nanobpm/agentic-protocol";
 import type { Capability, Frame } from "@nanobpm/agentic-protocol";
 import type { AgenticHub, HubConnection } from "@nanobpm/agentic-channel";
 import type { PresenceRow, PresenceStore } from "./store.ts";
+import { PresenceOwnershipError } from "./store.ts";
 
 export interface PresenceFamilyOptions {
   /**
@@ -111,7 +112,17 @@ export function attachPresenceFamily(
       return;
     }
     const capability = readCapability(payload);
-    store.register({ instance, connectionId: ctx.id, identity: ctx.identity, capability });
+    try {
+      store.register({ instance, connectionId: ctx.id, identity: ctx.identity, capability });
+    } catch (err) {
+      // An instance owned by another identity must not be hijacked: surface the
+      // rejection and leave S1's in-memory registry untouched.
+      if (err instanceof PresenceOwnershipError) {
+        onError(err, ctx.id);
+        return;
+      }
+      throw err;
+    }
     // Mirror the enrolment onto S1's in-memory connection registry so a live
     // connection carries its instance+capability without a DB read.
     ctx.registry.setPresence(ctx.id, { instance, capability });
@@ -129,7 +140,7 @@ export function attachPresenceFamily(
       reject("heartbeat", ctx.id, "missing instance");
       return;
     }
-    store.heartbeat(instance);
+    store.heartbeat(instance, ctx.identity);
   });
 
   hub.registerFamilyHandler("deregister", (frame: Frame, ctx: HubConnection) => {
@@ -144,7 +155,7 @@ export function attachPresenceFamily(
       reject("deregister", ctx.id, "missing instance");
       return;
     }
-    store.deregister(instance);
+    store.deregister(instance, ctx.identity);
   });
 
   const sweepNow = (): PresenceRow[] => {

@@ -19,7 +19,7 @@ export const PRESENCE_TABLE = "agentic_presence";
  * it). Capability (cognition/weight/family/host) is stored as an ENROLMENT
  * attribute — never a routing token.
  */
-export const PRESENCE_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS agentic_presence (
+export const PRESENCE_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS ${PRESENCE_TABLE} (
   instance      TEXT PRIMARY KEY,
   connection_id TEXT NOT NULL,
   identity      TEXT NOT NULL,
@@ -30,5 +30,5 @@ export const PRESENCE_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS agentic_presence 
   registered_at TEXT NOT NULL,
   last_seen     INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_agentic_presence_last_seen ON agentic_presence (last_seen);
-CREATE INDEX IF NOT EXISTS idx_agentic_presence_connection ON agentic_presence (connection_id);`;
+CREATE INDEX IF NOT EXISTS idx_${PRESENCE_TABLE}_last_seen ON ${PRESENCE_TABLE} (last_seen);
+CREATE INDEX IF NOT EXISTS idx_${PRESENCE_TABLE}_connection ON ${PRESENCE_TABLE} (connection_id);`;

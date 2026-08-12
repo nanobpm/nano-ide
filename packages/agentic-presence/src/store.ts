@@ -64,6 +64,21 @@ export interface PresenceStoreOptions {
 
 const DEFAULT_TTL_MS = 30_000;
 
+/**
+ * Raised when a `register` would overwrite an instance already owned by a
+ * different authenticated identity. Presence rows are bound to the identity
+ * that first registered them, so one authenticated peer can never take over
+ * (or change the identity of) another peer's instance.
+ */
+export class PresenceOwnershipError extends Error {
+  readonly instance: string;
+  constructor(instance: string) {
+    super(`instance "${instance}" is registered to a different identity`);
+    this.name = "PresenceOwnershipError";
+    this.instance = instance;
+  }
+}
+
 /** The raw DB row shape (snake_case columns) as read back from SQLite. */
 interface DbRow {
   instance: string;
@@ -133,11 +148,17 @@ export class PresenceStore {
    * `registered_at`; a re-registration (e.g. after a reconnect on a new
    * connection) keeps the original `registered_at` and refreshes everything
    * else, including `last_seen`. Returns the stored row.
+   *
+   * Ownership is bound to the authenticated `identity` that first registered the
+   * instance: a re-register from the same identity (the reconnect case) is
+   * allowed, but one from a *different* identity is rejected with a
+   * {@link PresenceOwnershipError} and leaves the existing row untouched — no
+   * peer can take over another peer's instance or rewrite its identity.
    */
   register(input: RegisterInput): PresenceRow {
     const now = this.#clock.now();
     const cap = input.capability;
-    this.#db.run(
+    const { changes } = this.#db.run(
       `INSERT INTO ${PRESENCE_TABLE}
          (instance, connection_id, identity, cognition, weight, family, host, registered_at, last_seen)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -148,7 +169,8 @@ export class PresenceStore {
          weight        = excluded.weight,
          family        = excluded.family,
          host          = excluded.host,
-         last_seen     = excluded.last_seen`,
+         last_seen     = excluded.last_seen
+       WHERE ${PRESENCE_TABLE}.identity = excluded.identity`,
       [
         input.instance,
         input.connectionId,
@@ -161,6 +183,12 @@ export class PresenceStore {
         now,
       ],
     );
+    // An UPSERT that neither inserts (instance already present) nor updates (the
+    // identity guard filtered the row out) reports zero changes: the instance is
+    // owned by another identity. Reject rather than silently leaving it stale.
+    if (changes === 0) {
+      throw new PresenceOwnershipError(input.instance);
+    }
     const row = this.get(input.instance);
     if (row === undefined) {
       throw new Error(`presence row vanished immediately after register: ${input.instance}`);
@@ -171,18 +199,32 @@ export class PresenceStore {
   /**
    * Refresh an instance's liveness to now. Returns `true` if the instance was
    * registered, `false` if there is no such row (a heartbeat before register).
+   * When `identity` is given, the refresh is scoped to the owning identity, so a
+   * heartbeat from a foreign identity is a silent no-op (and cannot probe for
+   * the existence of another peer's instance).
    */
-  heartbeat(instance: string): boolean {
-    const { changes } = this.#db.run(
-      `UPDATE ${PRESENCE_TABLE} SET last_seen = ? WHERE instance = ?`,
-      [this.#clock.now(), instance],
-    );
+  heartbeat(instance: string, identity?: string): boolean {
+    const { changes } =
+      identity === undefined
+        ? this.#db.run(`UPDATE ${PRESENCE_TABLE} SET last_seen = ? WHERE instance = ?`, [this.#clock.now(), instance])
+        : this.#db.run(`UPDATE ${PRESENCE_TABLE} SET last_seen = ? WHERE instance = ? AND identity = ?`, [
+            this.#clock.now(),
+            instance,
+            identity,
+          ]);
     return changes > 0;
   }
 
-  /** Remove an instance's presence row. Returns `true` if a row was removed. */
-  deregister(instance: string): boolean {
-    const { changes } = this.#db.run(`DELETE FROM ${PRESENCE_TABLE} WHERE instance = ?`, [instance]);
+  /**
+   * Remove an instance's presence row. Returns `true` if a row was removed. When
+   * `identity` is given, the removal is scoped to the owning identity, so a
+   * deregister from a foreign identity is a silent no-op.
+   */
+  deregister(instance: string, identity?: string): boolean {
+    const { changes } =
+      identity === undefined
+        ? this.#db.run(`DELETE FROM ${PRESENCE_TABLE} WHERE instance = ?`, [instance])
+        : this.#db.run(`DELETE FROM ${PRESENCE_TABLE} WHERE instance = ? AND identity = ?`, [instance, identity]);
     return changes > 0;
   }
 

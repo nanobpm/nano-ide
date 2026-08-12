@@ -12,7 +12,7 @@
  * The wire contract lives in `@nanobpm/agentic-protocol`; the hub in
  * `@nanobpm/agentic-channel`. This package builds on both.
  */
-export { PresenceStore } from "./store.ts";
+export { PresenceOwnershipError, PresenceStore } from "./store.ts";
 export type {
   PresenceRow,
   PresenceStoreOptions,

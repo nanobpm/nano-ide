@@ -4,6 +4,7 @@ import { AgenticClient, connectAgenticChannel } from "./client.ts";
 import { encodeFrame } from "./protocol.ts";
 import type { Frame, ServePayload } from "./protocol.ts";
 import { fakeTransportFactory } from "./testkit.ts";
+import type { TransportCloseInfo } from "./transport.ts";
 
 function serveFrame(instance: string, tokens: string[]): Uint8Array {
   const payload: ServePayload = { instance, tokens };
@@ -530,4 +531,78 @@ test("on open, a REGISTER buffered behind other control frames is coalesced to t
     "exactly one REGISTER drains (the buffered one was coalesced, not duplicated)",
   );
   client.close();
+});
+
+test("a send failure reports a remote (non-local) close even when transport.close() fires its own onClose", () => {
+  const { client, t } = newClient({ reconnect: { enabled: false } });
+  const closes: TransportCloseInfo[] = [];
+  client.onClose((info) => closes.push(info));
+  client.connect();
+  t.last().fireOpen();
+
+  // Arm a send failure. When forceReconnect tears the transport down, the
+  // FakeTransport's close() synchronously fires its own onClose({ local: true }).
+  // The client must still report this send failure as a REMOTE drop, not a
+  // caller-initiated (local) close, so onClose subscribers aren't misled.
+  t.last().throwOnSend = true;
+  client.relay("stdout", "boom"); // pump → send throws → forceReconnect({ local: false })
+
+  assert.equal(closes.length, 1, "exactly one close is reported");
+  assert.equal(closes[0]?.local, false, "a send failure is a remote drop, not a local close");
+  client.close();
+});
+
+test("auto-heartbeats coalesce while down so a long outage can't shed buffered relay", () => {
+  // A bounded ring: control-lane heartbeats are never evicted, so without
+  // coalescing an outage's worth of heartbeat ticks would pile up and shed the
+  // buffered bulk relay (worker output) via the QoS overflow policy.
+  const { client, t } = newClient({
+    reconnect: { enabled: false },
+    capability: { cognition: "high" },
+    bufferCapacity: 3,
+  });
+  client.connect(); // connecting, not yet open
+
+  client.relay("stdout", "work"); // one bulk relay buffered
+  for (let i = 0; i < 10; i++) {
+    client.heartbeat(); // a long outage's worth of heartbeat ticks
+  }
+  assert.equal(client.buffered, 2, "at most one heartbeat is buffered regardless of tick count");
+
+  t.last().fireOpen();
+  const families = t.last().sentFrames.map((f) => f.family);
+  assert.deepEqual(
+    families,
+    ["register", "heartbeat", "relay"],
+    "the buffered relay survived and drains after the heartbeats coalesced",
+  );
+  client.close();
+});
+
+test("the default reconnect scheduler unrefs its backoff timer so it can't pin the event loop open", () => {
+  // Spy on the shared Timeout prototype's unref so we observe the DEFAULT
+  // scheduler (no `schedule` override) unref its backoff timer, just like the
+  // serve-timeout and heartbeat timers do.
+  const probe = setTimeout(() => {}, 0);
+  const timeoutProto = Object.getPrototypeOf(probe);
+  clearTimeout(probe);
+  const unrefSpy = mock.method(timeoutProto, "unref");
+  try {
+    const t = fakeTransportFactory();
+    const client = new AgenticClient({
+      url: "ws://test/agentic",
+      instance: "worker-1",
+      transport: t.factory,
+      reconnect: { enabled: true, initialDelayMs: 10 },
+    });
+    client.connect();
+    t.last().fireOpen();
+
+    unrefSpy.mock.resetCalls();
+    t.last().drop(); // remote drop → default scheduler schedules a reconnect
+    assert.ok(unrefSpy.mock.callCount() >= 1, "the default reconnect backoff timer was unref'd");
+    client.close();
+  } finally {
+    unrefSpy.mock.restore();
+  }
 });

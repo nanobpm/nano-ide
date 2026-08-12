@@ -150,7 +150,16 @@ export class AgenticClient {
       factor: options.reconnect?.factor ?? DEFAULT_RECONNECT.factor,
     };
     this.reconnectDelay = this.reconnectPolicy.initialDelayMs;
-    this.schedule = options.schedule ?? ((fn, ms) => void setTimeout(fn, ms));
+    this.schedule =
+      options.schedule ??
+      ((fn, ms) => {
+        // Match the serve-timeout and heartbeat timers: an auto-reconnect backoff
+        // timer must not keep the Node event loop alive on its own.
+        const timer = setTimeout(fn, ms);
+        if (typeof timer.unref === "function") {
+          timer.unref();
+        }
+      });
   }
 
   /** Current connection state. */
@@ -211,7 +220,7 @@ export class AgenticClient {
     // AND drop any REGISTER still buffered in the ring, so a reconnect drains
     // only the newest capability (and never a stale duplicate ahead of it).
     this.rejectPendingServe(new Error("superseded by a newer register"));
-    this.removeBufferedRegisters();
+    this.removeBuffered("register");
 
     const promise = new Promise<RegisterResult>((resolve, reject) => {
       const timer =
@@ -242,6 +251,13 @@ export class AgenticClient {
     if (this.refuseWhenClosed("heartbeat")) {
       return;
     }
+    // A heartbeat is point-in-time liveness, not durable state: only the newest
+    // one matters. Coalesce any heartbeat still buffered from a prior tick before
+    // enqueuing this one, so at most a single heartbeat is ever buffered. Without
+    // this, an auto-heartbeat timer running through a long outage would pile
+    // never-evicted control-lane heartbeats into the bounded ring and shed the
+    // buffered bulk relay (worker output) via the QoS overflow policy.
+    this.removeBuffered("heartbeat");
     const payload: HeartbeatPayload = { instance: this.instance };
     this.enqueue("heartbeat", OUTBOUND_LANE.heartbeat, payload);
   }
@@ -385,7 +401,7 @@ export class AgenticClient {
     // control lane, so it drains ahead of the entire backlog — never behind a
     // heartbeat and never as a stale duplicate.
     if (this.capability !== undefined) {
-      this.removeBufferedRegisters();
+      this.removeBuffered("register");
       this.enqueueRegister(this.capability, true);
       // A capability set in options auto-registers here without register() ever
       // being called, so start the documented auto-heartbeat timer on open too
@@ -599,13 +615,13 @@ export class AgenticClient {
   }
 
   /**
-   * Drop every REGISTER still buffered in the ring, returning them. The single
-   * source of truth for register coalescing: a superseding `register()` and a
-   * reconnect's `handleOpen()` both use it so the drain never emits a stale or
-   * mis-ordered REGISTER.
+   * Drop every buffered frame of `family` from the ring, returning them. The
+   * single source of truth for outbound coalescing: register coalescing (a
+   * superseding `register()` and a reconnect's `handleOpen()`) and heartbeat
+   * coalescing both use it so the drain never emits a stale or duplicate frame.
    */
-  private removeBufferedRegisters(): Frame[] {
-    return this.ring.remove((frame) => frame.family === "register");
+  private removeBuffered(family: MessageFamily): Frame[] {
+    return this.ring.remove((frame) => frame.family === family);
   }
 
   /**
@@ -617,12 +633,17 @@ export class AgenticClient {
   private forceReconnect(info: TransportCloseInfo): void {
     const transport = this.transport;
     this.transport = undefined;
+    // Drive the close with the intended `info` FIRST, then tear down the
+    // transport. `handleClose` is idempotent per connection attempt, so if
+    // closing the transport synchronously fires its own onClose (the bundled
+    // FakeTransport does, with `{ local: true }`), that second pass is a no-op
+    // and cannot misreport this remote drop / send failure as a local close.
+    this.handleClose(info);
     try {
       transport?.close();
     } catch {
       // A transport that is already broken may throw on close; ignore it.
     }
-    this.handleClose(info);
   }
 
   private nextSeq(): number {

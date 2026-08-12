@@ -17,7 +17,6 @@
 import { decodeFrame, encodeFrame, FrameDecodeError } from "@nanobpm/agentic-protocol";
 import type { Frame } from "@nanobpm/agentic-protocol";
 import type { Authenticator } from "./auth.ts";
-import { systemClock } from "./clock.ts";
 import type { Clock } from "./clock.ts";
 import type { ChannelConnection, ChannelTransport, CloseCode, HandshakeRequest } from "./connection.ts";
 import { FamilyRouter } from "./dispatch.ts";
@@ -56,7 +55,11 @@ export interface AgenticHubOptions {
   router?: FamilyRouter<HubConnection>;
   /** A shared registry, or omit to let the hub create one. */
   registry?: ConnectionRegistry;
-  /** Injectable clock (deterministic tests). Default {@link systemClock}. */
+  /**
+   * Injectable clock for the registry's liveness time. Ignored when a `registry`
+   * is supplied — that registry owns time (it is the single source of truth for
+   * liveness), so pass the clock to the {@link ConnectionRegistry} instead.
+   */
   clock?: Clock;
   /**
    * How often to sweep for aged-out connections, in ms. Default: a third of the
@@ -73,7 +76,6 @@ export class AgenticHub {
   readonly registry: ConnectionRegistry;
   readonly #transport: ChannelTransport;
   readonly #authenticator: Authenticator;
-  readonly #clock: Clock;
   readonly #onError: (err: unknown, connectionId?: string) => void;
   readonly #conns = new Map<string, ChannelConnection>();
   #sweepTimer: ReturnType<typeof setInterval> | undefined;
@@ -83,7 +85,6 @@ export class AgenticHub {
     this.#authenticator = options.authenticator;
     this.router = options.router ?? new FamilyRouter<HubConnection>();
     this.registry = options.registry ?? new ConnectionRegistry({ clock: options.clock });
-    this.#clock = options.clock ?? systemClock;
     this.#onError = options.onError ?? (() => {});
 
     this.#transport.onConnection((conn) => {
@@ -185,10 +186,12 @@ export class AgenticHub {
 
   /**
    * Age out connections past the liveness TTL and close their sockets. Called
-   * automatically by the internal timer; exposed for deterministic tests.
+   * automatically by the internal timer; exposed for deterministic tests. Reads
+   * "now" from the registry's own clock so liveness time has a single source of
+   * truth — the hub keeps no separate clock to drift against `lastSeen`.
    */
   sweepNow(): void {
-    const stale = this.registry.sweep(this.#clock.now());
+    const stale = this.registry.sweep();
     for (const entry of stale) {
       const conn = this.#conns.get(entry.id);
       this.#conns.delete(entry.id);

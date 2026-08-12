@@ -8,6 +8,7 @@ import type { AuthResult } from "./auth.ts";
 import type { Clock } from "./clock.ts";
 import type { ChannelConnection, ChannelTransport, CloseCode, HandshakeRequest } from "./connection.ts";
 import { AgenticHub, LIVENESS_TIMEOUT } from "./hub.ts";
+import { ConnectionRegistry } from "./registry.ts";
 
 /** An in-memory connection the test drives directly — no sockets, no timers. */
 class FakeConnection implements ChannelConnection {
@@ -255,6 +256,30 @@ test("an inbound keepalive ping refreshes liveness", async () => {
   hub.sweepNow();
 
   assert.equal(hub.connectionCount, 1);
+  await hub.close();
+});
+
+test("liveness sweep reads time from the registry, not a separate hub clock (no clock drift)", async () => {
+  // A pre-built registry stamps lastSeen with ITS clock; the hub must sweep
+  // against that same clock. If the hub kept a separate, faster clock it would
+  // spuriously age out a connection the registry still considers fresh — the
+  // registry is the single source of truth for liveness time.
+  const registryClock = fakeClock(1000);
+  const registry = new ConnectionRegistry({ clock: registryClock });
+  const hubClock = fakeClock(1000 + 100_000); // 100s ahead of the registry's clock
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: goodAuth, registry, clock: hubClock, sweepIntervalMs: 0 });
+
+  const conn = new FakeConnection("c1", { token: "s3cret", credential: "cap-1", remote: "peer-a" });
+  transport.accept(conn);
+  await tick();
+
+  // Neither clock advances: the connection was just seen at registryClock=1000,
+  // well within the 30s TTL, so it must NOT be swept.
+  hub.sweepNow();
+
+  assert.equal(hub.connectionCount, 1);
+  assert.equal(conn.closed, null);
   await hub.close();
 });
 test("a closed connection is removed from the registry", async () => {

@@ -142,13 +142,16 @@ export function correlateRegistry(
   workers: readonly RegisteredWorker[],
 ): DiversityReport {
   const sorted = [...workers].sort((a, b) => (a.instance < b.instance ? -1 : a.instance > b.instance ? 1 : 0));
+  // Resolve each worker's SERVE token set once (O(workers)) so per-role seating
+  // is a membership check, not a repeated resolve — correlation stays O(workers × roles).
+  const workerTokens = sorted.map((worker) => new Set(resolver.resolve(worker.capability).tokens));
   const perRole = new Map<string, SeatAssignment[]>();
 
   for (const role of resolver.roles()) {
     const seats = seatLabels(role);
     if (seats.length === 0) continue;
     const qualifying = sorted.filter(
-      (worker) => worker.capability.family !== undefined && satisfies(resolver, role, worker.capability),
+      (worker, index) => worker.capability.family !== undefined && workerTokens[index].has(role.token),
     );
     const assignments: SeatAssignment[] = [];
     for (let index = 0; index < seats.length && index < qualifying.length; index += 1) {
@@ -163,8 +166,4 @@ export function correlateRegistry(
   }
 
   return computeDiversity(resolver, perRole);
-}
-
-function satisfies(resolver: VocabResolver, role: ResolvedRole, capability: Capability): boolean {
-  return resolver.resolve(capability).roles.some((matched) => matched.token === role.token);
 }

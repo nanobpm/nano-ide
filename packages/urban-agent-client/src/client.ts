@@ -104,7 +104,6 @@ type VoidListener = () => void;
 interface PendingServe {
   resolve: (result: RegisterResult) => void;
   reject: (error: Error) => void;
-  timer: ReturnType<typeof setTimeout> | undefined;
 }
 
 /**
@@ -246,17 +245,25 @@ export class AgenticClient {
     this.removeBuffered("register");
 
     const promise = new Promise<RegisterResult>((resolve, reject) => {
-      const timer =
-        this.serveTimeoutMs > 0
-          ? setTimeout(() => {
-              this.pendingServe = undefined;
-              reject(new Error(`SERVE not received within ${this.serveTimeoutMs}ms`));
-            }, this.serveTimeoutMs)
-          : undefined;
-      if (timer !== undefined && typeof timer.unref === "function") {
-        timer.unref();
+      const pending: PendingServe = { resolve, reject };
+      this.pendingServe = pending;
+      // Route the serve-timeout through the injectable scheduler (which unref()s
+      // the underlying timer by default, so a lingering register never keeps a
+      // process alive). A raw unref()'d setTimeout was the sole event-loop keeper
+      // during a caller's `await client.register()`, so under Node's test runner
+      // the loop could drain and cancel the awaited promise before the timer
+      // fired ("Promise resolution is still pending but the event loop has
+      // already resolved"). The scheduler is cancellation-free, so a stale fire
+      // after the pending was resolved/superseded is a guarded no-op.
+      if (this.serveTimeoutMs > 0) {
+        this.schedule(() => {
+          if (this.pendingServe !== pending) {
+            return;
+          }
+          this.pendingServe = undefined;
+          reject(new Error(`SERVE not received within ${this.serveTimeoutMs}ms`));
+        }, this.serveTimeoutMs);
       }
-      this.pendingServe = { resolve, reject, timer };
     });
 
     this.enqueueRegister(capability);
@@ -529,9 +536,6 @@ export class AgenticClient {
     if (this.pendingServe !== undefined) {
       const pending = this.pendingServe;
       this.pendingServe = undefined;
-      if (pending.timer !== undefined) {
-        clearTimeout(pending.timer);
-      }
       pending.resolve({ serve: payload.tokens });
     }
     this.emitServe(payload);
@@ -719,9 +723,6 @@ export class AgenticClient {
     if (this.pendingServe !== undefined) {
       const pending = this.pendingServe;
       this.pendingServe = undefined;
-      if (pending.timer !== undefined) {
-        clearTimeout(pending.timer);
-      }
       pending.reject(error);
     }
   }

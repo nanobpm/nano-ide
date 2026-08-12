@@ -263,7 +263,7 @@ function narrowRole(input: unknown): VocabRole {
   } = {};
   const requires = input.requires;
   if (Array.isArray(requires) && requires.every((entry) => typeof entry === "string")) {
-    role.requires = requires;
+    role.requires = [...requires];
   }
   if (typeof input.weight === "number") {
     role.weight = input.weight;
@@ -272,7 +272,7 @@ function narrowRole(input: unknown): VocabRole {
   if (typeof seats === "number") {
     role.seats = seats;
   } else if (Array.isArray(seats) && seats.every((seat) => typeof seat === "string")) {
-    role.seats = seats;
+    role.seats = [...seats];
   }
   if (typeof input.seatsDistinctFamily === "boolean") {
     role.seatsDistinctFamily = input.seatsDistinctFamily;

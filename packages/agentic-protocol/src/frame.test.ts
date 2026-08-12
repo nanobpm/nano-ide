@@ -41,7 +41,7 @@ test("malformed frames: decode rejects with the specified error code", () => {
   }
 });
 
-test("decode: rejects a frame subarray with a non-zero byteOffset correctly", () => {
+test("decode: decodes a frame subarray with a non-zero byteOffset correctly", () => {
   // Guards the DataView(byteOffset,length) wiring: a valid frame embedded in a
   // larger buffer must decode from its subarray view, not from offset 0.
   const golden = GOLDEN_FRAMES[0];

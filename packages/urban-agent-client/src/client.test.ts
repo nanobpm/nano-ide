@@ -337,6 +337,44 @@ test("close emits onClose exactly once even when the transport also fires its ow
   assert.equal(client.connectionState, "closed");
 });
 
+test("close notifies onClose even when the client never reached open (caller close while connecting)", () => {
+  const { client } = newClient();
+  client.connect(); // connecting — never fireOpen
+  assert.equal(client.connectionState, "connecting");
+
+  const closes: Array<{ local?: boolean }> = [];
+  client.onClose((info) => closes.push(info));
+
+  client.close();
+
+  // A caller-initiated close while still connecting must surface onClose, just
+  // like a remote drop while connecting already does — no silent shutdowns.
+  assert.equal(closes.length, 1, "onClose fired once even though the channel never opened");
+  assert.equal(closes[0]?.local, true, "reported as a local (caller-initiated) close");
+  assert.equal(client.connectionState, "closed");
+});
+
+test("connect() is a no-op after close() — a shut-down client never reopens", () => {
+  const { client, t } = newClient();
+  client.connect();
+  t.last().fireOpen();
+  client.close();
+  assert.equal(client.connectionState, "closed");
+  assert.equal(t.transports.length, 1);
+
+  client.connect(); // must NOT reopen a terminally-closed client
+
+  assert.equal(client.connectionState, "closed", "still closed after a post-close connect()");
+  assert.equal(t.transports.length, 1, "no new transport was built after close()");
+});
+
+test("fakeTransportFactory().last() throws a clear error before any transport is created", () => {
+  const t = fakeTransportFactory();
+  // The type signature promises a FakeTransport; returning undefined here would be
+  // a misleading runtime crash downstream, so last() must fail loudly and early.
+  assert.throws(() => t.last(), /before any transport was created/);
+});
+
 test("on open, a REGISTER buffered behind other control frames is coalesced to the front", () => {
   const { client, t } = newClient({ reconnect: { enabled: false }, capability: { cognition: "high" } });
   client.connect(); // not open — control frames buffer

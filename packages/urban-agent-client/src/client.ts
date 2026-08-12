@@ -167,9 +167,13 @@ export class AgenticClient {
     return this.lastServe;
   }
 
-  /** Open the transport. Safe to call once; reconnects are automatic. */
+  /** Open the transport. Safe to call once; reconnects are automatic. A no-op after close() (terminal). */
   connect(): void {
-    if (this.state === "connecting" || this.state === "open") {
+    // A caller-initiated close() is terminal: once closed, connect() is a no-op
+    // so a shut-down client never silently reopens (and never re-drains frames
+    // buffered before the shutdown). Manual reconnect after a passive drop is
+    // still available from the "idle" state (reconnect disabled).
+    if (this.state === "connecting" || this.state === "open" || this.state === "closed") {
       return;
     }
     this.closedByCaller = false;
@@ -257,11 +261,10 @@ export class AgenticClient {
     this.rejectPendingServe(new Error("client closed"));
     // Best-effort transport close, then own the state transition + close event
     // ourselves. A real transport's close is asynchronous (a WebSocket fires its
-    // own onClose on a later tick), so if we set state="closed" inline the
-    // eventual onClose would compute wasOpen=false and skip emitClose — meaning
-    // onClose subscribers never learn about a normal caller-initiated shutdown.
-    // Routing through handleClose (idempotent per connection attempt) fixes that
-    // and de-duplicates against any onClose the transport also fires.
+    // own onClose on a later tick), and it may never surface a close at all, so
+    // we drive handleClose directly to guarantee onClose fires. handleClose is
+    // idempotent per connection attempt, so it de-duplicates against any onClose
+    // the transport also fires.
     const transport = this.transport;
     this.transport = undefined;
     try {
@@ -345,7 +348,6 @@ export class AgenticClient {
       return;
     }
     this.closeHandled = true;
-    const wasOpen = this.state === "open";
     this.transport = undefined;
     if (this.closedByCaller) {
       this.state = "closed";
@@ -355,9 +357,12 @@ export class AgenticClient {
       // No auto-reconnect: go idle so the caller can reconnect manually.
       this.state = "idle";
     }
-    if (wasOpen || !this.closedByCaller) {
-      this.emitClose(info);
-    }
+    // Emit exactly once per handled close (the closeHandled guard above makes
+    // this once-per-connection-attempt). Fire regardless of whether we reached
+    // "open": a caller-initiated close while still "connecting" must notify
+    // onClose just like a remote drop while connecting already does — otherwise
+    // onClose is silent for `connect()` immediately followed by `close()`.
+    this.emitClose(info);
     if (!this.closedByCaller && this.reconnectPolicy.enabled) {
       this.scheduleReconnect();
     }
@@ -622,8 +627,10 @@ export function connectAgenticChannel(options: AgenticClientOptions): AgenticCli
   return client;
 }
 
+const utf8Encoder = new TextEncoder();
+
 function byteLength(text: string): number {
-  return new TextEncoder().encode(text).length;
+  return utf8Encoder.encode(text).length;
 }
 
 function isServePayload(payload: unknown): payload is ServePayload {

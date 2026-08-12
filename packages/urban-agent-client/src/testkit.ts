@@ -101,6 +101,12 @@ export function fakeTransportFactory(): {
   return {
     factory,
     transports,
-    last: () => transports[transports.length - 1],
+    last: () => {
+      const transport = transports[transports.length - 1];
+      if (transport === undefined) {
+        throw new Error("fakeTransportFactory().last() called before any transport was created");
+      }
+      return transport;
+    },
   };
 }

@@ -36,8 +36,11 @@ export function openTestDb(): TestDb {
     },
     all: <T>(sql: string, params: unknown[] = []): T[] => {
       const stmt = db.prepare(sql);
-      const rows = stmt.all(...toParams(params));
-      return JSON.parse(JSON.stringify(rows));
+      // Mirror wrapNodeSqlite exactly: return the driver's row objects directly.
+      // A JSON round-trip would throw on `bigint` values and mangle `Uint8Array`
+      // blobs, diverging from production and breaking test-only reads.
+      // biome-ignore lint/plugin: Node sqlite returns untyped row objects; SqliteDb.all<T> is the host adapter boundary.
+      return stmt.all(...toParams(params)) as T[];
     },
     close: () => db.close(),
   };

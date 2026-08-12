@@ -36,3 +36,22 @@ test("openTestDb accepts the SQLite-native parameter types", () => {
     db.close();
   }
 });
+
+/**
+ * `all()` must return the driver's row objects verbatim, exactly like the host
+ * `wrapNodeSqlite`. A JSON clone would mangle `Uint8Array` blobs into plain
+ * objects (and throw outright on `bigint`), so guard that blobs round-trip as
+ * real `Uint8Array` instances.
+ */
+test("openTestDb.all returns Uint8Array blobs intact, like the host adapter", () => {
+  const db = openTestDb();
+  try {
+    db.exec("CREATE TABLE t (id INTEGER PRIMARY KEY, blob BLOB)");
+    db.run("INSERT INTO t (id, blob) VALUES (?, ?)", [1, new Uint8Array([1, 2, 3])]);
+    const rows = db.all<{ blob: Uint8Array }>("SELECT blob FROM t WHERE id = ?", [1]);
+    assert.ok(rows[0]?.blob instanceof Uint8Array);
+    assert.deepEqual([...(rows[0]?.blob ?? [])], [1, 2, 3]);
+  } finally {
+    db.close();
+  }
+});

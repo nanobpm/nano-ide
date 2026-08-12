@@ -59,17 +59,18 @@ stream), declares its capability, and receives its resolved tokens:
 ```ts
 import { connectAgenticChannel } from "@nanobpm/urban-agent-client"; // S9
 
-const agent = await connectAgenticChannel({ url: process.env.AGENTIC_CHANNEL_URL });
+// connectAgenticChannel returns synchronously and starts connecting immediately.
+const agent = connectAgenticChannel({ url: process.env.AGENTIC_CHANNEL_URL! });
 
 // REGISTER {capability} → SERVE [leaf tokens]. Capability is an enrolment
 // attribute, NOT part of any routing token. Invariant #3.
 const { serve } = await agent.register({
-  capability: { cognition: "high", weight: "senior", family: "opus", host: "cli" },
+  capability: { cognition: "high", weight: 3, family: "opus", host: "cli" },
 });
 // serve === ["planning.spar#red", …] — resolved from the vocab artifact (S3)
 
 agent.heartbeat();                 // liveness; ages out on TTL if it stops (S2)
-agent.relay(process.stdout);       // stream terminal bytes on the relay lane (S5)
+agent.relay("stdout", "hello\n");  // stream terminal bytes on the relay lane (S5)
 // The client buffers + drains across a hub outage — hub-down tolerance. Invariant #6.
 ```
 

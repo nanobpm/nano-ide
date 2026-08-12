@@ -150,8 +150,28 @@ test("a later no-gap ack clears a gap recorded by an earlier ack", () => {
   assert.equal(session.gap, false);
 });
 
+test("a subscribed ack with a negative/unsafe nextOffset is rejected and does not corrupt the resume point", () => {
+  // nextOffset is echoed into subscribe.from on the next attach, so a
+  // negative/NaN/unsafe value from a buggy or malicious transport that bypasses
+  // RelayChannelClient's validation must fail fast rather than corrupt resume.
+  const h = harness({ from: 4 });
+  h.session.attach();
+  assert.throws(
+    () => h.session.handle({ op: "subscribed", stream: "worker-1", gap: false, nextOffset: -1 }),
+    RangeError,
+    "a negative ack nextOffset must reject",
+  );
+  assert.throws(
+    () =>
+      h.session.handle({ op: "subscribed", stream: "worker-1", gap: false, nextOffset: Number.MAX_SAFE_INTEGER + 1 }),
+    RangeError,
+    "an unsafe ack nextOffset must reject",
+  );
+  // A rejected ack must leave the resume point untouched.
+  assert.equal(h.session.nextOffset, 4);
+});
+
 test("an ack whose head is below our resume point clamps nextOffset down so fresh chunks are not dropped", () => {
-  // Consumer resumed from 10, but the hub restarted/reset and its head is now 3
   // (we are ahead of the stream). Without a clamp, offsets 3,4,… stay below our
   // resume point and every fresh chunk is dropped as a stale replay — output lost.
   const h = harness({ from: 10 });

@@ -164,6 +164,16 @@ export class TerminalSession {
   }
 
   #onSubscribed(gap: boolean, nextOffset: number): void {
+    // Validate the ack's resume point exactly as the constructor validates
+    // `from`: `nextOffset` is echoed back into subscribe.from on the next
+    // attach, so a negative/NaN/unsafe value (from a buggy or malicious
+    // transport that bypasses RelayChannelClient's validation) would corrupt
+    // resume semantics or lose precision on a JSON round-trip. Fail fast.
+    if (!isNonNegInt(nextOffset)) {
+      throw new RangeError(
+        `TerminalSession.subscribed nextOffset must be a non-negative safe integer, got ${nextOffset}`,
+      );
+    }
     // Clamp our resume point down to the hub's current head when we are ahead of
     // it. Without this, a hub restart/reset (or a `from` seeded past the head)
     // leaves #nextOffset above every offset the hub will now emit, so #onData

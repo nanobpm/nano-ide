@@ -179,7 +179,15 @@ export class RelayChannelClient {
       this.#onError?.(new Error("malformed relay payload"));
       return;
     }
-    this.#onRelay(message);
+    // Guard the consumer the same way decode/malformed errors are guarded: a
+    // handler (e.g. TerminalSession.handle) can throw on an unsafe offset via
+    // addSafeInt, and an unguarded throw here escapes the socket message
+    // callback and can wedge the relay client / page. Route it to onError.
+    try {
+      this.#onRelay(message);
+    } catch (err) {
+      this.#onError?.(err);
+    }
   }
 
   #handleClose(): void {

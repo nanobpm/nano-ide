@@ -96,6 +96,27 @@ test("a malformed relay payload reports an error and is not routed", () => {
   assert.equal(errors.length, 1);
 });
 
+test("a throwing onRelay consumer is routed to onError, not escaped to the socket handler", () => {
+  const socket = new FakeSocket();
+  const errors: unknown[] = [];
+  const boom = new RangeError("consumer blew up");
+  const client = new RelayChannelClient({
+    connect: () => socket,
+    onRelay: () => {
+      throw boom;
+    },
+    onError: (e) => errors.push(e),
+  });
+  client.open();
+  // A valid inbound frame whose consumer throws (e.g. TerminalSession.handle on
+  // an unsafe offset) must not escape #receive — it is routed to onError like
+  // decode/malformed errors, keeping the socket message handler intact.
+  assert.doesNotThrow(() =>
+    socket.deliver({ lane: "bulk", family: "relay", seq: 0, payload: { stream: "w1", offset: 7, chunk: "hi" } }),
+  );
+  assert.deepEqual(errors, [boom]);
+});
+
 test("the hub's boolean-gap subscribed ack is accepted (matches the S5 wire)", () => {
   const socket = new FakeSocket();
   const received: RelayInbound[] = [];

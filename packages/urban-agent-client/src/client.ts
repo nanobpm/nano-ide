@@ -313,6 +313,18 @@ export class AgenticClient {
     // we drive handleClose directly to guarantee onClose fires. handleClose is
     // idempotent per connection attempt, so it de-duplicates against any onClose
     // the transport also fires.
+    // Terminal: the outbound ring and per-stream relay offsets can never be
+    // drained again, so release them here rather than pinning a large outage
+    // backlog (buffered frames, many relay streams) in memory for the lifetime
+    // of the now-dead client. Clear BEFORE anything can fire the close event —
+    // both the transport (an injectable seam that may legally fire onClose
+    // synchronously from close(), as FakeTransport does when open) and our own
+    // handleClose below emit onClose synchronously. A subscriber that reads
+    // `buffered` (or the relay-offset state) must observe the released,
+    // self-consistent terminal state that close() documents — not a stale
+    // non-zero backlog — regardless of which path surfaces the close first.
+    this.ring.clear();
+    this.relayOffsets.clear();
     const transport = this.transport;
     this.transport = undefined;
     try {
@@ -320,15 +332,6 @@ export class AgenticClient {
     } catch {
       // An already-broken transport may throw on close; the teardown proceeds.
     }
-    // Terminal: the outbound ring and per-stream relay offsets can never be
-    // drained again, so release them here rather than pinning a large outage
-    // backlog (buffered frames, many relay streams) in memory for the lifetime
-    // of the now-dead client. Clear BEFORE emitting the close event: handleClose
-    // fires onClose synchronously, and a subscriber that reads `buffered` (or the
-    // relay-offset state) must observe the released, self-consistent terminal
-    // state that close() documents — not a stale non-zero backlog.
-    this.ring.clear();
-    this.relayOffsets.clear();
     this.handleClose({ local: true });
   }
 

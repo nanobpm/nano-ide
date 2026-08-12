@@ -4,7 +4,7 @@ import { AgenticClient, connectAgenticChannel } from "./client.ts";
 import { encodeFrame } from "./protocol.ts";
 import type { Frame, ServePayload } from "./protocol.ts";
 import { fakeTransportFactory } from "./testkit.ts";
-import type { TransportCloseInfo } from "./transport.ts";
+import type { TransportCloseInfo, TransportFactory, TransportHooks } from "./transport.ts";
 
 function serveFrame(instance: string, tokens: string[]): Uint8Array {
   const payload: ServePayload = { instance, tokens };
@@ -627,5 +627,60 @@ test("close() releases the outbound buffer BEFORE it emits onClose, so subscribe
   client.close();
 
   assert.equal(bufferedAtClose, 0, "onClose observed a released, self-consistent outbound buffer");
+  assert.equal(client.buffered, 0, "close() cleared the outbound ring");
+});
+
+test("close() releases the outbound buffer BEFORE the transport's synchronous onClose can surface it", () => {
+  // A transport seam is injectable and may legally fire onClose *synchronously*
+  // from close() (as FakeTransport does when open). This one always does so,
+  // even while the client still holds a backlog — the exact window round 11's
+  // handleClose reorder did NOT cover, because that path runs AFTER
+  // transport.close(). An onClose subscriber must still observe the released,
+  // self-consistent terminal state, not a stale non-zero backlog.
+  let hooks: TransportHooks | undefined;
+  const syncCloseTransport: TransportFactory = (_url, h) => {
+    hooks = h;
+    return {
+      send() {
+        throw new Error("never open: force the client to buffer");
+      },
+      close() {
+        // Fire onClose synchronously from within close(), like an open WebSocket
+        // that resolves its close on the same tick would be free to do.
+        h.onClose({ local: true });
+      },
+    };
+  };
+
+  const client = new AgenticClient({
+    url: "ws://test/agentic",
+    instance: "worker-1",
+    transport: syncCloseTransport,
+    reconnect: { enabled: false },
+    serveTimeoutMs: 0,
+    capability: { cognition: "high" },
+  });
+  client.connect(); // builds the transport; it never opens, so frames buffer
+  assert.ok(hooks !== undefined, "transport factory was invoked on connect()");
+
+  for (let i = 0; i < 4; i++) {
+    client.relay("stdout", `chunk-${i}`);
+  }
+  assert.ok(client.buffered > 0, "frames buffered while the channel is down");
+
+  let bufferedAtClose = -1;
+  client.onClose(() => {
+    if (bufferedAtClose === -1) {
+      bufferedAtClose = client.buffered; // capture the FIRST close the subscriber sees
+    }
+  });
+
+  client.close(); // transport.close() fires onClose synchronously, before handleClose
+
+  assert.equal(
+    bufferedAtClose,
+    0,
+    "the transport's synchronous onClose observed a released outbound buffer",
+  );
   assert.equal(client.buffered, 0, "close() cleared the outbound ring");
 });

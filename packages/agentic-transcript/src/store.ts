@@ -413,22 +413,29 @@ export class TranscriptStore {
    * `status = 'completed'` and whose `completed_at` is older than the retention
    * window, along with its chunks. Long-lived streams are never time-swept (they
    * are bounded by {@link truncateBefore} instead). Returns the removed stream ids.
+   *
+   * The selection and all deletes run inside a single SAVEPOINT (#atomic) so the
+   * sweep is all-or-nothing: if any delete throws mid-sweep the whole batch rolls
+   * back, so the DB is never left partially swept and the returned list always
+   * matches what was actually deleted.
    */
   sweep(now: number = this.#clock.now()): string[] {
     const cutoffIso = new Date(now - this.#ephemeralRetentionMs).toISOString();
-    const removed = this.#db
-      .all<{ stream: string }>(
-        `SELECT stream FROM ${TRANSCRIPT_STREAM_TABLE}
-         WHERE lifecycle = 'ephemeral' AND status = 'completed'
-           AND completed_at IS NOT NULL AND completed_at < ?`,
-        [cutoffIso],
-      )
-      .map((r) => r.stream);
-    for (const stream of removed) {
-      this.#db.run(`DELETE FROM ${TRANSCRIPT_CHUNK_TABLE} WHERE stream = ?`, [stream]);
-      this.#db.run(`DELETE FROM ${TRANSCRIPT_STREAM_TABLE} WHERE stream = ?`, [stream]);
-    }
-    return removed;
+    return this.#atomic(() => {
+      const removed = this.#db
+        .all<{ stream: string }>(
+          `SELECT stream FROM ${TRANSCRIPT_STREAM_TABLE}
+           WHERE lifecycle = 'ephemeral' AND status = 'completed'
+             AND completed_at IS NOT NULL AND completed_at < ?`,
+          [cutoffIso],
+        )
+        .map((r) => r.stream);
+      for (const stream of removed) {
+        this.#db.run(`DELETE FROM ${TRANSCRIPT_CHUNK_TABLE} WHERE stream = ?`, [stream]);
+        this.#db.run(`DELETE FROM ${TRANSCRIPT_STREAM_TABLE} WHERE stream = ?`, [stream]);
+      }
+      return removed;
+    });
   }
 
   /** Look up a single stream's transcript metadata. */
@@ -509,14 +516,14 @@ export class TranscriptStore {
    * whether or not an outer transaction is already open.
    */
   #atomic<T>(body: () => T): T {
-    this.#db.exec("SAVEPOINT nano_record");
+    this.#db.exec("SAVEPOINT nano_atomic");
     try {
       const result = body();
-      this.#db.exec("RELEASE SAVEPOINT nano_record");
+      this.#db.exec("RELEASE SAVEPOINT nano_atomic");
       return result;
     } catch (err) {
-      this.#db.exec("ROLLBACK TO SAVEPOINT nano_record");
-      this.#db.exec("RELEASE SAVEPOINT nano_record");
+      this.#db.exec("ROLLBACK TO SAVEPOINT nano_atomic");
+      this.#db.exec("RELEASE SAVEPOINT nano_atomic");
       throw err;
     }
   }

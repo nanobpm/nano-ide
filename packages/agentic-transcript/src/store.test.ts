@@ -236,6 +236,43 @@ test("sweep retires completed ephemeral transcripts past the retention window, k
   assert.equal(store.get("live")?.lifecycle, "long-lived");
 });
 
+test("sweep is atomic — a mid-sweep delete failure rolls the whole sweep back", () => {
+  const clock = fakeClock(10_000);
+  // Two ephemeral streams both eligible for the sweep.
+  const base = newStore({ retentionMs: 0, clock });
+  base.flush("a", { since: () => ({ entries: chunks(2) }), nextOffset: 2 }, "ephemeral");
+  base.flush("b", { since: () => ({ entries: chunks(2) }), nextOffset: 2 }, "ephemeral");
+  assert.equal(base.count(), 2);
+
+  // Wrap the shared connection so the stream-table DELETE throws once (a
+  // simulated mid-sweep failure). Everything else delegates to the real db, so
+  // the SAVEPOINT still runs against the same underlying connection.
+  let boom = true;
+  const faulting: TestDb = {
+    exec: (sql) => db.exec(sql),
+    run: (sql, params) => {
+      if (boom && sql.includes(`DELETE FROM ${TRANSCRIPT_STREAM_TABLE}`)) {
+        boom = false;
+        throw new Error("injected mid-sweep delete failure");
+      }
+      return db.run(sql, params);
+    },
+    all: <T>(sql: string, params?: unknown[]): T[] => db.all<T>(sql, params),
+    close: () => db.close(),
+  };
+  const store = new TranscriptStore(faulting, { ephemeralRetentionMs: 0, clock });
+
+  clock.set(10_001);
+  assert.throws(() => store.sweep(), /injected mid-sweep delete failure/);
+
+  // Nothing was swept: both streams and all their chunks survive intact, so the
+  // returned list can never claim a deletion that did not actually happen.
+  const check = newStore({ retentionMs: 0, clock });
+  assert.equal(check.count(), 2);
+  assert.equal(check.read("a").length, 2);
+  assert.equal(check.read("b").length, 2);
+});
+
 test("a fully-swept reattach is empty and gap-free (nothing was lost)", () => {
   const clock = fakeClock(0);
   const store = newStore({ retentionMs: 0, clock });

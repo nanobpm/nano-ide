@@ -834,14 +834,40 @@ function openModal(m) {
   const copyText = resolveCopyText(m.copyText);
   if (copyText) dialog.append(el("pre", { class: "pc-modal-code" }, copyText));
   const actions = el("div", { class: "pc-modal-actions" });
+  // Remember what had focus so we can restore it on close — a keyboard/screen
+  // reader user returns to where they were instead of being dumped at <body>.
+  const prevFocus = document.activeElement;
   let closed = false;
   function close() {
     if (closed) return;
     closed = true;
     document.removeEventListener("keydown", onKey);
     overlay.remove();
+    // A manual close (button / Escape / backdrop) never pops the disposers
+    // stack, so drop our own entry here — otherwise repeated open/close cycles
+    // accrete dead close() closures until the next page navigation runs teardown.
+    const i = disposers.indexOf(close);
+    if (i !== -1) disposers.splice(i, 1);
+    if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
   }
-  function onKey(ev) { if (ev.key === "Escape") close(); }
+  // Focusable descendants of the dialog, in DOM order, for the Tab focus trap.
+  function focusables() {
+    return Array.prototype.slice.call(dialog.querySelectorAll(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+    )).filter((n) => !n.disabled);
+  }
+  function onKey(ev) {
+    if (ev.key === "Escape") { close(); return; }
+    if (ev.key !== "Tab") return;
+    // Trap Tab within the dialog so focus can't slip behind the overlay onto the
+    // inert page underneath — that would break aria-modal semantics.
+    const f = focusables();
+    if (!f.length) return;
+    const first = f[0];
+    const last = f[f.length - 1];
+    if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+    else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+  }
   if (copyText) {
     const label = m.copyLabel || "Copy";
     const copyBtn = el("button", { class: "pc-btn pc-btn-sm", type: "button" }, label);

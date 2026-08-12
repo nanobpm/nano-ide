@@ -493,7 +493,7 @@ test("the renderer ships a button node that opens a copy-pasteable modal", async
   assert.match(js, /function openModal\(m\)/);
   assert.match(js, /class: "pc-modal-overlay"/);
   assert.match(js, /"aria-modal": "true"/);
-  assert.match(js, /if \(ev\.key === "Escape"\) close\(\)/);
+  assert.match(js, /if \(ev\.key === "Escape"\) \{ close\(\); return; \}/);
   assert.match(js, /document\.removeEventListener\("keydown", onKey\)/);
   // {{appBase}} in copy text is rebased onto the absolute mount root so an
   // external agent gets a fetchable URL.
@@ -513,6 +513,16 @@ test("the renderer ships a button node that opens a copy-pasteable modal", async
   // An open modal is registered with teardown() so a page switch disposes it
   // instead of leaking a stale overlay + document-level keydown listener.
   assert.match(js, /disposers\.push\(close\)/);
+  // A manual close removes its own disposer entry, so repeated open/close cycles
+  // don't accrete dead close() closures on the disposers stack.
+  assert.match(js, /disposers\.indexOf\(close\)/);
+  assert.match(js, /disposers\.splice\(i, 1\)/);
+  // Focus is restored to the previously-focused element on close, and Tab is
+  // trapped inside the dialog so it can't reach the inert page behind the overlay.
+  assert.match(js, /const prevFocus = document\.activeElement/);
+  assert.match(js, /if \(ev\.key !== "Tab"\) return/);
+  assert.match(js, /ev\.preventDefault\(\); last\.focus\(\)/);
+  assert.match(js, /ev\.preventDefault\(\); first\.focus\(\)/);
 });
 
 

@@ -50,7 +50,11 @@ export interface ReconnectOptions {
 }
 
 export interface AgenticClientOptions {
-  /** The agentic channel URL (the app's own bound port). Ignored when a custom `transport` is supplied. */
+  /**
+   * The agentic channel URL (the app's own bound port). Always passed through
+   * to the transport factory as its first argument; only the default WebSocket
+   * transport requires it, so a custom `transport` may ignore it.
+   */
   readonly url: string;
   /** Stable instance id, carried on every presence frame. Defaults to a random UUID. */
   readonly instance?: string;
@@ -81,6 +85,8 @@ export interface RegisterResult {
 export type AgenticClientState = "idle" | "connecting" | "open" | "closed";
 
 type Listener<T> = (value: T) => void;
+/** Listener for value-less events (channel open, buffer drained). */
+type VoidListener = () => void;
 
 interface PendingServe {
   resolve: (result: RegisterResult) => void;
@@ -124,10 +130,10 @@ export class AgenticClient {
 
   private readonly serveListeners = new Set<Listener<ServePayload>>();
   private readonly frameListeners = new Set<Listener<Frame>>();
-  private readonly openListeners = new Set<Listener<void>>();
+  private readonly openListeners = new Set<VoidListener>();
   private readonly closeListeners = new Set<Listener<TransportCloseInfo>>();
   private readonly errorListeners = new Set<Listener<Error>>();
-  private readonly drainListeners = new Set<Listener<void>>();
+  private readonly drainListeners = new Set<VoidListener>();
 
   constructor(options: AgenticClientOptions) {
     this.url = options.url;
@@ -315,7 +321,7 @@ export class AgenticClient {
   }
 
   /** Subscribe to channel-open events (fires on first connect and each reconnect). */
-  onOpen(listener: Listener<void>): () => void {
+  onOpen(listener: VoidListener): () => void {
     this.openListeners.add(listener);
     return () => this.openListeners.delete(listener);
   }
@@ -333,7 +339,7 @@ export class AgenticClient {
   }
 
   /** Subscribe to buffer-drained events (fires when the outbound ring empties after sending). */
-  onDrain(listener: Listener<void>): () => void {
+  onDrain(listener: VoidListener): () => void {
     this.drainListeners.add(listener);
     return () => this.drainListeners.delete(listener);
   }

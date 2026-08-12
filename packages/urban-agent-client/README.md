@@ -59,7 +59,7 @@ and drain once it connects.
 | `url`                 | —                  | the agentic channel URL (the app's own bound port)                   |
 | `instance`            | random UUID        | stable instance id carried on every presence frame                   |
 | `capability`          | —                  | capability to (re-)register with; may also be passed to `register()` |
-| `transport`           | binary `WebSocket` | injectable {@link TransportFactory} (tests, custom framing)          |
+| `transport`           | binary `WebSocket` | injectable `TransportFactory` (tests, custom framing)                |
 | `bufferCapacity`      | `1024`             | outbound ring size in frames                                         |
 | `heartbeatIntervalMs` | `0` (manual)       | auto-heartbeat period                                                |
 | `serveTimeoutMs`      | `30000`            | how long `register()` waits for its `SERVE`                          |

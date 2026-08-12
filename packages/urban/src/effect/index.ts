@@ -135,10 +135,16 @@ export type TagUnion<Tag extends string, P> = Tag extends string ? Tagged<Tag> &
 // passed: `tag("X")` is exactly `Tagged<"X">` (no phantom `& P` that could read
 // as `undefined` at runtime), while `tag("X", props)` carries them. Both return
 // the distributive `TagUnion`, so a union `Tag` expands to a discriminated union.
+// `props` is forbidden from carrying its own `_tag` (`{ _tag?: never }`) so it
+// cannot shadow the discriminant, and the runtime spreads `props` *first* so the
+// tag always wins even for props arriving through an untyped boundary.
 export function tag<Tag extends string>(t: Tag): TagUnion<Tag, {}>;
-export function tag<Tag extends string, P extends object>(t: Tag, props: P): TagUnion<Tag, P>;
+export function tag<Tag extends string, P extends object>(
+  t: Tag,
+  props: P & { _tag?: never },
+): TagUnion<Tag, P>;
 export function tag(t: string, props?: object): Tagged<string> {
-  return { _tag: t, ...props };
+  return { ...props, _tag: t };
 }
 
 // Handle every tag in the union — the handlers object is keyed by `E["_tag"]`,

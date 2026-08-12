@@ -115,6 +115,14 @@ test("tag without props carries only the tag (no phantom prop keys)", () => {
   assert.deepEqual(Object.keys(e), ["_tag"]);
 });
 
+test("tag() sets _tag last so untyped props cannot clobber the discriminant", () => {
+  // Props arriving through an untyped boundary must never override the tag —
+  // otherwise a stray `_tag` would break the discriminant `matchTags` relies on.
+  const untyped: object = JSON.parse('{"_tag":"EVIL","detail":1}');
+  const e = tag("Real", untyped);
+  assert.equal(e._tag, "Real");
+});
+
 test("matchTags dispatches on the tag", () => {
   type E = Tagged<"NotFound"> | (Tagged<"Denied"> & { who: string });
   const describe = (e: E) =>

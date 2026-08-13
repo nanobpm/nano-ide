@@ -9,7 +9,7 @@ import {
   byModelPath,
   type WorkerIo,
 } from "./worker-io.ts";
-import type { DomainTypeRegistry } from "./domain.ts";
+import type { DomainFieldDef, DomainTypeRegistry } from "./domain.ts";
 
 test("byModelPath is a spec-compliant comparator: returns 0 for equal paths", () => {
   assert.equal(byModelPath({ path: "a" }, { path: "a" }), 0);
@@ -163,6 +163,45 @@ test("detectEnvelopeConflicts treats a list mismatch as a conflict", () => {
   assert.equal(conflicts.length, 1);
   assert.equal(conflicts[0].slot, "out");
   assert.deepEqual(conflicts[0].types.sort(), ["string", "string[]"]);
+});
+
+test("detectEnvelopeConflicts uses own-property checks for envelope ids (no prototype-chain false positives)", () => {
+  const types: DomainTypeRegistry = {
+    Real: { fields: { prKey: { type: "string" } } },
+  };
+  // An author-named envelope id that only exists on Object.prototype ("toString", "constructor")
+  // must be treated as undeclared and skipped — not read through the prototype chain, which would
+  // yield a non-registry value and (previously) crash on `.fields`.
+  const conflicts = detectEnvelopeConflicts(
+    [
+      { taskType: "t", inputType: "Real" },
+      { taskType: "t", inputType: "toString" },
+      { taskType: "t", inputType: "constructor" },
+    ],
+    types,
+  );
+  assert.deepEqual(conflicts, []);
+});
+
+test("detectEnvelopeConflicts uses own-property checks for field names (no prototype-chain false positives)", () => {
+  // Envelope A carries an own field literally named "toString"; B does not carry it at all.
+  // A prototype-chain read (`B.fields["toString"]`) would resolve to Object.prototype.toString and
+  // fabricate a spurious type conflict; an own-property check correctly sees it as a presence
+  // difference, which is not a conflict.
+  const aFields: Record<string, DomainFieldDef> = {};
+  aFields.toString = { type: "string" };
+  const types: DomainTypeRegistry = {
+    A: { fields: aFields },
+    B: { fields: { prKey: { type: "string" } } },
+  };
+  const conflicts = detectEnvelopeConflicts(
+    [
+      { taskType: "t", inputType: "A" },
+      { taskType: "t", inputType: "B" },
+    ],
+    types,
+  );
+  assert.deepEqual(conflicts, []);
 });
 
 test("deriveWorkerBindings is deterministic and emits worker-io.d.ts", () => {

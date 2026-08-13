@@ -278,7 +278,7 @@ export function detectEnvelopeConflicts(
     const byType = new Map<string, string[]>();
     for (const w of workers) {
       const id = pick(w);
-      if (typeof w?.taskType !== "string" || !w.taskType || !id || !(id in types)) continue;
+      if (typeof w?.taskType !== "string" || !w.taskType || !id || !Object.hasOwn(types, id)) continue;
       const list = byType.get(w.taskType) ?? [];
       if (!list.includes(id)) list.push(id);
       byType.set(w.taskType, list);
@@ -291,8 +291,8 @@ export function detectEnvelopeConflicts(
       for (const field of fieldNames) {
         const seen = new Map<string, string[]>(); // signature -> envelope ids carrying it
         for (const id of ids) {
+          if (!Object.hasOwn(types[id].fields, field)) continue; // absent in this variant — a presence difference, not a type conflict
           const f = types[id].fields[field];
-          if (!f) continue; // absent in this variant — a presence difference, not a type conflict
           const sig = fieldSig(f);
           const carriers = seen.get(sig) ?? [];
           carriers.push(id);
@@ -304,7 +304,7 @@ export function detectEnvelopeConflicts(
             slot,
             field,
             types: [...seen.keys()],
-            envelopes: ids.filter((id) => field in types[id].fields),
+            envelopes: ids.filter((id) => Object.hasOwn(types[id].fields, field)),
           });
         }
       }

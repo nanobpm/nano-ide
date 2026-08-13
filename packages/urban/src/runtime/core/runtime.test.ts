@@ -260,11 +260,27 @@ test("exposes the native http server for a same-port WebSocket upgrade", async (
         path: "/agentic",
         headers: { Connection: "Upgrade", Upgrade: "websocket" },
       });
+      // fail fast rather than hang the runner if the handshake never happens
+      const timer = setTimeout(() => {
+        req.destroy();
+        reject(new Error("upgrade handshake timed out"));
+      }, 5000);
       req.on("upgrade", (_res, socket) => {
+        clearTimeout(timer);
         socket.destroy();
         resolve(true);
       });
-      req.on("error", reject);
+      // a plain HTTP response means the server did NOT upgrade — surface it clearly
+      req.on("response", (res) => {
+        clearTimeout(timer);
+        res.resume();
+        req.destroy();
+        reject(new Error(`expected upgrade, got HTTP ${res.statusCode}`));
+      });
+      req.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
       req.end();
     });
     assert.equal(upgraded, true, "upgrade handshake completed on the app port");

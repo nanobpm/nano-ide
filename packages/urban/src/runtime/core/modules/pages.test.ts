@@ -502,6 +502,45 @@ test("the renderer honours boolean (checkbox) actionForm fields", async () => {
   assert.match(js, /input\.checked = input\.defaultChecked;/);
 });
 
+test("the renderer enforces required actionForm fields client-side, blocking submit with an inline hint", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A field declared `required: true` is tracked in a Set and given an inline
+  // error node; the label carries a danger-toned "*" marker before submit.
+  assert.match(js, /required\.add\(f\.key\)/);
+  assert.match(js, /reqMark = \(f\) =>/);
+  assert.match(js, /class: "pc-req"/);
+  // The input is marked aria-required, and a clear-on-edit handler wipes the hint
+  // the moment the user starts fixing the field (input for text/number, change for
+  // a checkbox).
+  assert.match(js, /input\.setAttribute\("aria-required", "true"\)/);
+  assert.match(js, /wireField\(f, input, ferr, "input"\)/);
+  assert.match(js, /wireField\(f, input, ferr, "change"\)/);
+  // Submit is GATED: an empty required text/number or an unchecked required
+  // checkbox is "missing"; the first offender is focused and the submit RETURNS
+  // early (never round-trips to the server).
+  assert.match(js, /input\.checked !== true/);
+  assert.match(js, /!Number\.isFinite\(Number\(val\)\)/);
+  assert.match(js, /if \(firstInvalid\)/);
+  assert.match(js, /Please fill in the required fields\./);
+  assert.match(js, /firstInvalid\.focus\(\)/);
+  assert.match(js, /input\.classList\.add\("pc-invalid"\)/);
+  // A per-field custom message (`requiredMessage`) overrides the default "Required".
+  assert.match(js, /reqMsg\.get\(k\) \|\| "Required"/);
+  assert.match(js, /f\.requiredMessage/);
+});
+
+test("the shell styles required-field markers and inline field errors", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  // The "*" required marker and the inline per-field error both resolve through
+  // the shared danger token, and an empty error node collapses (no reserved gap).
+  assert.match(html, /\.pc-req \{ color:var\(--nano-danger\)/);
+  assert.match(html, /\.pc-field-err \{ font-size:.75rem; color:var\(--nano-danger\)/);
+  assert.match(html, /\.pc-field-err:empty \{ display:none; \}/);
+  assert.match(html, /input\.pc-invalid/);
+});
+
 test("renderer makes collapsible nodes persist their state across sessions", async () => {
   // A node with `collapsible` gets a clickable header that hides/shows the card
   // body, and the collapsed state is written to localStorage keyed by the home

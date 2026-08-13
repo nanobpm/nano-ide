@@ -533,6 +533,10 @@ body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64r
 .pc-msg { font-size:.85rem; margin-top:.5rem; min-height:1.2em; }
 .pc-msg.err { color:var(--nano-danger); }
 .pc-msg.ok { color:var(--nano-ok); }
+.pc-req { color:var(--nano-danger); font-weight:600; }
+.pc-field-err { font-size:.75rem; color:var(--nano-danger); margin:.1rem 0 0; }
+.pc-field-err:empty { display:none; }
+.pc-field input.pc-invalid, .pc-field-check input.pc-invalid { border-color:var(--nano-danger); outline-color:var(--nano-danger); }
 table.pc-grid { width:100%; border-collapse:collapse; font-size:.9rem; table-layout:fixed; }
 /* table-layout:fixed divides the available width across columns and wraps text
    within each, so a grid with several long free-text columns (e.g. the epic
@@ -1083,9 +1087,34 @@ function renderActionForm(node) {
   // pollute Object.prototype or shadow inherited props (prototype-pollution class).
   const inputs = new Map();
   const fieldTypes = new Map();
+  // Client-side required-field validation state: the set of required keys, each
+  // field's custom message, and its inline error node (populated on a blocked
+  // submit, cleared as soon as the user edits the field).
+  const required = new Set();
+  const reqMsg = new Map();
+  const errs = new Map();
+  // A required field's label carries a danger-toned "*" so the requirement is
+  // visible BEFORE submit; spread into el(...) — an empty array adds no child.
+  const reqMark = (f) => (f.required === true ? [el("span", { class: "pc-req", title: "Required" }, " *")] : []);
+  // Register a field's inline error node and, when required, mark the input
+  // (aria-required) and wire a clear-on-edit handler so a hint disappears the
+  // moment the user starts fixing it.
+  const wireField = (f, input, ferr, evt) => {
+    errs.set(f.key, ferr);
+    if (f.required !== true) return;
+    required.add(f.key);
+    if (typeof f.requiredMessage === "string" && f.requiredMessage !== "") reqMsg.set(f.key, f.requiredMessage);
+    input.setAttribute("aria-required", "true");
+    input.addEventListener(evt, () => {
+      input.classList.remove("pc-invalid");
+      input.removeAttribute("aria-invalid");
+      ferr.textContent = "";
+    });
+  };
   for (const f of p.fields || []) {
     const kind = f.type === "checkbox" ? "checkbox" : (f.type === "number" ? "number" : "text");
     fieldTypes.set(f.key, kind);
+    const ferr = el("p", { class: "pc-field-err" });
     if (kind === "checkbox") {
       // A boolean field renders a real checkbox; its default checked state comes
       // from default/checked on the field (unset -> unchecked). We record that on
@@ -1096,9 +1125,10 @@ function renderActionForm(node) {
       input.defaultChecked = checked;
       input.checked = checked;
       inputs.set(f.key, input);
+      wireField(f, input, ferr, "change");
       // Input-first, wrapped in the label so the whole row is a click target.
       card.append(
-        el("div", { class: "pc-field pc-field-check" }, el("label", {}, input, " " + (f.label || f.key))),
+        el("div", { class: "pc-field pc-field-check" }, el("label", {}, input, " " + (f.label || f.key), ...reqMark(f)), ferr),
       );
       continue;
     }
@@ -1111,11 +1141,43 @@ function renderActionForm(node) {
     }
     const input = el("input", attrs);
     inputs.set(f.key, input);
-    card.append(el("div", { class: "pc-field" }, el("label", {}, f.label || f.key), input));
+    wireField(f, input, ferr, "input");
+    card.append(el("div", { class: "pc-field" }, el("label", {}, f.label || f.key, ...reqMark(f)), input, ferr));
   }
   const msg = el("p", { class: "pc-msg" });
   const btn = el("button", { class: "pc-btn" }, p.submitLabel || "Submit");
   btn.addEventListener("click", async () => {
+    // Required-field gate: block the submit and surface an inline hint on each
+    // empty required field (a text/number left blank, a required checkbox left
+    // unchecked), focusing the first offender — so a missing value never
+    // round-trips to the server only to bounce back as a generic error.
+    let firstInvalid = null;
+    for (const [k, input] of inputs) {
+      const ferr = errs.get(k);
+      if (ferr) ferr.textContent = "";
+      input.classList.remove("pc-invalid");
+      input.removeAttribute("aria-invalid");
+      if (!required.has(k)) continue;
+      const type = fieldTypes.get(k);
+      const val = String(input.value).trim();
+      const missing = type === "checkbox"
+        ? input.checked !== true
+        : type === "number"
+          ? (val === "" || !Number.isFinite(Number(val)))
+          : val === "";
+      if (missing) {
+        if (ferr) ferr.textContent = reqMsg.get(k) || "Required";
+        input.classList.add("pc-invalid");
+        input.setAttribute("aria-invalid", "true");
+        if (!firstInvalid) firstInvalid = input;
+      }
+    }
+    if (firstInvalid) {
+      msg.className = "pc-msg err";
+      msg.textContent = "Please fill in the required fields.";
+      firstInvalid.focus();
+      return;
+    }
     const variables = Object.create(null);
     for (const [k, input] of inputs) {
       if (fieldTypes.get(k) === "checkbox") {

@@ -79,7 +79,7 @@ function processId(xml: string): string | undefined {
   return m ? shapeAttr(m[0], "id") : undefined;
 }
 
-// One `nano:shape` element: capture its open-tag attrs (2) and inner body (4, empty when self-closing).
+// One `nano:shape` element: capture its open-tag attrs (2) and inner body (3, empty when self-closing).
 const SHAPE_RE = /<([\w.-]*:)?shape\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1?shape\s*>)/g;
 // One composition op child (`nano:carry|project|extend|reference`): the local name (2) + its attrs (3).
 const SHAPE_OP_RE = /<([\w.-]*:)?(carry|project|extend|reference)\b([^>]*?)\/?>/g;

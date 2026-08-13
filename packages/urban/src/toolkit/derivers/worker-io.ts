@@ -140,14 +140,33 @@ export function emitWorkerBindings(
   const inputs: string[] = [];
   const outputs: string[] = [];
   const headers: string[] = [];
+  // A `taskType` may be serviced by more than one model element (a worker reused across processes,
+  // or the same job on several boundaries). The interface is keyed by `taskType`, so emit at most
+  // one member per (taskType, map): first declared wins (stable, model-scan order). When a later
+  // occurrence carries a *different* envelope for the same `taskType` the contract is ambiguous —
+  // that is a model-level conflict for the author to resolve (split the job type or unify the
+  // envelope); we keep the first here so the emitted `.d.ts` stays valid TS rather than a duplicate
+  // identifier, and the conflict is reported out-of-band by `deriveWorkerBindings`.
+  const seenIn = new Set<string>();
+  const seenOut = new Set<string>();
+  const seenHdr = new Set<string>();
   for (const w of workers) {
     if (typeof w?.taskType !== "string" || w.taskType.length === 0) continue;
     const inRef = typeRefFor(w.inputType, declared);
-    if (inRef) inputs.push(`  ${propKey(w.taskType)}: ${inRef};`);
+    if (inRef && !seenIn.has(w.taskType)) {
+      seenIn.add(w.taskType);
+      inputs.push(`  ${propKey(w.taskType)}: ${inRef};`);
+    }
     const outRef = typeRefFor(w.outputType, declared);
-    if (outRef) outputs.push(`  ${propKey(w.taskType)}: ${outRef};`);
+    if (outRef && !seenOut.has(w.taskType)) {
+      seenOut.add(w.taskType);
+      outputs.push(`  ${propKey(w.taskType)}: ${outRef};`);
+    }
     const hdrRef = headerRefFor(w.headerKeys);
-    if (hdrRef) headers.push(`  ${propKey(w.taskType)}: ${hdrRef};`);
+    if (hdrRef && !seenHdr.has(w.taskType)) {
+      seenHdr.add(w.taskType);
+      headers.push(`  ${propKey(w.taskType)}: ${hdrRef};`);
+    }
   }
 
   const header =

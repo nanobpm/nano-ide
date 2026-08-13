@@ -50,6 +50,99 @@ export interface ShapeDecl {
   meta?: Record<string, string>;
 }
 
+// --- model scan (`nano:shape` XML → `ShapeDecl[]`) -------------------------------------------
+// The regex-based BPMN scan mirrors the Rust `envelope_scan.rs` shape parser (and the sibling
+// `meta.ts`/`worker-io.ts` scanners): the toolkit is the standalone `urban gen` path, so it must
+// lift model-authored shapes itself rather than receive them from the host reifier.
+
+/** Read a `name="…"` attribute off an element's opening tag (any namespace prefix on the name). */
+function shapeAttr(tag: string, name: string): string | undefined {
+  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`));
+  const v = m?.[1]?.trim();
+  return v != null && v.length > 0 ? v : undefined;
+}
+
+/** A boolean attribute is true only for the exact literal `"true"` (mirrors `bool_attr`). */
+function shapeBool(tag: string, name: string): boolean {
+  const m = tag.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`));
+  return m?.[1]?.trim() === "true";
+}
+
+/** Split a comma-delimited `fields="a, b"` list, trimming and dropping empties (`split_fields`). */
+function splitFields(raw: string | undefined): string[] {
+  return (raw ?? "").split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
+/** The enclosing `bpmn:process` id (provenance for the `model:<processId>` tag), best-effort. */
+function processId(xml: string): string | undefined {
+  const m = xml.match(/<[\w.-]*:?process\b[^>]*>/);
+  return m ? shapeAttr(m[0], "id") : undefined;
+}
+
+// One `nano:shape` element: capture its open-tag attrs (2) and inner body (4, empty when self-closing).
+const SHAPE_RE = /<([\w.-]*:)?shape\b([^>]*?)(?:\/>|>([\s\S]*?)<\/\1?shape\s*>)/g;
+// One composition op child (`nano:carry|project|extend|reference`): the local name (2) + its attrs (3).
+const SHAPE_OP_RE = /<([\w.-]*:)?(carry|project|extend|reference)\b([^>]*?)\/?>/g;
+
+/** Parse one composition-op element into a `ShapeOp`. An op missing a required attribute is dropped
+ * (returns `undefined`) so a malformed model degrades rather than emitting a spurious binding —
+ * mirrors `parse_shape_op` in `envelope_scan.rs`. */
+function parseShapeOp(local: string, attrs: string): ShapeOp | undefined {
+  const tag = `<x ${attrs}>`;
+  switch (local) {
+    case "carry": {
+      const ref = shapeAttr(tag, "ref");
+      return ref ? { op: "carry", ref } : undefined;
+    }
+    case "project": {
+      const ref = shapeAttr(tag, "ref");
+      if (!ref) return undefined;
+      return { op: "project", ref, fields: splitFields(shapeAttr(tag, "fields")), via: shapeAttr(tag, "via") };
+    }
+    case "extend": {
+      const name = shapeAttr(tag, "name");
+      const type = shapeAttr(tag, "type");
+      if (!name || !type) return undefined;
+      return { op: "extend", name, type, optional: shapeBool(tag, "optional"), list: shapeBool(tag, "list") };
+    }
+    case "reference": {
+      const name = shapeAttr(tag, "name");
+      const ref = shapeAttr(tag, "ref");
+      if (!name || !ref) return undefined;
+      return { op: "reference", name, ref, spread: shapeBool(tag, "spread"), list: shapeBool(tag, "list") };
+    }
+    default:
+      return undefined;
+  }
+}
+
+/** Scan one BPMN document for its `nano:shape` declarations (ADR 0040 §9), in document order, each
+ * tagged with the enclosing process for provenance. A shape with no `id` is skipped; op children
+ * are folded in author (XML) order. This is the standalone-`urban-gen` port of the shape-parsing
+ * half of the console's `envelope_scan.rs`. */
+export function scanModelShapes(xml: string): ShapeDecl[] {
+  const proc = processId(xml);
+  const out: ShapeDecl[] = [];
+  let sm: RegExpExecArray | null;
+  SHAPE_RE.lastIndex = 0;
+  while ((sm = SHAPE_RE.exec(xml)) !== null) {
+    const open = `<x ${sm[2]}>`;
+    const id = shapeAttr(open, "id");
+    if (!id) continue;
+    const name = shapeAttr(open, "name");
+    const body = sm[3] ?? "";
+    const ops: ShapeOp[] = [];
+    let om: RegExpExecArray | null;
+    SHAPE_OP_RE.lastIndex = 0;
+    while ((om = SHAPE_OP_RE.exec(body)) !== null) {
+      const op = parseShapeOp(om[2], om[3] ?? "");
+      if (op) ops.push(op);
+    }
+    out.push({ id, name, process: proc, ops });
+  }
+  return out;
+}
+
 /** A scan/resolve-time problem with a shape, surfaced like the `workers[]` drift warning (never a
  * silent merge). A shape with any `error` diagnostic is omitted from the fuse; a `warning` (e.g. a
  * deliberate field shadow) still resolves. */

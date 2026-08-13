@@ -247,9 +247,6 @@ async function startNodeServer(port: number, handler: HttpHandler): Promise<Http
       nres.end(String(err));
     }
   });
-  await new Promise<void>((res) => server.listen(port, res));
-  const addr = server.address();
-  const actualPort = typeof addr === "object" && addr ? addr.port : port;
   // Track every raw TCP socket so `stop()` can force teardown. `server.close()` only
   // stops accepting new connections and waits for existing ones to end; a lingering
   // long-lived socket would keep it pending forever and hang `app.stop()`. Now that we
@@ -258,12 +255,17 @@ async function startNodeServer(port: number, handler: HttpHandler): Promise<Http
   // upgraded (they are detached from the server's HTTP connection tracking after the
   // `upgrade` event). The underlying TCP socket from the `connection` event is the same
   // object that a later upgrade reuses, so destroying those is what actually unblocks
-  // shutdown regardless of what an upgrade handler left open.
+  // shutdown regardless of what an upgrade handler left open. Attach the listener
+  // BEFORE `listen()` so no connection can slip through untracked in the window between
+  // the server accepting sockets and the tracker being wired up.
   const sockets = new Set<Socket>();
   server.on("connection", (socket) => {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
+  await new Promise<void>((res) => server.listen(port, res));
+  const addr = server.address();
+  const actualPort = typeof addr === "object" && addr ? addr.port : port;
   return {
     port: actualPort,
     stop: () =>

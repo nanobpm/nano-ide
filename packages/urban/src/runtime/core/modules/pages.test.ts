@@ -601,6 +601,48 @@ test("renderer makes collapsible nodes persist their state across sessions", asy
   assert.match(js, /container\.append\(header, body\);\s*return container;/);
 });
 
+test("renderer surfaces a live row-count badge on a dataGrid's collapsible header (showCount)", async () => {
+  // A dataGrid opting in via `showCount:true` renders a count pill that reflects the
+  // currently-fetched, filtered (active-tab) row set, updates on every refresh (the
+  // refreshMs poll and pc:refresh), and — because makeCollapsible re-homes it into the
+  // collapse header — stays visible while the section is collapsed. Omitting showCount
+  // is a no-op (backward-compatible).
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Opt-in badge, created only when showCount is set; class-tagged for re-homing + CSS.
+  assert.match(js, /const countBadge = p\.showCount \? el\("span", \{ class: "pc-badge pc-count-badge"/);
+  // The badge's accessible name carries the count (kept in sync on refresh) rather than a
+  // bare aria-label that would override the number screen readers need to announce.
+  assert.match(js, /"aria-label": rowCountLabel\(0\)/);
+  assert.match(js, /function rowCountLabel\(n\) \{ return n \+ \(n === 1 \? " row" : " rows"\); \}/);
+  // The <h2> (title and/or badge) renders when either the title or the badge is present.
+  assert.match(js, /if \(p\.title \|\| countBadge\) \{/);
+  // The badge is appended to the <h2>; the " " spacer is inserted only when a title is
+  // present, so a badge-only header can't render (or store) a stray leading space.
+  assert.match(js, /if \(countBadge\) \{ if \(p\.title\) h2\.append\(" "\); h2\.append\(countBadge\); \}/);
+  // Every refresh rewrites the count from the fetched, filtered row set (poll + pc:refresh),
+  // keeping both the visible text and the accessible label in sync.
+  assert.match(js, /if \(countBadge\) \{ countBadge\.textContent = String\(rows\.length\); countBadge\.setAttribute\("aria-label", rowCountLabel\(rows\.length\)\); \}/);
+  // makeCollapsible lifts the badge out of the <h2> before deriving the title (so the
+  // count can't leak into the label) and re-homes it in the header so it stays visible
+  // while collapsed (only the body is hidden).
+  assert.match(js, /const countBadge = h2 && h2\.querySelector \? h2\.querySelector\("\.pc-count-badge"\) : null;/);
+  assert.match(js, /if \(countBadge\) countBadge\.remove\(\);/);
+  assert.match(js, /if \(countBadge\) header\.append\(countBadge\);/);
+  // The derived collapse-header title is trimmed so a badge-only <h2> (no title) can't
+  // leave a lone whitespace node as the label (or leak whitespace into the storage key).
+  assert.match(js, /const titleText = props\.title \|\| \(h2 \? h2\.textContent\.trim\(\) : ""\) \|\| "Section";/);
+});
+
+test("the shell styles the row-count pill as a neutral count distinct from status badges", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  const rule = (html.match(/\.pc-count-badge\s*\{[^}]*\}/) ?? [""])[0];
+  assert.ok(rule, ".pc-count-badge rule must be present");
+  assert.match(rule, /background:var\(--nano-inset\)/);
+  assert.match(rule, /color:var\(--nano-text\)/);
+});
+
 test("GET /app/pages/<id> returns the page json, 404 for unknown", async () => {
   const ok = await dispatch("GET", "/app/pages/home");
   assert.equal(ok.status, 200);

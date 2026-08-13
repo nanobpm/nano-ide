@@ -20,6 +20,7 @@
     "test:conformance": "npm run test:conformance --workspaces --if-present",
     "lint": "biome check",
     "validate": "node scripts/validate-manifests.mjs",
+    "check:migrations": "node scripts/check-migrations.mjs",
     "check:intellisense": "npm run check:intellisense --workspaces --if-present",
     "gen:intellisense": "npm run gen:intellisense --workspaces --if-present"
   },

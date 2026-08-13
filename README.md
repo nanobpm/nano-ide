@@ -46,6 +46,14 @@ Published libraries + tooling — no `nano-ide.ext.json`, not installed as packs
 | `@nanobpm/workflow` | Code-first durable orchestration — author a flow with `defineFlow` and derive the BPMN model, job types, and correlation wiring; `defineFlow` is the blessed surface (imperative `defineWorkflow` is experimental/internal) (ADR 0044/0045) |
 | `create-urban-app` | `npm create urban-app` scaffolder for a runnable Urban app that runs on Node and Deno (ADR 0052) |
 
+## Capabilities
+
+- **[The Nano agentic protocol](docs/nano-agentic-protocol.md)** — a generic
+  `@nanobpm/urban` capability: one app-tier channel carrying agent
+  presence/registry, demand×supply, the blackboard, and live terminal relay (ADR
+  0056/0057; epic [#124](https://github.com/nanobpm/nano-ide/issues/124)). See the
+  [example wiring](docs/examples/boot-agentic-channel.md) that boots the channel.
+
 ## Pack kinds
 - **lang** — file types (Monaco lazy-loads the grammar), toolchain (detect/run/compile/targets), templates.
 - **app** — project template producing a runnable/compilable binary (e.g. Deno GUI, or an embedded-engine app).

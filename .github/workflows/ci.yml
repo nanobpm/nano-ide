@@ -48,6 +48,25 @@ jobs:
       - run: npm run typecheck
       - run: npm test --if-present
 
+  # The Nano agentic protocol's wire contract is authored once as a shared
+  # conformance corpus (S0, #126) that BOTH this repo's codec and the cross-repo
+  # c8ctl client are held to — a shared prose spec does not stop divergence, shared
+  # adversarial test vectors do. This job runs that corpus through the single
+  # canonical entry point (`npm run test:conformance`, which fans out to every
+  # workspace's `test:conformance` script). It is a green no-op until S0 publishes
+  # its package, then exercises the real golden vectors with no further CI edit.
+  # See docs/nano-agentic-protocol.md §7.
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:conformance
+
   # The Urban stack ships as source .ts and must run on Deno as well as Node
   # (ADR 0052/0053: hosts are interchangeable). This job proves the dual-runtime
   # contract by running the Deno test suite.

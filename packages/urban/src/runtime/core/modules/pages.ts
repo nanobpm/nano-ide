@@ -843,9 +843,9 @@ function interpParam(s) {
 // replacement pattern. Unknown tokens (no such field) render empty rather than
 // throwing, matching interpParam. This is a dumb text formatter: no expressions,
 // arithmetic, or conditionals — just field splicing. Only the row's own
-// enumerable fields resolve: an inherited Object.prototype key (toString,
-// constructor, …) counts as unknown and renders "", so a token can't pick up
-// prototype cruft instead of blank.
+// fields resolve (own-property gate, enumerable or not): an inherited
+// Object.prototype key (toString, constructor, …) counts as unknown and
+// renders "", so a token can't pick up prototype cruft instead of blank.
 function interpTemplate(tpl, row) {
   return typeof tpl === "string"
     ? tpl.replace(/\{\{([^{}]+)\}\}/g, (_m, name) => {

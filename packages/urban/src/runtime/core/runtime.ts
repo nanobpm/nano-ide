@@ -110,11 +110,12 @@ export interface UrbanApp {
   readonly httpPort: number | undefined;
   /**
    * The runtime's native HTTP server object once `start()` has bound it (the Node adapter's
-   * `node:http` `Server`), for attaching a WebSocket upgrade on the app's *own* port — e.g.
-   * `new WebSocketServer({ server: app.httpServer as import("node:http").Server, path })`.
+   * `node:http` `Server`), for attaching a WebSocket upgrade on the app's *own* port. Narrow it
+   * with a runtime `instanceof` check before use (no type assertion needed) — e.g.
+   * `import { Server } from "node:http"; if (app.httpServer instanceof Server) new WebSocketServer({ server: app.httpServer, path });`.
    * `undefined` before `start()`, after `stop()`, and on hosts that don't surface one (Deno).
    */
-  readonly httpServer: unknown | undefined;
+  readonly httpServer: object | undefined;
 }
 
 export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<UrbanApp> {
@@ -200,8 +201,9 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     get httpPort() {
       return httpPort;
     },
-    get httpServer() {
-      return server?.native;
+    get httpServer(): object | undefined {
+      const native = server?.native;
+      return typeof native === "object" && native !== null ? native : undefined;
     },
 
     async start() {

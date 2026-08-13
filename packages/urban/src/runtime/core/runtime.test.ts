@@ -234,12 +234,15 @@ test("exposes the native http server for a same-port WebSocket upgrade", async (
   const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
 
   // undefined before start
-  assert.equal(app.httpServer, undefined);
+  const httpServerBeforeStart = app.httpServer;
+  assert.equal(httpServerBeforeStart, undefined);
 
   await app.start();
   try {
-    // the live node:http Server, on the app's own port
-    const server = app.httpServer as unknown as http.Server;
+    // the live node:http Server, on the app's own port — narrow the getter's `object | undefined`
+    // to a concrete server with runtime checks (no type assertion needed).
+    const server = app.httpServer;
+    if (server === undefined) throw new Error("httpServer should be defined after start");
     assert.ok(server instanceof http.Server, "httpServer is a node:http Server after start");
 
     // an attached 'upgrade' handler completes a WebSocket handshake on the app's port —

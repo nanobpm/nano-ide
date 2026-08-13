@@ -611,17 +611,25 @@ test("renderer surfaces a live row-count badge on a dataGrid's collapsible heade
   const js = res.body ?? "";
   // Opt-in badge, created only when showCount is set; class-tagged for re-homing + CSS.
   assert.match(js, /const countBadge = p\.showCount \? el\("span", \{ class: "pc-badge pc-count-badge"/);
+  // The badge's accessible name carries the count (kept in sync on refresh) rather than a
+  // bare aria-label that would override the number screen readers need to announce.
+  assert.match(js, /"aria-label": rowCountLabel\(0\)/);
+  assert.match(js, /function rowCountLabel\(n\) \{ return n \+ \(n === 1 \? " row" : " rows"\); \}/);
   // The <h2> (title and/or badge) renders when either the title or the badge is present.
   assert.match(js, /if \(p\.title \|\| countBadge\) \{/);
   assert.match(js, /if \(countBadge\) h2\.append\(" ", countBadge\);/);
-  // Every refresh rewrites the count from the fetched, filtered row set (poll + pc:refresh).
-  assert.match(js, /if \(countBadge\) countBadge\.textContent = String\(rows\.length\);/);
+  // Every refresh rewrites the count from the fetched, filtered row set (poll + pc:refresh),
+  // keeping both the visible text and the accessible label in sync.
+  assert.match(js, /if \(countBadge\) \{ countBadge\.textContent = String\(rows\.length\); countBadge\.setAttribute\("aria-label", rowCountLabel\(rows\.length\)\); \}/);
   // makeCollapsible lifts the badge out of the <h2> before deriving the title (so the
   // count can't leak into the label) and re-homes it in the header so it stays visible
   // while collapsed (only the body is hidden).
   assert.match(js, /const countBadge = h2 && h2\.querySelector \? h2\.querySelector\("\.pc-count-badge"\) : null;/);
   assert.match(js, /if \(countBadge\) countBadge\.remove\(\);/);
   assert.match(js, /if \(countBadge\) header\.append\(countBadge\);/);
+  // The derived collapse-header title is trimmed so a badge-only <h2> (no title) can't
+  // leave a lone whitespace node as the label (or leak whitespace into the storage key).
+  assert.match(js, /const titleText = props\.title \|\| \(h2 \? h2\.textContent\.trim\(\) : ""\) \|\| "Section";/);
 });
 
 test("the shell styles the row-count pill as a neutral count distinct from status badges", async () => {

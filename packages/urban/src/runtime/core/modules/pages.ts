@@ -1269,6 +1269,12 @@ function renderActionForm(node) {
   return card;
 }
 
+// Accessible name for the row-count badge. The visible text is just a number, so an
+// aria-label would override it with a bare "row count" (the count — the important part —
+// is dropped). Instead name it "N row(s)" and keep it in sync with the text on refresh.
+// Single source of truth for both the initial render and every refresh below.
+function rowCountLabel(n) { return n + (n === 1 ? " row" : " rows"); }
+
 function renderDataGrid(node) {
   const p = node.props;
   const card = el("section", { class: "pc-card" });
@@ -1276,7 +1282,7 @@ function renderDataGrid(node) {
   // (non-collapsible) grid surfaces it beside the title; makeCollapsible re-homes it
   // into the collapse header so it stays visible — and refresh-updated — while the
   // section is collapsed. refresh() below rewrites its text on every poll/pc:refresh.
-  const countBadge = p.showCount ? el("span", { class: "pc-badge pc-count-badge", "aria-label": "row count" }, "0") : null;
+  const countBadge = p.showCount ? el("span", { class: "pc-badge pc-count-badge", "aria-label": rowCountLabel(0) }, "0") : null;
   if (p.title || countBadge) {
     const h2 = el("h2", {}, p.title || "");
     if (countBadge) h2.append(" ", countBadge);
@@ -1602,7 +1608,7 @@ function renderDataGrid(node) {
       // Live row-count badge: reflect the currently-fetched, filtered (active-tab)
       // set — exactly what the body renders — on every refresh (poll + pc:refresh),
       // whether the section is expanded or collapsed.
-      if (countBadge) countBadge.textContent = String(rows.length);
+      if (countBadge) { countBadge.textContent = String(rows.length); countBadge.setAttribute("aria-label", rowCountLabel(rows.length)); }
       // Forget expansion / cached detail nodes for rows no longer present so the maps
       // don't grow without bound and a stale answer can't resurface on a key reuse.
       if (p.rowKey) {
@@ -1777,7 +1783,10 @@ function makeCollapsible(node, card) {
   // refresh-updated by the grid's own refresh() — while the section is collapsed.
   const countBadge = h2 && h2.querySelector ? h2.querySelector(".pc-count-badge") : null;
   if (countBadge) countBadge.remove();
-  const titleText = props.title || (h2 ? h2.textContent : "") || "Section";
+  // Trim the derived label: after the badge is lifted out, the leftover " " whitespace
+  // node from h2.append(" ", countBadge) would otherwise make a title-less section's
+  // header a lone space (and leak whitespace into the storage key). Fall back to "Section".
+  const titleText = props.title || (h2 ? h2.textContent.trim() : "") || "Section";
   if (h2) h2.remove();
   const body = el("div", { class: "pc-card-body" });
   if (isCard) {

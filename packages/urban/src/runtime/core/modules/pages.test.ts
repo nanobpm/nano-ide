@@ -337,12 +337,37 @@ test("renderer wires a column's badge to a tone-classed pill shown only when pre
   // (default danger), the label defaults to "1", and the full field text becomes
   // the tooltip.
   assert.match(js, /if\s*\(col\.badge\)/);
-  assert.match(js, /text\.trim\(\)\s*===\s*""/);
+  assert.match(js, /rawText\.trim\(\)\s*===\s*""/);
   assert.match(js, /t\s*===\s*"warn"\s*\|\|\s*t\s*===\s*"ok"\s*\|\|\s*t\s*===\s*"info"\s*\?\s*t\s*:\s*"danger"/);
   assert.match(js, /col\.badge\.label\s*==\s*null\s*\?\s*"1"/);
   assert.match(js, /class:\s*"pc-badge pc-badge-"\s*\+\s*tone/);
-  assert.match(js, /title:\s*text/);
-  assert.match(js, /"aria-label":\s*text/);
+  assert.match(js, /title:\s*rawText/);
+  assert.match(js, /"aria-label":\s*rawText/);
+});
+
+test("renderer interpolates a column's per-cell template into DOM text (#214)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A column declaring `template: "{{a}}/{{b}}"` renders one cell by splicing the
+  // named row fields into a string, coerced to text and set only as DOM text
+  // (never markup). Guard the whole shape so the primitive can't silently
+  // regress: interpTemplate exists, replaces {{field}} tokens via a function
+  // replacement (so a "$"-bearing value can't be reinterpreted as a replacement
+  // pattern), coerces null/undefined to "" (unknown tokens render blank, no
+  // throw), and gridCell prefers a string col.template over the raw field value
+  // for the visible text while the badge stays keyed to the raw field.
+  assert.match(js, /function interpTemplate\(tpl, row\)/);
+  assert.match(js, /replace\(\/\\\{\\\{\(\[\^\{\}\]\+\)\\\}\\\}\/g,/);
+  assert.match(js, /const key = name\.trim\(\);/);
+  // Unknown tokens (no such own field) render blank and, crucially, an inherited
+  // Object.prototype key (toString, constructor, …) counts as unknown rather than
+  // resolving to prototype cruft — guard the own-property gate explicitly.
+  assert.match(js, /Object\.prototype\.hasOwnProperty\.call\(row, key\) \? row\[key\] : null/);
+  assert.match(js, /return v == null \? "" : String\(v\);/);
+  // gridCell keeps the raw single-field value separate (drives the badge gate)
+  // and lets a string template win for the rendered text.
+  assert.match(js, /const rawText = row\[col\.field\] == null \? "" : String\(row\[col\.field\]\);/);
+  assert.match(js, /const text = typeof col\.template === "string" \? interpTemplate\(col\.template, row\) : rawText;/);
 });
 
 test("renderer wires a column's processExplorer link to the console explorer", async () => {

@@ -838,6 +838,27 @@ function el(tag, attrs = {}, ...kids) {
 function interpParam(s) {
   return typeof s === "string" ? s.replace(/\{\{param\}\}/g, () => PARAM) : s;
 }
+
+// Interpolate {{field}} tokens in a column's per-cell template with values from
+// the row, coercing each to a string (null/undefined → ""). Like interpParam the
+// result is only ever set as DOM text (textContent via el()), so a substituted
+// row value cannot inject markup or attributes. A function replacement inserts
+// each value literally, so a "$"-bearing value can't be reinterpreted as a
+// replacement pattern. Unknown tokens (no such field) render empty rather than
+// throwing, matching interpParam. This is a dumb text formatter: no expressions,
+// arithmetic, or conditionals — just field splicing. Only the row's own
+// fields resolve (own-property gate, enumerable or not): an inherited
+// Object.prototype key (toString, constructor, …) counts as unknown and
+// renders "", so a token can't pick up prototype cruft instead of blank.
+function interpTemplate(tpl, row) {
+  return typeof tpl === "string"
+    ? tpl.replace(/\{\{([^{}]+)\}\}/g, (_m, name) => {
+        const key = name.trim();
+        const v = Object.prototype.hasOwnProperty.call(row, key) ? row[key] : null;
+        return v == null ? "" : String(v);
+      })
+    : tpl;
+}
 function renderText(node) {
   const v = node.props.variant;
   const cls = v === "heading" ? "pc-heading" : v === "sub" ? "pc-sub" : "pc-body";
@@ -1002,8 +1023,27 @@ function renderButton(node) {
 // host's own explorer view in place via the nano-navigate postMessage bridge
 // (a modified/middle click keeps the new-tab behavior). Shared by the top-level
 // grid and child grids.
+//
+// Cell TEXT (the 'text' local below): the visible string a cell renders. By
+// default it is the column's single 'field' value, but an optional
+// 'col.template' string wins: its {{field}} tokens are spliced from the row
+// (interpTemplate) into DOM text. A template lets one cell combine several
+// fields / add surrounding text (e.g. "{{current_wave}}/{{wave_count}}")
+// without denormalising a display column into the datasource. The template
+// drives the rendered text for the plain, linkField and link
+// (page/processExplorer) paths — a link's href still comes from its own
+// keyField/linkField, never the template. The 'badge' presence gate and its
+// tooltip stay keyed to the raw 'field' value (a badge shows a fixed glyph, not
+// the field text), so a template does not change badge behaviour. Sorting,
+// groupBy and orderBy also key off real fields, never the rendered template.
 function gridCell(col, row) {
-  const text = row[col.field] == null ? "" : String(row[col.field]);
+  // Raw single-field value: drives the badge presence gate + tooltip and any
+  // field-derived defaults. Kept separate from the (possibly templated) display
+  // text so a template never re-lights or blanks a badge.
+  const rawText = row[col.field] == null ? "" : String(row[col.field]);
+  // Visible text: a col.template (interpolated from the row) wins over the
+  // raw field value, else the field value is shown verbatim.
+  const text = typeof col.template === "string" ? interpTemplate(col.template, row) : rawText;
   // 1. badge — a compact status indicator. When the row's field value is
   //    non-empty (truthy after trimming) render a small circular badge (e.g. a
   //    red "1" dot flagging an incident) whose tooltip is the full field text;
@@ -1015,14 +1055,14 @@ function gridCell(col, row) {
   //    field text is also mirrored into aria-label so assistive tech announces
   //    the incident/status text (the visible "1" glyph alone is not meaningful).
   if (col.badge) {
-    if (text.trim() === "") return el("td", {});
+    if (rawText.trim() === "") return el("td", {});
     const t = col.badge.tone;
     const tone = t === "warn" || t === "ok" || t === "info" ? t : "danger";
     const label = col.badge.label == null ? "1" : String(col.badge.label);
     return el(
       "td",
       {},
-      el("span", { class: "pc-badge pc-badge-" + tone, title: text, "aria-label": text }, label),
+      el("span", { class: "pc-badge pc-badge-" + tone, title: rawText, "aria-label": rawText }, label),
     );
   }
   if (col.linkField) {

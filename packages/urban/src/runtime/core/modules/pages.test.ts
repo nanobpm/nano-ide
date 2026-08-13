@@ -170,6 +170,9 @@ test("grid uses fixed layout + wrapping so several wide columns can't overflow t
   const cellRule = (html.match(/table\.pc-grid th,\s*table\.pc-grid td\s*\{[^}]*\}/) ?? [""])[0];
   assert.ok(cellRule, "grid th/td rule must be present");
   assert.match(cellRule, /overflow-wrap:anywhere/);
+  // The per-cell max-width cap was the root cause of the overflow: guard against
+  // any future change silently reintroducing it (which would pass the checks above).
+  assert.doesNotMatch(cellRule, /max-width:/);
 });
 
 test("GET /app/runtime.js serves the renderer module", async () => {

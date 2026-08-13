@@ -154,18 +154,22 @@ test("the warn badge stays legible in light appearance", async () => {
   );
 });
 
-test("grid cells wrap long, space-less values so one cell can't overflow the table", async () => {
-  // Regression: a dataGrid cell holding a long space-less value (e.g. a JSON
-  // blob or a 40-char SHA) has no soft-wrap opportunity, so with table-layout
-  // auto it forces its column to the value's full width and pushes the whole
-  // table past the page. The shared grid CSS must let such a cell break so the
-  // column can shrink to fit its container.
+test("grid uses fixed layout + wrapping so several wide columns can't overflow the page", async () => {
+  // Regression: with table-layout:auto a per-cell max-width let two long
+  // free-text columns (e.g. the epic detail's coordination-notes files+note, or
+  // trial-merge-results heads+conflicts+failing+summary) each claim ~32rem, and
+  // their summed content widths overran the page's width regardless of the
+  // viewport. table-layout:fixed divides the width across columns and wraps text
+  // within each; overflow-wrap:anywhere still breaks space-less tokens (a 40-char
+  // SHA, a JSON blob) inside the column instead of forcing a horizontal scrollbar.
   const res = await dispatch("GET", "/");
   const html = res.body ?? "";
-  const rule = (html.match(/table\.pc-grid th,\s*table\.pc-grid td\s*\{[^}]*\}/) ?? [""])[0];
-  assert.ok(rule, "grid th/td rule must be present");
-  assert.match(rule, /overflow-wrap:anywhere/);
-  assert.match(rule, /max-width:/);
+  const tableRule = (html.match(/table\.pc-grid\s*\{[^}]*\}/) ?? [""])[0];
+  assert.ok(tableRule, "table.pc-grid rule must be present");
+  assert.match(tableRule, /table-layout:\s*fixed/);
+  const cellRule = (html.match(/table\.pc-grid th,\s*table\.pc-grid td\s*\{[^}]*\}/) ?? [""])[0];
+  assert.ok(cellRule, "grid th/td rule must be present");
+  assert.match(cellRule, /overflow-wrap:anywhere/);
 });
 
 test("GET /app/runtime.js serves the renderer module", async () => {

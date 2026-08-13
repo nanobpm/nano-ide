@@ -113,7 +113,7 @@ export interface UrbanApp {
    * `node:http` `Server`), for attaching a WebSocket upgrade on the app's *own* port. Snapshot it
    * into a local `const` and narrow that with a runtime `instanceof` check before use (no type
    * assertion needed) — reading the property again after the check would not narrow — e.g.
-   * `import { Server } from "node:http"; const server = app.httpServer; if (server instanceof Server) new WebSocketServer({ server, path: "/agentic" });`.
+   * `const { Server } = await import("node:http"); const server = app.httpServer; if (server instanceof Server) new WebSocketServer({ server, path: "/agentic" });`.
    * `undefined` before `start()`, after `stop()`, and on hosts that don't surface one (Deno).
    */
   readonly httpServer: object | undefined;

@@ -188,8 +188,7 @@ test("detectEnvelopeConflicts uses own-property checks for field names (no proto
   // A prototype-chain read (`B.fields["toString"]`) would resolve to Object.prototype.toString and
   // fabricate a spurious type conflict; an own-property check correctly sees it as a presence
   // difference, which is not a conflict.
-  const aFields: Record<string, DomainFieldDef> = {};
-  aFields.toString = { type: "string" };
+  const aFields: Record<string, DomainFieldDef> = { toString: { type: "string" } };
   const types: DomainTypeRegistry = {
     A: { fields: aFields },
     B: { fields: { prKey: { type: "string" } } },

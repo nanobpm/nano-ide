@@ -293,6 +293,79 @@ test("exposes the native http server for a same-port WebSocket upgrade", async (
   assert.equal(app.httpServer, undefined);
 });
 
+test("stop() completes promptly even with a lingering upgraded socket", async () => {
+  const dir = await makeFixture();
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const engine = new FakeEngine();
+  const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+
+  await app.start();
+  const openSockets: import("node:stream").Duplex[] = [];
+  try {
+    const server = app.httpServer;
+    if (server === undefined) throw new Error("httpServer should be defined after start");
+    assert.ok(server instanceof http.Server, "httpServer is a node:http Server after start");
+
+    // Complete the handshake but deliberately KEEP the upgraded socket open on both
+    // ends — this is exactly the long-lived WebSocket case that would make a plain
+    // `server.close()` hang forever.
+    server.on("upgrade", (_req, socket) => {
+      openSockets.push(socket);
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+      );
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const req = http.request({
+        port: app.httpPort!,
+        path: "/agentic",
+        headers: { Connection: "Upgrade", Upgrade: "websocket" },
+      });
+      const timer = setTimeout(() => {
+        req.destroy();
+        reject(new Error("upgrade handshake timed out"));
+      }, 5000);
+      req.on("upgrade", (_res, socket) => {
+        clearTimeout(timer);
+        openSockets.push(socket);
+        resolve();
+      });
+      req.on("response", (res) => {
+        clearTimeout(timer);
+        res.resume();
+        req.destroy();
+        reject(new Error(`expected upgrade, got HTTP ${res.statusCode}`));
+      });
+      req.on("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      req.end();
+    });
+
+    // stop() must resolve without waiting on the still-open upgraded socket.
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("app.stop() hung on an open upgraded socket")), 5000);
+      app.stop().then(
+        () => {
+          clearTimeout(timer);
+          resolve();
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      );
+    });
+
+    assert.equal(app.httpServer, undefined, "httpServer is undefined after stop");
+  } finally {
+    for (const s of openSockets) s.destroy();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("stop() resets state so the app can be cleanly restarted", async () => {
   const dir = await makeFixture();
   const host = createNodeHost({ cwd: dir, log: () => {} });

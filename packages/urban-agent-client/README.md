@@ -8,8 +8,8 @@ A worker uses it — on a connection **separate from the C8 job protocol** — t
 join the one app-tier agentic channel: declare a capability and receive its
 resolved routing tokens, heartbeat/deregister for presence, and stream live
 terminal / command-stream bytes. It speaks the
-[`@nanobpm/agentic-protocol`](https://www.npmjs.com/package/@nanobpm/agentic-protocol)
-wire contract (S0) and is held
+[`@nanobpm/agentic`](https://www.npmjs.com/package/@nanobpm/agentic)
+wire contract (S0, via its `@nanobpm/agentic/protocol` subpath) and is held
 to its shared conformance corpus; it never redefines the contract.
 
 ## What it does
@@ -81,12 +81,12 @@ The package also exports its internals for reuse and testing:
   own to run without a global `WebSocket` or with custom framing.
 - The S0 contract surface it consumes (`encodeFrame`, `decodeFrame`,
   `validatePayload`, `parseToken`, `MESSAGE_FAMILIES`, `QOS_LANES`, …), re-exported
-  from `@nanobpm/agentic-protocol`.
+  from `@nanobpm/agentic/protocol`.
 
 ## Conformance
 
 `npm run test:conformance` runs this client against the **shared** adversarial
-corpus at `@nanobpm/agentic-protocol/source/conformance` — golden frames both
+corpus at `@nanobpm/agentic/source/protocol/conformance` — golden frames both
 directions, malformed byte vectors, and routing-token vectors — the same corpus
 the S0 codec and the cross-repo c8ctl client are held to. It runs from source
 (no build step) so the repo's `conformance` CI job exercises the real vectors.

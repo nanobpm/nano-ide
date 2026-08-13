@@ -1,5 +1,5 @@
 /**
- * @nanobpm/agentic-protocol — the wire contract for the Nano agentic protocol
+ * @nanobpm/agentic/protocol — the wire contract for the Nano agentic protocol
  * (ADR 0056): one app-tier channel carrying agent presence/registry,
  * demand×supply, the blackboard and live terminal relay.
  *
@@ -11,8 +11,8 @@
  *  - the vocab-artifact schema ({@link validateVocabDocument}), and
  *  - per-family payload contracts ({@link validatePayload}).
  *
- * The shared conformance corpus is published separately at
- * `@nanobpm/agentic-protocol/conformance`.
+ * The shared conformance corpus is published at the
+ * `@nanobpm/agentic/protocol/conformance` subpath.
  */
 export {
   MESSAGE_FAMILIES,

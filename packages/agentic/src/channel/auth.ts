@@ -69,7 +69,7 @@ export interface SharedSecretAuthOptions {
   readonly requireCredential?: boolean;
   /** Extra check on the credential; return false to reject. Default accept-any. */
   readonly verifyCredential?: (credential: string, identity: string) => boolean;
-  /** Derive the identity from the handshake. Default: the token itself, or `anonymous`. */
+  /** Derive the identity from the handshake. Default: the connection's remote address (`req.remote`), or `anonymous`. */
   readonly identityFor?: (req: HandshakeRequest) => string;
 }
 

@@ -110,9 +110,10 @@ export interface UrbanApp {
   readonly httpPort: number | undefined;
   /**
    * The runtime's native HTTP server object once `start()` has bound it (the Node adapter's
-   * `node:http` `Server`), for attaching a WebSocket upgrade on the app's *own* port. Narrow it
-   * with a runtime `instanceof` check before use (no type assertion needed) — e.g.
-   * `import { Server } from "node:http"; if (app.httpServer instanceof Server) new WebSocketServer({ server: app.httpServer, path });`.
+   * `node:http` `Server`), for attaching a WebSocket upgrade on the app's *own* port. Snapshot it
+   * into a local `const` and narrow that with a runtime `instanceof` check before use (no type
+   * assertion needed) — reading the property again after the check would not narrow — e.g.
+   * `import { Server } from "node:http"; const server = app.httpServer; if (server instanceof Server) new WebSocketServer({ server, path });`.
    * `undefined` before `start()`, after `stop()`, and on hosts that don't surface one (Deno).
    */
   readonly httpServer: object | undefined;

@@ -33,7 +33,8 @@ export interface HttpServer {
    * Lets an app attach a WebSocket upgrade (e.g. `ws`'s `WebSocketServer({ server })`) to the *same*
    * port the app already serves. `undefined` on hosts that don't surface an upgradeable server object
    * (the Deno adapter, whose WS story is `Deno.upgradeWebSocket` in the request handler). Typed
-   * `unknown` because this is the host-adapter boundary — the consumer casts to the concrete type.
+   * `unknown` because this is the host-adapter boundary — the consumer narrows it with a runtime
+   * check (e.g. `instanceof Server`) before use, rather than a type assertion.
    */
   readonly native?: unknown;
 }

@@ -7,7 +7,7 @@ import type { DerivedArtifact } from "./artifact.ts";
 import { GENERATED_DIR, isAbsolutePath, RUNTIME_MATERIALIZED_ARTIFACTS, sortArtifacts } from "./artifact.ts";
 import { deriveMigrations, type ToolkitManifest } from "./derivers/migrations.ts";
 import { emitDomainModel, registryFromManifest, sourcesFromManifest } from "./derivers/domain.ts";
-import { deriveWorkerBindings, DOMAIN_DTS, type ModelSource } from "./derivers/worker-io.ts";
+import { byModelPath, deriveWorkerBindings, detectEnvelopeConflicts, DOMAIN_DTS, formatEnvelopeConflict, type ModelSource, scanModelWorkers } from "./derivers/worker-io.ts";
 import { deriveMeta } from "./derivers/meta.ts";
 import { deriveMessageBindings } from "./derivers/messages.ts";
 import { resolveShapes, scanModelShapes } from "./derivers/shapes.ts";
@@ -180,6 +180,16 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
       artifacts.push(...deriveWorkerBindings(models, declaredTypeIds));
       artifacts.push(...deriveMeta(models));
       artifacts.push(...deriveMessageBindings(models, declaredTypeIds));
+      // Surface genuine data-envelope conflicts: a taskType whose variants disagree on a field's
+      // TYPE. The emitted contract is the union of the variants (sound for a shared handler), so a
+      // type clash would silently widen to `A | B` — warn instead so the author unifies the envelope.
+      const scannedWorkers = [...models]
+        .sort(byModelPath)
+        .flatMap((m) => scanModelWorkers(m.xml))
+        .map((w) => ({ taskType: w.taskType, inputType: w.in, outputType: w.out }));
+      for (const c of detectEnvelopeConflicts(scannedWorkers, fusedTypes)) {
+        warnings.push(formatEnvelopeConflict(c));
+      }
     }
   }
 

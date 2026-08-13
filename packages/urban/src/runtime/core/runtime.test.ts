@@ -286,6 +286,7 @@ test("exposes the native http server for a same-port WebSocket upgrade", async (
     assert.equal(upgraded, true, "upgrade handshake completed on the app port");
   } finally {
     await app.stop();
+    await rm(dir, { recursive: true, force: true });
   }
 
   // undefined again after stop

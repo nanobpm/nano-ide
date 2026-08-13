@@ -617,7 +617,9 @@ test("renderer surfaces a live row-count badge on a dataGrid's collapsible heade
   assert.match(js, /function rowCountLabel\(n\) \{ return n \+ \(n === 1 \? " row" : " rows"\); \}/);
   // The <h2> (title and/or badge) renders when either the title or the badge is present.
   assert.match(js, /if \(p\.title \|\| countBadge\) \{/);
-  assert.match(js, /if \(countBadge\) h2\.append\(" ", countBadge\);/);
+  // The badge is appended to the <h2>; the " " spacer is inserted only when a title is
+  // present, so a badge-only header can't render (or store) a stray leading space.
+  assert.match(js, /if \(countBadge\) \{ if \(p\.title\) h2\.append\(" "\); h2\.append\(countBadge\); \}/);
   // Every refresh rewrites the count from the fetched, filtered row set (poll + pc:refresh),
   // keeping both the visible text and the accessible label in sync.
   assert.match(js, /if \(countBadge\) \{ countBadge\.textContent = String\(rows\.length\); countBadge\.setAttribute\("aria-label", rowCountLabel\(rows\.length\)\); \}/);

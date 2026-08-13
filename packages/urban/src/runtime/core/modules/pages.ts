@@ -1285,7 +1285,7 @@ function renderDataGrid(node) {
   const countBadge = p.showCount ? el("span", { class: "pc-badge pc-count-badge", "aria-label": rowCountLabel(0) }, "0") : null;
   if (p.title || countBadge) {
     const h2 = el("h2", {}, p.title || "");
-    if (countBadge) h2.append(" ", countBadge);
+    if (countBadge) { if (p.title) h2.append(" "); h2.append(countBadge); }
     card.append(h2);
   }
   const cols = p.columns || [];

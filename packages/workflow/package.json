@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/workflow",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Code-first durable orchestration for nanobpmn (ADR 0044/0045). Author a durable workflow as a declarative flow — `defineFlow(id, w => { w.run(...); w.signal(...); w.task(...) })` — and the SDK derives the executable BPMN model, the job types, and the message/correlation wiring, then hosts a generic worker. `w.run` is a local step, `w.signal` is a durable human-in-the-loop wait, `w.task` is a step serviced by an external worker. `defineFlow` is the single code-first surface; the imperative `defineWorkflow` replay function is experimental/internal, not a recommended API. No diagram, no task-type wiring, no correlation plumbing authored by hand — and you can optionally auto-generate a diagram (DI) for the derived model with `declarativeToLayoutedBpmn` via the optional `bpmn-auto-layout` peer dependency. Talks to a running nanobpmn gateway through @nanobpm/nano-sdk (the shared engine-transport spine — ADR 0055), which negotiates the Falcon protocol on a Nano server and REST elsewhere.",
   "type": "module",
   "license": "Apache-2.0",
@@ -28,7 +28,7 @@
   },
   "sideEffects": false,
   "dependencies": {
-    "@nanobpm/nano-sdk": "^1.2.3"
+    "@nanobpm/nano-sdk": "^1.2.5"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

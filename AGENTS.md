@@ -34,9 +34,25 @@ Type assertions (`as T`) bypass the type system and are banned across the author
 
 ## Adding a Workspace Package
 
-New packages under `packages/*` follow one setup, mirrored from the existing
-agentic packages (e.g. `packages/agentic-presence`). Copy it rather than
-inventing a variant:
+**First decide whether you need a *package* at all.** A new published unit under
+`packages/*` (its own name on npm, its own version and changelog, its own
+publish/credentials bootstrap) is warranted only when there is a **consumer-facing**
+reason: a distinct external consumer imports *it* on its own, it wants an
+**independent release cadence**, or it is a **different runtime tier** (e.g. a
+worker client vs. a server library vs. a browser bundle). "This is an independent
+unit of work" is **not** such a reason — slicing one cohesive library into a
+package per task just leaks your work breakdown into the module boundaries
+(Conway's Law) and has to be un-fragmented later.
+
+The default is instead **one library exposing each surface as a subpath export**.
+`@nanobpm/agentic` is the worked example: the whole agentic protocol ships as one
+package with `./protocol`, `./channel`, `./relay`, `./cockpit`, … subpaths (see
+`packages/agentic/package.json` `exports`); `@nanobpm/urban` does the same with
+`./runtime`/`./toolkit`/`./worker`. To add a surface, add a `src/<family>/`
+subdirectory and a matching `exports` entry — no new package.
+
+**When you genuinely do add a new package**, follow the one setup the existing
+packages use — copy it rather than inventing a variant:
 
 - **Dual tsconfig.** `tsconfig.json` is the typecheck config (`"noEmit": true`,
   `"module"`/`"moduleResolution": "NodeNext"`,

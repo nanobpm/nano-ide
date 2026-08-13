@@ -564,6 +564,9 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-badge-warn { background:var(--nano-warn); color:#3a2a00; }
 .pc-badge-ok { background:var(--nano-ok); }
 .pc-badge-info { background:var(--nano-info); }
+/* Live row-count pill (dataGrid showCount): a subtle, neutral count distinct from
+   the coloured status badges, legible in the collapse header while collapsed. */
+.pc-count-badge { color:var(--nano-text); background:var(--nano-inset); border:1px solid var(--nano-edge); font-weight:600; }
 :root[data-appearance="light"] .pc-badge-warn { color:#fff; }
 @media (prefers-color-scheme: light) { :root:not([data-appearance]) .pc-badge-warn { color:#fff; } }
 .pc-child { margin:.6rem 0; }
@@ -1269,7 +1272,16 @@ function renderActionForm(node) {
 function renderDataGrid(node) {
   const p = node.props;
   const card = el("section", { class: "pc-card" });
-  if (p.title) card.append(el("h2", {}, p.title));
+  // Opt-in live row-count badge ("showCount"). Rendered inside the <h2> so a plain
+  // (non-collapsible) grid surfaces it beside the title; makeCollapsible re-homes it
+  // into the collapse header so it stays visible — and refresh-updated — while the
+  // section is collapsed. refresh() below rewrites its text on every poll/pc:refresh.
+  const countBadge = p.showCount ? el("span", { class: "pc-badge pc-count-badge", "aria-label": "row count" }, "0") : null;
+  if (p.title || countBadge) {
+    const h2 = el("h2", {}, p.title || "");
+    if (countBadge) h2.append(" ", countBadge);
+    card.append(h2);
+  }
   const cols = p.columns || [];
   const tabs = p.tabs || [];
   const rowActions = p.rowActions || [];
@@ -1587,6 +1599,10 @@ function renderDataGrid(node) {
       const { rows } = paramScoped && PARAM === ""
         ? { rows: [] }
         : await getJSON(dataUrl(p.data.source, p.data.table, activeFilter, p.data.orderBy));
+      // Live row-count badge: reflect the currently-fetched, filtered (active-tab)
+      // set — exactly what the body renders — on every refresh (poll + pc:refresh),
+      // whether the section is expanded or collapsed.
+      if (countBadge) countBadge.textContent = String(rows.length);
       // Forget expansion / cached detail nodes for rows no longer present so the maps
       // don't grow without bound and a stale answer can't resurface on a key reuse.
       if (p.rowKey) {
@@ -1755,6 +1771,12 @@ function makeCollapsible(node, card) {
   const isCard = card.tagName === "SECTION";
   const container = isCard ? card : el("section", { class: "pc-card" });
   const h2 = isCard && card.querySelector ? card.querySelector("h2") : null;
+  // A dataGrid with "showCount" renders a live count badge inside its <h2>. Lift it
+  // out before deriving the title (so the count doesn't leak into the label text),
+  // then re-home it in the header alongside the title so it stays visible — and
+  // refresh-updated by the grid's own refresh() — while the section is collapsed.
+  const countBadge = h2 && h2.querySelector ? h2.querySelector(".pc-count-badge") : null;
+  if (countBadge) countBadge.remove();
   const titleText = props.title || (h2 ? h2.textContent : "") || "Section";
   if (h2) h2.remove();
   const body = el("div", { class: "pc-card-body" });
@@ -1770,6 +1792,7 @@ function makeCollapsible(node, card) {
     chevron,
     el("span", { class: "pc-collapse-title" }, titleText),
   );
+  if (countBadge) header.append(countBadge);
   const storageKey = "pc:collapsed:" + CURRENT + ":" + (node.id || titleText);
   let collapsed = readCollapsed(storageKey, !!props.defaultCollapsed);
   function apply() {

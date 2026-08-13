@@ -252,5 +252,6 @@ async function startNodeServer(port: number, handler: HttpHandler): Promise<Http
   return {
     port: actualPort,
     stop: () => new Promise<void>((res) => server.close(() => res())),
+    native: server,
   };
 }

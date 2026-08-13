@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import * as http from "node:http";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -224,6 +225,52 @@ test("app.sdk is undefined when the engine exposes no SDK client", async () => {
     await app.stop();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("exposes the native http server for a same-port WebSocket upgrade", async () => {
+  const dir = await makeFixture();
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const engine = new FakeEngine();
+  const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+
+  // undefined before start
+  assert.equal(app.httpServer, undefined);
+
+  await app.start();
+  try {
+    // the live node:http Server, on the app's own port
+    const server = app.httpServer as unknown as http.Server;
+    assert.ok(server instanceof http.Server, "httpServer is a node:http Server after start");
+
+    // an attached 'upgrade' handler completes a WebSocket handshake on the app's port —
+    // exactly what @nanobpm/agentic's WebSocketChannelTransport({ server }) needs.
+    server.on("upgrade", (_req, socket) => {
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n",
+      );
+      socket.destroy();
+    });
+
+    const upgraded = await new Promise<boolean>((resolve, reject) => {
+      const req = http.request({
+        port: app.httpPort!,
+        path: "/agentic",
+        headers: { Connection: "Upgrade", Upgrade: "websocket" },
+      });
+      req.on("upgrade", (_res, socket) => {
+        socket.destroy();
+        resolve(true);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(upgraded, true, "upgrade handshake completed on the app port");
+  } finally {
+    await app.stop();
+  }
+
+  // undefined again after stop
+  assert.equal(app.httpServer, undefined);
 });
 
 test("stop() resets state so the app can be cleanly restarted", async () => {

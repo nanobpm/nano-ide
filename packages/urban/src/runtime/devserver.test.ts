@@ -231,6 +231,7 @@ function fakeApp(stops: string[], id: string): UrbanApp {
     data: undefined,
     security: undefined,
     httpPort: undefined,
+    httpServer: undefined,
   };
 }
 

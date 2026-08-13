@@ -108,6 +108,13 @@ export interface UrbanApp {
   readonly data: DataLayer | undefined;
   readonly security: SecurityPolicy | undefined;
   readonly httpPort: number | undefined;
+  /**
+   * The runtime's native HTTP server object once `start()` has bound it (the Node adapter's
+   * `node:http` `Server`), for attaching a WebSocket upgrade on the app's *own* port — e.g.
+   * `new WebSocketServer({ server: app.httpServer as import("node:http").Server, path })`.
+   * `undefined` before `start()`, after `stop()`, and on hosts that don't surface one (Deno).
+   */
+  readonly httpServer: unknown | undefined;
 }
 
 export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<UrbanApp> {
@@ -192,6 +199,9 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     },
     get httpPort() {
       return httpPort;
+    },
+    get httpServer() {
+      return server?.native;
     },
 
     async start() {

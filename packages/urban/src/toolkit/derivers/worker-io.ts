@@ -6,6 +6,7 @@
 
 import type { DerivedArtifact, Deriver } from "../artifact.ts";
 import { GENERATED_DIR } from "../artifact.ts";
+import type { DomainFieldDef, DomainTypeRegistry } from "./domain.ts";
 
 export interface ModelSource {
   /** Path (used only for diagnostics/ordering). */
@@ -137,17 +138,43 @@ export function emitWorkerBindings(
   const taskTypeUnion = taskTypes.length > 0
     ? taskTypes.map((t) => JSON.stringify(t)).join(" | ")
     : "string";
-  const inputs: string[] = [];
-  const outputs: string[] = [];
-  const headers: string[] = [];
+  // A `taskType` may be serviced by more than one model element (a worker reused across processes,
+  // or the same job on several boundaries), each declaring its own data envelope. The interface is
+  // keyed by `taskType`, so a single member must cover every caller. We UNION the distinct declared
+  // envelope ids: `DomainTypes["A"] | DomainTypes["B"]`. A union is exactly the right contract for a
+  // shared handler — it reads the safe common surface (a field is accessible only where it is
+  // present-and-compatibly-typed in *every* variant, so an optional/absent-in-one field is not
+  // guaranteed), which is the "required iff required in all callers" rule. A single variant collapses
+  // to a plain `DomainTypes["A"]`. Genuine field-type conflicts across variants are reported out of
+  // band (see `detectEnvelopeConflicts`), where the resolved field types are in hand.
+  const inIds = new Map<string, string[]>();
+  const outIds = new Map<string, string[]>();
+  const hdrKeys = new Map<string, string[]>();
+  const pushDistinct = (m: Map<string, string[]>, key: string, val: string) => {
+    const list = m.get(key) ?? [];
+    if (!list.includes(val)) list.push(val);
+    m.set(key, list);
+  };
   for (const w of workers) {
     if (typeof w?.taskType !== "string" || w.taskType.length === 0) continue;
-    const inRef = typeRefFor(w.inputType, declared);
-    if (inRef) inputs.push(`  ${propKey(w.taskType)}: ${inRef};`);
-    const outRef = typeRefFor(w.outputType, declared);
-    if (outRef) outputs.push(`  ${propKey(w.taskType)}: ${outRef};`);
-    const hdrRef = headerRefFor(w.headerKeys);
-    if (hdrRef) headers.push(`  ${propKey(w.taskType)}: ${hdrRef};`);
+    if (w.inputType && declared.has(w.inputType)) pushDistinct(inIds, w.taskType, w.inputType);
+    if (w.outputType && declared.has(w.outputType)) pushDistinct(outIds, w.taskType, w.outputType);
+    for (const k of w.headerKeys ?? []) {
+      if (typeof k === "string" && k.trim().length > 0) pushDistinct(hdrKeys, w.taskType, k.trim());
+    }
+  }
+  const unionRef = (ids: string[]): string =>
+    ids.map((id) => typeRefFor(id, declared)).filter((r): r is string => !!r).join(" | ");
+  const inputs = [...inIds.entries()]
+    .filter(([, ids]) => ids.length > 0)
+    .map(([t, ids]) => `  ${propKey(t)}: ${unionRef(ids)};`);
+  const outputs = [...outIds.entries()]
+    .filter(([, ids]) => ids.length > 0)
+    .map(([t, ids]) => `  ${propKey(t)}: ${unionRef(ids)};`);
+  const headers: string[] = [];
+  for (const [t, keys] of hdrKeys.entries()) {
+    const hdrRef = headerRefFor(keys);
+    if (hdrRef) headers.push(`  ${propKey(t)}: ${hdrRef};`);
   }
 
   const header =
@@ -216,6 +243,86 @@ export const workerIoDeriver: Deriver<{ models: ModelSource[]; declaredTypeIds: 
   describe: "Derive worker-io.d.ts (task type + data-envelope in/out) from BPMN models.",
   derive: ({ models, declaredTypeIds }) => deriveWorkerBindings(models, declaredTypeIds),
 };
+
+/** A data-envelope conflict: one `taskType` bound to variants that disagree on a field's *type*. */
+export interface EnvelopeConflict {
+  taskType: string;
+  /** `"in"` (job.variables) or `"out"` (result). */
+  slot: "in" | "out";
+  field: string;
+  /** The distinct resolved type expressions seen for `field`, one per conflicting variant. */
+  types: string[];
+  /** The envelope ids that carry the conflicting field, in scan order. */
+  envelopes: string[];
+}
+
+function fieldSig(f: DomainFieldDef): string {
+  return `${f.type}${f.list ? "[]" : ""}`;
+}
+
+/**
+ * Report data-envelope conflicts: a `taskType` serviced by more than one *distinct* envelope whose
+ * variants disagree on the resolved TYPE of a shared field. A single handler is keyed by `taskType`,
+ * so its input/output is the UNION of every variant (see `emitWorkerBindings`). A union is sound as
+ * long as a shared field means the same thing everywhere; differing presence or optionality is fine
+ * (that is the normal subset/superset relationship the union already narrows). But a field declared
+ * `string` in one variant and `number` in another is a genuine contract conflict the author must
+ * resolve (split the job type or unify the envelope) — this surfaces it instead of silently
+ * emitting `string | number`. Compatible variants (nwf's escalation subset) produce no diagnostic.
+ */
+export function detectEnvelopeConflicts(
+  workers: WorkerBindingDecl[],
+  types: DomainTypeRegistry,
+): EnvelopeConflict[] {
+  const collect = (pick: (w: WorkerBindingDecl) => string | undefined, slot: "in" | "out") => {
+    const byType = new Map<string, string[]>();
+    for (const w of workers) {
+      const id = pick(w);
+      if (typeof w?.taskType !== "string" || !w.taskType || !id || !Object.hasOwn(types, id)) continue;
+      const list = byType.get(w.taskType) ?? [];
+      if (!list.includes(id)) list.push(id);
+      byType.set(w.taskType, list);
+    }
+    const conflicts: EnvelopeConflict[] = [];
+    for (const [taskType, ids] of byType.entries()) {
+      if (ids.length < 2) continue;
+      const fieldNames = new Set<string>();
+      for (const id of ids) for (const name of Object.keys(types[id].fields)) fieldNames.add(name);
+      for (const field of fieldNames) {
+        const seen = new Map<string, string[]>(); // signature -> envelope ids carrying it
+        for (const id of ids) {
+          if (!Object.hasOwn(types[id].fields, field)) continue; // absent in this variant — a presence difference, not a type conflict
+          const f = types[id].fields[field];
+          const sig = fieldSig(f);
+          const carriers = seen.get(sig) ?? [];
+          carriers.push(id);
+          seen.set(sig, carriers);
+        }
+        if (seen.size > 1) {
+          conflicts.push({
+            taskType,
+            slot,
+            field,
+            types: [...seen.keys()],
+            envelopes: ids.filter((id) => Object.hasOwn(types[id].fields, field)),
+          });
+        }
+      }
+    }
+    return conflicts;
+  };
+  return [...collect((w) => w.inputType, "in"), ...collect((w) => w.outputType, "out")];
+}
+
+/** Human-readable warning for one envelope conflict, for the gen warning stream. */
+export function formatEnvelopeConflict(c: EnvelopeConflict): string {
+  return (
+    `data-envelope conflict on worker "${c.taskType}" (${c.slot}): field "${c.field}" is ` +
+    `${c.types.join(" vs ")} across envelopes ${c.envelopes.map((e) => `"${e}"`).join(", ")}. ` +
+    `The taskType's ${c.slot === "in" ? "input" : "output"} is the union of its envelopes; a ` +
+    `field must have one type across all of them. Unify the envelope or split the job type.`
+  );
+}
 
 /**
  * Overlay the model-derived worker-IO map onto the manifest `workers[]`. The model is authoritative

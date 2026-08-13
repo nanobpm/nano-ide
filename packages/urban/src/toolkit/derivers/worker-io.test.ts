@@ -2,11 +2,14 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   deriveWorkerBindings,
+  detectEnvelopeConflicts,
   emitWorkerBindings,
+  formatEnvelopeConflict,
   scanModelWorkers,
   byModelPath,
   type WorkerIo,
 } from "./worker-io.ts";
+import type { DomainFieldDef, DomainTypeRegistry } from "./domain.ts";
 
 test("byModelPath is a spec-compliant comparator: returns 0 for equal paths", () => {
   assert.equal(byModelPath({ path: "a" }, { path: "a" }), 0);
@@ -70,6 +73,134 @@ test("emitWorkerBindings falls back to string union + no import when nothing is 
   assert.match(out, /export type WorkerTaskType = "orders.notify";/);
   assert.doesNotMatch(out, /import type \{ DomainTypes \}/);
   assert.match(out, /export interface WorkerInputs \{\}/);
+});
+
+test("emitWorkerBindings unions distinct envelopes bound to one taskType (shared handler)", () => {
+  // The same worker services two processes, each declaring its own envelope. Keyed by taskType,
+  // the member is the UNION — a shared handler reads only what every caller guarantees.
+  const out = emitWorkerBindings(
+    [
+      { taskType: "pr.persist-escalation", inputType: "PrPersistEscalationIn" },
+      { taskType: "pr.persist-escalation", inputType: "MergeEscalationIn" },
+    ],
+    ["PrPersistEscalationIn", "MergeEscalationIn"],
+  );
+  assert.match(
+    out,
+    /"pr.persist-escalation": DomainTypes\["PrPersistEscalationIn"\] \| DomainTypes\["MergeEscalationIn"\];/,
+  );
+});
+
+test("emitWorkerBindings collapses a repeated identical envelope to a single ref (no dup keys)", () => {
+  const out = emitWorkerBindings(
+    [
+      { taskType: "pr.persist-escalation", inputType: "EscalationIn" },
+      { taskType: "pr.persist-escalation", inputType: "EscalationIn" },
+      { taskType: "pr.persist-escalation", inputType: "EscalationIn" },
+    ],
+    ["EscalationIn"],
+  );
+  // Exactly one member, no union, and the interface still parses (no duplicate identifier).
+  assert.match(out, /export interface WorkerInputs \{\n {2}"pr.persist-escalation": DomainTypes\["EscalationIn"\];\n\}/);
+});
+
+test("detectEnvelopeConflicts stays silent for a compatible subset (nwf escalation shape)", () => {
+  const types: DomainTypeRegistry = {
+    PrPersistEscalationIn: {
+      fields: {
+        prKey: { type: "string" },
+        round: { type: "integer" },
+        recordRound: { type: "boolean", optional: true },
+      },
+    },
+    MergeEscalationIn: {
+      fields: { prKey: { type: "string" }, round: { type: "integer" } },
+    },
+  };
+  const conflicts = detectEnvelopeConflicts(
+    [
+      { taskType: "pr.persist-escalation", inputType: "PrPersistEscalationIn" },
+      { taskType: "pr.persist-escalation", inputType: "MergeEscalationIn" },
+    ],
+    types,
+  );
+  // A field present in one and absent in the other, or optional in one, is NOT a conflict.
+  assert.deepEqual(conflicts, []);
+});
+
+test("detectEnvelopeConflicts flags a genuine field-type clash across envelopes", () => {
+  const types: DomainTypeRegistry = {
+    A: { fields: { round: { type: "integer" } } },
+    B: { fields: { round: { type: "string" } } },
+  };
+  const conflicts = detectEnvelopeConflicts(
+    [
+      { taskType: "pr.review", inputType: "A" },
+      { taskType: "pr.review", inputType: "B" },
+    ],
+    types,
+  );
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].taskType, "pr.review");
+  assert.equal(conflicts[0].slot, "in");
+  assert.equal(conflicts[0].field, "round");
+  assert.deepEqual(conflicts[0].types.sort(), ["integer", "string"]);
+  assert.match(formatEnvelopeConflict(conflicts[0]), /field "round" is integer vs string/);
+});
+
+test("detectEnvelopeConflicts treats a list mismatch as a conflict", () => {
+  const types: DomainTypeRegistry = {
+    A: { fields: { tags: { type: "string" } } },
+    B: { fields: { tags: { type: "string", list: true } } },
+  };
+  const conflicts = detectEnvelopeConflicts(
+    [
+      { taskType: "t", outputType: "A" },
+      { taskType: "t", outputType: "B" },
+    ],
+    types,
+  );
+  assert.equal(conflicts.length, 1);
+  assert.equal(conflicts[0].slot, "out");
+  assert.deepEqual(conflicts[0].types.sort(), ["string", "string[]"]);
+});
+
+test("detectEnvelopeConflicts uses own-property checks for envelope ids (no prototype-chain false positives)", () => {
+  const types: DomainTypeRegistry = {
+    Real: { fields: { prKey: { type: "string" } } },
+  };
+  // An author-named envelope id that only exists on Object.prototype ("toString", "constructor")
+  // must be treated as undeclared and skipped — not read through the prototype chain, which would
+  // yield a non-registry value and (previously) crash on `.fields`.
+  const conflicts = detectEnvelopeConflicts(
+    [
+      { taskType: "t", inputType: "Real" },
+      { taskType: "t", inputType: "toString" },
+      { taskType: "t", inputType: "constructor" },
+    ],
+    types,
+  );
+  assert.deepEqual(conflicts, []);
+});
+
+test("detectEnvelopeConflicts uses own-property checks for field names (no prototype-chain false positives)", () => {
+  // Envelope A carries an own field literally named "toString"; B does not carry it at all.
+  // A prototype-chain read (`B.fields["toString"]`) would resolve to Object.prototype.toString and
+  // fabricate a spurious type conflict; an own-property check correctly sees it as a presence
+  // difference, which is not a conflict.
+  const aFields: Record<string, DomainFieldDef> = { toString: { type: "string" } };
+  const types: DomainTypeRegistry = {
+    A: { fields: aFields },
+    B: { fields: { prKey: { type: "string" } } },
+  };
+  const conflicts = detectEnvelopeConflicts(
+    [
+      { taskType: "t", inputType: "A" },
+      { taskType: "t", inputType: "B" },
+    ],
+    types,
+  );
+  assert.deepEqual(conflicts, []);
 });
 
 test("deriveWorkerBindings is deterministic and emits worker-io.d.ts", () => {

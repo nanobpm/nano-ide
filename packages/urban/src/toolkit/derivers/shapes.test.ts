@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   emitDomainModelJson,
   resolveShapes,
+  scanModelShapes,
   type ShapeDecl,
 } from "./shapes.ts";
 import type { DomainTypeRegistry, SourceSchema } from "./domain.ts";
@@ -168,4 +169,69 @@ test("resolveShapes returns an empty resolution for no shapes", () => {
   );
   assert.deepEqual(types, {});
   assert.deepEqual(diagnostics, []);
+});
+
+// --- scanModelShapes: the standalone-`urban gen` port of the `nano:shape` XML scan --------------
+
+const SHAPES_BPMN = `<?xml version="1.0"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:nano="http://nanobpm.io/schema/nano/1.0">
+  <bpmn:process id="p1">
+    <bpmn:extensionElements>
+      <nano:shapes>
+        <nano:shape id="ReviewIn" name="Review — input">
+          <nano:extend name="prUrl" type="string" />
+          <nano:extend name="round" type="integer" />
+          <nano:extend name="answer" type="string" optional="true" />
+        </nano:shape>
+        <nano:shape id="Composed">
+          <nano:carry ref="ReviewIn" />
+          <nano:project ref="Customer" fields="tier, region" via="Order.customerId" />
+          <nano:reference name="lines" ref="OrderLine" spread="false" list="true" />
+        </nano:shape>
+        <nano:shape name="no-id-dropped"><nano:carry ref="ReviewIn" /></nano:shape>
+      </nano:shapes>
+    </bpmn:extensionElements>
+  </bpmn:process>
+</bpmn:definitions>`;
+
+test("scanModelShapes lifts nano:shape declarations with ops in author order", () => {
+  const shapes = scanModelShapes(SHAPES_BPMN);
+  // The id-less shape is dropped; the two identified shapes survive, process-tagged.
+  assert.deepEqual(shapes.map((s) => s.id), ["ReviewIn", "Composed"]);
+  assert.equal(shapes[0].process, "p1");
+  assert.equal(shapes[0].name, "Review — input");
+  assert.deepEqual(shapes[0].ops, [
+    { op: "extend", name: "prUrl", type: "string", optional: false, list: false },
+    { op: "extend", name: "round", type: "integer", optional: false, list: false },
+    { op: "extend", name: "answer", type: "string", optional: true, list: false },
+  ]);
+  assert.deepEqual(shapes[1].ops, [
+    { op: "carry", ref: "ReviewIn" },
+    { op: "project", ref: "Customer", fields: ["tier", "region"], via: "Order.customerId" },
+    { op: "reference", name: "lines", ref: "OrderLine", spread: false, list: true },
+  ]);
+});
+
+test("scanModelShapes → resolveShapes round-trips an all-extend envelope into DomainTypes", () => {
+  const shapes = scanModelShapes(SHAPES_BPMN).filter((s) => s.id === "ReviewIn");
+  const { types, diagnostics } = resolveShapes(shapes, {}, []);
+  assert.deepEqual(diagnostics, []);
+  assert.deepEqual(types.ReviewIn.fields, {
+    prUrl: { type: "string" },
+    round: { type: "integer" },
+    answer: { type: "string", optional: true },
+  });
+});
+
+test("scanModelShapes drops an op missing a required attribute", () => {
+  const xml = `<bpmn:process id="p"><bpmn:extensionElements><nano:shapes>
+    <nano:shape id="S">
+      <nano:extend name="ok" type="string" />
+      <nano:extend name="noType" />
+      <nano:carry />
+    </nano:shape>
+  </nano:shapes></bpmn:extensionElements></bpmn:process>`;
+  const [s] = scanModelShapes(xml);
+  assert.deepEqual(s.ops, [{ op: "extend", name: "ok", type: "string", optional: false, list: false }]);
 });

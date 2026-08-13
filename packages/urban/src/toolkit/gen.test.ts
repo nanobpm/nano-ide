@@ -289,3 +289,38 @@ test("runGen warns when a requestBody schema is shared across operations, but ne
   });
   assert.deepEqual((await runGen({ root: "/app", io: clean })).warnings, []);
 });
+
+test("gen fuses a model-authored nano:shape envelope into the worker-io contract", async () => {
+  // No manifest `types` at all: the envelope's shape lives ENTIRELY in the model as a `nano:shape`,
+  // linked to the worker by `io.nanobpm.dataEnvelope.in`. Before the shape fuse was wired into gen
+  // this produced an empty `WorkerInputs {}`; now it resolves to `DomainTypes["ReviewIn"]`.
+  const manifest = JSON.stringify({
+    id: "demo",
+    data: { default: "app" },
+    models: { processes: ["processes/p.bpmn"] },
+  });
+  const bpmn = `<bpmn:process id="p"
+    xmlns:bpmn="x" xmlns:zeebe="y" xmlns:nano="z">
+    <bpmn:extensionElements><nano:shapes>
+      <nano:shape id="ReviewIn" name="Review — input">
+        <nano:extend name="prUrl" type="string" />
+        <nano:extend name="round" type="integer" />
+      </nano:shape>
+    </nano:shapes></bpmn:extensionElements>
+    <bpmn:serviceTask id="T"><bpmn:extensionElements>
+      <zeebe:taskDefinition type="demo.review" />
+      <zeebe:properties>
+        <zeebe:property name="io.nanobpm.dataEnvelope.in" value="ReviewIn" />
+      </zeebe:properties>
+    </bpmn:extensionElements></bpmn:serviceTask>
+  </bpmn:process>`;
+  const io = memIO({ "/app/nano.app.json": manifest, "/app/processes/p.bpmn": bpmn });
+  const res = await runGen({ root: "/app", io });
+  const workerIo = res.artifacts.find((a) => a.path.endsWith("worker-io.d.ts"));
+  assert.ok(workerIo, "worker-io.d.ts is emitted");
+  assert.match(workerIo!.content, /"demo\.review": DomainTypes\["ReviewIn"\];/);
+  // The fused shape also lands in the domain registry the worker index imports from.
+  const domain = res.artifacts.find((a) => a.path.endsWith("domain-rows.d.ts"));
+  assert.ok(domain, "domain-rows.d.ts is emitted from the fused registry");
+  assert.match(domain!.content, /"ReviewIn":/);
+});

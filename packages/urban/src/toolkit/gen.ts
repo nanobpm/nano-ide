@@ -6,10 +6,11 @@
 import type { DerivedArtifact } from "./artifact.ts";
 import { GENERATED_DIR, isAbsolutePath, RUNTIME_MATERIALIZED_ARTIFACTS, sortArtifacts } from "./artifact.ts";
 import { deriveMigrations, type ToolkitManifest } from "./derivers/migrations.ts";
-import { deriveDomain } from "./derivers/domain.ts";
-import { deriveWorkerBindings, type ModelSource } from "./derivers/worker-io.ts";
+import { emitDomainModel, registryFromManifest, sourcesFromManifest } from "./derivers/domain.ts";
+import { byModelPath, deriveWorkerBindings, detectEnvelopeConflicts, DOMAIN_DTS, formatEnvelopeConflict, type ModelSource, scanModelWorkers } from "./derivers/worker-io.ts";
 import { deriveMeta } from "./derivers/meta.ts";
 import { deriveMessageBindings } from "./derivers/messages.ts";
+import { resolveShapes, scanModelShapes } from "./derivers/shapes.ts";
 import { deriveApi } from "./derivers/api.ts";
 import { parseSpec, sharedRequestBodySchemas } from "../openapi/spec.ts";
 import { deriveModels, type DerivedModels, type ModelError, MODEL_PROVENANCE } from "./models.ts";
@@ -133,29 +134,62 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
   const artifacts: DerivedArtifact[] = [];
   const warnings: string[] = [];
 
-  // 1. types → migrations + domain row types (DomainTables spine + DomainTypes registry)
-  if (!opts.modelsOnly && manifest.types && Object.keys(manifest.types).length > 0) {
-    artifacts.push(...deriveMigrations(manifest));
-    artifacts.push(...deriveDomain(manifest));
+  // 1. Resolve the app's models first (code-first `workflows/*.ts` → BPMN, plus authored on-disk
+  //    `.bpmn`): the fused domain model (below) lifts `nano:shape` envelopes *from* the models, so
+  //    they must be in hand before the domain + worker/message type-contracts are derived.
+  const derived = await deriveModels(root, io, manifest);
+  //    The derived `.bpmn` are emitted only when `emitModels` (default), but always fed to the
+  //    type-contract derivers so worker I/O works for a code-first app even on a `--no-models` run.
+  if (emitModels) artifacts.push(...derived.artifacts);
+  const derivedPaths = new Set(derived.artifacts.map((a) => a.path));
+  const diskModels = (await readModels(root, io, manifest)).filter((m) => !derivedPaths.has(m.path));
+  const models = [...diskModels, ...derived.models];
+
+  // 2. Fused domain model (ADR 0040): the `DomainTypes` registry is the union of the manifest
+  //    `types` registry and the model-authored `nano:shape` envelopes, resolved through the same
+  //    fuse the console reifier (`envelope_scan.rs`) uses. Without this the standalone `urban gen`
+  //    would honour only `manifest.types` and silently ignore every model-authored data envelope,
+  //    so worker/message I/O against those envelopes would fall back to the untyped `WorkerVars`.
+  const manifestRegistry = registryFromManifest(manifest);
+  const sources = sourcesFromManifest(manifest);
+  const shapeDecls = models.flatMap((m) => scanModelShapes(m.xml));
+  const shapeResolution = resolveShapes(shapeDecls, manifestRegistry, sources);
+  const fusedTypes = { ...manifestRegistry, ...shapeResolution.types };
+  for (const d of shapeResolution.diagnostics) {
+    warnings.push(`data-envelope shape "${d.shape}" (${d.kind}): ${d.message}`);
   }
 
-  // 2. code-first models → derive BPMN from `workflows/*.ts` (executes the app's TS). The derived
-  //    `.bpmn` are emitted only when `emitModels` (default), but always fed to the type-contract
-  //    derivers below so worker I/O works for a code-first app even on a `--no-models` run.
-  const derived = await deriveModels(root, io, manifest);
-  if (emitModels) artifacts.push(...derived.artifacts);
+  // 3. types → migrations (persisted `manifest.types` only — shapes are transient wire envelopes,
+  //    never tables) + the fused domain row types (`DomainTables` spine + `DomainTypes` registry).
+  if (!opts.modelsOnly && manifest.types && Object.keys(manifest.types).length > 0) {
+    artifacts.push(...deriveMigrations(manifest));
+  }
+  if (!opts.modelsOnly && Object.keys(fusedTypes).length > 0) {
+    artifacts.push({
+      path: `${GENERATED_DIR}/${DOMAIN_DTS}`,
+      content: emitDomainModel(sources, manifest.data?.default ?? "app", fusedTypes),
+    });
+  }
 
-  // 3. models (authored on-disk + derived) → worker I/O index + meta accessor + message map.
-  //    Drop any on-disk model whose path a derived model already covers, to avoid double-counting.
+  // 4. models (authored on-disk + derived) → worker I/O index + meta accessor + message map. The
+  //    declared type ids include the fused shapes, so an envelope ref to a model-authored shape
+  //    resolves to its `DomainTypes[...]` entry instead of degrading to the untyped fallback.
   if (!opts.modelsOnly) {
-    const derivedPaths = new Set(derived.artifacts.map((a) => a.path));
-    const diskModels = (await readModels(root, io, manifest)).filter((m) => !derivedPaths.has(m.path));
-    const models = [...diskModels, ...derived.models];
     if (models.length > 0) {
-      const declaredTypeIds = Object.keys(manifest.types ?? {});
+      const declaredTypeIds = Object.keys(fusedTypes);
       artifacts.push(...deriveWorkerBindings(models, declaredTypeIds));
       artifacts.push(...deriveMeta(models));
       artifacts.push(...deriveMessageBindings(models, declaredTypeIds));
+      // Surface genuine data-envelope conflicts: a taskType whose variants disagree on a field's
+      // TYPE. The emitted contract is the union of the variants (sound for a shared handler), so a
+      // type clash would silently widen to `A | B` — warn instead so the author unifies the envelope.
+      const scannedWorkers = [...models]
+        .sort(byModelPath)
+        .flatMap((m) => scanModelWorkers(m.xml))
+        .map((w) => ({ taskType: w.taskType, inputType: w.in, outputType: w.out }));
+      for (const c of detectEnvelopeConflicts(scannedWorkers, fusedTypes)) {
+        warnings.push(formatEnvelopeConflict(c));
+      }
     }
   }
 

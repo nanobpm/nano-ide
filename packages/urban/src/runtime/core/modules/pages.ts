@@ -1098,7 +1098,9 @@ function renderActionForm(node) {
   const reqMark = (f) => (f.required === true ? [el("span", { class: "pc-req", title: "Required" }, " *")] : []);
   // Register a field's inline error node and, when required, mark the input
   // (aria-required) and wire a clear-on-edit handler so a hint disappears the
-  // moment the user starts fixing it.
+  // moment the user starts fixing it. Editing a required field also clears the
+  // blocked-submit summary ("Please fill in the required fields.") so it never
+  // lingers as a stale/misleading banner while the user is correcting input.
   const wireField = (f, input, ferr, evt) => {
     errs.set(f.key, ferr);
     if (f.required !== true) return;
@@ -1109,6 +1111,8 @@ function renderActionForm(node) {
       input.classList.remove("pc-invalid");
       input.removeAttribute("aria-invalid");
       ferr.textContent = "";
+      msg.textContent = "";
+      msg.className = "pc-msg";
     });
   };
   for (const f of p.fields || []) {

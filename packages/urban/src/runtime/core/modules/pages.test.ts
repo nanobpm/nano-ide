@@ -525,6 +525,9 @@ test("the renderer enforces required actionForm fields client-side, blocking sub
   assert.match(js, /Please fill in the required fields\./);
   assert.match(js, /firstInvalid\.focus\(\)/);
   assert.match(js, /input\.classList\.add\("pc-invalid"\)/);
+  // Editing a required field after a blocked submit clears the summary banner too,
+  // so "Please fill in the required fields." never lingers stale while correcting.
+  assert.match(js, /msg\.textContent = "";\s*\n\s*msg\.className = "pc-msg";/);
   // A per-field custom message (`requiredMessage`) overrides the default "Required".
   assert.match(js, /reqMsg\.get\(k\) \|\| "Required"/);
   assert.match(js, /f\.requiredMessage/);

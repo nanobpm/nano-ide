@@ -358,7 +358,11 @@ test("renderer interpolates a column's per-cell template into DOM text (#214)", 
   // for the visible text while the badge stays keyed to the raw field.
   assert.match(js, /function interpTemplate\(tpl, row\)/);
   assert.match(js, /replace\(\/\\\{\\\{\(\[\^\{\}\]\+\)\\\}\\\}\/g,/);
-  assert.match(js, /const v = row\[name\.trim\(\)\];/);
+  assert.match(js, /const key = name\.trim\(\);/);
+  // Unknown tokens (no such own field) render blank and, crucially, an inherited
+  // Object.prototype key (toString, constructor, …) counts as unknown rather than
+  // resolving to prototype cruft — guard the own-property gate explicitly.
+  assert.match(js, /Object\.prototype\.hasOwnProperty\.call\(row, key\) \? row\[key\] : null/);
   assert.match(js, /return v == null \? "" : String\(v\);/);
   // gridCell keeps the raw single-field value separate (drives the badge gate)
   // and lets a string template win for the rendered text.

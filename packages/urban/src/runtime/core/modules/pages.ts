@@ -842,11 +842,15 @@ function interpParam(s) {
 // each value literally, so a "$"-bearing value can't be reinterpreted as a
 // replacement pattern. Unknown tokens (no such field) render empty rather than
 // throwing, matching interpParam. This is a dumb text formatter: no expressions,
-// arithmetic, or conditionals — just field splicing.
+// arithmetic, or conditionals — just field splicing. Only the row's own
+// enumerable fields resolve: an inherited Object.prototype key (toString,
+// constructor, …) counts as unknown and renders "", so a token can't pick up
+// prototype cruft instead of blank.
 function interpTemplate(tpl, row) {
   return typeof tpl === "string"
     ? tpl.replace(/\{\{([^{}]+)\}\}/g, (_m, name) => {
-        const v = row[name.trim()];
+        const key = name.trim();
+        const v = Object.prototype.hasOwnProperty.call(row, key) ? row[key] : null;
         return v == null ? "" : String(v);
       })
     : tpl;

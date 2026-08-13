@@ -108,6 +108,15 @@ export interface UrbanApp {
   readonly data: DataLayer | undefined;
   readonly security: SecurityPolicy | undefined;
   readonly httpPort: number | undefined;
+  /**
+   * The runtime's native HTTP server object once `start()` has bound it (the Node adapter's
+   * `node:http` `Server`), for attaching a WebSocket upgrade on the app's *own* port. Snapshot it
+   * into a local `const` and narrow that with a runtime `instanceof` check before use (no type
+   * assertion needed) — reading the property again after the check would not narrow — e.g.
+   * `const { Server } = await import("node:http"); const server = app.httpServer; if (server instanceof Server) new WebSocketServer({ server, path: "/agentic" });`.
+   * `undefined` before `start()`, after `stop()`, and on hosts that don't surface one (Deno).
+   */
+  readonly httpServer: object | undefined;
 }
 
 export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<UrbanApp> {
@@ -192,6 +201,10 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     },
     get httpPort() {
       return httpPort;
+    },
+    get httpServer(): object | undefined {
+      const native = server?.native;
+      return typeof native === "object" && native !== null ? native : undefined;
     },
 
     async start() {

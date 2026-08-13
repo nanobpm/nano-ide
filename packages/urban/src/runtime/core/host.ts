@@ -28,6 +28,16 @@ export type HttpHandler = (req: HttpRequest) => Promise<HttpResponse> | HttpResp
 export interface HttpServer {
   readonly port: number;
   stop(): Promise<void>;
+  /**
+   * The host's native server object, when it exposes one — the Node adapter's `node:http` `Server`.
+   * Lets an app attach a WebSocket upgrade (e.g. `ws`'s `WebSocketServer({ server })`) to the *same*
+   * port the app already serves. `undefined` on hosts that don't surface an upgradeable server object
+   * (the Deno adapter, whose WS story is `upgradeWebSocket` on the Deno global in the request
+   * handler). Typed
+   * `unknown` because this is the host-adapter boundary — the consumer narrows it with a runtime
+   * check (e.g. `instanceof Server`) before use, rather than a type assertion.
+   */
+  readonly native?: unknown;
 }
 
 /** A handle to an active filesystem watch; call close() to stop watching. */

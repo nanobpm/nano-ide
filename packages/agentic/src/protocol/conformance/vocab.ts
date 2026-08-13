@@ -30,13 +30,13 @@ export const VALID_VOCABS: readonly ValidVocab[] = [
       networks: {
         planning: {
           roles: {
-            decide: { requires: ["cognition:reasoning"], weight: 3, seats: 1 },
+            decide: { requires: ["cognition=reasoning"], weight: 3, seats: 1 },
           },
         },
         qa: {
           roles: {
             review: {
-              requires: ["cognition:reasoning"],
+              requires: ["cognition=reasoning"],
               weight: 2,
               seats: ["red", "blue"],
               seatsDistinctFamily: true,
@@ -59,7 +59,7 @@ export const VALID_VOCABS: readonly ValidVocab[] = [
       networks: {
         support: {
           roles: {
-            triage: { requires: ["host:on-call"], weight: 1, seats: 3 },
+            triage: { requires: ["host=on-call"], weight: 1, seats: 3 },
           },
         },
       },

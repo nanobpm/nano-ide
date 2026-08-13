@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseToken } from "../protocol/index.ts";
+import { VALID_VOCABS } from "../protocol/conformance/vocab.ts";
 import { CORE_VOCAB } from "./core-vocab.ts";
 import { VocabDocumentError, VocabResolver } from "./resolver.ts";
 
@@ -98,4 +99,20 @@ test("a self-named collapse does not collide with a network-qualified token of t
   assert.deepEqual([...resolver.tokens()].sort(), ["decide", "x.decide"]);
   assert.equal(resolver.roleForToken("decide")?.role, "decide");
   assert.equal(resolver.roleForToken("x.decide")?.role, "decide");
+});
+
+test("every VALID_VOCABS conformance sample constructs a resolver without throwing", () => {
+  // Guard the defect class: the conformance corpus advertises these documents as
+  // resolver-valid ("held to the same schema this repo's validator enforces"), so
+  // a sample that passes `validateVocabDocument` but carries an unparseable
+  // `requires` gate (e.g. the `field:value` colon form instead of `field=value`)
+  // would still throw `RequiresParseError` the moment a consumer builds a
+  // resolver. Constructing a resolver over every sample parses each gate up front,
+  // catching that drift categorically rather than one predicate at a time.
+  for (const vector of VALID_VOCABS) {
+    assert.doesNotThrow(
+      () => new VocabResolver(vector.document),
+      `${vector.name}: every VALID_VOCABS sample must build a resolver`,
+    );
+  }
 });

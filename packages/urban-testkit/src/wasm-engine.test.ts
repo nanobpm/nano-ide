@@ -102,6 +102,40 @@ test("wasm: deployResources skips non-engine models (forms) but deploys the BPMN
   }
 });
 
+test("wasm: getForm resolves a deployed .form by id (latest) and by key", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    const v1 = { id: "greeting", type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "who" }] };
+    const v2 = { id: "greeting", type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "who" }, { type: "number", key: "times" }] };
+    await engine.deployResources([
+      { name: "greeting.form", content: JSON.stringify(v1), contentType: "application/json" },
+    ]);
+    const byId1 = await engine.getForm({ formId: "greeting" });
+    assert.deepEqual(byId1?.schema, v1, "resolves the deployed form by id");
+    assert.equal(byId1?.version, 1);
+    const key1 = byId1?.formKey;
+    assert.ok(key1, "assigns a form key");
+
+    // Redeploy a newer version of the same id → getForm({formId}) tracks the latest.
+    await engine.deployResources([
+      { name: "greeting.form", content: JSON.stringify(v2), contentType: "application/json" },
+    ]);
+    const byId2 = await engine.getForm({ formId: "greeting" });
+    assert.deepEqual(byId2?.schema, v2, "formId resolves to the latest deployed version");
+    assert.equal(byId2?.version, 2);
+
+    // The older version is still fetchable by its original key.
+    const byKey = await engine.getForm({ formKey: key1 });
+    assert.deepEqual(byKey?.schema, v1, "the prior version is still addressable by key");
+
+    // Unknown identifiers resolve to null (the surface's no-form fallback).
+    assert.equal(await engine.getForm({ formId: "nope" }), null);
+    assert.equal(await engine.getForm({}), null);
+  } finally {
+    await engine.close();
+  }
+});
+
 test("wasm: advanceTime fires a timer and drains resulting work", async () => {
   const engine = await createWasmEngineClient();
   try {

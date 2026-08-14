@@ -75,6 +75,10 @@ function fakeSdkClient(overrides: Partial<NanoSdkClient> = {}): NanoSdkClient & 
       calls.push("completeUserTask");
       return {};
     },
+    async getFormByKey() {
+      calls.push("getFormByKey");
+      return {};
+    },
     createJobWorker(cfg) {
       calls.push("createJobWorker");
       const rec = { cfg, started: 0, stopped: 0, dispatch: cfg.jobHandler };
@@ -192,6 +196,73 @@ test("searchUserTasks passes zero-wait consistency and maps items", async () => 
     { userTaskKey: "7", elementId: "task_a", variables: { x: 1 } },
     { userTaskKey: "8", elementId: undefined, variables: undefined },
   ]);
+});
+
+test("searchUserTasks surfaces the resolved form linkage", async () => {
+  const client = fakeSdkClient({
+    searchUserTasks: async () => ({
+      items: [
+        { userTaskKey: 5, elementId: "approve", formKey: 42 },
+        { userTaskKey: 6, elementId: "review", externalFormReference: "https://x/form" },
+        { userTaskKey: 7, elementId: "plain", formKey: null, externalFormReference: null },
+      ],
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const tasks = await engine.searchUserTasks();
+  assert.deepEqual(tasks, [
+    { userTaskKey: "5", elementId: "approve", variables: undefined, formKey: "42" },
+    { userTaskKey: "6", elementId: "review", variables: undefined, externalFormReference: "https://x/form" },
+    { userTaskKey: "7", elementId: "plain", variables: undefined },
+  ]);
+});
+
+test("getForm resolves by formKey and parses the serialized schema", async () => {
+  let seen: unknown;
+  const schema = { type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "name" }] };
+  const client = fakeSdkClient({
+    getFormByKey: async (input, c) => {
+      seen = { input, c };
+      return { formKey: "42", formId: "myForm", version: 3, schema: JSON.stringify(schema) };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const form = await engine.getForm({ formKey: "42" });
+  assert.deepEqual(seen, { input: { formKey: "42" }, c: { consistency: { waitUpToMs: 0 } } });
+  assert.deepEqual(form, { formKey: "42", formId: "myForm", version: 3, schema });
+});
+
+test("getForm falls back to formId as the key when no formKey is given", async () => {
+  let seen: unknown;
+  const client = fakeSdkClient({
+    getFormByKey: async (input) => {
+      seen = input;
+      return { schema: JSON.stringify({ type: "default", components: [] }) };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const form = await engine.getForm({ formId: "myForm" });
+  assert.deepEqual(seen, { formKey: "myForm" });
+  assert.deepEqual(form?.schema, { type: "default", components: [] });
+});
+
+test("getForm returns null when no identifier is given or the fetch fails", async () => {
+  const throwing = fakeSdkClient({
+    getFormByKey: async () => {
+      throw new Error("404 not found");
+    },
+  });
+  const engine = new SdkEngineClient(throwing);
+  assert.equal(await engine.getForm({}), null);
+  assert.equal(await engine.getForm({ formKey: "missing" }), null);
+});
+
+test("getForm returns null when the schema is not valid JSON", async () => {
+  const client = fakeSdkClient({
+    getFormByKey: async () => ({ formKey: "42", schema: "not json" }),
+  });
+  const engine = new SdkEngineClient(client);
+  assert.equal(await engine.getForm({ formKey: "42" }), null);
 });
 
 test("completeUserTask routes through the SDK", async () => {

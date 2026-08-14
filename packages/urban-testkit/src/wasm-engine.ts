@@ -56,6 +56,16 @@ function isEngineModel(r: { name?: string; contentType?: string }): boolean {
   return name.endsWith(".bpmn") || name.endsWith(".dmn");
 }
 
+/** Whether a deploy resource is a form-js `.form` (JSON) — the WASM engine can't execute
+ *  it, but the kit captures its schema so the taskInbox surface's `getForm` resolves under
+ *  the test engine exactly as it does against a live one. */
+function isFormResource(r: { name?: string; contentType?: string }): boolean {
+  const ct = (r.contentType ?? "").toLowerCase();
+  if (ct.includes("json")) return true;
+  if (ct.length > 0) return false;
+  return (r.name ?? "").toLowerCase().endsWith(".form");
+}
+
 /** Return a copy of `source` containing only the requested keys that are
  *  actually present — the client-side analogue of an engine `fetchVariables`
  *  projection. */
@@ -163,6 +173,13 @@ function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm")> {
 export class WasmEngineClient implements EngineClient {
   readonly #engine: TestEngine;
   readonly #workers = new Map<string, RegisteredWorker>();
+  /** Deployed form-js schemas captured at deploy time (the WASM engine discards
+   *  `.form` resources), keyed by their assigned form key. `#formKeyById` maps a
+   *  form's authored id to the key of its most recently deployed version, so a
+   *  `getForm({ formId })` resolves to the latest — mirroring the live engine. */
+  readonly #formsByKey = new Map<string, { formId?: string; version: number; schema: Record<string, unknown> }>();
+  readonly #formKeyById = new Map<string, string>();
+  #nextFormKey = 1;
   /** Optional observer notified with a job's type each time a job is dispatched to a
    *  worker handler. Additive, default-absent seam used by the S4 coverage gate to know
    *  which worker/job types were actually exercised; a no-op for every other caller. */
@@ -188,11 +205,36 @@ export class WasmEngineClient implements EngineClient {
     // XML resources and skip the rest, so an app that ships a form still boots under the test engine.
     let deployed = 0;
     for (const r of resources) {
-      if (!isEngineModel(r)) continue;
-      this.#engine.deploy(r.content);
-      deployed++;
+      if (isEngineModel(r)) {
+        this.#engine.deploy(r.content);
+        deployed++;
+        continue;
+      }
+      // A `.form` has no engine execution semantics, but the taskInbox surface fetches
+      // its schema via `getForm`; capture it so the surface works under the test engine.
+      if (isFormResource(r)) this.#captureForm(r.content);
     }
     return { deployed };
+  }
+
+  /** Parse and store a deployed form-js schema. A form is identified by its `id`; a
+   *  redeploy of the same id bumps the version and points the id at the newer key so
+   *  `getForm({ formId })` resolves to the latest. */
+  #captureForm(content: string): void {
+    let schema: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(content);
+      if (!isRecord(parsed)) return;
+      schema = parsed;
+    } catch {
+      return;
+    }
+    const formId = typeof schema.id === "string" && schema.id !== "" ? schema.id : undefined;
+    const prevKey = formId ? this.#formKeyById.get(formId) : undefined;
+    const version = prevKey ? (this.#formsByKey.get(prevKey)?.version ?? 0) + 1 : 1;
+    const formKey = `form-${this.#nextFormKey++}`;
+    this.#formsByKey.set(formKey, { formId, version, schema });
+    if (formId) this.#formKeyById.set(formId, formKey);
   }
 
   async createInstance(input: {
@@ -241,7 +283,13 @@ export class WasmEngineClient implements EngineClient {
     processInstanceKey?: string;
     assignee?: string;
     candidateGroup?: string;
-  }): Promise<{ userTaskKey: string; elementId?: string; variables?: Record<string, unknown> }[]> {
+  }): Promise<{
+    userTaskKey: string;
+    elementId?: string;
+    variables?: Record<string, unknown>;
+    formKey?: string;
+    externalFormReference?: string;
+  }[]> {
     return records(this.#snapshot().userTasks)
       .filter((t) => str(t.state) === "Created")
       .filter((t) =>
@@ -253,14 +301,49 @@ export class WasmEngineClient implements EngineClient {
         filter?.candidateGroup === undefined ||
         strings(t.candidateGroups).includes(filter.candidateGroup)
       )
-      .map((t) => ({
-        userTaskKey: str(t.key),
-        elementId: typeof t.elementId === "string" ? t.elementId : undefined,
-        // Match the live SdkEngineClient: surface the task-local variables
-        // attached to the user-task item (undefined when absent), not the
-        // whole instance's variables (see runtime/engine/nanosdk.ts).
-        variables: isRecord(t.variables) ? t.variables : undefined,
-      }));
+      .map((t) => {
+        // Surface the task's form linkage. The WASM engine doesn't itself resolve a
+        // `formId="X"` linkage to a form key, so map any authored `formId` on the task to
+        // the key of the latest deployed form of that id (what `getForm` then fetches);
+        // pass through a `formKey`/`externalFormReference` the snapshot already carries.
+        const authoredId = typeof t.formId === "string" ? t.formId : undefined;
+        const formKey =
+          (t.formKey != null && t.formKey !== "" ? str(t.formKey) : undefined) ??
+          (authoredId ? this.#formKeyById.get(authoredId) : undefined);
+        const externalFormReference =
+          typeof t.externalFormReference === "string" && t.externalFormReference !== ""
+            ? t.externalFormReference
+            : undefined;
+        return {
+          userTaskKey: str(t.key),
+          elementId: typeof t.elementId === "string" ? t.elementId : undefined,
+          // Match the live SdkEngineClient: surface the task-local variables
+          // attached to the user-task item (undefined when absent), not the
+          // whole instance's variables (see runtime/engine/nanosdk.ts).
+          variables: isRecord(t.variables) ? t.variables : undefined,
+          ...(formKey ? { formKey } : {}),
+          ...(externalFormReference ? { externalFormReference } : {}),
+        };
+      });
+  }
+
+  /** Resolve a captured form-js schema by key or by (latest) id. Structurally matches
+   *  urban's `EngineClient.getForm`; returns `null` when no such form was deployed. */
+  async getForm(input: { formKey?: string; formId?: string }): Promise<
+    { formKey?: string; formId?: string; version?: number; schema: Record<string, unknown> } | null
+  > {
+    const key =
+      (input.formKey && input.formKey !== "" ? input.formKey : undefined) ??
+      (input.formId ? this.#formKeyById.get(input.formId) : undefined);
+    if (!key) return null;
+    const found = this.#formsByKey.get(key);
+    if (!found) return null;
+    return {
+      formKey: key,
+      ...(found.formId ? { formId: found.formId } : {}),
+      version: found.version,
+      schema: found.schema,
+    };
   }
 
   async completeUserTask(

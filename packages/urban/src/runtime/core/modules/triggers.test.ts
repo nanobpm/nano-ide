@@ -30,6 +30,7 @@ class MiniEngine implements EngineClient {
     this.calls.push({ kind: "message", target: input.name, correlationKey: input.correlationKey, variables: input.variables });
   }
   async searchUserTasks(): Promise<[]> { return []; }
+  async getForm(): Promise<null> { return null; }
   async completeUserTask(): Promise<void> {}
   async searchProcessInstances(): Promise<[]> { return []; }
   async registerWorker(jobType: string): Promise<{ jobType: string; unsubscribe(): Promise<void> }> {

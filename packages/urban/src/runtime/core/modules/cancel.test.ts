@@ -73,6 +73,7 @@ function cancelEngine(opts: {
     createInstance: notUsed("createInstance"),
     publishMessage: notUsed("publishMessage"),
     searchUserTasks: notUsed("searchUserTasks"),
+    getForm: notUsed("getForm"),
     completeUserTask: notUsed("completeUserTask"),
     registerWorker: notUsed("registerWorker"),
     close: notUsed("close"),

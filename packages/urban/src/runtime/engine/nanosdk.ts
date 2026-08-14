@@ -14,9 +14,11 @@
 import type {
   EngineClient,
   EngineJob,
+  FormSchema,
   JobHandler,
   ProcessInstanceSnapshot,
   ProcessInstanceState,
+  UserTaskSummary,
   WorkerSubscription,
 } from "../core/host.ts";
 import { isBpmnError } from "../core/host.ts";
@@ -125,6 +127,11 @@ export interface NanoSdkClient {
     input: { userTaskKey: string; variables?: Record<string, unknown> },
     options?: unknown,
   ): Promise<unknown>;
+  getFormByKey(
+    input: { formKey: string },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
   searchProcessInstances(
     input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
     consistency?: unknown,
@@ -214,7 +221,7 @@ export class SdkEngineClient implements EngineClient {
     processInstanceKey?: string;
     assignee?: string;
     candidateGroup?: string;
-  }): Promise<{ userTaskKey: string; elementId?: string; variables?: Record<string, unknown> }[]> {
+  }): Promise<UserTaskSummary[]> {
     // User tasks are an eventually consistent read; ask for zero-wait consistency so
     // the search reflects what is currently visible without blocking.
     const body = await this.client.searchUserTasks(
@@ -228,12 +235,68 @@ export class SdkEngineClient implements EngineClient {
         this.log("warn", "skipping user task with no key in engine response");
         return [];
       }
+      // The engine resolves a `formId="X"` linkage to the latest deployed form's key at
+      // task creation, so `formKey` (not a form id) is the linkage it reports on the task.
+      const formKey =
+        it.formKey != null && it.formKey !== "" ? String(it.formKey) : undefined;
+      const externalFormReference =
+        typeof it.externalFormReference === "string" && it.externalFormReference !== ""
+          ? it.externalFormReference
+          : undefined;
       return [{
         userTaskKey: String(userTaskKey),
         elementId: typeof it.elementId === "string" ? it.elementId : undefined,
         variables: isRecord(it.variables) ? it.variables : undefined,
+        ...(formKey ? { formKey } : {}),
+        ...(externalFormReference ? { externalFormReference } : {}),
       }];
     });
+  }
+
+  async getForm(input: { formKey?: string; formId?: string }): Promise<FormSchema | null> {
+    // The engine addresses deployed forms by key (`GET /forms/{formKey}`). A user task's
+    // `formKey` is the engine's resolution of its `formId` linkage to the latest deployed
+    // form, so callers pass that key. `formId` is accepted as a fallback identifier for
+    // engines that address a form by its id; either way the engine returns the current
+    // form or 404s (→ null) when there is no such form.
+    const key = input.formKey ?? input.formId;
+    if (key == null || key === "") return null;
+    let body: Record<string, unknown>;
+    try {
+      body = await this.client.getFormByKey(
+        { formKey: key },
+        { consistency: { waitUpToMs: 0 } },
+      );
+    } catch (err) {
+      this.log("warn", "getForm: engine form fetch failed", {
+        formKey: input.formKey,
+        formId: input.formId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    if (!isRecord(body)) return null;
+    const rawSchema = body.schema;
+    // The engine serializes the form-js schema as a JSON string; parse it to the object
+    // the surface renders. Tolerate an already-parsed object (an in-memory/embedded engine).
+    let schema: Record<string, unknown> | undefined;
+    if (typeof rawSchema === "string") {
+      try {
+        const parsed: unknown = JSON.parse(rawSchema);
+        if (isRecord(parsed)) schema = parsed;
+      } catch {
+        this.log("warn", "getForm: form schema is not valid JSON", { formKey: input.formKey });
+      }
+    } else if (isRecord(rawSchema)) {
+      schema = rawSchema;
+    }
+    if (!schema) return null;
+    return {
+      schema,
+      ...(body.formKey != null && body.formKey !== "" ? { formKey: String(body.formKey) } : {}),
+      ...(typeof body.formId === "string" && body.formId !== "" ? { formId: body.formId } : {}),
+      ...(typeof body.version === "number" ? { version: body.version } : {}),
+    };
   }
 
   async completeUserTask(userTaskKey: string, variables?: Record<string, unknown>): Promise<void> {

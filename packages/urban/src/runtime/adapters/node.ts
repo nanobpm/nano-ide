@@ -166,8 +166,8 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
         pathToFileURL(abs(entry)).href + (opts.importNonce ? `?v=${opts.importNonce}` : "");
       await import(href);
     },
-    async serveHttp(port, handler) {
-      return await startNodeServer(port, handler);
+    async serveHttp(port, handler, bindHost) {
+      return await startNodeServer(port, handler, bindHost);
     },
     watch(onChange) {
       const onFsEvent = (_event: unknown, filename: string | Buffer | null) => {
@@ -216,7 +216,11 @@ function wrapNodeSqlite(db: DatabaseSync): SqliteDb {
   };
 }
 
-async function startNodeServer(port: number, handler: HttpHandler): Promise<HttpServer> {
+async function startNodeServer(
+  port: number,
+  handler: HttpHandler,
+  bindHost?: string,
+): Promise<HttpServer> {
   const server = createServer(async (nreq, nres) => {
     const chunks: Buffer[] = [];
     for await (const c of nreq) {
@@ -263,7 +267,13 @@ async function startNodeServer(port: number, handler: HttpHandler): Promise<Http
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((res) => server.listen(port, res));
+  // Bind to the requested interface when given (issue #235): `"127.0.0.1"` keeps the app
+  // loopback-only (secure default), `"0.0.0.0"` exposes it on the LAN. Omitting `bindHost`
+  // preserves Node's default (all interfaces) for callers that don't resolve a bind host.
+  await new Promise<void>((res) => {
+    if (bindHost === undefined) server.listen(port, res);
+    else server.listen(port, bindHost, res);
+  });
   const addr = server.address();
   const actualPort = typeof addr === "object" && addr ? addr.port : port;
   return {

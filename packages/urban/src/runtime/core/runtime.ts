@@ -6,7 +6,7 @@
 import type { AppApi, Mounted } from "./context.ts";
 import type { EngineClient, HostContext, HttpServer } from "./host.ts";
 import type { EngineSdkClient } from "../engine/sdk.ts";
-import { loadManifest, type AppManifest } from "./manifest.ts";
+import { loadManifest, resolveBindHost, resolveBindMode, type AppManifest } from "./manifest.ts";
 import { validateManifest } from "./validate.ts";
 import { makeRouter, type Route } from "./router.ts";
 import { deployModels } from "./modules/deploy.ts";
@@ -157,6 +157,11 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
 
   const port = resolvePort(opts.port, host.env("PORT"));
 
+  // Which interface the HTTP server binds to (issue #235). Secure by default: loopback unless
+  // the manifest's `network.bind` (or the `URBAN_BIND` env override) opts into all interfaces.
+  const bindMode = resolveBindMode(manifest, (n) => host.env(n));
+  const bindHost = resolveBindHost(manifest, (n) => host.env(n));
+
   // Release every mounted resource and reset internal state so a subsequent
   // start() begins clean. Used by stop() and by start()'s failure path.
   const teardown = async () => {
@@ -268,9 +273,26 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
               body: JSON.stringify({ ok: true, app: manifest.id }),
             }),
           });
-          server = await host.serveHttp(port, makeRouter(routes));
+          server = await host.serveHttp(port, makeRouter(routes), bindHost);
           httpPort = server.port;
-          host.log("info", "urban app serving surfaces/triggers", { port: httpPort, routes: routes.length });
+          host.log("info", "urban app serving surfaces/triggers", {
+            port: httpPort,
+            routes: routes.length,
+            bind: bindMode,
+            bindHost,
+          });
+          // Binding to all interfaces exposes the app (and its token-gated capability
+          // hooks) on the LAN. That is the explicit opt-in this setting exists for, but a
+          // non-loopback bind must not serve any LOCAL-mode "well-known localhost token"
+          // credential (issue #235) — consumers that mint one (e.g. the agentic channel's
+          // LOCAL mode) must gate it on a loopback bind. Surface the exposure so it is never
+          // silent.
+          if (bindMode === "all") {
+            host.log("warn", "urban app bound to all interfaces — reachable off-box on the LAN", {
+              port: httpPort,
+              bindHost,
+            });
+          }
           // ADR 0057 boot handshake: under a supervising host (the nano-bpm
           // Studio sets NANOBPMN_APP_HANDSHAKE), announce the port we actually
           // bound on a machine-readable stdout control line so the host can

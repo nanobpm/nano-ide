@@ -52,11 +52,25 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
     if (!(req in obj)) issues.push({ path: req, message: "required by nano-app.schema.json" });
   }
   const allowed = new Set(Object.keys(S.properties ?? {}));
+  // `network` (issue #235) is threaded as a runtime-side setting until
+  // @nanobpm/nano-app-schema ships the field in its JSON Schema; allow it here so the
+  // envelope check doesn't reject it. Remove this once the schema owns `network` (it
+  // then flows from `S.properties` like every other block). Matching type augmentation
+  // lives in manifest.ts.
+  allowed.add("network");
   if (S.additionalProperties === false) {
     for (const k of Object.keys(obj)) {
       if (!allowed.has(k)) {
         issues.push({ path: k, message: "unknown top-level key (additionalProperties: false)" });
       }
+    }
+  }
+  if ("network" in obj) {
+    const network = isRecord(obj.network) ? obj.network : undefined;
+    if (!network) {
+      issues.push({ path: "network", message: "must be an object" });
+    } else if ("bind" in network && network.bind !== "loopback" && network.bind !== "all") {
+      issues.push({ path: "network.bind", message: 'must be "loopback" or "all"' });
     }
   }
   if ("schemaVersion" in obj && obj.schemaVersion !== 1) {

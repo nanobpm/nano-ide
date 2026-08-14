@@ -99,8 +99,13 @@ export interface HostContext {
    * connector mount then reports the workers as unsupported rather than crashing.
    */
   importConnectorModule?(entry: string): Promise<void>;
-  /** Start an HTTP server. Routing is done by the caller inside `handler`. */
-  serveHttp(port: number, handler: HttpHandler): Promise<HttpServer>;
+  /**
+   * Start an HTTP server. Routing is done by the caller inside `handler`. `bindHost` is the
+   * network interface to bind (e.g. `"127.0.0.1"` for loopback, `"0.0.0.0"` for all interfaces);
+   * when omitted the host adapter's default applies. See the manifest `network.bind` setting
+   * (issue #235) which the runtime resolves into this value.
+   */
+  serveHttp(port: number, handler: HttpHandler, bindHost?: string): Promise<HttpServer>;
   /**
    * Recursively watch the app root for file changes, invoking `onChange` with the
    * changed path (app-root-relative when the runtime reports it that way). Optional:

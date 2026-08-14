@@ -10,20 +10,29 @@ export type {
 
 // Manifest
 export {
+  bindModeToHost,
   expandEnv,
   expandEnvString,
+  isBindMode,
   loadManifest,
   parseManifest,
+  resolveBindHost,
+  resolveBindMode,
   workerJobType,
+  ALL_INTERFACES_HOST,
+  BIND_ENV_VAR,
+  LOOPBACK_HOST,
 } from "./core/manifest.ts";
 export type {
   ActionDecl,
   AppManifest,
+  BindMode,
   ChatSurface,
   DataSource,
   DomainField,
   DomainType,
   LlmBinding,
+  NetworkConfig,
   PagesSurface,
   Surfaces,
   TaskInboxSurface,

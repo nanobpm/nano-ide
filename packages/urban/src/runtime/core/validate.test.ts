@@ -45,6 +45,22 @@ test("a `ui` block is an accepted top-level key (Studio App View, ADR 0057 / nan
   assert.deepEqual(issues, []);
 });
 
+test("a `network` block with a valid bind is accepted (issue #235)", () => {
+  assert.deepEqual(collectManifestIssues({ ...valid, network: { bind: "loopback" } }), []);
+  assert.deepEqual(collectManifestIssues({ ...valid, network: { bind: "all" } }), []);
+  assert.deepEqual(collectManifestIssues({ ...valid, network: {} }), []);
+});
+
+test("a `network.bind` outside loopback|all is reported (issue #235)", () => {
+  const issues = collectManifestIssues({ ...valid, network: { bind: "lan" } });
+  assert.ok(issues.some((i) => i.path === "network.bind"));
+});
+
+test("a non-object `network` is reported (issue #235)", () => {
+  const issues = collectManifestIssues({ ...valid, network: "all" });
+  assert.ok(issues.some((i) => i.path === "network"));
+});
+
 test("bad schemaVersion and bad slug id are reported", () => {
   const issues = collectManifestIssues({ ...valid, schemaVersion: 2, id: "Not A Slug" });
   assert.ok(issues.some((i) => i.path === "schemaVersion"));

@@ -73,6 +73,74 @@ export function workerJobType(w: Worker): string | undefined {
   return w.taskType;
 }
 
+/**
+ * Which interface the app's embedded HTTP server binds to (issue #235):
+ *  - `"loopback"` (default): `127.0.0.1` — secure-by-default; refuses off-box connections.
+ *  - `"all"`: `0.0.0.0` — reachable from other hosts on the LAN (distributed worker fleet).
+ */
+export type BindMode = "loopback" | "all";
+
+/** App-level network settings (issue #235). Absent ⇒ loopback. */
+export interface NetworkConfig {
+  /** HTTP bind interface. Default `"loopback"`. */
+  bind?: BindMode;
+}
+
+// The manifest type is the single source of truth (ADR 0027) and is owned by
+// @nanobpm/nano-app-schema. `network` is threaded here as a runtime-side forward
+// declaration until that package's JSON Schema + generated types ship the field;
+// once they do, this augmentation (and the matching allow-list entry in validate.ts)
+// can be deleted and the field flows from the schema like every other block.
+declare module "@nanobpm/nano-app-schema" {
+  interface AppManifest {
+    network?: NetworkConfig;
+  }
+}
+
+/** Loopback bind address — secure/local default. */
+export const LOOPBACK_HOST = "127.0.0.1";
+/** All-interfaces IPv4 bind address — LAN / distributed fleet. */
+export const ALL_INTERFACES_HOST = "0.0.0.0";
+
+/** Environment variable that overrides the manifest bind mode for ops. */
+export const BIND_ENV_VAR = "URBAN_BIND";
+
+/** True when `v` is a valid {@link BindMode}. */
+export function isBindMode(v: unknown): v is BindMode {
+  return v === "loopback" || v === "all";
+}
+
+/**
+ * Resolve the effective HTTP bind mode: the `URBAN_BIND` env override wins when set to a
+ * valid value, else the manifest's `network.bind`, else `"loopback"` (secure by default).
+ * An env value that is present but invalid is ignored (falls through to the manifest/default);
+ * callers that want to surface that can check {@link isBindMode} on the raw env value.
+ */
+export function resolveBindMode(
+  manifest: Pick<AppManifest, "network">,
+  lookup: (name: string) => string | undefined = () => undefined,
+): BindMode {
+  const envRaw = lookup(BIND_ENV_VAR);
+  if (isBindMode(envRaw)) return envRaw;
+  return manifest.network?.bind ?? "loopback";
+}
+
+/** Map a {@link BindMode} to the concrete host address passed to the HTTP adapter. */
+export function bindModeToHost(mode: BindMode): string {
+  return mode === "all" ? ALL_INTERFACES_HOST : LOOPBACK_HOST;
+}
+
+/**
+ * Resolve the concrete bind host address from the manifest + environment.
+ * `"loopback"` ⇒ `127.0.0.1` (default), `"all"` ⇒ `0.0.0.0`.
+ */
+export function resolveBindHost(
+  manifest: Pick<AppManifest, "network">,
+  lookup: (name: string) => string | undefined = () => undefined,
+): string {
+  return bindModeToHost(resolveBindMode(manifest, lookup));
+}
+
 const ENV_RE = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g;
 
 /**

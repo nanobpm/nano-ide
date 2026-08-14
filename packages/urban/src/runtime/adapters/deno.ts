@@ -52,7 +52,7 @@ interface DenoGlobal {
   stat(path: string): Promise<unknown>;
   watchFs(paths: string | string[], options?: { recursive?: boolean }): DenoFsWatcher;
   serve(
-    opts: { port: number; onListen?: (a: { port: number }) => void },
+    opts: { port: number; hostname?: string; onListen?: (a: { port: number }) => void },
     handler: (req: Request) => Response | Promise<Response>,
   ): DenoHttpServer;
 }
@@ -123,8 +123,8 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
       const mod: Promise<Record<string, unknown>> = import(href);
       return mod;
     },
-    async serveHttp(port, handler) {
-      return startDenoServer(port, handler);
+    async serveHttp(port, handler, opts) {
+      return startDenoServer(port, handler, opts?.hostname);
     },
     watch(onChange) {
       const w = Deno.watchFs(cwd, { recursive: true });
@@ -177,9 +177,13 @@ function wrapSqlite(db: DatabaseSync): SqliteDb {
   };
 }
 
-function startDenoServer(port: number, handler: HttpHandler): Promise<HttpServer> {
+function startDenoServer(
+  port: number,
+  handler: HttpHandler,
+  hostname?: string,
+): Promise<HttpServer> {
   return new Promise<HttpServer>((resolveServer) => {
-    const server = Deno.serve({ port, onListen: ({ port: p }) => {
+    const server = Deno.serve({ port, hostname, onListen: ({ port: p }) => {
       resolveServer({
         port: p,
         stop: () => server.shutdown(),

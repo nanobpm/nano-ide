@@ -49,6 +49,7 @@ export async function runFromEnv(opts: RunOptions = {}): Promise<UrbanApp> {
     manifest: opts.manifest,
     manifestPath: opts.manifestPath,
     port: opts.port,
+    hostname: opts.hostname,
     mount: opts.mount,
     templates: opts.templates,
   });

@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeHost } from "../adapters/node.ts";
-import { createUrbanApp, resolvePort } from "./runtime.ts";
+import { createUrbanApp, resolveHostname, resolvePort } from "./runtime.ts";
 import type { SchedulerDeps } from "./modules/scheduler.ts";
 import { runFromEnv } from "../run.ts";
 import { isRecord } from "./guards.ts";
@@ -473,6 +473,19 @@ test("resolvePort prefers explicit, then $PORT, then 8090; rejects bad $PORT", (
   assert.equal(resolvePort(undefined, ""), 8090);
   assert.throws(() => resolvePort(undefined, "abc"), /invalid PORT/);
   assert.throws(() => resolvePort(undefined, "70000"), /invalid PORT/);
+});
+
+test("resolveHostname prefers explicit, then env candidates in order, else undefined; blanks are unset", () => {
+  // Explicit wins over any env.
+  assert.equal(resolveHostname("127.0.0.1", "0.0.0.0", "::"), "127.0.0.1");
+  // First non-empty env candidate wins (NANO_HOST before HOST).
+  assert.equal(resolveHostname(undefined, "0.0.0.0", "::"), "0.0.0.0");
+  assert.equal(resolveHostname(undefined, undefined, "::"), "::");
+  // Blank strings are treated as unset, so a later candidate or undefined is used.
+  assert.equal(resolveHostname("", "", "127.0.0.1"), "127.0.0.1");
+  assert.equal(resolveHostname("", ""), undefined);
+  // Nothing set -> host default (all interfaces).
+  assert.equal(resolveHostname(undefined), undefined);
 });
 
 test("runFromEnv anchors the host at a non-'.' root without double-prefixing paths", async () => {

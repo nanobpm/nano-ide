@@ -34,6 +34,20 @@ export function resolvePort(explicit: number | undefined, envPort: string | unde
   return n;
 }
 
+/** Resolve the bind hostname: the explicit option wins, else the first non-empty env candidate
+ * (NANO_HOST, then HOST), else `undefined` (the host binds its default interface). A blank string is
+ * treated as unset so `HOST=""` does not force an empty-host bind. */
+export function resolveHostname(
+  explicit: string | undefined,
+  ...envCandidates: (string | undefined)[]
+): string | undefined {
+  if (explicit !== undefined && explicit !== "") return explicit;
+  for (const candidate of envCandidates) {
+    if (candidate !== undefined && candidate !== "") return candidate;
+  }
+  return undefined;
+}
+
 /** Read the underlying nano-sdk client off an engine when it exposes one (the
  *  `SdkEngineClient` does). Non-SDK engines (e.g. an in-memory test double) have no
  *  `sdk`, so handlers get `undefined` and fall back to the transport-agnostic seam. */
@@ -72,6 +86,9 @@ export interface CreateUrbanAppOptions {
   manifestPath?: string;
   /** HTTP port for surfaces/triggers. Default from PORT env or 8090. */
   port?: number;
+  /** Interface to bind the HTTP server to (e.g. "127.0.0.1" for loopback-only). Default: the
+   * NANO_HOST/HOST env, else the host default (all interfaces). */
+  hostname?: string;
   /** Which modules to mount (all true by default). */
   mount?: MountFlags;
   /** Programmatic `{{name}}` template source for deploy-time substitution (globs or a
@@ -156,6 +173,13 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
   let httpPort: number | undefined;
 
   const port = resolvePort(opts.port, host.env("PORT"));
+  // Bind interface: explicit option wins, else NANO_HOST/HOST env, else undefined (host default,
+  // all interfaces). Local-first apps can pass "127.0.0.1" to keep the server loopback-only.
+  const hostname = resolveHostname(
+    opts.hostname,
+    host.env("NANO_HOST"),
+    host.env("HOST"),
+  );
 
   // Release every mounted resource and reset internal state so a subsequent
   // start() begins clean. Used by stop() and by start()'s failure path.
@@ -268,7 +292,7 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
               body: JSON.stringify({ ok: true, app: manifest.id }),
             }),
           });
-          server = await host.serveHttp(port, makeRouter(routes));
+          server = await host.serveHttp(port, makeRouter(routes), { hostname });
           httpPort = server.port;
           host.log("info", "urban app serving surfaces/triggers", { port: httpPort, routes: routes.length });
           // ADR 0057 boot handshake: under a supervising host (the nano-bpm

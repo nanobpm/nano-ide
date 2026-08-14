@@ -166,8 +166,8 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
         pathToFileURL(abs(entry)).href + (opts.importNonce ? `?v=${opts.importNonce}` : "");
       await import(href);
     },
-    async serveHttp(port, handler) {
-      return await startNodeServer(port, handler);
+    async serveHttp(port, handler, opts) {
+      return await startNodeServer(port, handler, opts?.hostname);
     },
     watch(onChange) {
       const onFsEvent = (_event: unknown, filename: string | Buffer | null) => {
@@ -216,7 +216,11 @@ function wrapNodeSqlite(db: DatabaseSync): SqliteDb {
   };
 }
 
-async function startNodeServer(port: number, handler: HttpHandler): Promise<HttpServer> {
+async function startNodeServer(
+  port: number,
+  handler: HttpHandler,
+  hostname?: string,
+): Promise<HttpServer> {
   const server = createServer(async (nreq, nres) => {
     const chunks: Buffer[] = [];
     for await (const c of nreq) {
@@ -263,7 +267,12 @@ async function startNodeServer(port: number, handler: HttpHandler): Promise<Http
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((res) => server.listen(port, res));
+  // Bind the requested interface when one is given (e.g. "127.0.0.1" for loopback-only); otherwise
+  // let Node pick its default (all interfaces). `server.listen` rejects `undefined` as a host arg,
+  // so branch rather than always passing it.
+  await new Promise<void>((res) =>
+    hostname ? server.listen(port, hostname, res) : server.listen(port, res)
+  );
   const addr = server.address();
   const actualPort = typeof addr === "object" && addr ? addr.port : port;
   return {

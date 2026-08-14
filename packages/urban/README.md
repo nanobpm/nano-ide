@@ -52,6 +52,11 @@ The engine address comes from `$CAMUNDA_REST_ADDRESS` (default
 serving to Falcon on a Nano server and falls back to REST elsewhere. Set it to
 `rest`, `falcon`, or `embedded` to pin a specific transport.
 
+The HTTP server binds all interfaces by default. Set `$NANO_HOST` (or `$HOST`) —
+or pass `hostname` to `runFromEnv`/`createUrbanApp` — to bind a specific
+interface; e.g. `NANO_HOST=127.0.0.1` keeps the server loopback-only, which a
+local-first app should prefer so it is not reachable from other hosts.
+
 ### A typical session
 
 ```bash

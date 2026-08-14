@@ -8,6 +8,7 @@
 // Surfaces contribute routes to the shared server.
 
 import type { AppApi, RuntimeContext } from "../context.ts";
+import { presentFormIdentifier } from "../host.ts";
 import { html, json, noContent, normalizeRoutePath, type Route } from "../router.ts";
 import { mountActions } from "./actions.ts";
 import { mountApi } from "./api.ts";
@@ -161,7 +162,14 @@ function buildField(c){
   return {field:wrap,read:()=>{
     const raw=input.value;
     if(raw===''||raw==null)return null;
-    return {key,value:isNumber?Number(raw):raw};
+    if(isNumber){
+      const n=Number(raw);
+      // A non-numeric value in a number field is only reachable via tampering (the browser
+      // blanks invalid type=number input). Treat it as absent rather than silently submitting
+      // NaN, which JSON.stringify serializes as null — quietly changing the submitted value.
+      return Number.isFinite(n)?{key,value:n}:null;
+    }
+    return {key,value:raw};
   }};
 }
 
@@ -210,7 +218,14 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       handler: async (req) => {
         const formKey = req.query.get("formKey") ?? undefined;
         const formId = req.query.get("formId") ?? undefined;
-        if (!formKey && !formId) return json({ error: "formKey or formId required" }, 400);
+        // Reject only when *neither* identifier is present. Presence follows getForm's
+        // canonical rule (`presentFormIdentifier`: empty/whitespace = absent) so a
+        // whitespace-only `?formKey=   ` request 400s here instead of slipping past a raw
+        // truthiness check and returning a spurious 204. The raw values are still passed
+        // through unchanged — resolving a blank key to its `formId` fallback is getForm's
+        // single responsibility.
+        if (!presentFormIdentifier(formKey) && !presentFormIdentifier(formId))
+          return json({ error: "formKey or formId required" }, 400);
         const form = await app.engine.getForm({ formKey, formId });
         // A task whose form can't be resolved returns 204: the client renders the
         // no-form fallback rather than erroring.

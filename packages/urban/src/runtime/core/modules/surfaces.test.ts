@@ -208,6 +208,17 @@ test("/api/form passes an empty formKey through so getForm can fall back to form
   assert.deepEqual(seen, { formKey: "", formId: "form-9" });
 });
 
+test("/api/form 400s a whitespace-only identifier instead of a spurious 204", async () => {
+  // A `?formKey=   ` (or `formId=   `) request provides no usable identifier. The route's
+  // presence gate must follow getForm's canonical rule (whitespace = absent) and 400,
+  // rather than letting the blank key slip past a raw truthiness check to getForm (→ null
+  // → 204). Guards the route↔getForm presence drift on the taskInbox form path — Red when
+  // the gate checks raw `!formKey && !formId`, since "   " is truthy.
+  const { form } = inboxRoutes(fakeEngine);
+  assert.equal((await call(form, { query: "formKey=%20%20%20" })).status, 400);
+  assert.equal((await call(form, { query: "formId=%20%20" })).status, 400);
+});
+
 test("/api/form returns 204 for a task with no resolvable form (no-form fallback)", async () => {
   const engine: EngineClient = { ...fakeEngine, getForm: async () => null };
   const { form } = inboxRoutes(engine);
@@ -226,6 +237,16 @@ test("inbox client fetch helper short-circuits 204 so the no-form fallback rende
   // to resolve to null so openForm() falls through to renderNoForm(t).
   assert.ok(rendered.includes("r.status===204"), "api() short-circuits a 204 response");
   assert.ok(rendered.includes("function renderNoForm"), "page has a no-form renderer");
+});
+
+test("number field reader guards against a non-numeric (tampered) value", async () => {
+  // A number field submits `Number(raw)`; a non-numeric value (only reachable via tampering
+  // — the browser blanks invalid type=number input) yields NaN, which JSON.stringify
+  // serializes as null, silently changing the submission. The inline reader must guard it
+  // with Number.isFinite so a bad value is treated as absent rather than submitted as NaN.
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  assert.ok(rendered.includes("Number.isFinite"), "number field guards NaN via Number.isFinite");
 });
 
 test("/api/complete completes the task with the submitted variables", async () => {

@@ -21,7 +21,7 @@ import type {
   UserTaskSummary,
   WorkerSubscription,
 } from "../core/host.ts";
-import { isBpmnError } from "../core/host.ts";
+import { isBpmnError, presentFormIdentifier } from "../core/host.ts";
 import type { EngineSdkClient } from "./sdk.ts";
 import { isRecord } from "../core/guards.ts";
 
@@ -261,12 +261,11 @@ export class SdkEngineClient implements EngineClient {
     // form or 404s (→ null) when there is no such form.
     //
     // This is the single gate that resolves which identifier addresses the form: an
-    // empty/whitespace identifier is treated as *absent* so a blank `formKey` (e.g. a
-    // `?formKey=` query param) falls through to a valid `formId` instead of being taken
-    // as a present-but-unresolvable key that short-circuits to null.
-    const present = (v: string | undefined): string | undefined =>
-      v != null && v.trim() !== "" ? v : undefined;
-    const key = present(input.formKey) ?? present(input.formId);
+    // empty/whitespace identifier is treated as *absent* (via `presentFormIdentifier`, the
+    // shared presence rule) so a blank `formKey` (e.g. a `?formKey=` query param) falls
+    // through to a valid `formId` instead of being taken as a present-but-unresolvable key
+    // that short-circuits to null.
+    const key = presentFormIdentifier(input.formKey) ?? presentFormIdentifier(input.formId);
     if (key == null) return null;
     let body: Record<string, unknown>;
     try {

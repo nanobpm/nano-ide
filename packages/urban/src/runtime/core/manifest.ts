@@ -9,7 +9,11 @@
 // used to cause.
 
 import type { HostContext } from "./host.ts";
-import type { AppManifest, Worker } from "@nanobpm/nano-app-schema";
+import type {
+  AppManifest,
+  InstanceTracking as SchemaInstanceTracking,
+  Worker,
+} from "@nanobpm/nano-app-schema";
 
 export type {
   ActionDecl,
@@ -21,7 +25,6 @@ export type {
   DataSource,
   DomainField,
   DomainType,
-  InstanceTracking,
   LlmBinding,
   Models,
   PagesSurface,
@@ -33,6 +36,23 @@ export type {
   TriggerAction,
   Worker,
 } from "@nanobpm/nano-app-schema";
+
+/**
+ * `instanceTracking` binding, bridged to add the fail-open `terminalStatuses` selector.
+ *
+ * `terminalStatuses` is landing in the canonical schema (`@nanobpm/nano-app-schema`,
+ * Magikcraft/nano-bpm#769): an exclusion list — the runtime polls every row whose
+ * `statusField` is NOT in it — so a newly-added non-terminal status is reconciled by
+ * default instead of silently dropping out of an allow-list. Until that publishes and this
+ * package's dep is bumped, extend the schema type here so the reconciler can consume the
+ * field. Drop this augmentation and re-export `InstanceTracking` from the schema once the
+ * dep bump lands (No Drift Surfaces).
+ */
+export type InstanceTracking = SchemaInstanceTracking & {
+  /** Values of `statusField` considered finished. When set, every row NOT in one of these
+   *  is polled (fail-open). Requires `statusField`; mutually exclusive with `activeStatuses`. */
+  readonly terminalStatuses?: readonly string[];
+};
 
 /** The job type a worker subscribes to (schema key: `taskType`). */
 export function workerJobType(w: Worker): string | undefined {

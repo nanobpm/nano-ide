@@ -178,6 +178,21 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           message: "activeStatuses requires statusField",
         });
       }
+      // `terminalStatuses` is the fail-open exclusion selector (poll every row NOT in one of
+      // these). Like `activeStatuses` it reads `statusField`, so it too requires one; and the two
+      // selectors are mutually exclusive — declaring both is ambiguous, so reject it.
+      if (Array.isArray(b?.terminalStatuses) && (typeof b?.statusField !== "string" || b.statusField.length === 0)) {
+        issues.push({
+          path: `instanceTracking[${i}].terminalStatuses`,
+          message: "terminalStatuses requires statusField",
+        });
+      }
+      if (Array.isArray(b?.activeStatuses) && Array.isArray(b?.terminalStatuses)) {
+        issues.push({
+          path: `instanceTracking[${i}].terminalStatuses`,
+          message: "activeStatuses and terminalStatuses are mutually exclusive; declare only one",
+        });
+      }
       // `pollMs`, when set, schedules a self-rescheduling timer; a non-number/NaN/non-positive
       // value would become a 0-delay hot loop at runtime, so reject it at author time.
       if (b?.pollMs !== undefined && (typeof b.pollMs !== "number" || !Number.isFinite(b.pollMs) || b.pollMs <= 0)) {

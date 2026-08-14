@@ -169,6 +169,60 @@ test("instanceTracking activeStatuses with an empty-string statusField is flagge
   assert.ok(issues.some((i) => i.path === "instanceTracking[0].activeStatuses"));
 });
 
+test("instanceTracking terminalStatuses without statusField is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        terminalStatuses: ["abandoned"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].terminalStatuses"));
+});
+
+test("instanceTracking with statusField + terminalStatuses (no activeStatuses) has no issues", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        terminalStatuses: ["abandoned", "completed"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("instanceTracking declaring both activeStatuses and terminalStatuses is flagged (mutually exclusive)", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        activeStatuses: ["planning"],
+        terminalStatuses: ["abandoned"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(
+    issues.some(
+      (i) =>
+        i.path === "instanceTracking[0].terminalStatuses" &&
+        /mutually exclusive/.test(i.message),
+    ),
+  );
+});
+
 test("instanceTracking pollMs that is non-positive/NaN/non-number is flagged (would hot-loop the poll timer)", () => {
   for (const badPollMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "5000"]) {
     const issues = collectManifestIssues({

@@ -285,7 +285,7 @@ export class SdkEngineClient implements EngineClient {
         const parsed: unknown = JSON.parse(rawSchema);
         if (isRecord(parsed)) schema = parsed;
       } catch {
-        this.log("warn", "getForm: form schema is not valid JSON", { formKey: input.formKey });
+        this.log("warn", "getForm: form schema is not valid JSON", { formKey: input.formKey, formId: input.formId });
       }
     } else if (isRecord(rawSchema)) {
       schema = rawSchema;

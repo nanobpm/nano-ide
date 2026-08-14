@@ -265,6 +265,22 @@ test("getForm returns null when the schema is not valid JSON", async () => {
   assert.equal(await engine.getForm({ formKey: "42" }), null);
 });
 
+test("getForm's invalid-JSON warning records the formId when only formId is given", async () => {
+  const logs: { level: string; message: string; details?: unknown }[] = [];
+  const client = fakeSdkClient({
+    getFormByKey: async () => ({ formKey: "42", schema: "not json" }),
+  });
+  const engine = new SdkEngineClient(client, (level, message, details) => {
+    logs.push({ level, message, details });
+  });
+  assert.equal(await engine.getForm({ formId: "myForm" }), null);
+  const warn = logs.find((l) => l.message === "getForm: form schema is not valid JSON");
+  assert.ok(warn, "invalid-JSON schema is warned");
+  // A formId-only caller must not be logged as { formKey: undefined } — the
+  // identifier that was actually used has to be traceable.
+  assert.deepEqual(warn.details, { formKey: undefined, formId: "myForm" });
+});
+
 test("completeUserTask routes through the SDK", async () => {
   let seen: unknown;
   const client = fakeSdkClient({

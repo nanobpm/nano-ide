@@ -185,6 +185,19 @@ test("/api/form returns 204 for a task with no resolvable form (no-form fallback
   const { form } = inboxRoutes(engine);
   const res = await call(form, { query: "formKey=missing" });
   assert.equal(res.status, 204);
+  // The body must be empty: a "null" payload (json(null, 204)) makes the client's
+  // fetch helper throw on parse and surface "Failed to load form" instead of the
+  // no-form fallback. Guard the wire shape here and the client short-circuit below.
+  assert.equal(res.body, "");
+});
+
+test("inbox client fetch helper short-circuits 204 so the no-form fallback renders", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // The api() helper must not call r.json() on a 204 (empty body → throw). It has
+  // to resolve to null so openForm() falls through to renderNoForm(t).
+  assert.ok(rendered.includes("r.status===204"), "api() short-circuits a 204 response");
+  assert.ok(rendered.includes("function renderNoForm"), "page has a no-form renderer");
 });
 
 test("/api/complete completes the task with the submitted variables", async () => {

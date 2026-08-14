@@ -27,6 +27,16 @@ export function text(body: string, status = 200): HttpResponse {
 }
 
 /**
+ * A `204 No Content` response: an empty body and no `content-type`. Use this
+ * instead of `json(null, 204)` — the latter emits a `"null"` body that both
+ * violates the no-body semantics of 204 and makes a client that parses the
+ * body throw. Any client that short-circuits 204 receives no payload here.
+ */
+export function noContent(): HttpResponse {
+  return { status: 204, headers: {}, body: "" };
+}
+
+/**
  * Normalize a manifest-supplied route path: collapse leading slashes to exactly
  * one, drop trailing slashes. Incoming request paths always start with "/", so a
  * manifest path lacking one (e.g. "hooks/x") would otherwise never match. Collapsing

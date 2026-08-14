@@ -8,7 +8,7 @@
 // Surfaces contribute routes to the shared server.
 
 import type { AppApi, RuntimeContext } from "../context.ts";
-import { html, json, normalizeRoutePath, type Route } from "../router.ts";
+import { html, json, noContent, normalizeRoutePath, type Route } from "../router.ts";
 import { mountActions } from "./actions.ts";
 import { mountApi } from "./api.ts";
 import { mountPages } from "./pages.ts";
@@ -48,7 +48,7 @@ const BASE=${JSON.stringify(basePath)};
 const tasksEl=document.getElementById('tasks');
 const formEl=document.getElementById('form');
 
-function api(path,opts){return fetch(BASE+path,opts).then(r=>r.ok?r.json():r.text().then(t=>{throw new Error(t||r.status)}));}
+function api(path,opts){return fetch(BASE+path,opts).then(r=>{if(!r.ok)return r.text().then(t=>{throw new Error(t||r.status)});if(r.status===204)return null;return r.json();});}
 
 function loadTasks(){
   formEl.replaceChildren();
@@ -211,7 +211,7 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
         const form = await app.engine.getForm({ formKey, formId });
         // A task whose form can't be resolved returns 204: the client renders the
         // no-form fallback rather than erroring.
-        if (!form) return json(null, 204);
+        if (!form) return noContent();
         return json(form);
       },
     });

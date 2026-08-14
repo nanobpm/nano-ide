@@ -332,10 +332,16 @@ export class WasmEngineClient implements EngineClient {
   async getForm(input: { formKey?: string; formId?: string }): Promise<
     { formKey?: string; formId?: string; version?: number; schema: Record<string, unknown> } | null
   > {
-    const key =
-      (input.formKey && input.formKey !== "" ? input.formKey : undefined) ??
-      (input.formId ? this.#formKeyById.get(input.formId) : undefined);
-    if (!key) return null;
+    // Mirror `SdkEngineClient.getForm`'s identifier normalization exactly (a behavioral
+    // drift surface guarded by a test): an empty/whitespace-only identifier is *absent*,
+    // so a blank `formKey` falls through to a valid `formId` instead of short-circuiting
+    // to null. Kept as a local copy (not imported) because the kit depends only on urban's
+    // long-published public API — see the re-declaration note at the top of this file.
+    const present = (v: string | undefined): string | undefined =>
+      v != null && v.trim() !== "" ? v : undefined;
+    const formId = present(input.formId);
+    const key = present(input.formKey) ?? (formId ? this.#formKeyById.get(formId) : undefined);
+    if (key == null) return null;
     const found = this.#formsByKey.get(key);
     if (!found) return null;
     return {

@@ -128,6 +128,14 @@ test("wasm: getForm resolves a deployed .form by id (latest) and by key", async 
     const byKey = await engine.getForm({ formKey: key1 });
     assert.deepEqual(byKey?.schema, v1, "the prior version is still addressable by key");
 
+    // Drift guard: identifier normalization must match SdkEngineClient — an empty or
+    // whitespace-only `formKey` is treated as absent, so it falls through to `formId`
+    // (latest) rather than short-circuiting to a spurious null.
+    const byBlankKey = await engine.getForm({ formKey: "", formId: "greeting" });
+    assert.deepEqual(byBlankKey?.schema, v2, "empty formKey falls through to formId (latest)");
+    const byWsKey = await engine.getForm({ formKey: "   ", formId: "greeting" });
+    assert.deepEqual(byWsKey?.schema, v2, "whitespace-only formKey falls through to formId (latest)");
+
     // Unknown identifiers resolve to null (the surface's no-form fallback).
     assert.equal(await engine.getForm({ formId: "nope" }), null);
     assert.equal(await engine.getForm({}), null);

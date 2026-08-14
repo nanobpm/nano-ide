@@ -259,10 +259,11 @@ export interface EngineClient {
   /**
    * Fetch a deployed form's form-js schema for the `taskInbox` surface. Resolve by
    * `formKey` (the linkage the engine attaches to a user task) or, as a best-effort
-   * fallback, by `formId` — passed straight through as the lookup key for engines that
-   * address a form by its id; it is not separately resolved to a latest deployment here.
-   * Returns `null` when no matching form exists — the caller then falls back to the
-   * no-form path.
+   * fallback, by `formId`. An empty or whitespace-only identifier is treated as absent,
+   * so a blank `formKey` falls through to `formId`. How `formId` is addressed is
+   * adapter-specific: an adapter may pass it straight through as the lookup key, or
+   * resolve it to the latest deployed form's key. Returns `null` when no matching form
+   * exists — the caller then falls back to the no-form path.
    */
   getForm(input: { formKey?: string; formId?: string }): Promise<FormSchema | null>;
   /** Complete a user task. */

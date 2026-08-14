@@ -61,7 +61,7 @@ function loadTasks(){
       const code=el('code',{},t.elementId||t.userTaskKey);
       li.appendChild(code);
       li.appendChild(document.createTextNode(' — key '+t.userTaskKey));
-      if(t.formKey||t.formId){
+      if(t.formKey){
         li.appendChild(btn('Open',()=>openForm(t)));
       }else{
         li.appendChild(btn('Complete',()=>complete(t.userTaskKey,{})));
@@ -73,7 +73,7 @@ function loadTasks(){
 
 function openForm(t){
   formEl.replaceChildren(el('p',{class:'muted'},'loading form…'));
-  const q=t.formKey?('formKey='+encodeURIComponent(t.formKey)):('formId='+encodeURIComponent(t.formId));
+  const q='formKey='+encodeURIComponent(t.formKey);
   api('/api/form?'+q).then(f=>{
     formEl.replaceChildren();
     if(!f||!f.schema){renderNoForm(t);return;}

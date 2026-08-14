@@ -135,6 +135,11 @@ test("inbox page renders the client-side form fetch + renderer", async () => {
   assert.ok(rendered.includes("function renderForm"), "page has a form renderer");
   assert.ok(rendered.includes("function buildField"), "page builds fields from the schema");
   assert.ok(rendered.includes("/api/complete"), "page posts completion");
+  // Drift guard: the client script is a stringified <script> body, so it is invisible to
+  // the type checker. UserTaskSummary carries `formKey`/`externalFormReference` but no
+  // `formId`, so the client must never branch on a task-supplied `formId` (that phantom
+  // field would silently be `undefined`). Lock the drift closed.
+  assert.ok(!rendered.includes("formId"), "client script must not reference formId — UserTaskSummary carries none");
 });
 
 test("/api/tasks surfaces the resolved form linkage", async () => {

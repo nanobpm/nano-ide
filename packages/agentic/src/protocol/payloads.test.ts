@@ -69,11 +69,41 @@ test("blackboard files must be an array of only strings when present", () => {
   if (!mixed.ok) assert.ok(mixed.errors.some((e) => e.code === "bad-files"));
 });
 
-test("relay requires stream, non-negative integer offset, and string chunk", () => {
+test("relay delivery chunk (no op) requires stream, non-negative integer offset, and string chunk", () => {
   assert.ok(validatePayload("relay", { stream: "s", offset: 0, chunk: "" }).ok);
   assert.ok(!validatePayload("relay", { stream: "s", offset: -1, chunk: "" }).ok);
   assert.ok(!validatePayload("relay", { stream: "s", offset: 1.5, chunk: "" }).ok);
   assert.ok(!validatePayload("relay", { stream: "", offset: 0, chunk: "" }).ok);
+});
+
+test("relay produce control frame requires stream, non-negative integer incarnation, and string chunk", () => {
+  assert.ok(validatePayload("relay", { op: "produce", stream: "s", incarnation: 0, chunk: "hi" }).ok);
+  assert.ok(validatePayload("relay", { op: "produce", stream: "s", incarnation: 1786690000000, chunk: "" }).ok);
+  const badInc = validatePayload("relay", { op: "produce", stream: "s", incarnation: -1, chunk: "" });
+  assert.ok(!badInc.ok);
+  if (!badInc.ok) assert.ok(badInc.errors.some((e) => e.code === "bad-incarnation"));
+  assert.ok(!validatePayload("relay", { op: "produce", stream: "s", incarnation: 1.5, chunk: "" }).ok);
+  // The legacy bug: a produce frame missing `incarnation` (the old { stream, offset, chunk } shape) is rejected.
+  assert.ok(!validatePayload("relay", { op: "produce", stream: "s", offset: 0, chunk: "" }).ok);
+  assert.ok(!validatePayload("relay", { op: "produce", stream: "", incarnation: 0, chunk: "" }).ok);
+});
+
+test("relay subscribe/credit/subscribed control frames validate their fields", () => {
+  assert.ok(validatePayload("relay", { op: "subscribe", stream: "s" }).ok);
+  assert.ok(validatePayload("relay", { op: "subscribe", stream: "s", from: 2, credit: 1024 }).ok);
+  assert.ok(!validatePayload("relay", { op: "subscribe", stream: "s", from: -1 }).ok);
+  assert.ok(!validatePayload("relay", { op: "subscribe", stream: "s", credit: 1.5 }).ok);
+  assert.ok(validatePayload("relay", { op: "credit", credit: 512 }).ok);
+  assert.ok(!validatePayload("relay", { op: "credit", credit: -1 }).ok);
+  assert.ok(validatePayload("relay", { op: "subscribed", stream: "s", gap: false, nextOffset: 8 }).ok);
+  assert.ok(!validatePayload("relay", { op: "subscribed", stream: "s", gap: "no", nextOffset: 8 }).ok);
+  assert.ok(!validatePayload("relay", { op: "subscribed", stream: "s", gap: true, nextOffset: -1 }).ok);
+});
+
+test("relay rejects an unknown op", () => {
+  const bad = validatePayload("relay", { op: "explode", stream: "s" });
+  assert.ok(!bad.ok);
+  if (!bad.ok) assert.ok(bad.errors.some((e) => e.code === "bad-op"));
 });
 
 test("deregister accepts optional string reason and rejects non-string reason", () => {

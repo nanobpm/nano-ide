@@ -41,6 +41,7 @@ export type {
   DeregisterPayload,
   ServePayload,
   RelayPayload,
+  RelayProducePayload,
   BlackboardPayload,
   DemandPayload,
 } from "@nanobpm/agentic/source/protocol";

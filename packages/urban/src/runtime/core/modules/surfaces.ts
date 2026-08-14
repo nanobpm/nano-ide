@@ -105,7 +105,10 @@ function renderForm(t,schema){
   form.appendChild(bar);
   form.addEventListener('submit',e=>{
     e.preventDefault();
-    const variables={};
+    // Null-prototype: field keys come from the engine-supplied form schema. A component
+    // keyed '__proto__'/'constructor' must land as a plain own property (and round-trip
+    // through JSON), never mutate a prototype — no prototype pollution in the page runtime.
+    const variables=Object.create(null);
     for(const read of inputs){const kv=read();if(kv)variables[kv.key]=kv.value;}
     submit.disabled=true;
     complete(t.userTaskKey,variables).catch(()=>{submit.disabled=false;});

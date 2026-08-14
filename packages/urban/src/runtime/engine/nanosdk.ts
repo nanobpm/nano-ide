@@ -259,8 +259,15 @@ export class SdkEngineClient implements EngineClient {
     // form, so callers pass that key. `formId` is accepted as a fallback identifier for
     // engines that address a form by its id; either way the engine returns the current
     // form or 404s (→ null) when there is no such form.
-    const key = input.formKey ?? input.formId;
-    if (key == null || key === "") return null;
+    //
+    // This is the single gate that resolves which identifier addresses the form: an
+    // empty/whitespace identifier is treated as *absent* so a blank `formKey` (e.g. a
+    // `?formKey=` query param) falls through to a valid `formId` instead of being taken
+    // as a present-but-unresolvable key that short-circuits to null.
+    const present = (v: string | undefined): string | undefined =>
+      v != null && v.trim() !== "" ? v : undefined;
+    const key = present(input.formKey) ?? present(input.formId);
+    if (key == null) return null;
     let body: Record<string, unknown>;
     try {
       body = await this.client.getFormByKey(

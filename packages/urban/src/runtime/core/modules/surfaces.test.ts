@@ -140,6 +140,11 @@ test("inbox page renders the client-side form fetch + renderer", async () => {
   // `formId`, so the client must never branch on a task-supplied `formId` (that phantom
   // field would silently be `undefined`). Lock the drift closed.
   assert.ok(!rendered.includes("formId"), "client script must not reference formId — UserTaskSummary carries none");
+  // Prototype-pollution guard: submit builds `variables` from engine-supplied component
+  // keys (a schema could key a field '__proto__'/'constructor'). It must use a null-
+  // prototype bag so an untrusted key lands as an own property, never mutating a prototype.
+  assert.ok(rendered.includes("Object.create(null)"), "client builds the variables bag with a null prototype");
+  assert.ok(!/const\s+variables\s*=\s*\{\}/.test(rendered), "client must not collect untrusted keys into a plain {} object");
 });
 
 test("/api/tasks surfaces the resolved form linkage", async () => {
@@ -183,6 +188,24 @@ test("/api/form requires an identifier", async () => {
   const { form } = inboxRoutes(fakeEngine);
   const res = await call(form);
   assert.equal(res.status, 400);
+});
+
+test("/api/form passes an empty formKey through so getForm can fall back to formId", async () => {
+  // A `?formKey=&formId=…` request must not be rejected at the boundary (only *both*
+  // identifiers absent is a 400) nor stripped here — resolving an empty key to its formId
+  // fallback is getForm's single responsibility (see nanosdk getForm empty/whitespace test).
+  let seen: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    getForm: async (input) => {
+      seen = input;
+      return { formKey: "form-9", schema: { type: "default", components: [] } };
+    },
+  };
+  const { form } = inboxRoutes(engine);
+  const res = await call(form, { query: "formKey=&formId=form-9" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(seen, { formKey: "", formId: "form-9" });
 });
 
 test("/api/form returns 204 for a task with no resolvable form (no-form fallback)", async () => {

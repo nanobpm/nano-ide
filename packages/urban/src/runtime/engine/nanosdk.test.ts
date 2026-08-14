@@ -246,6 +246,25 @@ test("getForm falls back to formId as the key when no formKey is given", async (
   assert.deepEqual(form?.schema, { type: "default", components: [] });
 });
 
+test("getForm falls back to formId when formKey is empty/whitespace, not just absent", async () => {
+  // Regression: `formKey ?? formId` treated an empty-string key as present and short-
+  // circuited to null, ignoring a valid formId fallback (→ a spurious 204). An empty or
+  // whitespace-only identifier must be resolved as *missing*.
+  for (const formKey of ["", "   "]) {
+    let seen: unknown;
+    const client = fakeSdkClient({
+      getFormByKey: async (input) => {
+        seen = input;
+        return { schema: JSON.stringify({ type: "default", components: [] }) };
+      },
+    });
+    const engine = new SdkEngineClient(client);
+    const form = await engine.getForm({ formKey, formId: "myForm" });
+    assert.deepEqual(seen, { formKey: "myForm" }, `formKey=${JSON.stringify(formKey)} must fall through to formId`);
+    assert.deepEqual(form?.schema, { type: "default", components: [] });
+  }
+});
+
 test("getForm returns null when no identifier is given or the fetch fails", async () => {
   const throwing = fakeSdkClient({
     getFormByKey: async () => {

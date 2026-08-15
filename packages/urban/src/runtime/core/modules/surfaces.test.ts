@@ -29,6 +29,7 @@ function ctxWith(surfaces: Record<string, unknown>): Parameters<typeof mountSurf
     cancelInstance: async () => {},
     publishMessage: async () => {},
     searchUserTasks: async () => [],
+    getForm: async () => null,
     completeUserTask: async () => {},
     searchProcessInstances: async () => [],
     registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
@@ -43,6 +44,7 @@ const fakeEngine: EngineClient = {
   cancelInstance: async () => {},
   publishMessage: async () => {},
   searchUserTasks: async () => [],
+  getForm: async () => null,
   completeUserTask: async () => {},
   searchProcessInstances: async () => [],
   registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
@@ -86,3 +88,184 @@ test("task-inbox path is injected as a quoted JS literal (no script breakout)", 
   assert.ok(!body.includes("'});alert(1);//'"), "no raw single-quoted breakout");
   assert.ok(body.includes(JSON.stringify(evil)), "path embedded as a JSON string literal");
 });
+
+/** Build an app handle backed by a specific engine (the flow tests drive the routes). */
+function appWith(engine: EngineClient): Parameters<typeof mountSurfaces>[1] {
+  return {
+    manifest: { schemaVersion: 1, id: "app", name: "App" },
+    data: new DataLayer(new Map(), undefined, {}),
+    engine,
+    env: () => undefined,
+    log: createLogger(() => {}),
+  };
+}
+
+/** Invoke a route handler with an optional query string and POST body. */
+async function call(
+  route: { handler: (req: HttpRequest) => HttpResponse | Promise<HttpResponse> },
+  opts: { method?: string; query?: string; body?: string } = {},
+): Promise<HttpResponse> {
+  return route.handler({
+    method: opts.method ?? "GET",
+    path: "/",
+    query: new URLSearchParams(opts.query ?? ""),
+    headers: new Headers(),
+    text: async () => opts.body ?? "",
+  });
+}
+
+function inboxRoutes(engine: EngineClient) {
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+  const at = (suffix: string, method = "GET") =>
+    s.routes.find(
+      (r) => r.source === "surface:taskInbox" && r.method === method && r.path.endsWith(suffix),
+    )!;
+  return {
+    page: s.routes.find((r) => r.source === "surface:taskInbox" && r.method === "GET" && r.path === "/tasks")!,
+    tasks: at("/api/tasks"),
+    form: at("/api/form"),
+    complete: at("/api/complete", "POST"),
+  };
+}
+
+test("inbox page renders the client-side form fetch + renderer", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  assert.ok(rendered.includes("/api/form"), "page fetches the linked form");
+  assert.ok(rendered.includes("function renderForm"), "page has a form renderer");
+  assert.ok(rendered.includes("function buildField"), "page builds fields from the schema");
+  assert.ok(rendered.includes("/api/complete"), "page posts completion");
+  // Drift guard: the client script is a stringified <script> body, so it is invisible to
+  // the type checker. UserTaskSummary carries `formKey`/`externalFormReference` but no
+  // `formId`, so the client must never branch on a task-supplied `formId` (that phantom
+  // field would silently be `undefined`). Lock the drift closed.
+  assert.ok(!rendered.includes("formId"), "client script must not reference formId — UserTaskSummary carries none");
+  // Prototype-pollution guard: submit builds `variables` from engine-supplied component
+  // keys (a schema could key a field '__proto__'/'constructor'). It must use a null-
+  // prototype bag so an untrusted key lands as an own property, never mutating a prototype.
+  assert.ok(rendered.includes("Object.create(null)"), "client builds the variables bag with a null prototype");
+  assert.ok(!/const\s+variables\s*=\s*\{\}/.test(rendered), "client must not collect untrusted keys into a plain {} object");
+});
+
+test("/api/tasks surfaces the resolved form linkage", async () => {
+  let seenFilter: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    searchUserTasks: async (filter) => {
+      seenFilter = filter;
+      return [
+        { userTaskKey: "1", elementId: "approve", formKey: "form-123" },
+        { userTaskKey: "2", elementId: "review" },
+      ];
+    },
+  };
+  const { tasks } = inboxRoutes(engine);
+  const res = await call(tasks, { query: "processInstanceKey=pi-9" });
+  assert.deepEqual(seenFilter, { processInstanceKey: "pi-9" });
+  const parsed = JSON.parse(String(res.body));
+  assert.equal(parsed[0].formKey, "form-123");
+  assert.equal(parsed[1].formKey, undefined);
+});
+
+test("/api/form resolves a linked form's schema", async () => {
+  let seen: unknown;
+  const schema = { type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "name", label: "Name" }] };
+  const engine: EngineClient = {
+    ...fakeEngine,
+    getForm: async (input) => {
+      seen = input;
+      return { formKey: "form-123", schema };
+    },
+  };
+  const { form } = inboxRoutes(engine);
+  const res = await call(form, { query: "formKey=form-123" });
+  assert.deepEqual(seen, { formKey: "form-123", formId: undefined });
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(String(res.body)).schema, schema);
+});
+
+test("/api/form requires an identifier", async () => {
+  const { form } = inboxRoutes(fakeEngine);
+  const res = await call(form);
+  assert.equal(res.status, 400);
+});
+
+test("/api/form passes an empty formKey through so getForm can fall back to formId", async () => {
+  // A `?formKey=&formId=…` request must not be rejected at the boundary (only *both*
+  // identifiers absent is a 400) nor stripped here — resolving an empty key to its formId
+  // fallback is getForm's single responsibility (see nanosdk getForm empty/whitespace test).
+  let seen: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    getForm: async (input) => {
+      seen = input;
+      return { formKey: "form-9", schema: { type: "default", components: [] } };
+    },
+  };
+  const { form } = inboxRoutes(engine);
+  const res = await call(form, { query: "formKey=&formId=form-9" });
+  assert.equal(res.status, 200);
+  assert.deepEqual(seen, { formKey: "", formId: "form-9" });
+});
+
+test("/api/form 400s a whitespace-only identifier instead of a spurious 204", async () => {
+  // A `?formKey=   ` (or `formId=   `) request provides no usable identifier. The route's
+  // presence gate must follow getForm's canonical rule (whitespace = absent) and 400,
+  // rather than letting the blank key slip past a raw truthiness check to getForm (→ null
+  // → 204). Guards the route↔getForm presence drift on the taskInbox form path — Red when
+  // the gate checks raw `!formKey && !formId`, since "   " is truthy.
+  const { form } = inboxRoutes(fakeEngine);
+  assert.equal((await call(form, { query: "formKey=%20%20%20" })).status, 400);
+  assert.equal((await call(form, { query: "formId=%20%20" })).status, 400);
+});
+
+test("/api/form returns 204 for a task with no resolvable form (no-form fallback)", async () => {
+  const engine: EngineClient = { ...fakeEngine, getForm: async () => null };
+  const { form } = inboxRoutes(engine);
+  const res = await call(form, { query: "formKey=missing" });
+  assert.equal(res.status, 204);
+  // The body must be empty: a "null" payload (json(null, 204)) makes the client's
+  // fetch helper throw on parse and surface "Failed to load form" instead of the
+  // no-form fallback. Guard the wire shape here and the client short-circuit below.
+  assert.equal(res.body, "");
+});
+
+test("inbox client fetch helper short-circuits 204 so the no-form fallback renders", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // The api() helper must not call r.json() on a 204 (empty body → throw). It has
+  // to resolve to null so openForm() falls through to renderNoForm(t).
+  assert.ok(rendered.includes("r.status===204"), "api() short-circuits a 204 response");
+  assert.ok(rendered.includes("function renderNoForm"), "page has a no-form renderer");
+});
+
+test("number field reader guards against a non-numeric (tampered) value", async () => {
+  // A number field submits `Number(raw)`; a non-numeric value (only reachable via tampering
+  // — the browser blanks invalid type=number input) yields NaN, which JSON.stringify
+  // serializes as null, silently changing the submission. The inline reader must guard it
+  // with Number.isFinite so a bad value is treated as absent rather than submitted as NaN.
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  assert.ok(rendered.includes("Number.isFinite"), "number field guards NaN via Number.isFinite");
+});
+
+test("/api/complete completes the task with the submitted variables", async () => {
+  const calls: { key: string; variables?: Record<string, unknown> }[] = [];
+  const engine: EngineClient = {
+    ...fakeEngine,
+    completeUserTask: async (key, variables) => {
+      calls.push({ key, variables });
+    },
+  };
+  const { complete } = inboxRoutes(engine);
+  const res = await call(complete, { method: "POST", body: JSON.stringify({ userTaskKey: "7", variables: { name: "Ada", agree: true } }) });
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls, [{ key: "7", variables: { name: "Ada", agree: true } }]);
+});
+
+test("/api/complete rejects a body with no userTaskKey", async () => {
+  const { complete } = inboxRoutes(fakeEngine);
+  const res = await call(complete, { method: "POST", body: JSON.stringify({ variables: {} }) });
+  assert.equal(res.status, 400);
+});
+

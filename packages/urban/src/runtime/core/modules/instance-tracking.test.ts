@@ -96,6 +96,7 @@ function fakeEngine(states: Record<string, ProcessInstanceSnapshot["state"]>): {
     cancelInstance: notUsed("cancelInstance"),
     publishMessage: notUsed("publishMessage"),
     searchUserTasks: notUsed("searchUserTasks"),
+    getForm: notUsed("getForm"),
     completeUserTask: notUsed("completeUserTask"),
     registerWorker: notUsed("registerWorker"),
     close: notUsed("close"),

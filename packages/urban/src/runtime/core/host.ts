@@ -174,6 +174,20 @@ export function isBpmnError(err: unknown): err is { errorCode: string; message?:
   );
 }
 
+/**
+ * The canonical presence rule for a form identifier ({@link EngineClient.getForm}): an
+ * empty or whitespace-only value is treated as *absent*. Returns the *trimmed* value when
+ * present (so a padded `" form-123 "` resolves against the space-free deployed key),
+ * otherwise `undefined`. This is the single source of truth shared by `getForm`'s
+ * resolution gate ({@link EngineClient.getForm} adapters) and the `taskInbox`
+ * `/api/form` route's presence check, so the two cannot drift on what counts as "an
+ * identifier was provided" (e.g. a whitespace-only `?formKey=   ` is absent in both).
+ */
+export function presentFormIdentifier(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 /** A registered worker subscription. */
 export interface WorkerSubscription {
   readonly jobType: string;
@@ -193,6 +207,37 @@ export type ProcessInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED";
 export interface ProcessInstanceSnapshot {
   readonly processInstanceKey: string;
   readonly state: ProcessInstanceState;
+}
+
+/**
+ * A single open user task as {@link EngineClient.searchUserTasks} reports it. Carries the
+ * task's identity plus its resolved form linkage so the `taskInbox` surface (ADR 0026) can
+ * fetch and render the linked `.form`. `formKey` is the engine's resolution of a
+ * `<zeebe:formDefinition formId="X" />` linkage to the latest deployed form at task-creation
+ * time; `externalFormReference` is a form linked outside the deployment. Both are absent for a
+ * task with no linked form (the surface then falls back to the raw key-list + complete path).
+ */
+export interface UserTaskSummary {
+  readonly userTaskKey: string;
+  readonly elementId?: string;
+  readonly variables?: Record<string, unknown>;
+  /** The resolved key of the linked deployed form, if the task has one. */
+  readonly formKey?: string;
+  /** An external form reference (a form linked outside the deployment), if any. */
+  readonly externalFormReference?: string;
+}
+
+/**
+ * A deployed form's form-js schema plus its identifying metadata, as
+ * {@link EngineClient.getForm} returns it. `schema` is the parsed form-js document
+ * (`{ type: "default", schemaVersion, components: [...] }`) that the surface renders
+ * client-side; `formKey`/`formId`/`version` identify the exact deployed form resolved.
+ */
+export interface FormSchema {
+  readonly formKey?: string;
+  readonly formId?: string;
+  readonly version?: number;
+  readonly schema: Record<string, unknown>;
 }
 
 /**
@@ -218,12 +263,23 @@ export interface EngineClient {
     correlationKey?: string;
     variables?: Record<string, unknown>;
   }): Promise<void>;
-  /** Search open user tasks (optionally by process instance). */
+  /** Search open user tasks (optionally by process instance). Each result carries the
+   *  task's resolved form linkage (`formKey`/`externalFormReference`) when present. */
   searchUserTasks(filter?: {
     processInstanceKey?: string;
     assignee?: string;
     candidateGroup?: string;
-  }): Promise<{ userTaskKey: string; elementId?: string; variables?: Record<string, unknown> }[]>;
+  }): Promise<UserTaskSummary[]>;
+  /**
+   * Fetch a deployed form's form-js schema for the `taskInbox` surface. Resolve by
+   * `formKey` (the linkage the engine attaches to a user task) or, as a best-effort
+   * fallback, by `formId`. An empty or whitespace-only identifier is treated as absent,
+   * so a blank `formKey` falls through to `formId`. How `formId` is addressed is
+   * adapter-specific: an adapter may pass it straight through as the lookup key, or
+   * resolve it to the latest deployed form's key. Returns `null` when no matching form
+   * exists — the caller then falls back to the no-form path.
+   */
+  getForm(input: { formKey?: string; formId?: string }): Promise<FormSchema | null>;
   /** Complete a user task. */
   completeUserTask(userTaskKey: string, variables?: Record<string, unknown>): Promise<void>;
   /**

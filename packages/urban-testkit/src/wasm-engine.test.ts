@@ -102,6 +102,71 @@ test("wasm: deployResources skips non-engine models (forms) but deploys the BPMN
   }
 });
 
+test("wasm: getForm resolves a deployed .form by id (latest) and by key", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    const v1 = { id: "greeting", type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "who" }] };
+    const v2 = { id: "greeting", type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "who" }, { type: "number", key: "times" }] };
+    await engine.deployResources([
+      { name: "greeting.form", content: JSON.stringify(v1), contentType: "application/json" },
+    ]);
+    const byId1 = await engine.getForm({ formId: "greeting" });
+    assert.deepEqual(byId1?.schema, v1, "resolves the deployed form by id");
+    assert.equal(byId1?.version, 1);
+    const key1 = byId1?.formKey;
+    assert.ok(key1, "assigns a form key");
+
+    // Redeploy a newer version of the same id → getForm({formId}) tracks the latest.
+    await engine.deployResources([
+      { name: "greeting.form", content: JSON.stringify(v2), contentType: "application/json" },
+    ]);
+    const byId2 = await engine.getForm({ formId: "greeting" });
+    assert.deepEqual(byId2?.schema, v2, "formId resolves to the latest deployed version");
+    assert.equal(byId2?.version, 2);
+
+    // The older version is still fetchable by its original key.
+    const byKey = await engine.getForm({ formKey: key1 });
+    assert.deepEqual(byKey?.schema, v1, "the prior version is still addressable by key");
+
+    // Drift guard: identifier normalization must match SdkEngineClient — an empty or
+    // whitespace-only `formKey` is treated as absent, so it falls through to `formId`
+    // (latest) rather than short-circuiting to a spurious null.
+    const byBlankKey = await engine.getForm({ formKey: "", formId: "greeting" });
+    assert.deepEqual(byBlankKey?.schema, v2, "empty formKey falls through to formId (latest)");
+    const byWsKey = await engine.getForm({ formKey: "   ", formId: "greeting" });
+    assert.deepEqual(byWsKey?.schema, v2, "whitespace-only formKey falls through to formId (latest)");
+
+    // A padded identifier is trimmed before lookup, so it still resolves against the
+    // space-free deployed key/id (not a spurious null).
+    const byPaddedId = await engine.getForm({ formId: "  greeting  " });
+    assert.deepEqual(byPaddedId?.schema, v2, "a padded formId is trimmed and resolves");
+
+    // Unknown identifiers resolve to null (the surface's no-form fallback).
+    assert.equal(await engine.getForm({ formId: "nope" }), null);
+    assert.equal(await engine.getForm({}), null);
+  } finally {
+    await engine.close();
+  }
+});
+
+test("wasm: a non-.form JSON deploy resource is not captured as a form", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    // A JSON asset that merely has an `id` (like a manifest/config) must NOT be misread as a
+    // form: form detection keys on the `.form` filename, not on a JSON content type.
+    await engine.deployResources([
+      {
+        name: "manifest.json",
+        content: JSON.stringify({ id: "greeting", components: [{ type: "textfield", key: "who" }] }),
+        contentType: "application/json",
+      },
+    ]);
+    assert.equal(await engine.getForm({ formId: "greeting" }), null, "non-.form JSON is not resolvable as a form");
+  } finally {
+    await engine.close();
+  }
+});
+
 test("wasm: advanceTime fires a timer and drains resulting work", async () => {
   const engine = await createWasmEngineClient();
   try {

@@ -11,12 +11,21 @@
 
 import { presentFormIdentifier } from "./host.ts";
 import type { FormSchema } from "./host.ts";
+import { isRecord } from "./guards.ts";
 
 export { presentFormIdentifier };
 
-/** Narrow an untyped JSON value to a plain object. */
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+/**
+ * Presence-check a possibly-numeric identifier under the shared trim rule. The REST body may
+ * carry a `formKey` as a number, so coerce it to a string; an empty or whitespace-only string
+ * is *absent* (via {@link presentFormIdentifier}, which also trims). Any other type is absent.
+ * This is the same trimming presence rule {@link resolveFormIdentifier} applies, so a blank
+ * key can never be surfaced as an empty/whitespace value — the drift-bug class #252 targets.
+ */
+function presentKey(v: unknown): string | undefined {
+  if (typeof v === "number") return presentFormIdentifier(String(v));
+  if (typeof v === "string") return presentFormIdentifier(v);
+  return undefined;
 }
 
 /**
@@ -58,9 +67,11 @@ export function parseFormSchema(raw: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Assemble the {@link FormSchema} result with the contract's presence guards: a blank
- * `formKey`/`formId`, or a non-numeric `version`, is omitted rather than surfaced as an
- * empty/garbage value. `formKey` is stringified (the REST body may carry it as a number).
+ * Assemble the {@link FormSchema} result with the contract's presence guards: a blank or
+ * whitespace-only `formKey`/`formId`, or a non-numeric `version`, is omitted rather than
+ * surfaced as an empty/garbage value. Identifiers are trimmed (the shared presence rule), so
+ * a padded `formKey` never leaks whitespace; `formKey` is stringified (the REST body may carry
+ * it as a number).
  */
 export function buildFormSchema(parts: {
   schema: Record<string, unknown>;
@@ -68,10 +79,12 @@ export function buildFormSchema(parts: {
   formId?: unknown;
   version?: unknown;
 }): FormSchema {
+  const formKey = presentKey(parts.formKey);
+  const formId = typeof parts.formId === "string" ? presentFormIdentifier(parts.formId) : undefined;
   return {
     schema: parts.schema,
-    ...(parts.formKey != null && parts.formKey !== "" ? { formKey: String(parts.formKey) } : {}),
-    ...(typeof parts.formId === "string" && parts.formId !== "" ? { formId: parts.formId } : {}),
+    ...(formKey != null ? { formKey } : {}),
+    ...(formId != null ? { formId } : {}),
     ...(typeof parts.version === "number" ? { version: parts.version } : {}),
   };
 }
@@ -86,19 +99,20 @@ export function buildFormSchema(parts: {
  * A key-addressed engine that does *not* itself resolve that linkage (the WASM adapter)
  * can pass `resolveFormKeyByFormId` to map an authored `formId` on the task to the deploy
  * key; a backend that already resolved it (the REST gateway) omits the resolver, and the
- * authored-id path is simply not taken.
+ * authored-id path is simply not taken. A blank or whitespace-only `formKey`/`formId`/
+ * `externalFormReference` is treated as absent (the shared trimming presence rule).
  */
 export function pickFormLinkage(
   raw: Record<string, unknown>,
   resolveFormKeyByFormId?: (formId: string) => string | undefined,
 ): { formKey?: string; externalFormReference?: string } {
-  const directKey = raw.formKey != null && raw.formKey !== "" ? String(raw.formKey) : undefined;
-  const authoredId = typeof raw.formId === "string" && raw.formId !== "" ? raw.formId : undefined;
+  const directKey = presentKey(raw.formKey);
+  const authoredId = typeof raw.formId === "string" ? presentFormIdentifier(raw.formId) : undefined;
   const formKey =
     directKey ?? (authoredId && resolveFormKeyByFormId ? resolveFormKeyByFormId(authoredId) : undefined);
   const externalFormReference =
-    typeof raw.externalFormReference === "string" && raw.externalFormReference !== ""
-      ? raw.externalFormReference
+    typeof raw.externalFormReference === "string"
+      ? presentFormIdentifier(raw.externalFormReference)
       : undefined;
   return {
     ...(formKey ? { formKey } : {}),

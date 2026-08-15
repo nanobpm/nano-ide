@@ -54,6 +54,18 @@ test("buildFormSchema applies presence guards and stringifies a numeric formKey"
   assert.deepEqual(buildFormSchema({ schema }), { schema });
 });
 
+test("buildFormSchema trims padded identifiers and drops whitespace-only ones (the #252 drift bug)", () => {
+  const schema = { components: [] };
+  // Whitespace-only key/id are absent, not surfaced as " ".
+  assert.deepEqual(buildFormSchema({ schema, formKey: "   ", formId: "  " }), { schema });
+  // A padded key/id is trimmed to its space-free value, not surfaced with the padding.
+  assert.deepEqual(buildFormSchema({ schema, formKey: "  42  ", formId: "  myForm  " }), {
+    schema,
+    formKey: "42",
+    formId: "myForm",
+  });
+});
+
 test("pickFormLinkage prefers a direct formKey and carries an externalFormReference", () => {
   assert.deepEqual(
     pickFormLinkage({ formKey: 42, externalFormReference: "https://x/form" }),
@@ -61,6 +73,24 @@ test("pickFormLinkage prefers a direct formKey and carries an externalFormRefere
   );
   // Blank linkage fields are treated as absent.
   assert.deepEqual(pickFormLinkage({ formKey: "", externalFormReference: "" }), {});
+});
+
+test("pickFormLinkage trims padded linkage fields and drops whitespace-only ones", () => {
+  // Whitespace-only key/id/ref are absent, not surfaced with whitespace.
+  assert.deepEqual(
+    pickFormLinkage({ formKey: "   ", externalFormReference: "  " }),
+    {},
+  );
+  // A padded key/ref is trimmed; a padded authored id is trimmed before the resolver sees it.
+  assert.deepEqual(
+    pickFormLinkage({ formKey: "  7  ", externalFormReference: "  https://x/form  " }),
+    { formKey: "7", externalFormReference: "https://x/form" },
+  );
+  assert.deepEqual(
+    pickFormLinkage({ formId: "  myForm  " }, (id) => (id === "myForm" ? "form-7" : undefined)),
+    { formKey: "form-7" },
+    "the authored formId is trimmed before the key resolver is called",
+  );
 });
 
 test("pickFormLinkage resolves an authored formId to a deploy key only via the callback", () => {

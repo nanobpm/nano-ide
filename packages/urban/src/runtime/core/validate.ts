@@ -10,7 +10,7 @@
 
 import schema from "@nanobpm/nano-app-schema/schema" with { type: "json" };
 import { isRecord } from "./guards.ts";
-import { isConfiguredStatusSelector } from "./manifest.ts";
+import { BIND_MODES, isBindMode, isConfiguredStatusSelector } from "./manifest.ts";
 import type { AppManifest } from "./manifest.ts";
 
 export interface ValidationIssue {
@@ -69,8 +69,11 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
     const network = isRecord(obj.network) ? obj.network : undefined;
     if (!network) {
       issues.push({ path: "network", message: "must be an object" });
-    } else if ("bind" in network && network.bind !== "loopback" && network.bind !== "all") {
-      issues.push({ path: "network.bind", message: 'must be "loopback" or "all"' });
+    } else if ("bind" in network && !isBindMode(network.bind)) {
+      issues.push({
+        path: "network.bind",
+        message: `must be one of: ${BIND_MODES.map((mode) => `"${mode}"`).join(", ")}`,
+      });
     }
   }
   if ("schemaVersion" in obj && obj.schemaVersion !== 1) {

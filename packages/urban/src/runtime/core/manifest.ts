@@ -74,11 +74,18 @@ export function workerJobType(w: Worker): string | undefined {
 }
 
 /**
+ * The valid HTTP bind modes, in declaration order. This is the single runtime source of
+ * truth for the set: {@link BindMode}, {@link isBindMode}, and the manifest validator
+ * (`collectManifestIssues`) all derive from it, so the allowed values live in one place.
+ */
+export const BIND_MODES = ["loopback", "all"] as const;
+
+/**
  * Which interface the app's embedded HTTP server binds to (issue #235):
  *  - `"loopback"` (default): `127.0.0.1` — secure-by-default; refuses off-box connections.
  *  - `"all"`: `0.0.0.0` — reachable from other hosts on the LAN (distributed worker fleet).
  */
-export type BindMode = "loopback" | "all";
+export type BindMode = (typeof BIND_MODES)[number];
 
 /** App-level network settings (issue #235). Absent ⇒ loopback. */
 export interface NetworkConfig {
@@ -107,7 +114,7 @@ export const BIND_ENV_VAR = "URBAN_BIND";
 
 /** True when `v` is a valid {@link BindMode}. */
 export function isBindMode(v: unknown): v is BindMode {
-  return v === "loopback" || v === "all";
+  return BIND_MODES.some((mode) => mode === v);
 }
 
 /**

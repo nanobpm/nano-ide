@@ -285,9 +285,11 @@ export interface EngineClient {
     correlationKey?: string;
     variables?: Record<string, unknown>;
   }): Promise<void>;
-  /** Search open user tasks (optionally by process instance). Each result carries the
-   *  task's resolved form linkage (`formKey`/`externalFormReference`) when present. Pass
-   *  `state: "CREATED"` to constrain the search to open (answerable) tasks. */
+  /** Search user tasks (optionally by process instance, assignee, or candidate group).
+   *  By default this is unfiltered by lifecycle state and may return tasks in any state
+   *  (e.g. completed/canceled); pass `state: "CREATED"` to constrain the search to open
+   *  (answerable) tasks. Each result carries the task's resolved form linkage
+   *  (`formKey`/`externalFormReference`) when present. */
   searchUserTasks(filter?: {
     processInstanceKey?: string;
     assignee?: string;

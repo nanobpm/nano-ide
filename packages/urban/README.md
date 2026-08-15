@@ -232,8 +232,9 @@ it ever does — so docs (`docs/`, `AGENTS.md`, top-level `*.md`) live **outside
 `resources/` and are never swept into a deployment. Resources are keyed by their
 **basename** (filename), so two files with the same name in different sub-dirs are
 a **hard error** — rename or relocate one. `urban gen` follows the same
-convention: with no `models`, its `nano:shape`/code-first model scan defaults to
-`resources/**/*.bpmn` (+ `.dmn`) and derived models are written to
+convention: with no `models`, its `nano:shape`/code-first model scan defaults to a
+**shallow** `resources/` walk — `.bpmn`/`.dmn` directly under `resources/` and one
+level down in `resources/<subdir>/`, never deeper — and derived models are written to
 `resources/processes/`, exactly where the convention deploy then finds them.
 
 To opt out of the convention, declare `models` globs — they are used verbatim and

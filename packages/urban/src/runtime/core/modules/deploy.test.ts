@@ -105,6 +105,22 @@ test("deployModels deploys content verbatim (no {{name}} substitution remains)",
   assert.equal(deployed[0].content, '<x value="{{review}}" />');
 });
 
+test("deployModels treats a declared-but-empty models block as an override, not convention", async () => {
+  // A present `models` block that resolves to zero files is an explicit override: it must NOT
+  // silently fall back to the `resources/` convention walk (would deploy resources the author
+  // never opted into). Keyed off the block's *presence*, not an empty pattern set.
+  const { ctx, deployed, logs } = makeHarness(
+    { "/app/resources/order.bpmn": "<should-not-deploy/>" },
+    { models: { processes: [] } },
+  );
+  const res = await deployModels(ctx);
+  assert.equal(res.deployed, 0);
+  assert.deepEqual(deployed, []);
+  // No-model-files log (override path), NOT the "no resources found by convention" log.
+  assert.ok(logs.some((l) => l.msg.includes("no model files matched")));
+  assert.ok(!logs.some((l) => l.msg.includes("no resources found by convention")));
+});
+
 // ── deploy-by-convention (no models declared) ────────────────────────────────
 
 test("deployModels discovers resources/ by convention when no models are declared", async () => {

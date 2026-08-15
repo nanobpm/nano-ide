@@ -59,13 +59,17 @@ function assertNoBasenameCollisions(files: string[]): void {
  * hard error in either mode.
  */
 export async function deployModels(ctx: RuntimeContext): Promise<{ deployed: number; files: string[] }> {
-  const models = ctx.manifest.models ?? {};
+  const models = ctx.manifest.models;
   const patterns = [
-    ...(models.processes ?? []),
-    ...(models.decisions ?? []),
-    ...(models.forms ?? []),
+    ...(models?.processes ?? []),
+    ...(models?.decisions ?? []),
+    ...(models?.forms ?? []),
   ];
-  const byConvention = patterns.length === 0;
+  // Convention is keyed off the *absence* of the `models` block, not an empty pattern set: a
+  // declared `models` (even one resolving to zero files) is an explicit override that must NOT
+  // silently fall back to the `resources/` walk (ADR 0062: "no `models` block → convention;
+  // `models` present → exact override").
+  const byConvention = models === undefined;
   const files = byConvention
     ? await discoverResources(ctx.host, ctx.root, RESOURCES_DIR)
     : await expandPatterns(ctx.host, ctx.root, patterns);

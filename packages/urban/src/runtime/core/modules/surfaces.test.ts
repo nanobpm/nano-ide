@@ -78,15 +78,25 @@ test("chat agent is HTML-escaped in the mount page", async () => {
   assert.ok(body.includes("&lt;img src=x onerror=alert(1)&gt;"), "agent is escaped");
 });
 
-test("task-inbox path is injected as a quoted JS literal (no script breakout)", async () => {
+test("task-inbox client derives its API base from location (reverse-proxy safe, no path embedding)", async () => {
+  // The client must NOT embed the manifest-supplied route base as an absolute
+  // literal: a hardcoded "/tasks" escapes the Nano console's path-prefixed
+  // reverse proxy (/console/app-view/<name>/tasks) — every fetch to
+  // "/tasks/api/…" 404s upstream. Deriving the base from location.pathname keeps
+  // the API calls document-relative (correct at the origin root AND under the
+  // proxy) and, as a bonus, removes the manifest→<script> injection surface
+  // entirely: nothing manifest-supplied is embedded in the page at all.
   const evil = "/tasks'});alert(1);//x";
   const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: evil } }), fakeApp);
   const page = s.routes.find((r) => r.source === "surface:taskInbox" && r.method === "GET" && !r.path.endsWith("/api/tasks"))!;
   const body = await render(page);
-  // The path is embedded via JSON.stringify, so the raw breakout sequence must
-  // not appear unescaped inside the <script>.
-  assert.ok(!body.includes("'});alert(1);//'"), "no raw single-quoted breakout");
-  assert.ok(body.includes(JSON.stringify(evil)), "path embedded as a JSON string literal");
+  // The manifest path (evil or otherwise) is never emitted into the page.
+  assert.ok(!body.includes("alert(1)"), "manifest path is not embedded — nothing to inject");
+  assert.ok(!body.includes(JSON.stringify(evil)), "manifest path is not embedded as a JS literal");
+  // The base is derived from where the page was actually served, so it inherits
+  // any reverse-proxy path prefix instead of a root-absolute mount path.
+  assert.ok(body.includes("location.pathname"), "client derives its API base from location.pathname");
+  assert.ok(!/const\s+BASE\s*=\s*["'/]/.test(body), "client does not embed an absolute route base");
 });
 
 /** Build an app handle backed by a specific engine (the flow tests drive the routes). */

@@ -622,14 +622,15 @@ test("URBAN_BIND=all overrides a loopback manifest (issue #235)", async () => {
   const engine = new FakeEngine();
   const prev = process.env.URBAN_BIND;
   process.env.URBAN_BIND = "all";
-  const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
-  await app.start();
+  let app: Awaited<ReturnType<typeof createUrbanApp>> | undefined;
   try {
+    app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+    await app.start();
     assert.equal(appBoundAddress(app), "0.0.0.0");
   } finally {
     if (prev === undefined) delete process.env.URBAN_BIND;
     else process.env.URBAN_BIND = prev;
-    await app.stop();
+    await app?.stop();
     await rm(dir, { recursive: true, force: true });
   }
 });

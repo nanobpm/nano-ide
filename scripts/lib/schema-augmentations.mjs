@@ -8,6 +8,9 @@
 // fields must instead be threaded as runtime-side local types read off the raw manifest
 // (see the `api` binding / NetworkConfig in packages/urban).
 
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
+
 // Matches `declare module '@nanobpm/nano-app-schema'` and the double-quoted form, with any
 // run of whitespace between tokens.
 const AUGMENTATION_RE = /declare\s+module\s+['"]@nanobpm\/nano-app-schema['"]/;
@@ -28,5 +31,49 @@ export function findSchemaAugmentations(source) {
 			offenders.push({ line: i + 1, text: line.trim() });
 		}
 	});
+	return offenders;
+}
+
+/**
+ * Recursively collect authored `.ts` files (including `.d.ts`) under `dir`, skipping
+ * `node_modules` and `dist`. Returns absolute paths. A missing `dir` yields `[]`.
+ */
+export function collectTsFiles(dir) {
+	const out = [];
+	let entries = [];
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch (err) {
+		if (err && err.code === "ENOENT") return out;
+		throw err;
+	}
+	for (const entry of entries) {
+		if (entry.name === "node_modules" || entry.name === "dist") continue;
+		const full = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			out.push(...collectTsFiles(full));
+		} else if (entry.isFile() && entry.name.endsWith(".ts")) {
+			out.push(full);
+		}
+	}
+	return out;
+}
+
+/**
+ * Walk every package under `packagesDir` and report schema-augmentation offenders across
+ * all authored TS — not just `packages/*​/src`, since authored `.d.ts` files also live in
+ * sibling folders (e.g. `packages/*​/types`). Offender paths are relative to `repoRoot`.
+ */
+export function collectPackageSchemaAugmentations(packagesDir, repoRoot) {
+	const offenders = [];
+	for (const pkg of readdirSync(packagesDir, { withFileTypes: true })) {
+		if (!pkg.isDirectory()) continue;
+		const pkgDir = join(packagesDir, pkg.name);
+		for (const file of collectTsFiles(pkgDir)) {
+			for (const { line, text } of findSchemaAugmentations(readFileSync(file, "utf8"))) {
+				offenders.push({ file: relative(repoRoot, file), line, text });
+			}
+		}
+	}
 	return offenders;
 }

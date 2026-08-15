@@ -12,46 +12,14 @@
 // check:schema`) and so can any developer locally, so the failure surfaces before the
 // push instead of only in CI.
 
-import { readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { findSchemaAugmentations } from "./lib/schema-augmentations.mjs";
+import { collectPackageSchemaAugmentations } from "./lib/schema-augmentations.mjs";
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const packagesDir = join(repoRoot, "packages");
 
-/** Recursively collect `.ts` files under `dir`, skipping `node_modules` and `dist`. */
-function collectTsFiles(dir) {
-	const out = [];
-	let entries = [];
-	try {
-		entries = readdirSync(dir, { withFileTypes: true });
-	} catch (err) {
-		if (err && err.code === "ENOENT") return out;
-		throw err;
-	}
-	for (const entry of entries) {
-		if (entry.name === "node_modules" || entry.name === "dist") continue;
-		const full = join(dir, entry.name);
-		if (entry.isDirectory()) {
-			out.push(...collectTsFiles(full));
-		} else if (entry.isFile() && entry.name.endsWith(".ts")) {
-			out.push(full);
-		}
-	}
-	return out;
-}
-
-const offenders = [];
-for (const pkg of readdirSync(packagesDir, { withFileTypes: true })) {
-	if (!pkg.isDirectory()) continue;
-	const srcDir = join(packagesDir, pkg.name, "src");
-	for (const file of collectTsFiles(srcDir)) {
-		for (const { line, text } of findSchemaAugmentations(readFileSync(file, "utf8"))) {
-			offenders.push({ file: relative(repoRoot, file), line, text });
-		}
-	}
-}
+const offenders = collectPackageSchemaAugmentations(packagesDir, repoRoot);
 
 if (offenders.length === 0) {
 	console.log("check:schema — no @nanobpm/nano-app-schema augmentations. ✅");

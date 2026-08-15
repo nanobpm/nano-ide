@@ -22,7 +22,13 @@ import type {
   UserTaskSummary,
   WorkerSubscription,
 } from "../core/host.ts";
-import { isBpmnError, presentFormIdentifier } from "../core/host.ts";
+import { isBpmnError } from "../core/host.ts";
+import {
+  buildFormSchema,
+  parseFormSchema,
+  pickFormLinkage,
+  resolveFormIdentifier,
+} from "../core/form-contract.ts";
 import type { EngineSdkClient } from "./sdk.ts";
 import { isRecord } from "../core/guards.ts";
 
@@ -227,12 +233,7 @@ export class SdkEngineClient implements EngineClient {
     // User tasks are an eventually consistent read; ask for zero-wait consistency so
     // the search reflects what is currently visible without blocking.
     const body = await this.client.searchUserTasks(
-      // This method is contracted to return *open* tasks; constrain the read to
-      // CREATED so answered/canceled tasks never surface as answerable (e.g. a
-      // re-escalated instance whose prior escalation task is already COMPLETED).
-      // Spread caller filters first and pin `state` last so a caller can never
-      // override the open-only (CREATED) constraint this method contracts to.
-      { filter: { ...(filter ?? {}), state: "CREATED" } },
+      { filter: { ...(filter ?? {}) } },
       { consistency: { waitUpToMs: 0 } },
     );
     const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
@@ -243,19 +244,13 @@ export class SdkEngineClient implements EngineClient {
         return [];
       }
       // The engine resolves a `formId="X"` linkage to the latest deployed form's key at
-      // task creation, so `formKey` (not a form id) is the linkage it reports on the task.
-      const formKey =
-        it.formKey != null && it.formKey !== "" ? String(it.formKey) : undefined;
-      const externalFormReference =
-        typeof it.externalFormReference === "string" && it.externalFormReference !== ""
-          ? it.externalFormReference
-          : undefined;
+      // task creation, so `formKey` (not a form id) is the linkage it reports on the task;
+      // no `resolveFormKeyByFormId` resolver is passed because the gateway already resolved it.
       return [{
         userTaskKey: String(userTaskKey),
         elementId: typeof it.elementId === "string" ? it.elementId : undefined,
         variables: isRecord(it.variables) ? it.variables : undefined,
-        ...(formKey ? { formKey } : {}),
-        ...(externalFormReference ? { externalFormReference } : {}),
+        ...pickFormLinkage(it),
       }];
     });
   }
@@ -268,12 +263,14 @@ export class SdkEngineClient implements EngineClient {
     // form or 404s (→ null) when there is no such form.
     //
     // This is the single gate that resolves which identifier addresses the form: an
-    // empty/whitespace identifier is treated as *absent* (via `presentFormIdentifier`, the
-    // shared presence rule) so a blank `formKey` (e.g. a `?formKey=` query param) falls
+    // empty/whitespace identifier is treated as *absent* (via the shared presence rule in
+    // `resolveFormIdentifier`) so a blank `formKey` (e.g. a `?formKey=` query param) falls
     // through to a valid `formId` instead of being taken as a present-but-unresolvable key
-    // that short-circuits to null.
-    const key = presentFormIdentifier(input.formKey) ?? presentFormIdentifier(input.formId);
-    if (key == null) return null;
+    // that short-circuits to null. The REST gateway addresses a form by `value` regardless
+    // of whether it is a deploy key or an authored id, so `kind` is not consulted here.
+    const resolved = resolveFormIdentifier(input);
+    if (resolved == null) return null;
+    const key = resolved.value;
     let body: Record<string, unknown>;
     try {
       body = await this.client.getFormByKey(
@@ -290,27 +287,21 @@ export class SdkEngineClient implements EngineClient {
       return null;
     }
     if (!isRecord(body)) return null;
-    const rawSchema = body.schema;
     // The engine serializes the form-js schema as a JSON string; parse it to the object
     // the surface renders. Tolerate an already-parsed object (an in-memory/embedded engine).
-    let schema: Record<string, unknown> | undefined;
-    if (typeof rawSchema === "string") {
-      try {
-        const parsed: unknown = JSON.parse(rawSchema);
-        if (isRecord(parsed)) schema = parsed;
-      } catch {
+    const schema = parseFormSchema(body.schema);
+    if (!schema) {
+      if (typeof body.schema === "string") {
         this.log("warn", "getForm: form schema is not valid JSON", { key, formKey: input.formKey, formId: input.formId });
       }
-    } else if (isRecord(rawSchema)) {
-      schema = rawSchema;
+      return null;
     }
-    if (!schema) return null;
-    return {
+    return buildFormSchema({
       schema,
-      ...(body.formKey != null && body.formKey !== "" ? { formKey: String(body.formKey) } : {}),
-      ...(typeof body.formId === "string" && body.formId !== "" ? { formId: body.formId } : {}),
-      ...(typeof body.version === "number" ? { version: body.version } : {}),
-    };
+      formKey: body.formKey,
+      formId: body.formId,
+      version: body.version,
+    });
   }
 
   async completeUserTask(userTaskKey: string, variables?: Record<string, unknown>): Promise<void> {

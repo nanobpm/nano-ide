@@ -66,7 +66,7 @@ test("wasm: a BpmnError from a worker is routed as a BPMN error, not a failure",
   }
 });
 
-test("wasm: deployResources skips non-engine models (forms) but deploys the BPMN alongside them", async () => {
+test("wasm: deployResources captures forms (not executed) but reports every resource as deployed", async () => {
   const engine = await createWasmEngineClient();
   try {
     const model = `<?xml version="1.0" encoding="UTF-8"?>
@@ -79,7 +79,9 @@ test("wasm: deployResources skips non-engine models (forms) but deploys the BPMN
   </process>
 </definitions>`;
     // The runtime's deployModels sends processes AND forms here. A `.form` is JSON, not a process:
-    // it must be skipped, not fed to the BPMN parser (which would throw "no <process> element found").
+    // it must not be fed to the BPMN parser (which would throw "no <process> element found"). It is
+    // captured for `getForm` instead of executed — but, matching SdkEngineClient, it still counts as
+    // deployed, so the reported count is the total number of resources accepted, not just the BPMN.
     const { deployed } = await engine.deployResources([
       { name: "withform.bpmn", content: model, contentType: "text/xml" },
       {
@@ -88,7 +90,7 @@ test("wasm: deployResources skips non-engine models (forms) but deploys the BPMN
         contentType: "application/json",
       },
     ]);
-    assert.equal(deployed, 1, "only the BPMN was deployed; the form was skipped");
+    assert.equal(deployed, 2, "the deployment accepts every resource (BPMN + form), matching SdkEngineClient");
     // The BPMN really deployed — an instance runs to completion.
     const { processInstanceKey } = await engine.createInstance({
       processDefinitionId: "withform",
@@ -162,6 +164,42 @@ test("wasm: a non-.form JSON deploy resource is not captured as a form", async (
       },
     ]);
     assert.equal(await engine.getForm({ formId: "greeting" }), null, "non-.form JSON is not resolvable as a form");
+  } finally {
+    await engine.close();
+  }
+});
+
+test("wasm: searchUserTasks honors the optional state filter (not hardcoded to CREATED)", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    // A process that parks on a single native user task.
+    const model = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="human" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f1" sourceRef="s" targetRef="review"/>
+    <userTask id="review"><extensionElements><zeebe:userTask/></extensionElements></userTask>
+    <sequenceFlow id="f2" sourceRef="review" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+</definitions>`;
+    await engine.deployResources([
+      { name: "human.bpmn", content: model, contentType: "text/xml" },
+    ]);
+    const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "human" });
+
+    // With no state filter the engine returns the task in whatever state it is (here, open),
+    // matching SdkEngineClient — the surface, not the adapter, decides to constrain to CREATED.
+    const unfiltered = await engine.searchUserTasks({ processInstanceKey });
+    assert.equal(unfiltered.length, 1, "an unfiltered search returns the open task");
+
+    // The filter actually discriminates: CREATED matches the open task; COMPLETED does not.
+    const open = await engine.searchUserTasks({ processInstanceKey, state: "CREATED" });
+    assert.equal(open.length, 1, "state: CREATED returns the open task");
+    const done = await engine.searchUserTasks({ processInstanceKey, state: "COMPLETED" });
+    assert.equal(done.length, 0, "state: COMPLETED excludes the still-open task (state is applied, not ignored)");
   } finally {
     await engine.close();
   }

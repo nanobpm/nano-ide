@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runGen, collectArtifacts, type GenIO } from "./gen.ts";
+import { runGen, collectArtifacts, readModels, type GenIO } from "./gen.ts";
 import { defineFlow, envelope } from "@nanobpm/workflow";
 import { MODEL_PROVENANCE } from "./models.ts";
 
@@ -25,6 +25,18 @@ function memIO(
         if (f.startsWith(prefix)) {
           const rest = f.slice(prefix.length);
           if (!rest.includes("/")) names.add(rest);
+        }
+      }
+      return [...names];
+    },
+    async listSubdirs(p) {
+      const prefix = p.replace(/\/+$/, "") + "/";
+      const names = new Set<string>();
+      for (const f of Object.keys(files)) {
+        if (f.startsWith(prefix)) {
+          const rest = f.slice(prefix.length);
+          const slash = rest.indexOf("/");
+          if (slash > 0) names.add(rest.slice(0, slash));
         }
       }
       return [...names];
@@ -181,11 +193,11 @@ function codeFirstIO() {
   );
 }
 
-test("runGen derives processes/<id>.bpmn from workflows/*.ts and feeds worker-io off it", async () => {
+test("runGen derives resources/processes/<id>.bpmn from workflows/*.ts and feeds worker-io off it", async () => {
   const io = codeFirstIO();
   const res = await runGen({ root: "/cf", io });
-  const bpmn = io.files["/cf/processes/greet.bpmn"];
-  assert.ok(bpmn, "expected a derived processes/greet.bpmn");
+  const bpmn = io.files["/cf/resources/processes/greet.bpmn"];
+  assert.ok(bpmn, "expected a derived resources/processes/greet.bpmn");
   assert.ok(bpmn.includes(MODEL_PROVENANCE), "derived .bpmn must be provenance-stamped");
   assert.ok(bpmn.includes('type="greet:hello"'), "derived .bpmn carries the task type");
   // worker-io is derived FROM the in-memory model, not from any on-disk file.
@@ -197,7 +209,7 @@ test("runGen derives processes/<id>.bpmn from workflows/*.ts and feeds worker-io
 test("gen --no-models derives in-memory for worker-io but writes no .bpmn", async () => {
   const io = codeFirstIO();
   const res = await runGen({ root: "/cf", io, emitModels: false });
-  assert.equal(io.files["/cf/processes/greet.bpmn"], undefined, "must not write .bpmn");
+  assert.equal(io.files["/cf/resources/processes/greet.bpmn"], undefined, "must not write .bpmn");
   // still derives the model in-memory so worker-io is populated.
   assert.ok(io.files["/cf/nano-generated/worker-io.d.ts"].includes("greet:hello"));
   assert.equal(res.incomplete, false);
@@ -206,17 +218,17 @@ test("gen --no-models derives in-memory for worker-io but writes no .bpmn", asyn
 test("the provenance sweep removes a stale derived .bpmn no longer backed by a workflow", async () => {
   const io = codeFirstIO();
   // a leftover derived model from a since-deleted flow, provenance-stamped.
-  io.files["/cf/processes/stale.bpmn"] = `<?xml version="1.0"?>\n${MODEL_PROVENANCE}\n<bpmn:x/>`;
+  io.files["/cf/resources/processes/stale.bpmn"] = `<?xml version="1.0"?>\n${MODEL_PROVENANCE}\n<bpmn:x/>`;
   await runGen({ root: "/cf", io });
-  assert.ok(io.files["/cf/processes/greet.bpmn"], "keeps the live derived model");
-  assert.equal(io.files["/cf/processes/stale.bpmn"], undefined, "sweeps the stale derived model");
+  assert.ok(io.files["/cf/resources/processes/greet.bpmn"], "keeps the live derived model");
+  assert.equal(io.files["/cf/resources/processes/stale.bpmn"], undefined, "sweeps the stale derived model");
 });
 
 test("the sweep never touches an authored (un-stamped) .bpmn", async () => {
   const io = codeFirstIO();
-  io.files["/cf/processes/authored.bpmn"] = `<?xml version="1.0"?>\n<bpmn:authored/>`;
+  io.files["/cf/resources/processes/authored.bpmn"] = `<?xml version="1.0"?>\n<bpmn:authored/>`;
   await runGen({ root: "/cf", io });
-  assert.ok(io.files["/cf/processes/authored.bpmn"], "authored .bpmn must survive the sweep");
+  assert.ok(io.files["/cf/resources/processes/authored.bpmn"], "authored .bpmn must survive the sweep");
 });
 
 test("collectArtifacts trims api.spec whitespace so gen matches the runtime (no gen/runtime drift)", async () => {
@@ -323,4 +335,28 @@ test("gen fuses a model-authored nano:shape envelope into the worker-io contract
   const domain = res.artifacts.find((a) => a.path.endsWith("domain-rows.d.ts"));
   assert.ok(domain, "domain-rows.d.ts is emitted from the fused registry");
   assert.match(domain!.content, /"ReviewIn":/);
+});
+
+// Guards the gen/runtime drift class: gen's readModels must key the `resources/` convention off the
+// *absence* of the whole `models` block (mirroring the runtime deploy, ADR 0062), NOT off a missing
+// `models.processes`. A `models` block present for other overrides (e.g. forms) must suppress the
+// convention scan, so gen never derives process models the runtime deploy would never deploy.
+test("readModels: a models block without processes suppresses the resources/ convention (no gen/runtime drift)", async () => {
+  const io = memIO({
+    "/app/resources/a.bpmn": "<bpmn:definitions/>",
+    "/app/resources/sub/b.bpmn": "<bpmn:definitions/>",
+  });
+  // No models block at all → convention scans resources/ (shallow, one level deep).
+  const byConvention = await readModels("/app", io, {});
+  assert.deepEqual(
+    byConvention.map((m) => m.path).sort(),
+    ["resources/a.bpmn", "resources/sub/b.bpmn"],
+    "with no models block, gen discovers under resources/ by convention",
+  );
+  // A declared models block (even one that resolves to zero process files) is an explicit override:
+  // the convention scan must be skipped entirely, matching runtime deployModels.
+  const withEmptyModels = await readModels("/app", io, { models: {} });
+  assert.deepEqual(withEmptyModels, [], "a declared models block suppresses the resources/ convention");
+  const withOnlyProcesses = await readModels("/app", io, { models: { processes: [] } });
+  assert.deepEqual(withOnlyProcesses, [], "an explicitly empty models.processes yields no models, not a convention fallback");
 });

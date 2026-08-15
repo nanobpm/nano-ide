@@ -128,10 +128,8 @@ export type {
 } from "./core/modules/llm.ts";
 export { evalCorrelation } from "./core/modules/triggers.ts";
 
-// Model deploy + `{{name}}` template substitution
-export { deployModels } from "./core/modules/deploy.ts";
-export { applyTemplates, resolveTemplates } from "./core/modules/templates.ts";
-export type { TemplateApplication, TemplateSource } from "./core/modules/templates.ts";
+// Model deploy (deploy-by-convention under `resources/`, ADR 0062)
+export { deployModels, RESOURCES_DIR } from "./core/modules/deploy.ts";
 export { defaultScheduler, MAX_TIMER_DELAY_MS } from "./core/modules/scheduler.ts";
 export type { SchedulerDeps } from "./core/modules/scheduler.ts";
 

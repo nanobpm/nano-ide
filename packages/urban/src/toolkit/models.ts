@@ -2,7 +2,8 @@
 //
 // Unlike the pure derivers (migrations, domain, worker I/O), which transform strings, this
 // imports the app's `workflows/*.ts`, turns each `defineFlow` into executable BPMN via
-// `@nanobpm/workflow` (`toBpmn` + `bpmn-auto-layout` DI), and writes `processes/<id>.bpmn`.
+// `@nanobpm/workflow` (`toBpmn` + `bpmn-auto-layout` DI), and writes `resources/processes/<id>.bpmn`
+// (the deploy-by-convention `resources/` tree, ADR 0062 — see `PROCESSES_DIR`).
 // Executing the app's TypeScript needs a runtime module loader, so this is gated on the
 // optional `GenIO.importModule` (present on Node with type-stripping, and on Deno). When the
 // loader is absent — or the app authors its models directly (model-first) — derivation is a
@@ -19,9 +20,11 @@ import { isRecord } from "../runtime/core/guards.ts";
 /** Default source glob for code-first flows (matches the code-first scaffold layout). */
 export const DEFAULT_WORKFLOW_PATTERNS = ["workflows/*.ts"];
 
-/** Default output dir for derived models (matches the model-first scaffold, so a derived
- * model is ejectable to model-first and picked up by `models.processes: ["processes/*.bpmn"]`). */
-export const PROCESSES_DIR = "processes";
+/** Default output dir for derived models when the manifest declares no `models.processes`: under
+ * the deploy-by-convention `resources/` tree (ADR 0062), one level deep, so a derived model lands
+ * exactly where the convention deploy + codegen scan look for it. When `models.processes` IS set,
+ * `processesOutDir` derives the dir from that glob instead (the model-first override). */
+export const PROCESSES_DIR = "resources/processes";
 
 /** Marker stamped into every derived `.bpmn` (an XML comment) so re-gen overwrites and the
  * stale sweep deletes ONLY derived output — never an authored, human-owned model. */
@@ -68,7 +71,7 @@ export interface ModelError {
 }
 
 export interface DerivedModels {
-  /** `processes/<id>.bpmn` artifacts (path + provenance-stamped content). */
+  /** `resources/processes/<id>.bpmn` artifacts (path + provenance-stamped content). */
   artifacts: DerivedArtifact[];
   /** The same models, in-memory, for feeding the type-contract derivers (worker I/O, meta, messages). */
   models: ModelSource[];

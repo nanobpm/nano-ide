@@ -49,7 +49,7 @@ interface DenoGlobal {
   env: { get(name: string): string | undefined };
   cwd(): string;
   readTextFile(path: string): Promise<string>;
-  readDir(path: string): AsyncIterable<{ name: string; isFile: boolean }>;
+  readDir(path: string): AsyncIterable<{ name: string; isFile: boolean; isDirectory: boolean }>;
   stat(path: string): Promise<unknown>;
   watchFs(paths: string | string[], options?: { recursive?: boolean }): DenoFsWatcher;
   serve(
@@ -99,6 +99,17 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
         const names: string[] = [];
         for await (const e of Deno.readDir(abs(dir))) {
           if (e.isFile) names.push(e.name);
+        }
+        return names;
+      } catch {
+        return [];
+      }
+    },
+    async listSubdirs(dir) {
+      try {
+        const names: string[] = [];
+        for await (const e of Deno.readDir(abs(dir))) {
+          if (e.isDirectory) names.push(e.name);
         }
         return names;
       } catch {

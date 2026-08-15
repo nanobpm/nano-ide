@@ -85,8 +85,10 @@ test("full preset scaffolds a runnable app with substituted tokens", async () =>
   assert.equal(manifest.name, "Hello Urban");
   assert.ok(manifest.surfaces, "full keeps surfaces");
   assert.ok(manifest.triggers, "full keeps triggers");
-  assert.ok(manifest.models.forms, "full keeps form models");
-  assert.ok(await exists(join(dir, "forms")), "full keeps the forms dir");
+  assert.equal(manifest.models, undefined, "deploy-by-convention: no models block");
+  assert.ok(await exists(join(dir, "resources/forms")), "full keeps the resources/forms dir");
+  assert.ok(res.files.includes("resources/forms/greeting.form"), "form deploys by convention");
+  assert.ok(res.files.includes("resources/processes/greet.bpmn"), "process deploys by convention");
 
   // _gitignore is materialized as .gitignore
   assert.ok(await exists(join(dir, ".gitignore")));
@@ -174,10 +176,10 @@ test("headless preset drops surfaces, triggers and forms (workers only)", async 
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
   assert.equal(manifest.surfaces, undefined);
   assert.equal(manifest.triggers, undefined);
-  assert.equal(manifest.models?.forms, undefined);
+  assert.equal(manifest.models, undefined, "deploy-by-convention: no models block");
   assert.ok(manifest.workers, "headless keeps workers");
-  assert.ok(!res.files.some((f) => f.startsWith("forms/")), "no form files written");
-  assert.ok(!(await exists(join(dir, "forms"))), "no forms dir");
+  assert.ok(!res.files.some((f) => f.startsWith("resources/forms/")), "no form files written");
+  assert.ok(!(await exists(join(dir, "resources/forms"))), "no forms dir");
 
   // The human pages surface is dropped, but the machine API surface stays: a headless
   // service still exposes its REST API + Swagger docs.
@@ -349,8 +351,8 @@ test("code-first style scaffolds a defineFlow app (no processes/, custom main.ts
   // Code-first source layout: workflows/ + scripts/, no authored BPMN or worker map.
   assert.ok(res.files.includes("workflows/greet.ts"), "has a defineFlow workflow");
   assert.ok(res.files.includes("scripts/greet.ts"), "has a start script");
-  assert.ok(!res.files.some((f) => f.startsWith("processes/")), "no processes/*.bpmn");
-  assert.ok(!(await exists(join(dir, "processes"))), "no processes dir");
+  assert.ok(!res.files.some((f) => f.startsWith("resources/processes/")), "no authored .bpmn");
+  assert.ok(!(await exists(join(dir, "resources/processes"))), "no derived-model dir before gen");
   assert.ok(!(await exists(join(dir, "workers"))), "no workers dir");
 
   const flow = await readFile(join(dir, "workflows/greet.ts"), "utf8");
@@ -359,11 +361,10 @@ test("code-first style scaffolds a defineFlow app (no processes/, custom main.ts
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
   assert.equal(manifest.id, "code-app");
   assert.equal(manifest.name, "Code App");
-  // Self-describing: declares the code-first workflow source + where derived models land,
-  // so `urban gen`/`urban derive` and standalone (non-console) tooling need no defaults.
-  assert.ok(manifest.models, "code-first declares a models block");
-  assert.deepEqual(manifest.models.workflows, ["workflows/*.ts"], "declares the workflow source");
-  assert.deepEqual(manifest.models.processes, ["processes/*.bpmn"], "declares the derived model dir");
+  // Deploy-by-convention (ADR 0062): no `models` block. `urban gen`/`urban derive` derive from the
+  // default `workflows/*.ts` and emit into `resources/processes/`, which the convention deploy +
+  // codegen scan then pick up — so the scaffold needs no `models` declaration at all.
+  assert.equal(manifest.models, undefined, "code-first relies on the convention (no models block)");
   assert.equal(manifest.workers, undefined, "code-first hosts workers in main.ts");
 
   // Code-first runs its custom entrypoint, not `urban run`.

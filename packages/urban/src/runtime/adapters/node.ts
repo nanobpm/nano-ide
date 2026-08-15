@@ -138,6 +138,14 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
         return [];
       }
     },
+    async listSubdirs(dir) {
+      try {
+        const entries = await readdir(abs(dir), { withFileTypes: true });
+        return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+      } catch {
+        return [];
+      }
+    },
     async exists(p) {
       try {
         await stat(abs(p));

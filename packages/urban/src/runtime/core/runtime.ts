@@ -10,7 +10,6 @@ import { loadManifest, resolveBindMode, bindModeToHost, type AppManifest } from 
 import { validateManifest } from "./validate.ts";
 import { makeRouter, type Route } from "./router.ts";
 import { deployModels } from "./modules/deploy.ts";
-import type { TemplateSource } from "./modules/templates.ts";
 import { provisionData, DataLayer } from "./modules/datasource.ts";
 import { installExecStore, type JobExecContext } from "./execContext.ts";
 import { createLogger, type Logger } from "./logger.ts";
@@ -74,10 +73,6 @@ export interface CreateUrbanAppOptions {
   port?: number;
   /** Which modules to mount (all true by default). */
   mount?: MountFlags;
-  /** Programmatic `{{name}}` template source for deploy-time substitution (globs or a
-   *  `name → content` map). Merged over the manifest's `models.templates` (this wins on
-   *  collision). See `deployModels`. */
-  templates?: TemplateSource;
   /**
    * Injectable timer + clock seam driving every background loop (the cron trigger loops
    * and the instance-tracking reconciler). Defaults to the live scheduler (real timers,
@@ -135,7 +130,7 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     security: opts.mount?.security ?? true,
     instanceTracking: opts.mount?.instanceTracking ?? true,
   };
-  const ctx = { manifest, host, engine, root, templates: opts.templates };
+  const ctx = { manifest, host, engine, root };
 
   // One app-level structured logger over the host sink, shared by the entrypoint (exposed as
   // `app.log`) and the per-invocation `AppApi.log` (workers/route delegates `child()` it with their

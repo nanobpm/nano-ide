@@ -64,13 +64,13 @@ test("bpmnFilename sanitizes ids into safe .bpmn filenames", () => {
   assert.equal(bpmnFilename("a b:c"), "a-b-c.bpmn");
 });
 
-test("processesOutDir defaults to processes/, or the dir of a models.processes glob", () => {
-  assert.equal(processesOutDir({}), "processes");
+test("processesOutDir defaults to resources/processes/, or the dir of a models.processes glob", () => {
+  assert.equal(processesOutDir({}), "resources/processes");
   assert.equal(processesOutDir({ models: { processes: ["resources/processes/*.bpmn"] } }), "resources/processes");
   assert.equal(processesOutDir({ models: { processes: ["src/models/*.bpmn"] } }), "src/models");
 });
 
-test("deriveModels turns workflows/*.ts into a provenance-stamped processes/<id>.bpmn", async () => {
+test("deriveModels turns workflows/*.ts into a provenance-stamped resources/processes/<id>.bpmn", async () => {
   const io = memIO(
     { "/app/workflows/greet.ts": "// source" },
     { "workflows/greet.ts": { greet } },
@@ -81,12 +81,12 @@ test("deriveModels turns workflows/*.ts into a provenance-stamped processes/<id>
   assert.equal(d.incomplete, false);
   assert.deepEqual(d.ids, ["greet"]);
   assert.equal(d.artifacts.length, 1);
-  assert.equal(d.artifacts[0].path, "processes/greet.bpmn");
+  assert.equal(d.artifacts[0].path, "resources/processes/greet.bpmn");
   assert.match(d.artifacts[0].content, /<!--.*@nanobpm\/urban/);
   assert.ok(d.artifacts[0].content.includes(MODEL_PROVENANCE));
   assert.match(d.artifacts[0].content, /greet/);
   // the in-memory ModelSource is fed to the type-contract derivers
-  assert.deepEqual(d.models.map((m) => m.path), ["processes/greet.bpmn"]);
+  assert.deepEqual(d.models.map((m) => m.path), ["resources/processes/greet.bpmn"]);
   assert.equal(d.list[0].id, "greet");
   assert.equal(d.list[0].kind, "declarative");
 });

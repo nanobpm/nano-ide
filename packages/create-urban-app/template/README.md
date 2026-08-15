@@ -11,8 +11,10 @@ nano.app.json         the manifest — the whole app, declared
 openapi.yaml          the app's REST API contract (OpenAPI); Swagger UI for free
 operations/*.ts       one delegate per operationId (you write only the body)
 pages/*.page.json     the home UI (a declarative, data-bound screen)
-processes/*.bpmn      BPMN process models
-forms/*.form          form-js user task forms
+resources/**          deployables, discovered by convention (BPMN, DMN, forms, prompts)
+resources/processes/*.bpmn   BPMN process models
+resources/forms/*.form       form-js user task forms
+resources/prompts/*          agent prompts (GenericScript, linked via zeebe:linkedResource)
 db/migrations/*.sql   datasource schema (SQLite by default)
 workers/*.ts          service-task handlers (host-agnostic TypeScript)
 tests/*.test.ts       e2e tests (@nanobpm/urban-testkit, in-process WASM engine)
@@ -139,8 +141,9 @@ your current sources without rewriting them.
   `operations/<operationId>.ts`. Swagger picks it up automatically.
 - **Add a screen** — drop a `*.page.json` under `pages/` (nav, text, `actionForm`,
   `dataGrid` nodes). Link it from the `nav` items.
-- **Add a process step** — a `.bpmn` under `processes/` and a matching worker under
-  `workers/`.
+- **Add a process step** — a `.bpmn` under `resources/processes/` and a matching worker
+  under `workers/`. Everything under `resources/` deploys by convention (no `models`
+  block needed); anything outside it (docs, `AGENTS.md`, top-level `*.md`) never deploys.
 - **Add a domain type** — an entry in `types` in the manifest and a migration under
   `db/migrations/`.
 - **Enable more surfaces** (task inbox, chat) or triggers in the manifest.

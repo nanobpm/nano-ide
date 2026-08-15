@@ -4,7 +4,6 @@ import type { RuntimeContext } from "../context.ts";
 import type { HostContext } from "../host.ts";
 import type { AppManifest } from "../manifest.ts";
 import { deployModels } from "./deploy.ts";
-import { applyTemplates, resolveTemplates, type TemplateSource } from "./templates.ts";
 
 const ROOT = "/app";
 
@@ -25,14 +24,23 @@ interface Harness {
   deployed: DeployedResource[];
 }
 
-/** A virtual-filesystem host over `files` (keyed by absolute path) plus a recording engine. */
-function makeHarness(
-  files: Record<string, string>,
-  manifest: Partial<AppManifest>,
-  templates?: TemplateSource,
-): Harness {
+/** A virtual-filesystem host over `files` (keyed by absolute path) plus a recording engine. The
+ *  host implements `listDir` (files under a dir) and `listSubdirs` (immediate sub-directories), so
+ *  the convention walk (`resources/*` + `resources/<subdir>/*`) can be exercised. */
+function makeHarness(files: Record<string, string>, manifest: Partial<AppManifest>): Harness {
   const logs: Harness["logs"] = [];
   const deployed: DeployedResource[] = [];
+  const dirsUnder = (dir: string): Set<string> => {
+    const out = new Set<string>();
+    const prefix = `${dir.replace(/\/+$/, "")}/`;
+    for (const f of Object.keys(files)) {
+      if (!f.startsWith(prefix)) continue;
+      const rest = f.slice(prefix.length);
+      const slash = rest.indexOf("/");
+      if (slash > 0) out.add(rest.slice(0, slash));
+    }
+    return out;
+  };
   // biome-ignore lint/plugin: HostContext test double implementing only the fs/log members deployModels exercises; the rest are intentionally absent.
   const host: HostContext = {
     runtime: "node",
@@ -48,6 +56,7 @@ function makeHarness(
       Object.keys(files)
         .filter((f) => dirname(f) === dir)
         .map((f) => f.slice(f.lastIndexOf("/") + 1)),
+    listSubdirs: async (dir: string) => [...dirsUnder(dir)],
   } as unknown as HostContext;
   const engine = {
     deployResources: async (resources: DeployedResource[]) => {
@@ -63,196 +72,123 @@ function makeHarness(
     // biome-ignore lint/plugin: EngineClient test double implementing only deployResources (the sole method deployModels calls).
     engine: engine as unknown as RuntimeContext["engine"],
     host,
-    templates,
   } as unknown as RuntimeContext;
   return { ctx, logs, deployed };
 }
 
-// ── applyTemplates ─────────────────────────────────────────────────────────
+// ── models.* override (explicit globs, unchanged behavior) ───────────────────
 
-test("applyTemplates substitutes a named placeholder", () => {
-  const { content, unresolved } = applyTemplates("<a>{{greet}}</a>", "text/xml", {
-    greet: "hello",
-  });
-  assert.equal(content, "<a>hello</a>");
-  assert.deepEqual(unresolved, []);
-});
-
-test("applyTemplates tolerates inner whitespace in the placeholder", () => {
-  const { content } = applyTemplates("{{  greet  }}", "text/xml", { greet: "hi" });
-  assert.equal(content, "hi");
-});
-
-test("applyTemplates encodes newlines/tabs as XML character references (survives attr normalization)", () => {
-  const { content } = applyTemplates('value="{{p}}"', "text/xml", {
-    p: "line1\nline2\twith <b> & 'q'",
-  });
-  assert.equal(content, 'value="line1&#10;line2&#9;with &lt;b&gt; &amp; &apos;q&apos;"');
-  // Critically, no literal newline/tab remains (those would collapse to spaces in an attribute).
-  assert.ok(!/[\n\t]/.test(content));
-});
-
-test("applyTemplates escapes JSON-string content for .form resources", () => {
-  const { content } = applyTemplates('{"q":"{{p}}"}', "application/json", {
-    p: 'a\nb"c',
-  });
-  assert.equal(content, '{"q":"a\\nb\\"c"}');
-  assert.deepEqual(JSON.parse(content), { q: 'a\nb"c' });
-});
-
-test("applyTemplates leaves unknown placeholders verbatim and reports them once", () => {
-  const { content, unresolved } = applyTemplates("{{x}} {{y}} {{x}}", "text/xml", {});
-  assert.equal(content, "{{x}} {{y}} {{x}}");
-  assert.deepEqual(unresolved, ["x", "y"]);
-});
-
-test("applyTemplates is non-recursive: a template's own braces are not re-expanded", () => {
-  const { content, unresolved } = applyTemplates("{{a}}", "text/xml", {
-    a: "{{b}}",
-    b: "SHOULD-NOT-APPEAR",
-  });
-  assert.equal(content, "{{b}}");
-  assert.deepEqual(unresolved, []);
-});
-
-// ── resolveTemplates ─────────────────────────────────────────────────────────
-
-test("resolveTemplates reads a glob source, keying by file stem", async () => {
-  const { ctx } = makeHarness(
-    { "/app/prompts/review.md": "REVIEW", "/app/prompts/fix-ci.md": "FIXCI" },
-    {},
-  );
-  const map = await resolveTemplates(ctx.host, ROOT, [["prompts/*.md"]]);
-  assert.deepEqual({ ...map }, { review: "REVIEW", "fix-ci": "FIXCI" });
-});
-
-test("resolveTemplates scans a bare directory entry", async () => {
-  const { ctx } = makeHarness(
-    { "/app/prompts/a.md": "A", "/app/prompts/b.md": "B" },
-    {},
-  );
-  const map = await resolveTemplates(ctx.host, ROOT, [["prompts"]]);
-  assert.deepEqual({ ...map }, { a: "A", b: "B" });
-});
-
-test("resolveTemplates resolves a literal file entry", async () => {
-  const { ctx } = makeHarness({ "/app/prompts/one.md": "ONE" }, {});
-  const map = await resolveTemplates(ctx.host, ROOT, [["prompts/one.md"]]);
-  assert.deepEqual({ ...map }, { one: "ONE" });
-});
-
-test("resolveTemplates ignores a directory with no readable files without warning", async () => {
-  // A directory that exists (has nested content) but no files directly under it: previously the
-  // non-glob fallback treated it as a literal file and logged a misleading "unreadable entry" warn.
-  const { ctx, logs } = makeHarness({ "/app/prompts/nested/x.md": "X" }, {});
-  const map = await resolveTemplates(ctx.host, ROOT, [["prompts"]]);
-  assert.deepEqual({ ...map }, {});
-  assert.equal(logs.filter((l) => l.level === "warn").length, 0);
-});
-
-test("resolveTemplates merges a programmatic map, letting later sources win", async () => {
-  const { ctx } = makeHarness({ "/app/prompts/review.md": "FROM-FILE" }, {});
-  const map = await resolveTemplates(ctx.host, ROOT, [
-    ["prompts/*.md"],
-    { review: "FROM-MAP", extra: "X" },
-  ]);
-  assert.deepEqual({ ...map }, { review: "FROM-MAP", extra: "X" });
-});
-
-test("resolveTemplates returns a null-prototype map so `__proto__` keys can't pollute", async () => {
-  // A template file literally named `__proto__.md`, or a programmatic map keyed by `__proto__`,
-  // must set a plain own property rather than trip the magic prototype setter on `{}`.
-  const { ctx } = makeHarness({ "/app/prompts/__proto__.md": "PWN" }, {});
-  const map = await resolveTemplates(ctx.host, ROOT, [
-    ["prompts/__proto__.md"],
-    { extra: "X" },
-  ]);
-  assert.equal(Object.getPrototypeOf(map), null);
-  assert.equal(Object.getPrototypeOf({}), Object.prototype, "global prototype untouched");
-  assert.equal(map.extra, "X");
-  assert.equal(Object.prototype.hasOwnProperty.call(map, "__proto__"), true);
-});
-
-test("resolveTemplates skips a file whose stem is not a valid placeholder name, with a warning", async () => {
-  // `spaced name.md` yields the stem `spaced name`, which the `{{…}}` placeholder charset (`[\w.-]`)
-  // can never match — so it would be unreferenceable and silently ignored. Fail loudly instead.
-  const { ctx, logs } = makeHarness(
-    { "/app/prompts/spaced name.md": "NOPE", "/app/prompts/ok.md": "YES" },
-    {},
-  );
-  const map = await resolveTemplates(ctx.host, ROOT, [["prompts/*.md"]]);
-  assert.deepEqual({ ...map }, { ok: "YES" });
-  const warn = logs.find((l) => l.level === "warn" && l.msg === "template: skipped unsupported name");
-  assert.ok(warn, "expected an unsupported-name warning");
-  assert.equal(warn?.fields?.name, "spaced name");
-});
-
-// ── deployModels integration ─────────────────────────────────────────────────
-
-test("deployModels substitutes manifest templates into deployed model content", async () => {
+test("deployModels uses the manifest models globs when declared, keyed by basename", async () => {
   const { ctx, deployed } = makeHarness(
     {
-      "/app/processes/agent.bpmn": '<x value="{{review}}" />',
-      "/app/prompts/review.md": "Do the review",
+      "/app/processes/agent.bpmn": "<x/>",
+      "/app/forms/greet.form": "{}",
+      "/app/resources/ignored.bpmn": "<should-not-deploy/>",
     },
-    { models: { processes: ["processes/*.bpmn"], templates: ["prompts/*.md"] } },
+    { models: { processes: ["processes/*.bpmn"], forms: ["forms/*.form"] } },
   );
   const res = await deployModels(ctx);
-  assert.equal(res.deployed, 1);
-  assert.equal(deployed[0].name, "agent.bpmn");
-  assert.equal(deployed[0].content, '<x value="Do the review" />');
+  assert.equal(res.deployed, 2);
+  const byName = Object.fromEntries(deployed.map((d) => [d.name, d]));
+  assert.equal(byName["agent.bpmn"].contentType, "text/xml");
+  assert.equal(byName["greet.form"].contentType, "application/json");
+  // With an explicit override, the convention `resources/` walk is skipped entirely.
+  assert.ok(!deployed.some((d) => d.name === "ignored.bpmn"));
 });
 
-test("deployModels lets the programmatic templates option win over the manifest", async () => {
-  const { ctx, deployed } = makeHarness(
-    {
-      "/app/processes/agent.bpmn": '<x value="{{review}}" />',
-      "/app/prompts/review.md": "FROM-MANIFEST",
-    },
-    { models: { processes: ["processes/*.bpmn"], templates: ["prompts/*.md"] } },
-    { review: "FROM-OPTION" },
-  );
-  await deployModels(ctx);
-  assert.equal(deployed[0].content, '<x value="FROM-OPTION" />');
-});
-
-test("deployModels warns on an unresolved placeholder but still deploys", async () => {
-  const { ctx, deployed, logs } = makeHarness(
-    {
-      "/app/processes/agent.bpmn": '<x a="{{present}}" b="{{missing}}" />',
-      "/app/prompts/present.md": "HERE",
-    },
-    { models: { processes: ["processes/*.bpmn"], templates: ["prompts/*.md"] } },
-  );
-  const res = await deployModels(ctx);
-  assert.equal(res.deployed, 1);
-  assert.equal(deployed[0].content, '<x a="HERE" b="{{missing}}" />');
-  const warn = logs.find((l) => l.msg.includes("unresolved template placeholders"));
-  assert.ok(warn, "expected an unresolved-placeholder warning");
-  assert.deepEqual(warn?.fields?.unresolved, ["missing"]);
-});
-
-test("deployModels leaves unknown-extension resources untouched (no XML escaping)", async () => {
-  // Unknown extensions (application/octet-stream) have no safe escaper, so substitution must be
-  // skipped rather than run the default XML escaper and risk corrupting the resource.
-  const { ctx, deployed } = makeHarness(
-    {
-      "/app/models/notes.txt": "raw {{review}} & <stuff>",
-      "/app/prompts/review.md": "R",
-    },
-    { models: { processes: ["models/*.txt"], templates: ["prompts/*.md"] } },
-  );
-  await deployModels(ctx);
-  assert.equal(deployed[0].contentType, "application/octet-stream");
-  assert.equal(deployed[0].content, "raw {{review}} & <stuff>");
-});
-
-test("deployModels is a no-op on content when no templates are configured", async () => {
+test("deployModels deploys content verbatim (no {{name}} substitution remains)", async () => {
   const { ctx, deployed } = makeHarness(
     { "/app/processes/agent.bpmn": '<x value="{{review}}" />' },
     { models: { processes: ["processes/*.bpmn"] } },
   );
   await deployModels(ctx);
-  // With no templates, placeholders are left untouched (no substitution pass runs).
   assert.equal(deployed[0].content, '<x value="{{review}}" />');
+});
+
+test("deployModels treats a declared-but-empty models block as an override, not convention", async () => {
+  // A present `models` block that resolves to zero files is an explicit override: it must NOT
+  // silently fall back to the `resources/` convention walk (would deploy resources the author
+  // never opted into). Keyed off the block's *presence*, not an empty pattern set.
+  const { ctx, deployed, logs } = makeHarness(
+    { "/app/resources/order.bpmn": "<should-not-deploy/>" },
+    { models: { processes: [] } },
+  );
+  const res = await deployModels(ctx);
+  assert.equal(res.deployed, 0);
+  assert.deepEqual(deployed, []);
+  // No-model-files log (override path), NOT the "no resources found by convention" log.
+  assert.ok(logs.some((l) => l.msg.includes("no model files matched")));
+  assert.ok(!logs.some((l) => l.msg.includes("no resources found by convention")));
+});
+
+// ── deploy-by-convention (no models declared) ────────────────────────────────
+
+test("deployModels discovers resources/ by convention when no models are declared", async () => {
+  const { ctx, deployed, logs } = makeHarness(
+    {
+      "/app/resources/order.bpmn": "<p/>",
+      "/app/resources/decide.dmn": "<d/>",
+      "/app/resources/prompts/review.md": "Do the review",
+      "/app/resources/forms/greet.form": "{}",
+      // Docs live OUTSIDE resources/ and must never deploy.
+      "/app/docs/guide.md": "# docs",
+      "/app/AGENTS.md": "# agents",
+      "/app/README.md": "# readme",
+    },
+    {},
+  );
+  const res = await deployModels(ctx);
+  const names = deployed.map((d) => d.name).sort();
+  assert.deepEqual(names, ["decide.dmn", "greet.form", "order.bpmn", "review.md"]);
+  assert.equal(res.deployed, 4);
+  // A prompt (.md under resources/) is a GenericScript resource → octet-stream content type.
+  const prompt = deployed.find((d) => d.name === "review.md");
+  assert.equal(prompt?.contentType, "application/octet-stream");
+  assert.equal(prompt?.content, "Do the review");
+  assert.ok(logs.some((l) => l.fields?.byConvention === true));
+});
+
+test("deployModels convention walk is shallow — one level deep only", async () => {
+  const { ctx, deployed } = makeHarness(
+    {
+      "/app/resources/top.bpmn": "<a/>",
+      "/app/resources/sub/one.bpmn": "<b/>",
+      // Two levels deep: NOT swept in (shallow-by-convention).
+      "/app/resources/sub/deeper/two.bpmn": "<c/>",
+    },
+    {},
+  );
+  await deployModels(ctx);
+  const names = deployed.map((d) => d.name).sort();
+  assert.deepEqual(names, ["one.bpmn", "top.bpmn"]);
+});
+
+test("deployModels errors on a basename collision across resources/ subdirs", async () => {
+  const { ctx } = makeHarness(
+    {
+      "/app/resources/a/order.bpmn": "<a/>",
+      "/app/resources/b/order.bpmn": "<b/>",
+    },
+    {},
+  );
+  await assert.rejects(deployModels(ctx), /basename collision/);
+});
+
+test("deployModels errors on a basename collision under an explicit override too", async () => {
+  const { ctx } = makeHarness(
+    {
+      "/app/processes/order.bpmn": "<a/>",
+      "/app/extra/order.bpmn": "<b/>",
+    },
+    { models: { processes: ["processes/*.bpmn", "extra/*.bpmn"] } },
+  );
+  await assert.rejects(deployModels(ctx), /basename collision/);
+});
+
+test("deployModels is a no-op when resources/ is empty and no models are declared", async () => {
+  const { ctx, deployed, logs } = makeHarness({ "/app/docs/x.md": "y" }, {});
+  const res = await deployModels(ctx);
+  assert.equal(res.deployed, 0);
+  assert.deepEqual(deployed, []);
+  assert.ok(logs.some((l) => l.msg.includes("no resources found by convention")));
 });

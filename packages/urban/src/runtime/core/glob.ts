@@ -61,3 +61,27 @@ export async function expandPatterns(
   }
   return out;
 }
+
+/**
+ * Discover deployables under a convention directory (`resources/`), **shallow, one level deep**:
+ * the files directly under `dir` plus the files one sub-directory down (`dir/<subdir>/*`), but
+ * never deeper. The shallow bound is deliberate — deploy dedupes by basename (filename only), so a
+ * deep recursive walk would reintroduce cross-directory basename-collision risk. Sub-directory
+ * descent needs `host.listSubdirs`; a host that can't enumerate directories yields only the
+ * top-level files. Returns root-prefixed paths, sorted for determinism.
+ */
+export async function discoverResources(
+  host: HostContext,
+  root: string,
+  dir: string,
+): Promise<string[]> {
+  const base = joinPath(root, dir);
+  const out: string[] = [];
+  for (const name of await host.listDir(base)) out.push(joinPath(base, name));
+  const subdirs = host.listSubdirs ? await host.listSubdirs(base) : [];
+  for (const sub of subdirs.slice().sort()) {
+    const subBase = joinPath(base, sub);
+    for (const name of await host.listDir(subBase)) out.push(joinPath(subBase, name));
+  }
+  return out.sort();
+}

@@ -1,7 +1,6 @@
 import type { AppManifest } from "./manifest.ts";
 import type { EngineClient, HostContext } from "./host.ts";
 import type { EngineSdkClient } from "../engine/sdk.ts";
-import type { TemplateSource } from "./modules/templates.ts";
 
 /** Everything a runtime module needs. Passed to each module's mount function. */
 export interface RuntimeContext {
@@ -10,9 +9,6 @@ export interface RuntimeContext {
   engine: EngineClient;
   /** App root directory (paths in the manifest are relative to this). */
   root: string;
-  /** Programmatic `{{name}}` template source for deploy-time substitution (globs or a
-   *  `name → content` map), merged over the manifest's `models.templates`. See `deployModels`. */
-  templates?: TemplateSource;
 }
 
 /** A mounted module returns a disposer so the runtime can tear it down cleanly. */

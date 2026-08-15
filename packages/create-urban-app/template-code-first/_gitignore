@@ -5,4 +5,4 @@ node_modules/
 # Derived by `urban gen` — regenerable, never committed (ADR 0053).
 nano-generated/
 # Executable BPMN derived from workflows/*.ts by `urban gen` / `urban derive`.
-processes/
+resources/processes/

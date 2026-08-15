@@ -1,6 +1,6 @@
 # ADR 0062 — Resources deploy by convention; deploy-time templating is removed
 
-Status: **Proposed.**
+Status: Proposed
 Date: 2026-08-16
 Relates to: ADR 0027 (nano-bpm; `nano.app.json` manifest spec — the `models` key),
 ADR 0052/0053/0054 (dry out the Nano host over `@nanobpm/urban`; derivation is a shared

@@ -21,6 +21,7 @@ import type {
   WatchHandle,
 } from "../core/host.ts";
 import { resolveModulePath } from "../core/module-path.ts";
+import { LOOPBACK_HOST } from "../core/manifest.ts";
 import { formatLogLine, levelEnabled, parseLogLevel } from "../core/logger.ts";
 
 /**
@@ -166,8 +167,8 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
         pathToFileURL(abs(entry)).href + (opts.importNonce ? `?v=${opts.importNonce}` : "");
       await import(href);
     },
-    async serveHttp(port, handler) {
-      return await startNodeServer(port, handler);
+    async serveHttp(port, handler, bindHost) {
+      return await startNodeServer(port, handler, bindHost);
     },
     watch(onChange) {
       const onFsEvent = (_event: unknown, filename: string | Buffer | null) => {
@@ -216,7 +217,11 @@ function wrapNodeSqlite(db: DatabaseSync): SqliteDb {
   };
 }
 
-async function startNodeServer(port: number, handler: HttpHandler): Promise<HttpServer> {
+async function startNodeServer(
+  port: number,
+  handler: HttpHandler,
+  bindHost?: string,
+): Promise<HttpServer> {
   const server = createServer(async (nreq, nres) => {
     const chunks: Buffer[] = [];
     for await (const c of nreq) {
@@ -263,7 +268,27 @@ async function startNodeServer(port: number, handler: HttpHandler): Promise<Http
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((res) => server.listen(port, res));
+  // Bind to the requested interface (issue #235): `"127.0.0.1"` keeps the app loopback-only
+  // (secure default), `"0.0.0.0"` exposes it on the LAN. When no bind host is resolved we fail
+  // *closed* to loopback rather than inheriting Node's bind-all default, so a caller that omits
+  // it can never silently expose the server off-box.
+  const listenHost = bindHost ?? LOOPBACK_HOST;
+  // `server.listen` reports bind failures (EADDRINUSE/EACCES/…) via the `error` event, not the
+  // listening callback. Reject on the first such error so callers see the failure instead of
+  // hanging forever waiting for a `listening` that will never fire.
+  await new Promise<void>((res, rej) => {
+    const onError = (err: Error) => {
+      server.removeListener("listening", onListening);
+      rej(err);
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      res();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, listenHost);
+  });
   const addr = server.address();
   const actualPort = typeof addr === "object" && addr ? addr.port : port;
   return {

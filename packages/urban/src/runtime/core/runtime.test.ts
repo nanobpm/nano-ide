@@ -73,7 +73,7 @@ function expectArray(value: unknown): unknown[] {
   return value;
 }
 
-async function makeFixture(): Promise<string> {
+async function makeFixture(extraManifest?: Record<string, unknown>): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "urban-rt-"));
   await mkdir(join(dir, "processes"));
   await mkdir(join(dir, "decisions"));
@@ -106,6 +106,7 @@ async function makeFixture(): Promise<string> {
     workers: [{ taskType: "wf.claim", handler: "workers/handlers.ts" }],
     triggers: [{ id: "hook", type: "webhook", path: "/hooks/task", action: { message: "wf.requested", correlationKey: "= body.taskId" } }],
     surfaces: { taskInbox: { enabled: true, path: "/tasks" } },
+    ...extraManifest,
   };
   await writeFile(join(dir, "nano.app.json"), JSON.stringify(manifest, null, 2));
   return dir;
@@ -568,6 +569,68 @@ test("treats NANOBPMN_APP_HANDSHAKE other than \"1\" as opt-out", async () => {
     if (prev === undefined) delete process.env.NANOBPMN_APP_HANDSHAKE;
     else process.env.NANOBPMN_APP_HANDSHAKE = prev;
     await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// Read the interface a started app's HTTP server actually bound to (issue #235).
+function appBoundAddress(app: { httpServer: object | undefined }): string {
+  const native = app.httpServer;
+  assert.ok(native instanceof http.Server, "app exposes a node http.Server");
+  const addr = native.address();
+  assert.ok(addr && typeof addr === "object", "server has a bound AddressInfo");
+  return addr.address;
+}
+
+test("defaults to a loopback bind when the manifest omits network (issue #235)", async () => {
+  const dir = await makeFixture();
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const engine = new FakeEngine();
+  const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+  await app.start();
+  try {
+    assert.equal(appBoundAddress(app), "127.0.0.1");
+  } finally {
+    await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('manifest network.bind:"all" binds every interface (issue #235)', async () => {
+  const dir = await makeFixture({ network: { bind: "all" } });
+  const logs: Array<{ level: string; msg: string }> = [];
+  const host = createNodeHost({ cwd: dir, log: (level, msg) => logs.push({ level, msg }) });
+  const engine = new FakeEngine();
+  const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+  await app.start();
+  try {
+    assert.equal(appBoundAddress(app), "0.0.0.0");
+    // exposing the app off-box must never be silent
+    assert.ok(
+      logs.some((l) => l.level === "warn" && l.msg.includes("all interfaces")),
+      "a warning is logged when binding to all interfaces",
+    );
+  } finally {
+    await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("URBAN_BIND=all overrides a loopback manifest (issue #235)", async () => {
+  const dir = await makeFixture({ network: { bind: "loopback" } });
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const engine = new FakeEngine();
+  const prev = process.env.URBAN_BIND;
+  process.env.URBAN_BIND = "all";
+  let app: Awaited<ReturnType<typeof createUrbanApp>> | undefined;
+  try {
+    app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+    await app.start();
+    assert.equal(appBoundAddress(app), "0.0.0.0");
+  } finally {
+    if (prev === undefined) delete process.env.URBAN_BIND;
+    else process.env.URBAN_BIND = prev;
+    await app?.stop();
     await rm(dir, { recursive: true, force: true });
   }
 });

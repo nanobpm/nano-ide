@@ -99,8 +99,16 @@ export interface HostContext {
    * connector mount then reports the workers as unsupported rather than crashing.
    */
   importConnectorModule?(entry: string): Promise<void>;
-  /** Start an HTTP server. Routing is done by the caller inside `handler`. */
-  serveHttp(port: number, handler: HttpHandler): Promise<HttpServer>;
+  /**
+   * Start an HTTP server. Routing is done by the caller inside `handler`. `bindHost` is the
+   * network interface to bind (e.g. `"127.0.0.1"` for loopback, `"0.0.0.0"` for all interfaces);
+   * the runtime always resolves it from the manifest `network.bind` setting (issue #235,
+   * loopback by default). It stays optional so hosts that can't bind-control still satisfy the
+   * contract, but the built-in node/deno adapters fail *closed* to loopback when it is omitted —
+   * they never inherit a bind-all default — so the secure-by-default guarantee can't silently
+   * regress.
+   */
+  serveHttp(port: number, handler: HttpHandler, bindHost?: string): Promise<HttpServer>;
   /**
    * Recursively watch the app root for file changes, invoking `onChange` with the
    * changed path (app-root-relative when the runtime reports it that way). Optional:

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { collectManifestIssues, validateManifest, ManifestValidationError } from "./validate.ts";
+import { BIND_MODES } from "./manifest.ts";
 
 const valid = {
   schemaVersion: 1,
@@ -43,6 +44,33 @@ test("a `ui` block is an accepted top-level key (Studio App View, ADR 0057 / nan
     ui: { enabled: true, portEnv: "PORT", path: "/", label: "Nano Workforce" },
   });
   assert.deepEqual(issues, []);
+});
+
+// Drift guard: the validator's accepted set is derived from `BIND_MODES` (via `isBindMode`),
+// so every declared mode must validate. If the validator ever re-hardcodes a divergent literal
+// set, or a mode is added to `BIND_MODES` without the validator following, this fails.
+test("a `network` block with a valid bind is accepted for every BIND_MODES value (issue #235)", () => {
+  for (const bind of BIND_MODES) {
+    assert.deepEqual(collectManifestIssues({ ...valid, network: { bind } }), []);
+  }
+  assert.deepEqual(collectManifestIssues({ ...valid, network: {} }), []);
+});
+
+test("a `network.bind` outside loopback|all is reported (issue #235)", () => {
+  const issues = collectManifestIssues({ ...valid, network: { bind: "lan" } });
+  assert.ok(issues.some((i) => i.path === "network.bind"));
+});
+
+test("a non-object `network` is reported (issue #235)", () => {
+  const issues = collectManifestIssues({ ...valid, network: "all" });
+  assert.ok(issues.some((i) => i.path === "network"));
+});
+
+test("an unknown key inside `network` is rejected (network additionalProperties:false, issue #235)", () => {
+  const issues = collectManifestIssues({ ...valid, network: { bind: "loopback", binn: "all" } });
+  assert.ok(issues.some((i) => i.path === "network.binn"));
+  // A valid `bind` alongside the typo must not itself be flagged.
+  assert.ok(!issues.some((i) => i.path === "network.bind"));
 });
 
 test("bad schemaVersion and bad slug id are reported", () => {

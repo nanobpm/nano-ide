@@ -52,6 +52,38 @@ The engine address comes from `$CAMUNDA_REST_ADDRESS` (default
 serving to Falcon on a Nano server and falls back to REST elsewhere. Set it to
 `rest`, `falcon`, or `embedded` to pin a specific transport.
 
+### Network bind interface
+
+By default an app's HTTP server binds to **loopback only** (`127.0.0.1`) — secure
+by default, so surfaces, triggers and capability hooks are unreachable from other
+machines. To make the app reachable from other hosts on the LAN (e.g. a
+distributed worker fleet), opt in with the app-level `network.bind` manifest
+setting:
+
+```jsonc
+// nano.app.json
+{
+  "network": { "bind": "loopback" }  // default — 127.0.0.1, refuses off-box connections
+  // "network": { "bind": "all" }    // 0.0.0.0 — reachable across the LAN
+}
+```
+
+| `network.bind` | Bind address | Reachability |
+|---|---|---|
+| `"loopback"` (default) | `127.0.0.1` | this machine only |
+| `"all"` | `0.0.0.0` | every interface / the LAN |
+
+Ops can override the manifest at deploy time with the `URBAN_BIND` environment
+variable (`URBAN_BIND=all` or `URBAN_BIND=loopback`); a valid value wins over the
+manifest, the manifest stays the declarative default. Binding to all interfaces
+emits a startup `warn` log because it exposes the app off-box.
+
+> **Security:** binding to all interfaces exposes the app's token-gated capability
+> hooks on the LAN. Any LOCAL-mode "well-known localhost" credential (e.g. the
+> agentic channel's LOCAL mode) must **not** be served on a non-loopback bind — a
+> consumer that mints one must gate it on a loopback bind.
+
+
 ### A typical session
 
 ```bash

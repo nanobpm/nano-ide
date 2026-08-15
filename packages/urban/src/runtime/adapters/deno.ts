@@ -17,6 +17,7 @@ import type {
   SqliteDb,
 } from "../core/host.ts";
 import { resolveModulePath } from "../core/module-path.ts";
+import { LOOPBACK_HOST } from "../core/manifest.ts";
 import { formatLogRecord, levelEnabled, parseLogLevel } from "../core/logger.ts";
 
 type SqliteParam = string | number | bigint | Uint8Array | null;
@@ -52,7 +53,7 @@ interface DenoGlobal {
   stat(path: string): Promise<unknown>;
   watchFs(paths: string | string[], options?: { recursive?: boolean }): DenoFsWatcher;
   serve(
-    opts: { port: number; onListen?: (a: { port: number }) => void },
+    opts: { port: number; hostname?: string; onListen?: (a: { port: number }) => void },
     handler: (req: Request) => Response | Promise<Response>,
   ): DenoHttpServer;
 }
@@ -123,8 +124,8 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
       const mod: Promise<Record<string, unknown>> = import(href);
       return mod;
     },
-    async serveHttp(port, handler) {
-      return startDenoServer(port, handler);
+    async serveHttp(port, handler, bindHost) {
+      return startDenoServer(port, handler, bindHost);
     },
     watch(onChange) {
       const w = Deno.watchFs(cwd, { recursive: true });
@@ -177,9 +178,17 @@ function wrapSqlite(db: DatabaseSync): SqliteDb {
   };
 }
 
-function startDenoServer(port: number, handler: HttpHandler): Promise<HttpServer> {
+function startDenoServer(
+  port: number,
+  handler: HttpHandler,
+  bindHost?: string,
+): Promise<HttpServer> {
   return new Promise<HttpServer>((resolveServer) => {
-    const server = Deno.serve({ port, onListen: ({ port: p }) => {
+    // `hostname` binds the interface (issue #235): `"127.0.0.1"` loopback-only, `"0.0.0.0"`
+    // all interfaces. When no bind host is resolved we fail *closed* to loopback rather than
+    // inheriting Deno's default, so a caller that omits it can never silently expose the server
+    // off-box.
+    const server = Deno.serve({ port, hostname: bindHost ?? LOOPBACK_HOST, onListen: ({ port: p }) => {
       resolveServer({
         port: p,
         stop: () => server.shutdown(),

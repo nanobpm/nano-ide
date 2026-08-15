@@ -10,7 +10,7 @@
 
 import schema from "@nanobpm/nano-app-schema/schema" with { type: "json" };
 import { isRecord } from "./guards.ts";
-import { isConfiguredStatusSelector } from "./manifest.ts";
+import { BIND_MODES, NETWORK_KEYS, isBindMode, isConfiguredStatusSelector } from "./manifest.ts";
 import type { AppManifest } from "./manifest.ts";
 
 export interface ValidationIssue {
@@ -52,10 +52,38 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
     if (!(req in obj)) issues.push({ path: req, message: "required by nano-app.schema.json" });
   }
   const allowed = new Set(Object.keys(S.properties ?? {}));
+  // `network` (issue #235) is threaded as a runtime-side setting until
+  // @nanobpm/nano-app-schema ships the field in its JSON Schema; allow it here so the
+  // envelope check doesn't reject it. Remove this once the schema owns `network` (it
+  // then flows from `S.properties` like every other block). The matching local type
+  // (NetworkConfig) lives in manifest.ts — mirrored like the `api` binding (ADR 0058),
+  // never via a `declare module` augmentation (CI bans augmenting the schema type).
+  allowed.add("network");
   if (S.additionalProperties === false) {
     for (const k of Object.keys(obj)) {
       if (!allowed.has(k)) {
         issues.push({ path: k, message: "unknown top-level key (additionalProperties: false)" });
+      }
+    }
+  }
+  if ("network" in obj) {
+    const network = isRecord(obj.network) ? obj.network : undefined;
+    if (!network) {
+      issues.push({ path: "network", message: "must be an object" });
+    } else {
+      if ("bind" in network && !isBindMode(network.bind)) {
+        issues.push({
+          path: "network.bind",
+          message: `must be one of: ${BIND_MODES.map((mode) => `"${mode}"`).join(", ")}`,
+        });
+      }
+      // `network` is mirrored runtime-side until the schema owns it, so this is its only
+      // validation surface: mirror the schema's `additionalProperties: false` intent and
+      // reject unknown keys so typos (e.g. `binn`) fail loudly instead of silently no-op'ing.
+      for (const k of Object.keys(network)) {
+        if (!NETWORK_KEYS.some((known) => known === k)) {
+          issues.push({ path: `network.${k}`, message: "unknown key (network additionalProperties: false)" });
+        }
       }
     }
   }

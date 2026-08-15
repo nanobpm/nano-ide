@@ -33,3 +33,23 @@ test("serveHttp with no hostname still serves (host default interface)", async (
     await server.stop();
   }
 });
+
+test("serveHttp rejects fast when the bind fails instead of hanging", async () => {
+  const host = createNodeHost();
+  // An unassignable/unsupported hostname makes the underlying `listen` emit `error`. Without the
+  // wired-in `error` handler the startup promise would never settle and hang forever, so guard the
+  // failure path with a timeout and assert we reject rather than stall.
+  const start = host.serveHttp(
+    0,
+    () => ({ status: 200, body: "ok" }),
+    { hostname: "203.0.113.1" },
+  );
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error("serveHttp hung: bind failure did not reject")), 3000),
+  );
+  await assert.rejects(Promise.race([start, timeout]), (err: unknown) => {
+    assert.ok(err instanceof Error);
+    assert.doesNotMatch(err.message, /hung/, "rejected via the adapter, not the test timeout");
+    return true;
+  });
+});

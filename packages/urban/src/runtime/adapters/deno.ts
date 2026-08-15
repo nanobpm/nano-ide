@@ -123,8 +123,8 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
       const mod: Promise<Record<string, unknown>> = import(href);
       return mod;
     },
-    async serveHttp(port, handler, opts) {
-      return startDenoServer(port, handler, opts?.hostname);
+    async serveHttp(port, handler, serveOpts) {
+      return startDenoServer(port, handler, serveOpts?.hostname);
     },
     watch(onChange) {
       const w = Deno.watchFs(cwd, { recursive: true });

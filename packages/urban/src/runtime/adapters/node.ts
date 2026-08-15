@@ -166,8 +166,8 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
         pathToFileURL(abs(entry)).href + (opts.importNonce ? `?v=${opts.importNonce}` : "");
       await import(href);
     },
-    async serveHttp(port, handler, opts) {
-      return await startNodeServer(port, handler, opts?.hostname);
+    async serveHttp(port, handler, serveOpts) {
+      return await startNodeServer(port, handler, serveOpts?.hostname);
     },
     watch(onChange) {
       const onFsEvent = (_event: unknown, filename: string | Buffer | null) => {
@@ -269,10 +269,23 @@ async function startNodeServer(
   });
   // Bind the requested interface when one is given (e.g. "127.0.0.1" for loopback-only); otherwise
   // let Node pick its default (all interfaces). `server.listen` rejects `undefined` as a host arg,
-  // so branch rather than always passing it.
-  await new Promise<void>((res) =>
-    hostname ? server.listen(port, hostname, res) : server.listen(port, res)
-  );
+  // so branch rather than always passing it. Wire the `error` event into the promise so a failed
+  // bind (invalid/unsupported `hostname`, EADDRINUSE, EACCES, …) rejects and fails fast instead of
+  // hanging `serveHttp` forever — now that `hostname` is user-configurable this is easy to hit.
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.removeListener("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    if (hostname) server.listen(port, hostname);
+    else server.listen(port);
+  });
   const addr = server.address();
   const actualPort = typeof addr === "object" && addr ? addr.port : port;
   return {

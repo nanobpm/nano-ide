@@ -27,11 +27,15 @@ export interface SurfacesHandle {
   describe(): Record<string, unknown>;
 }
 
-function inboxPage(basePath: string): string {
-  // The base path is embedded as a JSON string literal so a manifest-supplied value
-  // cannot break out of the <script> (see surfaces.test.ts). All task/form values are
-  // rendered via textContent / setAttribute — never innerHTML — so nothing the engine
-  // returns can inject markup.
+function inboxPage(): string {
+  // Reverse-proxy safe: the client derives its API base from location.pathname
+  // (where THIS page was actually served) rather than an embedded absolute
+  // route base. A hardcoded "/tasks" would escape the Nano console's
+  // path-prefixed proxy (/console/app-view/<name>/tasks) — the API fetches must
+  // inherit that prefix. Deriving from location also removes the manifest→
+  // <script> injection surface entirely: nothing manifest-supplied is embedded.
+  // All task/form values are rendered via textContent / setAttribute — never
+  // innerHTML — so nothing the engine returns can inject markup.
   return `<!doctype html><meta charset="utf-8"><title>Task inbox</title>
 <style>body{font:14px system-ui,sans-serif;margin:2rem;max-width:52rem}
 ul{list-style:none;padding:0}li{margin:.4rem 0;display:flex;align-items:center;gap:.5rem}
@@ -45,7 +49,7 @@ form .field input[type=checkbox],form .field input[type=radio]{width:auto}
 <h1>Task inbox</h1><ul id="tasks"><li>loading…</li></ul>
 <div id="form"></div>
 <script>
-const BASE=${JSON.stringify(basePath)};
+const BASE=location.pathname.replace(/\/+$/,'');
 const tasksEl=document.getElementById('tasks');
 const formEl=document.getElementById('form');
 
@@ -203,7 +207,7 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       method: "GET",
       path: base,
       source: "surface:taskInbox",
-      handler: () => html(inboxPage(base)),
+      handler: () => html(inboxPage()),
     });
     routes.push({
       method: "GET",

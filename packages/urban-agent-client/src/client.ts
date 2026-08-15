@@ -92,7 +92,12 @@ export interface AgenticClientOptions {
    * highest seen for that stream, so a successor producer (a retried job on a
    * fresh runner taking over the same stream) MUST present a strictly higher
    * value to fence its stale predecessor. Defaults to `Date.now()`, which a
-   * later-started process naturally exceeds. Must be a non-negative integer.
+   * later-started process naturally exceeds — but that default is best-effort:
+   * clock skew, a backwards clock adjustment, or two restarts inside the same
+   * millisecond can break strict monotonicity. A caller that needs a hard
+   * fencing guarantee MUST supply an explicit monotonic `incarnation` (e.g. a
+   * persisted per-takeover counter) rather than rely on the clock. Must be a
+   * non-negative integer.
    */
   readonly incarnation?: number;
   /** Injectable scheduler for reconnect backoff (tests). Defaults to setTimeout. */
@@ -307,7 +312,8 @@ export class AgenticClient {
 
   /**
    * Produce relay bytes on the bulk lane. `chunk` is the terminal/command output
-   * for `stream`, sent as an op-tagged `produce` control frame stamped with this
+   * for `stream`, sent as an op-tagged `produce` frame — `produce` is the payload
+   * op, carried on the bulk lane (not the QoS control lane) — stamped with this
    * client's {@link incarnation} so the hub can fence a stale predecessor. The
    * hub assigns the authoritative byte offset from its ring — the producer never
    * carries one. Bytes are UTF-8-encoded on the wire as the payload's `chunk`.

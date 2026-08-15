@@ -77,7 +77,8 @@ function producedRelayFrames(chunks: string[], incarnation: number): Frame[] {
 test("the hub admits the client's produced relay frames and delivers the bytes", () => {
   const produced = producedRelayFrames(["hello ", "world"], 42);
   assert.equal(produced.length, 2);
-  // Every produced frame is an op-tagged produce control frame.
+  // Every produced frame is an op-tagged `produce` frame (the `produce` payload
+  // op — carried on the bulk lane, not the QoS control lane).
   for (const f of produced) {
     assert.equal(field(f.payload, "op"), "produce");
     assert.equal(field(f.payload, "incarnation"), 42);

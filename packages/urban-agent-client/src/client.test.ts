@@ -66,7 +66,7 @@ test("a SERVE addressed to a different instance is ignored", async () => {
 });
 
 test("heartbeat, relay and deregister emit correctly-shaped frames", () => {
-  const { client, t } = newClient();
+  const { client, t } = newClient({ incarnation: 7 });
   client.connect();
   t.last().fireOpen();
 
@@ -83,9 +83,10 @@ test("heartbeat, relay and deregister emit correctly-shaped frames", () => {
   const relays = frames.filter((f) => f.family === "relay");
   assert.equal(relays.length, 2);
   assert.equal(relays[0]?.lane, "bulk");
-  // Per-stream byte offset advances by the UTF-8 length of each chunk.
-  assert.deepEqual(relays[0]?.payload, { stream: "stdout", offset: 0, chunk: "hello" });
-  assert.deepEqual(relays[1]?.payload, { stream: "stdout", offset: 5, chunk: "world!" });
+  // Producer emits op-tagged `produce` control frames stamped with the client's
+  // incarnation; the hub assigns authoritative offsets, so the producer carries none.
+  assert.deepEqual(relays[0]?.payload, { op: "produce", stream: "stdout", incarnation: 7, chunk: "hello" });
+  assert.deepEqual(relays[1]?.payload, { op: "produce", stream: "stdout", incarnation: 7, chunk: "world!" });
 
   const dereg = frames.find((f) => f.family === "deregister");
   assert.deepEqual(dereg?.payload, { instance: "worker-1", reason: "done" });
@@ -146,8 +147,7 @@ test("close() releases the outbound buffer so a terminal client pins no backlog"
   client.close();
 
   // Terminal close must not pin the outage backlog in memory forever — the ring
-  // (and the per-stream relay offsets) can never be drained again, so they are
-  // released.
+  // can never be drained again, so it is released.
   assert.equal(client.buffered, 0, "close() cleared the outbound ring");
 });
 
@@ -175,36 +175,12 @@ test("a closed client refuses every outbound-producing call instead of buffering
   );
 });
 
-test("relay offset tracks UTF-8 byte length per stream, independently", () => {
-  const { client, t } = newClient();
-  client.connect();
-  t.last().fireOpen();
-  client.relay("a", "é"); // 2 bytes UTF-8
-  client.relay("b", "x"); // separate stream, offset 0
-  client.relay("a", "z"); // offset now 2
-  // Astral char (U+1F600) is 4 UTF-8 bytes but 2 UTF-16 code units, so the
-  // offset must advance by the UTF-8 byte count (4), never the JS string length
-  // (2) — guards the byte-length helper against surrogate-pair miscounting.
-  client.relay("a", "😀"); // offset now 3
-  client.relay("a", "!"); // offset now 3 + 4 = 7
-  const relays = t.last().sentFrames.filter((f) => f.family === "relay");
-  assert.deepEqual(relays.map((f) => f.payload), [
-    { stream: "a", offset: 0, chunk: "é" },
-    { stream: "b", offset: 0, chunk: "x" },
-    { stream: "a", offset: 2, chunk: "z" },
-    { stream: "a", offset: 3, chunk: "😀" },
-    { stream: "a", offset: 7, chunk: "!" },
-  ]);
-  client.close();
-});
-
-test("a relay dropped by the QoS overflow policy does not advance the stream offset", () => {
+test("a relay dropped by the QoS overflow policy is not emitted", () => {
   // With a single ring slot, the register buffered while the hub is down (control
   // lane) fills the ring. A relay (bulk) enqueued now is the least-important frame
   // in play, so the overflow policy DROPS the incoming relay rather than evict the
-  // higher-priority register. A dropped relay must consume no offset space, or the
-  // hub-side resume-from-offset (S5) would see a phantom gap for bytes never sent.
-  const { client, t } = newClient({ bufferCapacity: 1 });
+  // higher-priority register. The dropped relay must never reach the wire.
+  const { client, t } = newClient({ incarnation: 7, bufferCapacity: 1 });
   client.connect(); // transport built, hub still down
   client.register({ capability: { cognition: "high" } }).catch(() => {}); // control frame fills the slot; rejected on close()
   assert.equal(client.buffered, 1, "the buffered register occupies the single ring slot");
@@ -217,8 +193,8 @@ test("a relay dropped by the QoS overflow policy does not advance the stream off
   const relays = t.last().sentFrames.filter((f) => f.family === "relay");
   assert.deepEqual(
     relays.map((f) => f.payload),
-    [{ stream: "s", offset: 0, chunk: "sent" }],
-    "offset starts at 0 — the earlier dropped relay consumed no offset space",
+    [{ op: "produce", stream: "s", incarnation: 7, chunk: "sent" }],
+    "only the accepted produce frame reached the wire",
   );
   client.close();
 });
@@ -248,7 +224,7 @@ test("buffers while the hub is down and drains in QoS order on reconnect", () =>
 });
 
 test("survives a mid-stream drop: unsent frames stay buffered and drain on the next open", () => {
-  const { client, t } = newClient({ reconnect: { enabled: false } });
+  const { client, t } = newClient({ incarnation: 7, reconnect: { enabled: false } });
   client.connect();
   t.last().fireOpen();
   client.relay("stdout", "a");
@@ -267,8 +243,8 @@ test("survives a mid-stream drop: unsent frames stay buffered and drain on the n
   assert.equal(client.buffered, 0);
   const chunks = t.last().sentFrames.filter((f) => f.family === "relay").map((f) => f.payload);
   assert.deepEqual(chunks, [
-    { stream: "stdout", offset: 1, chunk: "b" },
-    { stream: "stdout", offset: 2, chunk: "c" },
+    { op: "produce", stream: "stdout", incarnation: 7, chunk: "b" },
+    { op: "produce", stream: "stdout", incarnation: 7, chunk: "c" },
   ]);
 });
 
@@ -427,8 +403,8 @@ test("an invalid outbound relay payload is dropped with onError, not buffered", 
   client.close();
 });
 
-test("a rejected relay consumes no offset space (advance-only-on-accept)", () => {
-  const { client, t } = newClient({ reconnect: { enabled: false } });
+test("a rejected relay does not disrupt subsequent produce frames", () => {
+  const { client, t } = newClient({ incarnation: 7, reconnect: { enabled: false } });
   client.connect();
   t.last().fireOpen();
 
@@ -436,21 +412,21 @@ test("a rejected relay consumes no offset space (advance-only-on-accept)", () =>
   client.onError((e) => errors.push(e));
 
   // An empty stream fails the S0 relay contract, so the frame is rejected at
-  // enqueue time. The offset for a real stream must be untouched by it, and a
-  // rejected relay must never advance its own (empty-stream) offset bucket.
-  client.relay("stdout", "ok"); // accepted → stdout offset advances to 2
+  // enqueue time. Subsequent valid produce frames must be emitted unaffected —
+  // the hub, not the producer, assigns offsets from the produce stream.
+  client.relay("stdout", "ok"); // accepted
   client.relay("", "dropped"); // rejected: empty stream
-  client.relay("stdout", "next"); // must resume at offset 2, unaffected by the reject
+  client.relay("stdout", "next"); // accepted, unaffected by the reject
 
   assert.ok(errors.some((e) => /relay payload failed validation/.test(e.message)));
   const relays = t.last().sentFrames.filter((f) => f.family === "relay").map((f) => f.payload);
   assert.deepEqual(
     relays,
     [
-      { stream: "stdout", offset: 0, chunk: "ok" },
-      { stream: "stdout", offset: 2, chunk: "next" },
+      { op: "produce", stream: "stdout", incarnation: 7, chunk: "ok" },
+      { op: "produce", stream: "stdout", incarnation: 7, chunk: "next" },
     ],
-    "the rejected relay neither advanced nor corrupted any offset",
+    "the rejected relay neither dropped nor corrupted a subsequent produce frame",
   );
   client.close();
 });
@@ -649,7 +625,7 @@ test("close() releases the outbound buffer BEFORE it emits onClose, so subscribe
   const { client } = newClient({ capability: { cognition: "high" } });
   client.connect(); // transport built but never opened
 
-  // Accumulate an outage backlog: buffered relay frames + per-stream offsets.
+  // Accumulate an outage backlog of buffered relay frames.
   for (let i = 0; i < 4; i++) {
     client.relay("stdout", `chunk-${i}`);
   }

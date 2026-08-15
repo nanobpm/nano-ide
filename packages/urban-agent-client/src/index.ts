@@ -74,4 +74,5 @@ export type {
   DeregisterPayload,
   ServePayload,
   RelayPayload,
+  RelayProducePayload,
 } from "./protocol.ts";

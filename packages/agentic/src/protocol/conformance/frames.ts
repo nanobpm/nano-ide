@@ -101,15 +101,43 @@ export const GOLDEN_FRAMES: readonly GoldenFrame[] = [
     hex: "4e4101010600000065000000187b226f70223a2272656164222c2273696e6365223a31327d",
   },
   {
-    name: "relay-chunk-bulk",
+    name: "relay-produce-bulk",
     direction: "worker->hub",
     frame: {
       lane: "bulk",
       family: "relay",
       seq: 5,
-      payload: { stream: "job-1223", offset: 2048, chunk: "hello world\n" },
+      payload: { op: "produce", stream: "job-1223", incarnation: 1, chunk: "hello world\n" },
     },
-    hex: "4e41010207000000050000003b7b2273747265616d223a226a6f622d31323233222c226f6666736574223a323034382c226368756e6b223a2268656c6c6f20776f726c645c6e227d",
+    hex: "4e41010207000000050000004c7b226f70223a2270726f64756365222c2273747265616d223a226a6f622d31323233222c22696e6361726e6174696f6e223a312c226368756e6b223a2268656c6c6f20776f726c645c6e227d",
+  },
+  {
+    name: "relay-subscribe-control",
+    direction: "worker->hub",
+    frame: {
+      lane: "control",
+      family: "relay",
+      seq: 6,
+      payload: { op: "subscribe", stream: "job-1223", from: 0, credit: 1024 },
+    },
+    hex: "4e41010007000000060000003d7b226f70223a22737562736372696265222c2273747265616d223a226a6f622d31323233222c2266726f6d223a302c22637265646974223a313032347d",
+  },
+  {
+    name: "relay-credit-control",
+    direction: "worker->hub",
+    frame: { lane: "control", family: "relay", seq: 7, payload: { op: "credit", credit: 512 } },
+    hex: "4e41010007000000070000001c7b226f70223a22637265646974222c22637265646974223a3531327d",
+  },
+  {
+    name: "relay-subscribed-ack-control",
+    direction: "hub->worker",
+    frame: {
+      lane: "control",
+      family: "relay",
+      seq: 8,
+      payload: { op: "subscribed", stream: "job-1223", gap: false, nextOffset: 2048 },
+    },
+    hex: "4e4101000700000008000000457b226f70223a2273756273637269626564222c2273747265616d223a226a6f622d31323233222c22676170223a66616c73652c226e6578744f6666736574223a323034387d",
   },
   {
     name: "relay-seq-max-bulk",
@@ -130,7 +158,7 @@ export const GOLDEN_FRAMES: readonly GoldenFrame[] = [
   },
   {
     name: "unicode-payload-relay",
-    direction: "worker->hub",
+    direction: "hub->worker",
     frame: {
       lane: "bulk",
       family: "relay",

@@ -14,7 +14,7 @@ import type {
   MessageFamily,
   QosLane,
   RegisterPayload,
-  RelayPayload,
+  RelayProducePayload,
   ServePayload,
 } from "./protocol.ts";
 import { websocketTransport } from "./transport.ts";
@@ -86,6 +86,20 @@ export interface AgenticClientOptions {
   readonly serveTimeoutMs?: number;
   /** Reconnect/backoff policy. Enabled by default. */
   readonly reconnect?: ReconnectOptions;
+  /**
+   * The producer generation stamped on every `produce` relay frame. The hub's
+   * incarnation fence admits a frame only when its incarnation is `>=` the
+   * highest seen for that stream, so a successor producer (a retried job on a
+   * fresh runner taking over the same stream) MUST present a strictly higher
+   * value to fence its stale predecessor. Defaults to `Date.now()`, which a
+   * later-started process naturally exceeds — but that default is best-effort:
+   * clock skew, a backwards clock adjustment, or two restarts inside the same
+   * millisecond can break strict monotonicity. A caller that needs a hard
+   * fencing guarantee MUST supply an explicit monotonic `incarnation` (e.g. a
+   * persisted per-takeover counter) rather than rely on the clock. Must be a
+   * non-negative integer.
+   */
+  readonly incarnation?: number;
   /** Injectable scheduler for reconnect backoff (tests). Defaults to setTimeout. */
   readonly schedule?: (fn: () => void, ms: number) => void;
 }
@@ -126,6 +140,7 @@ export class AgenticClient {
   private readonly serveTimeoutMs: number;
   private readonly reconnectPolicy: Required<ReconnectOptions>;
   private readonly schedule: (fn: () => void, ms: number) => void;
+  private readonly incarnation: number;
 
   private capability: Capability | undefined;
   private transport: Transport | undefined;
@@ -138,7 +153,6 @@ export class AgenticClient {
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private pendingServe: PendingServe | undefined;
   private lastServe: readonly string[] = [];
-  private readonly relayOffsets = new Map<string, number>();
 
   private readonly serveListeners = new Set<Listener<ServePayload>>();
   private readonly frameListeners = new Set<Listener<Frame>>();
@@ -162,6 +176,10 @@ export class AgenticClient {
       factor: options.reconnect?.factor ?? DEFAULT_RECONNECT.factor,
     };
     this.reconnectDelay = this.reconnectPolicy.initialDelayMs;
+    this.incarnation = options.incarnation ?? Date.now();
+    if (!Number.isInteger(this.incarnation) || this.incarnation < 0) {
+      throw new RangeError(`incarnation must be a non-negative integer, got ${this.incarnation}`);
+    }
     // Reject timing/backoff options that Node would coerce into a 0ms hot loop.
     // heartbeat/serveTimeout accept 0 as a "disabled" sentinel (guarded with > 0
     // at use), but reconnect delays have no such sentinel — enabled:false disables
@@ -294,28 +312,21 @@ export class AgenticClient {
 
   /**
    * Produce relay bytes on the bulk lane. `chunk` is the terminal/command output
-   * for `stream`; the client tracks a monotonic per-stream byte offset so the
-   * hub-side ring can resume-from-offset after a consumer reconnect (S5). Bytes
-   * are UTF-8-encoded on the wire as the payload's `chunk` string.
+   * for `stream`, sent as an op-tagged `produce` frame — `produce` is the payload
+   * op, carried on the bulk lane (not the QoS control lane) — stamped with this
+   * client's {@link incarnation} so the hub can fence a stale predecessor. The
+   * hub assigns the authoritative chunk offset from its ring — a per-chunk,
+   * monotonic, gap-free counter (not a byte offset); the producer never carries
+   * one. Bytes are UTF-8-encoded on the wire as the payload's `chunk`.
    */
   relay(stream: string, chunk: string): void {
-    // Terminal client: refuse before touching the per-stream offset map (which
-    // close() already released) so a post-close relay neither re-grows that map
-    // nor buffers a frame that can never drain.
+    // Terminal client: refuse post-close so a relay neither buffers a frame that
+    // can never drain nor is emitted after deregister.
     if (this.refuseWhenClosed("relay")) {
       return;
     }
-    const offset = this.relayOffsets.get(stream) ?? 0;
-    const payload: RelayPayload = { stream, offset, chunk };
-    // Advance the per-stream offset only if the frame was actually accepted
-    // for sending. A relay rejected for invalid payload, refused because the
-    // client is closed, OR dropped by the QoS overflow policy (ring full of
-    // higher-priority traffic) must not consume offset space, or every
-    // subsequent relay's offset would be inconsistent with the bytes the hub
-    // actually received.
-    if (this.enqueue("relay", OUTBOUND_LANE.relay, payload)) {
-      this.relayOffsets.set(stream, offset + byteLength(chunk));
-    }
+    const payload: RelayProducePayload = { op: "produce", stream, incarnation: this.incarnation, chunk };
+    this.enqueue("relay", OUTBOUND_LANE.relay, payload);
   }
 
   /**
@@ -345,18 +356,16 @@ export class AgenticClient {
     // we drive handleClose directly to guarantee onClose fires. handleClose is
     // idempotent per connection attempt, so it de-duplicates against any onClose
     // the transport also fires.
-    // Terminal: the outbound ring and per-stream relay offsets can never be
-    // drained again, so release them here rather than pinning a large outage
-    // backlog (buffered frames, many relay streams) in memory for the lifetime
-    // of the now-dead client. Clear BEFORE anything can fire the close event —
-    // both the transport (an injectable seam that may legally fire onClose
-    // synchronously from close(), as FakeTransport does when open) and our own
-    // handleClose below emit onClose synchronously. A subscriber that reads
-    // `buffered` (or the relay-offset state) must observe the released,
-    // self-consistent terminal state that close() documents — not a stale
-    // non-zero backlog — regardless of which path surfaces the close first.
+    // Terminal: the outbound ring can never be drained again, so release it here
+    // rather than pinning a large outage backlog (buffered frames) in memory for
+    // the lifetime of the now-dead client. Clear BEFORE anything can fire the
+    // close event — both the transport (an injectable seam that may legally fire
+    // onClose synchronously from close(), as FakeTransport does when open) and our
+    // own handleClose below emit onClose synchronously. A subscriber that reads
+    // `buffered` must observe the released, self-consistent terminal state that
+    // close() documents — not a stale non-zero backlog — regardless of which path
+    // surfaces the close first.
     this.ring.clear();
-    this.relayOffsets.clear();
     const transport = this.transport;
     this.transport = undefined;
     try {
@@ -787,20 +796,6 @@ export function connectAgenticChannel(options: AgenticClientOptions): AgenticCli
   const client = new AgenticClient(options);
   client.connect();
   return client;
-}
-
-const utf8Encoder = new TextEncoder();
-
-// UTF-8 byte length of `text`. Prefer Node's `Buffer.byteLength`, which computes
-// the length without allocating, on the `relay()` hot path where the extra
-// per-call `Uint8Array` allocation from `TextEncoder.encode()` would add
-// measurable GC/CPU overhead during bulk output storms. Fall back to
-// `TextEncoder` where `Buffer` is unavailable (non-Node hosts).
-function byteLength(text: string): number {
-  if (typeof Buffer !== "undefined") {
-    return Buffer.byteLength(text, "utf8");
-  }
-  return utf8Encoder.encode(text).length;
 }
 
 function isServePayload(payload: unknown): payload is ServePayload {

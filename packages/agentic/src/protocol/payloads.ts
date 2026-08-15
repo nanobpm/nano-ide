@@ -53,10 +53,58 @@ export interface BlackboardPayload {
   readonly since?: number;
 }
 
+/**
+ * The `relay` family multiplexes two roles on one message family:
+ *
+ *  - CONTROL frames a peer sends the hub: a producer's {@link RelayProducePayload}
+ *    (`op: "produce"`), and a consumer's {@link RelaySubscribePayload} /
+ *    {@link RelayCreditPayload}.
+ *  - DELIVERY frames the hub sends a consumer: a data chunk ({@link RelayPayload},
+ *    no `op`) and a resume ack ({@link RelaySubscribedPayload}, `op: "subscribed"`).
+ *
+ * {@link RelayPayload} is the DELIVERY data chunk specifically (`{ stream, offset,
+ * chunk }`, no `op`) — the hub assigns the authoritative `offset` from its ring.
+ * A producer must NOT send this shape; it sends {@link RelayProducePayload}.
+ */
 export interface RelayPayload {
   readonly stream: string;
   readonly offset: number;
   readonly chunk: string;
+}
+
+/** A producer appends bytes to a stream. `incarnation` is the producer's
+ * generation, stamped so the hub can fence a stale predecessor (a retried job on
+ * a fresh runner takes over with a strictly higher incarnation). The hub assigns
+ * the offset — a producer never carries one. */
+export interface RelayProducePayload {
+  readonly op: "produce";
+  readonly stream: string;
+  readonly incarnation: number;
+  readonly chunk: string;
+}
+
+/** A consumer subscribes to a stream, optionally resuming from `from` with an
+ * initial `credit` budget. */
+export interface RelaySubscribePayload {
+  readonly op: "subscribe";
+  readonly stream: string;
+  readonly from?: number;
+  readonly credit?: number;
+}
+
+/** A consumer replenishes its flow-control budget. */
+export interface RelayCreditPayload {
+  readonly op: "credit";
+  readonly credit: number;
+}
+
+/** The hub's ack to a subscribe: `gap` is true when `from` predated the retained
+ * ring (bytes were missed), `nextOffset` is where delivery resumes. */
+export interface RelaySubscribedPayload {
+  readonly op: "subscribed";
+  readonly stream: string;
+  readonly gap: boolean;
+  readonly nextOffset: number;
 }
 
 export interface PayloadError {
@@ -74,6 +122,10 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function nonNegInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
 }
 
 function validateRegister(p: Record<string, unknown>, errors: PayloadError[]): void {
@@ -150,14 +202,65 @@ function validateBlackboard(p: Record<string, unknown>, errors: PayloadError[]):
 }
 
 function validateRelay(p: Record<string, unknown>, errors: PayloadError[]): void {
-  if (!nonEmptyString(p.stream)) {
-    errors.push({ code: "bad-stream", message: "relay.stream must be a non-empty string" });
+  const op = p.op;
+  // No `op`: a DELIVERY data chunk (hub -> consumer) — `{ stream, offset, chunk }`.
+  if (op === undefined) {
+    if (!nonEmptyString(p.stream)) {
+      errors.push({ code: "bad-stream", message: "relay.stream must be a non-empty string" });
+    }
+    if (!nonNegInt(p.offset)) {
+      errors.push({ code: "bad-offset", message: "relay.offset must be a non-negative integer" });
+    }
+    if (typeof p.chunk !== "string") {
+      errors.push({ code: "bad-chunk", message: "relay.chunk must be a string" });
+    }
+    return;
   }
-  if (typeof p.offset !== "number" || !Number.isInteger(p.offset) || p.offset < 0) {
-    errors.push({ code: "bad-offset", message: "relay.offset must be a non-negative integer" });
-  }
-  if (typeof p.chunk !== "string") {
-    errors.push({ code: "bad-chunk", message: "relay.chunk must be a string" });
+  // Otherwise an op-tagged CONTROL/ack frame.
+  switch (op) {
+    case "produce":
+      if (!nonEmptyString(p.stream)) {
+        errors.push({ code: "bad-stream", message: "relay.produce.stream must be a non-empty string" });
+      }
+      if (!nonNegInt(p.incarnation)) {
+        errors.push({ code: "bad-incarnation", message: "relay.produce.incarnation must be a non-negative integer" });
+      }
+      if (typeof p.chunk !== "string") {
+        errors.push({ code: "bad-chunk", message: "relay.produce.chunk must be a string" });
+      }
+      return;
+    case "subscribe":
+      if (!nonEmptyString(p.stream)) {
+        errors.push({ code: "bad-stream", message: "relay.subscribe.stream must be a non-empty string" });
+      }
+      if ("from" in p && !nonNegInt(p.from)) {
+        errors.push({ code: "bad-from", message: "relay.subscribe.from must be a non-negative integer when present" });
+      }
+      if ("credit" in p && !nonNegInt(p.credit)) {
+        errors.push({ code: "bad-credit", message: "relay.subscribe.credit must be a non-negative integer when present" });
+      }
+      return;
+    case "credit":
+      if (!nonNegInt(p.credit)) {
+        errors.push({ code: "bad-credit", message: "relay.credit.credit must be a non-negative integer" });
+      }
+      return;
+    case "subscribed":
+      if (!nonEmptyString(p.stream)) {
+        errors.push({ code: "bad-stream", message: "relay.subscribed.stream must be a non-empty string" });
+      }
+      if (typeof p.gap !== "boolean") {
+        errors.push({ code: "bad-gap", message: "relay.subscribed.gap must be a boolean" });
+      }
+      if (!nonNegInt(p.nextOffset)) {
+        errors.push({ code: "bad-next-offset", message: "relay.subscribed.nextOffset must be a non-negative integer" });
+      }
+      return;
+    default:
+      errors.push({
+        code: "bad-op",
+        message: `relay.op must be one of produce|subscribe|credit|subscribed, got ${String(op)}`,
+      });
   }
 }
 

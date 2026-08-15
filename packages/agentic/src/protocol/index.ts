@@ -77,6 +77,10 @@ export {
   type BlackboardPayload,
   type BlackboardOp,
   type RelayPayload,
+  type RelayProducePayload,
+  type RelaySubscribePayload,
+  type RelayCreditPayload,
+  type RelaySubscribedPayload,
   type PayloadError,
   type PayloadValidationResult,
 } from "./payloads.ts";

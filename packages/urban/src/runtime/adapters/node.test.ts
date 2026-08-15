@@ -34,3 +34,34 @@ test("serveHttp binds all interfaces when handed 0.0.0.0 (reachable on the LAN)"
     await server.stop();
   }
 });
+
+// Issue #235 (fail closed): omitting the bind host must NOT inherit Node's bind-all default —
+// a caller that forgets to resolve one should still get loopback, never off-box exposure.
+test("serveHttp fails closed to loopback when no bind host is given", async () => {
+  const host = createNodeHost({ log: () => {} });
+  const server = await host.serveHttp(0, () => ({ status: 200 }));
+  try {
+    assert.equal(boundAddress(server), "127.0.0.1");
+  } finally {
+    await server.stop();
+  }
+});
+
+// A bind failure (EADDRINUSE) must reject the serveHttp promise instead of hanging forever
+// waiting for a `listening` event that never fires.
+test("serveHttp rejects when the port is already in use (does not hang)", async () => {
+  const host = createNodeHost({ log: () => {} });
+  const first = await host.serveHttp(0, () => ({ status: 200 }), "127.0.0.1");
+  const taken = first.native;
+  assert.ok(taken instanceof http.Server);
+  const addr = taken.address();
+  assert.ok(addr && typeof addr === "object");
+  try {
+    await assert.rejects(
+      () => host.serveHttp(addr.port, () => ({ status: 200 }), "127.0.0.1"),
+      (err: NodeJS.ErrnoException) => err.code === "EADDRINUSE",
+    );
+  } finally {
+    await first.stop();
+  }
+});

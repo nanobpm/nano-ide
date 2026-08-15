@@ -66,6 +66,13 @@ test("a non-object `network` is reported (issue #235)", () => {
   assert.ok(issues.some((i) => i.path === "network"));
 });
 
+test("an unknown key inside `network` is rejected (network additionalProperties:false, issue #235)", () => {
+  const issues = collectManifestIssues({ ...valid, network: { bind: "loopback", binn: "all" } });
+  assert.ok(issues.some((i) => i.path === "network.binn"));
+  // A valid `bind` alongside the typo must not itself be flagged.
+  assert.ok(!issues.some((i) => i.path === "network.bind"));
+});
+
 test("bad schemaVersion and bad slug id are reported", () => {
   const issues = collectManifestIssues({ ...valid, schemaVersion: 2, id: "Not A Slug" });
   assert.ok(issues.some((i) => i.path === "schemaVersion"));

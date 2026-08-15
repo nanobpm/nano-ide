@@ -104,6 +104,14 @@ export interface NetworkConfig {
   bind?: BindMode;
 }
 
+/**
+ * The keys the runtime-side `network` block understands, as the single source of truth for
+ * the validator's `additionalProperties: false` check under `network`. Typed as
+ * `(keyof NetworkConfig)[]` so it can only ever list real {@link NetworkConfig} keys — a
+ * drift test (`manifest.test.ts`) asserts it stays complete as the block grows.
+ */
+export const NETWORK_KEYS: readonly (keyof NetworkConfig)[] = ["bind"];
+
 /** A runtime-side view of a manifest carrying the pending-schema `network` block. */
 export interface WithNetwork {
   network?: NetworkConfig;

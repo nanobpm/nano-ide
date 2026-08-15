@@ -21,6 +21,7 @@ import type {
   WatchHandle,
 } from "../core/host.ts";
 import { resolveModulePath } from "../core/module-path.ts";
+import { LOOPBACK_HOST } from "../core/manifest.ts";
 import { formatLogLine, levelEnabled, parseLogLevel } from "../core/logger.ts";
 
 /**
@@ -267,12 +268,26 @@ async function startNodeServer(
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  // Bind to the requested interface when given (issue #235): `"127.0.0.1"` keeps the app
-  // loopback-only (secure default), `"0.0.0.0"` exposes it on the LAN. Omitting `bindHost`
-  // preserves Node's default (all interfaces) for callers that don't resolve a bind host.
-  await new Promise<void>((res) => {
-    if (bindHost === undefined) server.listen(port, res);
-    else server.listen(port, bindHost, res);
+  // Bind to the requested interface (issue #235): `"127.0.0.1"` keeps the app loopback-only
+  // (secure default), `"0.0.0.0"` exposes it on the LAN. When no bind host is resolved we fail
+  // *closed* to loopback rather than inheriting Node's bind-all default, so a caller that omits
+  // it can never silently expose the server off-box.
+  const listenHost = bindHost ?? LOOPBACK_HOST;
+  // `server.listen` reports bind failures (EADDRINUSE/EACCES/…) via the `error` event, not the
+  // listening callback. Reject on the first such error so callers see the failure instead of
+  // hanging forever waiting for a `listening` that will never fire.
+  await new Promise<void>((res, rej) => {
+    const onError = (err: Error) => {
+      server.removeListener("listening", onListening);
+      rej(err);
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      res();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, listenHost);
   });
   const addr = server.address();
   const actualPort = typeof addr === "object" && addr ? addr.port : port;

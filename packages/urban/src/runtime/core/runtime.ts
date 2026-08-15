@@ -6,7 +6,7 @@
 import type { AppApi, Mounted } from "./context.ts";
 import type { EngineClient, HostContext, HttpServer } from "./host.ts";
 import type { EngineSdkClient } from "../engine/sdk.ts";
-import { loadManifest, resolveBindHost, resolveBindMode, type AppManifest } from "./manifest.ts";
+import { loadManifest, resolveBindMode, bindModeToHost, type AppManifest } from "./manifest.ts";
 import { validateManifest } from "./validate.ts";
 import { makeRouter, type Route } from "./router.ts";
 import { deployModels } from "./modules/deploy.ts";
@@ -159,8 +159,10 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
 
   // Which interface the HTTP server binds to (issue #235). Secure by default: loopback unless
   // the manifest's `network.bind` (or the `URBAN_BIND` env override) opts into all interfaces.
+  // Derive the host address from the already-resolved mode so the two can never diverge (and we
+  // consult the env exactly once) — a second `resolveBindHost` call would re-read the override.
   const bindMode = resolveBindMode(manifest, (n) => host.env(n));
-  const bindHost = resolveBindHost(manifest, (n) => host.env(n));
+  const bindHost = bindModeToHost(bindMode);
 
   // Release every mounted resource and reset internal state so a subsequent
   // start() begins clean. Used by stop() and by start()'s failure path.

@@ -10,7 +10,7 @@
 
 import schema from "@nanobpm/nano-app-schema/schema" with { type: "json" };
 import { isRecord } from "./guards.ts";
-import { BIND_MODES, isBindMode, isConfiguredStatusSelector } from "./manifest.ts";
+import { BIND_MODES, NETWORK_KEYS, isBindMode, isConfiguredStatusSelector } from "./manifest.ts";
 import type { AppManifest } from "./manifest.ts";
 
 export interface ValidationIssue {
@@ -70,11 +70,21 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
     const network = isRecord(obj.network) ? obj.network : undefined;
     if (!network) {
       issues.push({ path: "network", message: "must be an object" });
-    } else if ("bind" in network && !isBindMode(network.bind)) {
-      issues.push({
-        path: "network.bind",
-        message: `must be one of: ${BIND_MODES.map((mode) => `"${mode}"`).join(", ")}`,
-      });
+    } else {
+      if ("bind" in network && !isBindMode(network.bind)) {
+        issues.push({
+          path: "network.bind",
+          message: `must be one of: ${BIND_MODES.map((mode) => `"${mode}"`).join(", ")}`,
+        });
+      }
+      // `network` is mirrored runtime-side until the schema owns it, so this is its only
+      // validation surface: mirror the schema's `additionalProperties: false` intent and
+      // reject unknown keys so typos (e.g. `binn`) fail loudly instead of silently no-op'ing.
+      for (const k of Object.keys(network)) {
+        if (!NETWORK_KEYS.some((known) => known === k)) {
+          issues.push({ path: `network.${k}`, message: "unknown key (network additionalProperties: false)" });
+        }
+      }
     }
   }
   if ("schemaVersion" in obj && obj.schemaVersion !== 1) {

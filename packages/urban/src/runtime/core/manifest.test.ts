@@ -11,6 +11,8 @@ import {
   bindModeToHost,
   LOOPBACK_HOST,
   ALL_INTERFACES_HOST,
+  NETWORK_KEYS,
+  type NetworkConfig,
 } from "./manifest.ts";
 
 test("expandEnvString: var, default, and empty fallback", () => {
@@ -52,6 +54,19 @@ test("manifest network.bind selects the interface", () => {
   assert.equal(resolveBindHost({ network: { bind: "all" } }), ALL_INTERFACES_HOST);
   assert.equal(resolveBindHost({ network: { bind: "all" } }), "0.0.0.0");
   assert.equal(resolveBindHost({ network: { bind: "loopback" } }), "127.0.0.1");
+});
+
+// Drift guard: NETWORK_KEYS is the validator's single source of truth for `network`'s allowed
+// keys. Keep it complete as NetworkConfig grows — every declared key must be listed, or the
+// validator would reject a legitimate field. The `satisfies` pins each entry to a real key.
+test("NETWORK_KEYS lists every NetworkConfig key (issue #235)", () => {
+  const sample = { bind: "loopback" } satisfies Required<NetworkConfig>;
+  for (const key of Object.keys(sample)) {
+    assert.ok(
+      NETWORK_KEYS.some((known) => known === key),
+      `NETWORK_KEYS is missing the '${key}' NetworkConfig key`,
+    );
+  }
 });
 
 test("URBAN_BIND env overrides the manifest, invalid values are ignored", () => {

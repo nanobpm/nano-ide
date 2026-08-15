@@ -17,6 +17,7 @@ import type {
   SqliteDb,
 } from "../core/host.ts";
 import { resolveModulePath } from "../core/module-path.ts";
+import { LOOPBACK_HOST } from "../core/manifest.ts";
 import { formatLogRecord, levelEnabled, parseLogLevel } from "../core/logger.ts";
 
 type SqliteParam = string | number | bigint | Uint8Array | null;
@@ -184,8 +185,10 @@ function startDenoServer(
 ): Promise<HttpServer> {
   return new Promise<HttpServer>((resolveServer) => {
     // `hostname` binds the interface (issue #235): `"127.0.0.1"` loopback-only, `"0.0.0.0"`
-    // all interfaces. Omitted ⇒ Deno's default. `Deno.serve` ignores an `undefined` hostname.
-    const server = Deno.serve({ port, hostname: bindHost, onListen: ({ port: p }) => {
+    // all interfaces. When no bind host is resolved we fail *closed* to loopback rather than
+    // inheriting Deno's default, so a caller that omits it can never silently expose the server
+    // off-box.
+    const server = Deno.serve({ port, hostname: bindHost ?? LOOPBACK_HOST, onListen: ({ port: p }) => {
       resolveServer({
         port: p,
         stop: () => server.shutdown(),

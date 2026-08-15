@@ -17,6 +17,7 @@ import {
   type EngineJob,
   isBpmnError,
   type JobHandler,
+  type UserTaskState,
   type WorkerSubscription,
 } from "@nanobpm/urban/runtime";
 
@@ -198,23 +199,22 @@ export class WasmEngineClient implements EngineClient {
   async deployResources(
     resources: { name: string; content: string; contentType: string }[],
   ): Promise<{ deployed: number }> {
-    // The runtime's `deployModels` sends every model resource here — processes AND decisions AND
-    // forms (the manifest `models.forms`). Only executable models go to the engine: BPMN + DMN are
-    // XML (`text/xml`); a `.form` is `application/json` and has no engine execution semantics, so
-    // forwarding its JSON to the BPMN parser throws "no <process> element found". Deploy only the
-    // XML resources and skip the rest, so an app that ships a form still boots under the test engine.
-    let deployed = 0;
+    // The runtime's `deployModels` sends every deployable here — BPMN + DMN (`text/xml`),
+    // `.form` (`application/json`), and, under ADR 0062 deploy-by-convention, any other file
+    // swept from `resources/`. Only executable models can run under the WASM engine: BPMN/DMN
+    // are parsed by the engine; a `.form` has no execution semantics but the taskInbox surface
+    // fetches its schema via `getForm`, so capture it. Every other resource is inert here.
     for (const r of resources) {
       if (isEngineModel(r)) {
         this.#engine.deploy(r.content);
-        deployed++;
         continue;
       }
-      // A `.form` has no engine execution semantics, but the taskInbox surface fetches
-      // its schema via `getForm`; capture it so the surface works under the test engine.
       if (isFormResource(r)) this.#captureForm(r.content);
     }
-    return { deployed };
+    // Match `SdkEngineClient.deployResources`: the deployment accepts every resource, so the
+    // `deployed` count is the total — a form (or any non-executable asset) still counts as
+    // deployed even though the WASM engine doesn't execute it.
+    return { deployed: resources.length };
   }
 
   /** Parse and store a deployed form-js schema. A form is identified by its `id`; a
@@ -283,6 +283,7 @@ export class WasmEngineClient implements EngineClient {
     processInstanceKey?: string;
     assignee?: string;
     candidateGroup?: string;
+    state?: UserTaskState;
   }): Promise<{
     userTaskKey: string;
     elementId?: string;
@@ -291,7 +292,15 @@ export class WasmEngineClient implements EngineClient {
     externalFormReference?: string;
   }[]> {
     return records(this.#snapshot().userTasks)
-      .filter((t) => str(t.state) === "Created")
+      // Match `SdkEngineClient.searchUserTasks`: apply the optional `state` filter rather
+      // than hardcoding open tasks. The engine snapshot spells states in PascalCase
+      // (`Created`/`Completed`/...) while the contract's `UserTaskState` is upper-case
+      // (`CREATED`/...), so compare case-insensitively; with no `state` the engine returns
+      // tasks in every state (the taskInbox surface passes `state: "CREATED"` itself).
+      .filter((t) =>
+        filter?.state === undefined ||
+        str(t.state).toUpperCase() === filter.state
+      )
       .filter((t) =>
         filter?.processInstanceKey === undefined ||
         str(t.instanceKey) === filter.processInstanceKey

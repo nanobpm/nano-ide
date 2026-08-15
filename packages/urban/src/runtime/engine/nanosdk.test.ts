@@ -194,15 +194,32 @@ test("searchUserTasks passes zero-wait consistency and maps items", async () => 
   const engine = new SdkEngineClient(client);
   const tasks = await engine.searchUserTasks({ processInstanceKey: "pi" });
   assert.deepEqual(consistency, { consistency: { waitUpToMs: 0 } });
-  // The search is constrained to open (CREATED) tasks so terminal tasks never
-  // surface as answerable, while caller filters (processInstanceKey) still apply.
-  // Assert individual fields so the check is independent of key insertion order.
-  assert.equal(input?.filter?.state, "CREATED");
+  // The adapter forwards the caller's filter verbatim and no longer injects a lifecycle
+  // state (#252): the search is unfiltered by state unless the caller opts in, so the
+  // taskInbox surface — not the adapter — owns the open-only (CREATED) policy. Assert
+  // individual fields so the check is independent of key insertion order.
+  assert.equal(input?.filter?.state, undefined, "no state is injected when the caller passes none");
   assert.equal(input?.filter?.processInstanceKey, "pi");
   assert.deepEqual(tasks, [
     { userTaskKey: "7", elementId: "task_a", variables: { x: 1 } },
     { userTaskKey: "8", elementId: undefined, variables: undefined },
   ]);
+});
+
+test("searchUserTasks forwards a caller-provided lifecycle state filter", async () => {
+  let input: { filter?: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    searchUserTasks: async (i) => {
+      input = i;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  await engine.searchUserTasks({ state: "CREATED", processInstanceKey: "pi" });
+  // The caller's `state` reaches the engine unchanged — the adapter neither drops nor
+  // overrides it (the taskInbox surface passes `state: "CREATED"` to constrain the inbox).
+  assert.equal(input?.filter?.state, "CREATED");
+  assert.equal(input?.filter?.processInstanceKey, "pi");
 });
 
 test("searchUserTasks surfaces the resolved form linkage", async () => {

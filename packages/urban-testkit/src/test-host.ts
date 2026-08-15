@@ -54,6 +54,10 @@ export function createTestHost(opts: CreateTestHostOptions): TestHost {
       Object.hasOwn(envOverlay, name) ? envOverlay[name] : base.env(name),
     readTextFile: (path) => base.readTextFile(path),
     listDir: (dir) => base.listDir(dir),
+    // Forward `listSubdirs` when the base host provides it so deploy-by-convention
+    // (ADR 0062) descends one level into `resources/<subdir>/` under the harness exactly
+    // as it does in production; omit it otherwise to match the base host's own capability.
+    ...(base.listSubdirs ? { listSubdirs: (dir: string) => base.listSubdirs!(dir) } : {}),
     exists: (path) => base.exists(path),
     openSqlite: (path) => base.openSqlite(path),
     importModule: (path) => base.importModule(path),

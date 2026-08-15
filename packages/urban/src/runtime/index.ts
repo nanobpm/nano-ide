@@ -52,16 +52,31 @@ export type { ValidationIssue } from "./core/validate.ts";
 export type {
   EngineClient,
   EngineJob,
+  FormSchema,
   HostContext,
   HttpHandler,
   HttpRequest,
   HttpResponse,
   HttpServer,
   JobHandler,
+  ProcessInstanceSnapshot,
+  ProcessInstanceState,
   SqliteDb,
+  UserTaskState,
+  UserTaskSummary,
   WatchHandle,
   WorkerSubscription,
 } from "./core/host.ts";
+// Shared form/user-task contract normalization (issue #252): the single source of truth
+// both engine adapters (SDK/REST + WASM test double) call, so their form-identifier,
+// form-schema, and user-task form-linkage handling cannot drift.
+export {
+  buildFormSchema,
+  parseFormSchema,
+  pickFormLinkage,
+  presentFormIdentifier,
+  resolveFormIdentifier,
+} from "./core/form-contract.ts";
 export type { AppApi, Mounted, RuntimeContext } from "./core/context.ts";
 // Structured logging surface (see core/logger.ts): the shape of `AppApi.log`, plus `createLogger`
 // so consumers can build a Logger for a custom sink or a no-op test double (`createLogger(() => {})`).

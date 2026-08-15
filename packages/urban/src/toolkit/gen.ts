@@ -135,22 +135,28 @@ export async function discoverResourceModels(root: string, io: GenIO): Promise<s
 }
 
 /**
- * Read + resolve the app's process models. With `models.processes` declared, its globs are used
- * verbatim (the override). With no `models.processes`, models are discovered by convention under
- * `resources/` (ADR 0062).
+ * Read + resolve the app's process models. Convention is keyed off the *absence* of the entire
+ * `models` block — mirroring the runtime deploy (ADR 0062): with no `models` block, models are
+ * discovered by convention under `resources/`; with a `models` block declared, `models.processes`
+ * is the explicit override (used verbatim, possibly empty). Keying off a missing `models.processes`
+ * alone would fall back to convention even when a `models` block is present for other overrides
+ * (e.g. forms), letting gen scan/derive process models the runtime deploy will never deploy —
+ * gen/runtime drift.
  */
 export async function readModels(
   root: string,
   io: GenIO,
   manifest: { models?: { processes?: string[] } },
 ): Promise<ModelSource[]> {
-  const procPatterns = manifest.models?.processes;
+  const byConvention = manifest.models === undefined;
   let rels: string[];
-  if (procPatterns) {
-    rels = [];
-    for (const pat of procPatterns) rels.push(...(await expandPattern(root, io, pat)));
-  } else {
+  if (byConvention) {
     rels = await discoverResourceModels(root, io);
+  } else {
+    rels = [];
+    for (const pat of manifest.models?.processes ?? []) {
+      rels.push(...(await expandPattern(root, io, pat)));
+    }
   }
   const models: ModelSource[] = [];
   const seen = new Set<string>();

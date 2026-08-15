@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { runGen, collectArtifacts, type GenIO } from "./gen.ts";
+import { runGen, collectArtifacts, readModels, type GenIO } from "./gen.ts";
 import { defineFlow, envelope } from "@nanobpm/workflow";
 import { MODEL_PROVENANCE } from "./models.ts";
 
@@ -335,4 +335,28 @@ test("gen fuses a model-authored nano:shape envelope into the worker-io contract
   const domain = res.artifacts.find((a) => a.path.endsWith("domain-rows.d.ts"));
   assert.ok(domain, "domain-rows.d.ts is emitted from the fused registry");
   assert.match(domain!.content, /"ReviewIn":/);
+});
+
+// Guards the gen/runtime drift class: gen's readModels must key the `resources/` convention off the
+// *absence* of the whole `models` block (mirroring the runtime deploy, ADR 0062), NOT off a missing
+// `models.processes`. A `models` block present for other overrides (e.g. forms) must suppress the
+// convention scan, so gen never derives process models the runtime deploy would never deploy.
+test("readModels: a models block without processes suppresses the resources/ convention (no gen/runtime drift)", async () => {
+  const io = memIO({
+    "/app/resources/a.bpmn": "<bpmn:definitions/>",
+    "/app/resources/sub/b.bpmn": "<bpmn:definitions/>",
+  });
+  // No models block at all → convention scans resources/ (shallow, one level deep).
+  const byConvention = await readModels("/app", io, {});
+  assert.deepEqual(
+    byConvention.map((m) => m.path).sort(),
+    ["resources/a.bpmn", "resources/sub/b.bpmn"],
+    "with no models block, gen discovers under resources/ by convention",
+  );
+  // A declared models block (even one that resolves to zero process files) is an explicit override:
+  // the convention scan must be skipped entirely, matching runtime deployModels.
+  const withEmptyModels = await readModels("/app", io, { models: {} });
+  assert.deepEqual(withEmptyModels, [], "a declared models block suppresses the resources/ convention");
+  const withOnlyProcesses = await readModels("/app", io, { models: { processes: [] } });
+  assert.deepEqual(withOnlyProcesses, [], "an explicitly empty models.processes yields no models, not a convention fallback");
 });

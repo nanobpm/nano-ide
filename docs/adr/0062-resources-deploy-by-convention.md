@@ -9,6 +9,10 @@ Repo: nanobpm/nano-ide (`packages/urban`), the schema source **Magikcraft/nano-b
 (`spec-app/nano-app.schema.json`, published as `@nanobpm/nano-app-schema`), and consumer
 apps such as nanobpm/nano-workforce.
 
+Implementation issues (ordered rollout): Magikcraft/nano-bpm#782 (schema) →
+nanobpm/nano-ide#243 (urban) → nanobpm/nano-workforce#239 (consumer migration, blocked
+on the urban release).
+
 ## Context
 
 An Urban app declares what it deploys through `nano.app.json` → `models`, a map of glob

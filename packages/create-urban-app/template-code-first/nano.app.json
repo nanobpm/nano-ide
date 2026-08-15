@@ -6,11 +6,6 @@
 	"codename": "Urban",
 	"runtime": { "engine": "embedded", "node": "single" },
 
-	"models": {
-		"workflows": ["workflows/*.ts"],
-		"processes": ["processes/*.bpmn"]
-	},
-
 	"data": {
 		"default": "app",
 		"sources": {

@@ -25,6 +25,14 @@ export function createNodeGenIO(): GenIO {
         return [];
       }
     },
+    async listSubdirs(path: string): Promise<string[]> {
+      try {
+        const entries = await readdir(path, { withFileTypes: true });
+        return entries.filter((e) => e.isDirectory()).map((e) => e.name);
+      } catch {
+        return [];
+      }
+    },
     async exists(path: string): Promise<boolean> {
       try {
         await stat(path);

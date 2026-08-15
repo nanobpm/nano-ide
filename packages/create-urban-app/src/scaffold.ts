@@ -103,9 +103,10 @@ export async function scaffold(opts: ScaffoldOptions): Promise<ScaffoldResult> {
     const rel = relative(root, src);
     const parts = rel.split(/[/\\]/).map(finalName);
     const destRel = parts.join("/");
-    // headless = workers only: no human surfaces, so skip the form + page assets. The
-    // `api` binding, its `operations/`, and `openapi.yaml` are a machine surface and stay.
-    if (headless && (destRel.startsWith("forms/") || destRel.startsWith("pages/"))) continue;
+    // headless = workers only: no human surfaces, so skip the form + page assets. Forms deploy by
+    // convention from `resources/forms/`; skipping those files keeps them out of the deployment.
+    // The `api` binding, its `operations/`, and `openapi.yaml` are a machine surface and stay.
+    if (headless && (destRel.startsWith("resources/forms/") || destRel.startsWith("pages/"))) continue;
     // Node is the default host; Deno host files are opt-in via `--deno`.
     if (!deno && destRel === "deno.json") continue;
     // tsconfig.json backs the default Node `tsc --noEmit` typecheck; under `--deno` the
@@ -145,16 +146,15 @@ function toDenoPackageJson(json: string, style: "model" | "code"): string {
   return JSON.stringify(pkg, null, "\t") + "\n";
 }
 
-/** headless preset: drop the human-facing surfaces, triggers and form models. */
+/** headless preset: drop the human-facing surfaces and triggers. Forms are dropped by skipping
+ *  their `resources/forms/` files at copy time (deploy-by-convention then sees none). */
 function toHeadlessManifest(json: string): string {
   const m: {
     surfaces?: unknown;
     triggers?: unknown;
-    models?: { forms?: unknown };
   } = JSON.parse(json);
   delete m.surfaces;
   delete m.triggers;
-  if (m.models) delete m.models.forms;
   return JSON.stringify(m, null, 2) + "\n";
 }
 

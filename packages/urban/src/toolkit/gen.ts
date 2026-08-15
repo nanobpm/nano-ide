@@ -21,6 +21,12 @@ export interface GenIO {
   writeText(path: string, content: string): Promise<void>;
   /** File names (not paths) in a directory; empty if it does not exist. */
   listDir(path: string): Promise<string[]>;
+  /**
+   * Sub-directory names (not files) in a directory; empty if it does not exist. Optional: the
+   * deploy-by-convention model scan uses it to descend one level into `resources/<subdir>/`. When
+   * absent, only files directly under `resources/` are scanned.
+   */
+  listSubdirs?(path: string): Promise<string[]>;
   exists(path: string): Promise<boolean>;
   /**
    * Import an app module and return its exports. Optional: only present when the caller runs on
@@ -99,18 +105,59 @@ export async function expandPattern(root: string, io: GenIO, pattern: string): P
     .sort();
 }
 
-/** Read + resolve the app's process models from the manifest's `models.processes` patterns. */
+/** The deploy-by-convention directory (ADR 0062): when the manifest declares no `models`, both the
+ *  runtime deploy and this codegen scan discover deployables/models under it — shallow, one level
+ *  deep (`resources/*` and `resources/<subdir>/*`). Deploy-only by convention. */
+export const RESOURCES_DIR = "resources";
+
+/** Model file extensions the `nano:shape`/code-first scan reads by convention (BPMN + DMN). */
+const MODEL_EXTS = [".bpmn", ".dmn"];
+
+/**
+ * Discover model files under `resources/` by convention — shallow, one level deep (`resources/*`
+ * and `resources/<subdir>/*`), never deeper — mirroring the runtime deploy walk so the codegen scan
+ * and the deploy see the same set. Returns root-relative paths, sorted. Descending one level needs
+ * `io.listSubdirs`; without it only the files directly under `resources/` are scanned.
+ */
+export async function discoverResourceModels(root: string, io: GenIO): Promise<string[]> {
+  const isModel = (n: string): boolean => MODEL_EXTS.some((e) => n.endsWith(e));
+  const out: string[] = [];
+  for (const n of await io.listDir(join(root, RESOURCES_DIR))) {
+    if (isModel(n)) out.push(`${RESOURCES_DIR}/${n}`);
+  }
+  const subdirs = io.listSubdirs ? await io.listSubdirs(join(root, RESOURCES_DIR)) : [];
+  for (const sub of subdirs.slice().sort()) {
+    for (const n of await io.listDir(join(root, `${RESOURCES_DIR}/${sub}`))) {
+      if (isModel(n)) out.push(`${RESOURCES_DIR}/${sub}/${n}`);
+    }
+  }
+  return out.sort();
+}
+
+/**
+ * Read + resolve the app's process models. With `models.processes` declared, its globs are used
+ * verbatim (the override). With no `models.processes`, models are discovered by convention under
+ * `resources/` (ADR 0062).
+ */
 export async function readModels(
   root: string,
   io: GenIO,
   manifest: { models?: { processes?: string[] } },
 ): Promise<ModelSource[]> {
-  const procPatterns = manifest.models?.processes ?? [];
+  const procPatterns = manifest.models?.processes;
+  let rels: string[];
+  if (procPatterns) {
+    rels = [];
+    for (const pat of procPatterns) rels.push(...(await expandPattern(root, io, pat)));
+  } else {
+    rels = await discoverResourceModels(root, io);
+  }
   const models: ModelSource[] = [];
-  for (const pat of procPatterns) {
-    for (const rel of await expandPattern(root, io, pat)) {
-      models.push({ path: rel, xml: await io.readText(join(root, rel)) });
-    }
+  const seen = new Set<string>();
+  for (const rel of rels) {
+    if (seen.has(rel)) continue;
+    seen.add(rel);
+    models.push({ path: rel, xml: await io.readText(join(root, rel)) });
   }
   return models;
 }

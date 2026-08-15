@@ -6,11 +6,6 @@
 	"codename": "Urban",
 	"runtime": { "engine": "embedded", "node": "single" },
 
-	"models": {
-		"processes": ["processes/*.bpmn"],
-		"forms": ["forms/*.form"]
-	},
-
 	"api": {
 		"spec": "openapi.yaml",
 		"dir": "operations"

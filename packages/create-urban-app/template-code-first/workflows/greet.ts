@@ -1,9 +1,9 @@
 // The `greet` process, authored code-first with `defineFlow` (ADR 0044/0045).
 //
-// Instead of an authored `processes/*.bpmn`, the executable model is DERIVED from
+// Instead of an authored `.bpmn`, the executable model is DERIVED from
 // this TypeScript: `@nanobpm/urban` (via `@nanobpm/workflow`) turns the flow tree
-// below into BPMN, job types and message names. `main.ts` deploys the derived
-// model and hosts the `w.run` handler in an in-process `Worker`.
+// below into BPMN, job types and message names, emitting it into `resources/processes/`.
+// `main.ts` deploys the derived model and hosts the `w.run` handler in an in-process `Worker`.
 //
 // A `w.run` step runs inside `@nanobpm/workflow`'s Worker, which receives the job
 // but no Urban `AppApi`. To reach the datasource, `main.ts` injects the Urban data

@@ -16,10 +16,12 @@ tests/*.test.ts        e2e tests (@nanobpm/urban-testkit, in-process WASM engine
 main.ts                entrypoint: runs Urban, deploys the flow, hosts the worker
 ```
 
-Model-first apps declare `processes/*.bpmn` in the manifest and run with `urban run`.
-A code-first app instead authors the flow in code and owns deployment + worker hosting
-in `main.ts` — `@nanobpm/urban` derives the model, job types and message names from
-`defineFlow`. The derived `.bpmn` is ejectable to model-first, so you never get stuck.
+Model-first apps drop a `.bpmn` under `resources/` (deploy-by-convention) and run with
+`urban run`. A code-first app instead authors the flow in code and owns deployment +
+worker hosting in `main.ts` — `@nanobpm/urban` derives the model, job types and message
+names from `defineFlow`, emitting the executable `.bpmn` into `resources/processes/`
+(where the same convention then deploys it). The derived `.bpmn` is ejectable to
+model-first, so you never get stuck.
 
 ## Run it
 

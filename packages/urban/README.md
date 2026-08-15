@@ -210,40 +210,66 @@ wiring; `WorkflowClient` deploys and starts, `Worker` hosts your `run` steps.
 inspectable in a modeller/Operate — `@nanobpm/urban` bundles `bpmn-auto-layout`
 so this works out of the box.
 
-### Deploy-time model templates (`{{name}}`)
+### Deploy by convention (`resources/`)
 
-A model file can carry `{{name}}` placeholders that are substituted at deploy
-time — handy for inlining a large asset (e.g. an agent prompt authored as its own
-file) into a `zeebe:header` value instead of hand-pasting it into XML or shipping
-it as a bulky per-instance process variable. Declare the template sources under
-`models.templates` (globs, a bare directory that is scanned, or literal files); a
-template's name is its file **stem**, so `prompts/review.md` fills `{{review}}`:
+Deployables are discovered by convention: with **no `models`** block in the
+manifest, `@nanobpm/urban` deploys everything under `resources/` — walked
+**shallow, one level deep** (`resources/*` and `resources/<subdir>/*`, never
+deeper). Content type is by extension: `.bpmn`/`.dmn` → BPMN/DMN, `.form` →
+form-js form, anything else → a `GenericScript` resource (this is how agent
+prompts are deployed — see below).
+
+```
+resources/
+  processes/  order.bpmn        ← deployed as a BPMN process
+  decisions/  route.dmn         ← deployed as a DMN decision
+  forms/      approve.form      ← deployed as a form
+  prompts/    review.md         ← deployed as a GenericScript (an agent prompt)
+```
+
+`resources/` is **deploy-only**: everything under it deploys, and nothing outside
+it ever does — so docs (`docs/`, `AGENTS.md`, top-level `*.md`) live **outside**
+`resources/` and are never swept into a deployment. Resources are keyed by their
+**basename** (filename), so two files with the same name in different sub-dirs are
+a **hard error** — rename or relocate one. `urban gen` follows the same
+convention: with no `models`, its `nano:shape`/code-first model scan defaults to
+`resources/**/*.bpmn` (+ `.dmn`) and derived models are written to
+`resources/processes/`, exactly where the convention deploy then finds them.
+
+To opt out of the convention, declare `models` globs — they are used verbatim and
+the `resources/` walk is skipped:
 
 ```jsonc
 {
   "models": {
-    "processes": ["processes/*.bpmn"],
-    "templates": ["prompts/*.md"]
+    "processes": ["src/models/*.bpmn"],
+    "forms": ["src/forms/*.form"]
   }
 }
 ```
 
+### Modular prompts — the blessed path (`zeebe:linkedResource`)
+
+To keep a large agent prompt out of a model's XML, author it as its own file under
+`resources/prompts/` (deployed as a `GenericScript`) and **link** it into the
+service task with a `zeebe:linkedResource` bound to the latest deployed version;
+the runtime resolves it with the `appendPrompt` FEEL helper at execution time:
+
 ```xml
-<!-- processes/agent.bpmn -->
-<zeebe:header key="io.nanobpm.agentTask.task.prompt" value="{{review}}" />
+<!-- resources/processes/agent.bpmn -->
+<zeebe:linkedResource linkName="prompt" resourceType="GenericScript"
+                      bindingType="latest" resourceId="review" />
 ```
 
-Content is escaped for the resource's type: XML for `.bpmn`/`.dmn` (newlines/tabs
-become character references so a multi-line prompt survives XML attribute-value
-normalization), JSON for `.form`. Substitution is single-pass (a template's own
-`{{…}}` is not re-expanded); an unknown placeholder is left verbatim and logged as
-a warning. Templates can also be supplied programmatically via the `templates`
-run option (globs or an explicit `name → content` map), which wins over the
-manifest on a name collision:
+This is the **only** supported prompt-modularity mechanism — there is no
+deploy-time string substitution (`{{name}}` templating has been removed).
 
-```ts
-await runFromEnv({ templates: { review: await readPrompt("review.md") } });
-```
+> **Value-injection caveat.** Injecting a *value* into a model at deploy time (a
+> URL, a feature flag, an environment-specific constant) must use **runtime
+> variables / FEEL**, never string substitution baked into the model. A model is
+> deployed once and shared across environments; bake a value in and you fork the
+> model per environment. Pass the value as a process variable and reference it
+> with FEEL instead.
 
 ### Triggers — the inbound I/O edge
 

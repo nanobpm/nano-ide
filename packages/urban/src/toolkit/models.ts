@@ -19,9 +19,11 @@ import { isRecord } from "../runtime/core/guards.ts";
 /** Default source glob for code-first flows (matches the code-first scaffold layout). */
 export const DEFAULT_WORKFLOW_PATTERNS = ["workflows/*.ts"];
 
-/** Default output dir for derived models (matches the model-first scaffold, so a derived
- * model is ejectable to model-first and picked up by `models.processes: ["processes/*.bpmn"]`). */
-export const PROCESSES_DIR = "processes";
+/** Default output dir for derived models when the manifest declares no `models.processes`: under
+ * the deploy-by-convention `resources/` tree (ADR 0062), one level deep, so a derived model lands
+ * exactly where the convention deploy + codegen scan look for it. When `models.processes` IS set,
+ * `processesOutDir` derives the dir from that glob instead (the model-first override). */
+export const PROCESSES_DIR = "resources/processes";
 
 /** Marker stamped into every derived `.bpmn` (an XML comment) so re-gen overwrites and the
  * stale sweep deletes ONLY derived output — never an authored, human-owned model. */

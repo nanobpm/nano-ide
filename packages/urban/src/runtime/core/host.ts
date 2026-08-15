@@ -80,6 +80,12 @@ export interface HostContext {
   readTextFile(path: string): Promise<string>;
   /** List file names (not directories) directly under `dir`. Returns [] if missing. */
   listDir(dir: string): Promise<string[]>;
+  /**
+   * List sub-directory names (not files) directly under `dir`. Returns [] if missing. Optional:
+   * the deploy-by-convention walk uses it to descend one level into `resources/<subdir>/` (a host
+   * that can't enumerate directories then deploys only the files directly under `resources/`).
+   */
+  listSubdirs?(dir: string): Promise<string[]>;
   /** True if the path exists (file or directory). */
   exists(path: string): Promise<boolean>;
   /** Open (creating if needed) a SQLite database at a filesystem path. */

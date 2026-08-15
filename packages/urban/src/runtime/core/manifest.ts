@@ -54,6 +54,20 @@ export type InstanceTracking = SchemaInstanceTracking & {
   readonly terminalStatuses?: readonly string[];
 };
 
+/**
+ * A status selector (`activeStatuses`/`terminalStatuses`) counts as *configured* only when it is
+ * a non-empty array of non-empty strings. Both the reconciler's row selection and the manifest
+ * validator gate on this one predicate, so "is this selector active?" has a single definition and
+ * the two can't drift (No Drift Surfaces). Anything else — `undefined`, an empty array, a bare
+ * string, or an array holding a non-string/empty entry — is treated as *not configured*: the
+ * reconciler falls through to the fail-open poll-all path and the validator flags the malformed
+ * shape at author time (rather than letting e.g. `new Set("abandoned")` silently become a set of
+ * characters, or `activeStatuses.map(...)` crash on a non-array).
+ */
+export function isConfiguredStatusSelector(v: unknown): v is readonly string[] {
+  return Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === "string" && s.length > 0);
+}
+
 /** The job type a worker subscribes to (schema key: `taskType`). */
 export function workerJobType(w: Worker): string | undefined {
   return w.taskType;

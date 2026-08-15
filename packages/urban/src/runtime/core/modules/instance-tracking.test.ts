@@ -336,6 +336,44 @@ test("terminalStatuses wins when a binding somehow declares both selectors (fail
   await h.close();
 });
 
+test("a malformed (non-array) terminalStatuses degrades to fail-open poll-all, not a Set-of-characters filter", async () => {
+  // A hand-built/JSON binding could carry a bare string. The buggy path (`new Set("ab")`) would
+  // filter rows by whether their status is one of those *characters* — silently dropping rows.
+  // The shared `isConfiguredStatusSelector` gate makes a malformed selector fall through to the
+  // fail-open poll-all path instead. Build the invalid fixture via JSON.parse (no `as` cast).
+  const { engine, queries } = fakeEngine({ pi1: "TERMINATED", pi2: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    // Both statuses are single characters that appear in "abandoned" — the buggy Set-of-chars
+    // filter would exclude them, polling nothing; the fail-open path polls both.
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "a", note: null });
+    await t.insert({ plan_key: "p2", process_key: "pi2", status: "b", note: null });
+  });
+  const malformed = JSON.parse('{"terminalStatuses":"abandoned","activeStatuses":null}');
+  const sched = fakeScheduler();
+  const binding = planBinding(malformed);
+  const handle = mount(h, [binding], sched);
+  await sched.advance(1000);
+  assert.deepEqual(queries[0]?.sort(), ["pi1", "pi2"]); // fail-open: every row polled
+  await handle.stop();
+  await h.close();
+});
+
+test("a malformed (non-array) activeStatuses degrades to fail-open poll-all instead of crashing .map", async () => {
+  const { engine, queries } = fakeEngine({ pi1: "TERMINATED", pi2: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "planning", note: null });
+    await t.insert({ plan_key: "p2", process_key: "pi2", status: "dispatched", note: null });
+  });
+  const malformed = JSON.parse('{"activeStatuses":"planning","terminalStatuses":null}');
+  const sched = fakeScheduler();
+  const binding = planBinding(malformed);
+  const handle = mount(h, [binding], sched);
+  await sched.advance(1000);
+  assert.deepEqual(queries[0]?.sort(), ["pi1", "pi2"]); // no crash; fail-open poll-all
+  await handle.stop();
+  await h.close();
+});
+
 test("defaults pollMs when the binding omits it", async () => {
   const { engine, queries } = fakeEngine({ pi1: "ACTIVE" });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {

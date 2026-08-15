@@ -14,7 +14,7 @@
 // row). The poll is driven through the shared `SchedulerDeps` seam so tests are deterministic.
 
 import type { AppApi, Mounted, RuntimeContext } from "../context.ts";
-import type { InstanceTracking } from "../manifest.ts";
+import { type InstanceTracking, isConfiguredStatusSelector } from "../manifest.ts";
 import { defaultScheduler, MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
 
 /** Default poll interval when a binding does not set `pollMs`. */
@@ -73,14 +73,18 @@ async function reconcileOnce(
   //  - neither: poll every row; a terminal instance's row is idempotently re-patched (the engine
   //    query returns only TERMINATED instances and the patch is a no-op once applied).
   // `terminalStatuses` and `activeStatuses` are mutually exclusive per binding (validation rejects
-  // both); if both are somehow present, `terminalStatuses` wins (the fail-open selector).
+  // both); if both are somehow present, `terminalStatuses` wins (the fail-open selector). Each
+  // selector is gated through the shared `isConfiguredStatusSelector` predicate (a non-empty array
+  // of non-empty strings) — the same one validation uses — so a malformed value (a bare string, an
+  // empty array) degrades to the fail-open poll-all path here instead of `new Set("abandoned")`
+  // silently filtering by character, or a non-array crashing `activeStatuses.map(...)`.
   let candidates: Row[];
   const statusField = binding.statusField;
-  if (statusField && binding.terminalStatuses && binding.terminalStatuses.length > 0) {
+  if (statusField && isConfiguredStatusSelector(binding.terminalStatuses)) {
     const terminal = new Set(binding.terminalStatuses);
     const all = await table.all();
     candidates = all.filter((row) => !terminal.has(String(row[statusField])));
-  } else if (statusField && binding.activeStatuses && binding.activeStatuses.length > 0) {
+  } else if (statusField && isConfiguredStatusSelector(binding.activeStatuses)) {
     const perStatus = await Promise.all(
       binding.activeStatuses.map((s): Promise<Row[]> => table.find({ [statusField]: s })),
     );

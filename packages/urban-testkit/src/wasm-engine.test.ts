@@ -144,6 +144,24 @@ test("wasm: getForm resolves a deployed .form by id (latest) and by key", async 
   }
 });
 
+test("wasm: a non-.form JSON deploy resource is not captured as a form", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    // A JSON asset that merely has an `id` (like a manifest/config) must NOT be misread as a
+    // form: form detection keys on the `.form` filename, not on a JSON content type.
+    await engine.deployResources([
+      {
+        name: "manifest.json",
+        content: JSON.stringify({ id: "greeting", components: [{ type: "textfield", key: "who" }] }),
+        contentType: "application/json",
+      },
+    ]);
+    assert.equal(await engine.getForm({ formId: "greeting" }), null, "non-.form JSON is not resolvable as a form");
+  } finally {
+    await engine.close();
+  }
+});
+
 test("wasm: advanceTime fires a timer and drains resulting work", async () => {
   const engine = await createWasmEngineClient();
   try {

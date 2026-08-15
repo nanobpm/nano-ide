@@ -60,9 +60,9 @@ function isEngineModel(r: { name?: string; contentType?: string }): boolean {
  *  it, but the kit captures its schema so the taskInbox surface's `getForm` resolves under
  *  the test engine exactly as it does against a live one. */
 function isFormResource(r: { name?: string; contentType?: string }): boolean {
-  const ct = (r.contentType ?? "").toLowerCase();
-  if (ct.includes("json")) return true;
-  if (ct.length > 0) return false;
+  // A form is identified by its `.form` filename (matching the live engine), NOT by a JSON
+  // content type: unrelated JSON deploy resources (manifests/config) must not be captured
+  // and stored as form schemas.
   return (r.name ?? "").toLowerCase().endsWith(".form");
 }
 

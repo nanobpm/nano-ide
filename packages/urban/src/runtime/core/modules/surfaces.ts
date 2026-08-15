@@ -131,7 +131,8 @@ function buildField(c){
     wrap.appendChild(lab);
     return {field:wrap,read:()=>({key,value:input.checked})};
   }
-  wrap.appendChild(el('label',{},label));
+  const labelEl=el('label',{},label);
+  wrap.appendChild(labelEl);
   let input;
   if(type==='textarea'){input=document.createElement('textarea');}
   else if(type==='select'){
@@ -157,6 +158,9 @@ function buildField(c){
     input=document.createElement('input');
     input.type=(type==='number')?'number':(type==='datetime'?'datetime-local':'text');
   }
+  // Associate the label with the input (for/id) so screen readers announce it on focus.
+  const fieldId='f'+Math.random().toString(36).slice(2);
+  input.id=fieldId;labelEl.setAttribute('for',fieldId);
   wrap.appendChild(input);
   const isNumber=type==='number';
   return {field:wrap,read:()=>{

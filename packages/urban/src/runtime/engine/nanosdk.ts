@@ -275,6 +275,7 @@ export class SdkEngineClient implements EngineClient {
       );
     } catch (err) {
       this.log("warn", "getForm: engine form fetch failed", {
+        key,
         formKey: input.formKey,
         formId: input.formId,
         err: err instanceof Error ? err.message : String(err),
@@ -291,7 +292,7 @@ export class SdkEngineClient implements EngineClient {
         const parsed: unknown = JSON.parse(rawSchema);
         if (isRecord(parsed)) schema = parsed;
       } catch {
-        this.log("warn", "getForm: form schema is not valid JSON", { formKey: input.formKey, formId: input.formId });
+        this.log("warn", "getForm: form schema is not valid JSON", { key, formKey: input.formKey, formId: input.formId });
       }
     } else if (isRecord(rawSchema)) {
       schema = rawSchema;

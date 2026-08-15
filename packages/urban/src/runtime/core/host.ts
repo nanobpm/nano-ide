@@ -217,6 +217,14 @@ export interface WorkerSubscription {
  */
 export type ProcessInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED";
 
+/**
+ * A user task's lifecycle state, as the engine reports it on a `/v2/user-tasks/search`
+ * result. `CREATED` is the only *open* (answerable) state — a task in any other state has
+ * already been answered (`COMPLETED`), withdrawn (`CANCELED`), or errored (`FAILED`) and must
+ * never surface in the `taskInbox` as if it were actionable.
+ */
+export type UserTaskState = "CREATED" | "COMPLETED" | "CANCELED" | "FAILED";
+
 /** A single process instance's lifecycle snapshot returned by {@link EngineClient.searchProcessInstances}. */
 export interface ProcessInstanceSnapshot {
   readonly processInstanceKey: string;
@@ -278,11 +286,13 @@ export interface EngineClient {
     variables?: Record<string, unknown>;
   }): Promise<void>;
   /** Search open user tasks (optionally by process instance). Each result carries the
-   *  task's resolved form linkage (`formKey`/`externalFormReference`) when present. */
+   *  task's resolved form linkage (`formKey`/`externalFormReference`) when present. Pass
+   *  `state: "CREATED"` to constrain the search to open (answerable) tasks. */
   searchUserTasks(filter?: {
     processInstanceKey?: string;
     assignee?: string;
     candidateGroup?: string;
+    state?: UserTaskState;
   }): Promise<UserTaskSummary[]>;
   /**
    * Fetch a deployed form's form-js schema for the `taskInbox` surface. Resolve by

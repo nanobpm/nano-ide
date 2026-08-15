@@ -315,8 +315,9 @@ export class AgenticClient {
    * for `stream`, sent as an op-tagged `produce` frame — `produce` is the payload
    * op, carried on the bulk lane (not the QoS control lane) — stamped with this
    * client's {@link incarnation} so the hub can fence a stale predecessor. The
-   * hub assigns the authoritative byte offset from its ring — the producer never
-   * carries one. Bytes are UTF-8-encoded on the wire as the payload's `chunk`.
+   * hub assigns the authoritative chunk offset from its ring — a per-chunk,
+   * monotonic, gap-free counter (not a byte offset); the producer never carries
+   * one. Bytes are UTF-8-encoded on the wire as the payload's `chunk`.
    */
   relay(stream: string, chunk: string): void {
     // Terminal client: refuse post-close so a relay neither buffers a frame that

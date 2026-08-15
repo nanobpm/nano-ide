@@ -176,14 +176,16 @@ export function isBpmnError(err: unknown): err is { errorCode: string; message?:
 
 /**
  * The canonical presence rule for a form identifier ({@link EngineClient.getForm}): an
- * empty or whitespace-only value is treated as *absent*. Returns the value when present,
+ * empty or whitespace-only value is treated as *absent*. Returns the *trimmed* value when
+ * present (so a padded `" form-123 "` resolves against the space-free deployed key),
  * otherwise `undefined`. This is the single source of truth shared by `getForm`'s
  * resolution gate ({@link EngineClient.getForm} adapters) and the `taskInbox`
  * `/api/form` route's presence check, so the two cannot drift on what counts as "an
  * identifier was provided" (e.g. a whitespace-only `?formKey=   ` is absent in both).
  */
 export function presentFormIdentifier(value: string | undefined): string | undefined {
-  return value != null && value.trim() !== "" ? value : undefined;
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
 }
 
 /** A registered worker subscription. */

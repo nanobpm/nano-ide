@@ -136,6 +136,11 @@ test("wasm: getForm resolves a deployed .form by id (latest) and by key", async 
     const byWsKey = await engine.getForm({ formKey: "   ", formId: "greeting" });
     assert.deepEqual(byWsKey?.schema, v2, "whitespace-only formKey falls through to formId (latest)");
 
+    // A padded identifier is trimmed before lookup, so it still resolves against the
+    // space-free deployed key/id (not a spurious null).
+    const byPaddedId = await engine.getForm({ formId: "  greeting  " });
+    assert.deepEqual(byPaddedId?.schema, v2, "a padded formId is trimmed and resolves");
+
     // Unknown identifiers resolve to null (the surface's no-form fallback).
     assert.equal(await engine.getForm({ formId: "nope" }), null);
     assert.equal(await engine.getForm({}), null);

@@ -265,6 +265,22 @@ test("getForm falls back to formId when formKey is empty/whitespace, not just ab
   }
 });
 
+test("getForm trims a padded identifier before the engine lookup", async () => {
+  // Regression: the presence check trimmed only for the emptiness test but forwarded the
+  // *untrimmed* value, so a padded `" 42 "` was fetched with the spaces and 404'd.
+  let seen: unknown;
+  const client = fakeSdkClient({
+    getFormByKey: async (input) => {
+      seen = input;
+      return { schema: JSON.stringify({ type: "default", components: [] }) };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const form = await engine.getForm({ formKey: "  42  " });
+  assert.deepEqual(seen, { formKey: "42" }, "the padded formKey is trimmed before lookup");
+  assert.deepEqual(form?.schema, { type: "default", components: [] });
+});
+
 test("getForm returns null when no identifier is given or the fetch fails", async () => {
   const throwing = fakeSdkClient({
     getFormByKey: async () => {
@@ -296,8 +312,8 @@ test("getForm's invalid-JSON warning records the formId when only formId is give
   const warn = logs.find((l) => l.message === "getForm: form schema is not valid JSON");
   assert.ok(warn, "invalid-JSON schema is warned");
   // A formId-only caller must not be logged as { formKey: undefined } — the
-  // identifier that was actually used has to be traceable.
-  assert.deepEqual(warn.details, { formKey: undefined, formId: "myForm" });
+  // resolved identifier that was actually used (`key`) has to be traceable.
+  assert.deepEqual(warn.details, { key: "myForm", formKey: undefined, formId: "myForm" });
 });
 
 test("completeUserTask routes through the SDK", async () => {

@@ -337,8 +337,10 @@ export class WasmEngineClient implements EngineClient {
     // so a blank `formKey` falls through to a valid `formId` instead of short-circuiting
     // to null. Kept as a local copy (not imported) because the kit depends only on urban's
     // long-published public API — see the re-declaration note at the top of this file.
-    const present = (v: string | undefined): string | undefined =>
-      v != null && v.trim() !== "" ? v : undefined;
+    const present = (v: string | undefined): string | undefined => {
+      const t = v?.trim();
+      return t ? t : undefined;
+    };
     const formId = present(input.formId);
     const key = present(input.formKey) ?? (formId ? this.#formKeyById.get(formId) : undefined);
     if (key == null) return null;

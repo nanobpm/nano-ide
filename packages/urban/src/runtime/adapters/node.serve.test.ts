@@ -53,14 +53,24 @@ test("serveHttp rejects fast when the bind fails instead of hanging", async () =
       () => ({ status: 200, body: "ok" }),
       { hostname: "127.0.0.1" },
     );
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("serveHttp hung: bind failure did not reject")), 3000),
-    );
-    await assert.rejects(Promise.race([start, timeout]), (err: unknown) => {
-      assert.ok(err instanceof Error);
-      assert.doesNotMatch(err.message, /hung/, "rejected via the adapter, not the test timeout");
-      return true;
+    // Capture the timer handle so we can clear it once the race settles: an uncleared 3s timer
+    // would keep the event loop alive and slow the suite even though the bind fails fast.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error("serveHttp hung: bind failure did not reject")),
+        3000,
+      );
     });
+    try {
+      await assert.rejects(Promise.race([start, timeout]), (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.doesNotMatch(err.message, /hung/, "rejected via the adapter, not the test timeout");
+        return true;
+      });
+    } finally {
+      clearTimeout(timer);
+    }
   } finally {
     await first.stop();
   }

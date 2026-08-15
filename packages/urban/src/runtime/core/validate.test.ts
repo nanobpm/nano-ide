@@ -169,6 +169,123 @@ test("instanceTracking activeStatuses with an empty-string statusField is flagge
   assert.ok(issues.some((i) => i.path === "instanceTracking[0].activeStatuses"));
 });
 
+test("instanceTracking terminalStatuses without statusField is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        terminalStatuses: ["abandoned"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].terminalStatuses"));
+});
+
+test("instanceTracking with statusField + terminalStatuses (no activeStatuses) has no issues", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        terminalStatuses: ["abandoned", "completed"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("instanceTracking declaring both activeStatuses and terminalStatuses is flagged (mutually exclusive)", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        activeStatuses: ["planning"],
+        terminalStatuses: ["abandoned"],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(
+    issues.some(
+      (i) =>
+        i.path === "instanceTracking[0].terminalStatuses" &&
+        /mutually exclusive/.test(i.message),
+    ),
+  );
+});
+
+test("instanceTracking treats an empty selector array as unset — both empty is NOT mutually-exclusive", () => {
+  // The runtime gates on a non-empty array (`isConfiguredStatusSelector`), so an empty array means
+  // "not configured". Validation must agree, or an equivalent manifest fails only at author time.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        activeStatuses: [],
+        terminalStatuses: [],
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("instanceTracking flags a non-array terminalStatuses (would become a Set of characters at runtime)", () => {
+  // A JSON manifest can supply a bare string; typed construction can't. Parse it so the fixture is
+  // genuinely runtime-invalid without an `as` cast.
+  const bad = JSON.parse(
+    '{"table":"plans","keyField":"process_key","statusField":"status","terminalStatuses":"abandoned","onTerminated":{"set":{"status":"abandoned"}}}',
+  );
+  const issues = collectManifestIssues({ ...valid, instanceTracking: [bad] });
+  assert.ok(
+    issues.some(
+      (i) =>
+        i.path === "instanceTracking[0].terminalStatuses" &&
+        /array of non-empty strings/.test(i.message),
+    ),
+  );
+});
+
+test("instanceTracking flags a non-array activeStatuses (would crash activeStatuses.map at runtime)", () => {
+  const bad = JSON.parse(
+    '{"table":"plans","keyField":"process_key","statusField":"status","activeStatuses":"planning","onTerminated":{"set":{"status":"abandoned"}}}',
+  );
+  const issues = collectManifestIssues({ ...valid, instanceTracking: [bad] });
+  assert.ok(
+    issues.some(
+      (i) =>
+        i.path === "instanceTracking[0].activeStatuses" &&
+        /array of non-empty strings/.test(i.message),
+    ),
+  );
+});
+
+test("instanceTracking flags a status selector array holding a non-string/empty entry", () => {
+  const bad = JSON.parse(
+    '{"table":"plans","keyField":"process_key","statusField":"status","terminalStatuses":["abandoned",""],"onTerminated":{"set":{"status":"abandoned"}}}',
+  );
+  const issues = collectManifestIssues({ ...valid, instanceTracking: [bad] });
+  assert.ok(
+    issues.some(
+      (i) =>
+        i.path === "instanceTracking[0].terminalStatuses" &&
+        /array of non-empty strings/.test(i.message),
+    ),
+  );
+});
+
 test("instanceTracking pollMs that is non-positive/NaN/non-number is flagged (would hot-loop the poll timer)", () => {
   for (const badPollMs of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, "5000"]) {
     const issues = collectManifestIssues({

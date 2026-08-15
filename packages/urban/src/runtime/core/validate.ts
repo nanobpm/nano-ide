@@ -10,6 +10,7 @@
 
 import schema from "@nanobpm/nano-app-schema/schema" with { type: "json" };
 import { isRecord } from "./guards.ts";
+import { isConfiguredStatusSelector } from "./manifest.ts";
 import type { AppManifest } from "./manifest.ts";
 
 export interface ValidationIssue {
@@ -172,10 +173,44 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           message: "missing onTerminated.set patch (a non-empty column → value map)",
         });
       }
-      if (Array.isArray(b?.activeStatuses) && (typeof b?.statusField !== "string" || b.statusField.length === 0)) {
+      // `activeStatuses` (fail-closed allow-list) and `terminalStatuses` (fail-open exclusion) are
+      // both consumed as arrays of status strings. A malformed value — a bare string, or an array
+      // holding a non-string/empty entry — would misbehave at runtime (`new Set("abandoned")`
+      // becomes a set of characters; `activeStatuses.map(...)` crashes), so reject any non-`unset`
+      // shape that isn't a non-empty array of non-empty strings. An empty array is treated as
+      // "unset" (the runtime's `isConfiguredStatusSelector` gate does the same), so it is allowed.
+      for (const sel of ["activeStatuses", "terminalStatuses"] as const) {
+        const v = b?.[sel];
+        const malformed = v !== undefined &&
+          (!Array.isArray(v) || v.some((s) => typeof s !== "string" || s.length === 0));
+        if (malformed) {
+          issues.push({
+            path: `instanceTracking[${i}].${sel}`,
+            message: `${sel} must be an array of non-empty strings`,
+          });
+        }
+      }
+      if (isConfiguredStatusSelector(b?.activeStatuses) && (typeof b?.statusField !== "string" || b.statusField.length === 0)) {
         issues.push({
           path: `instanceTracking[${i}].activeStatuses`,
           message: "activeStatuses requires statusField",
+        });
+      }
+      // `terminalStatuses` is the fail-open exclusion selector (poll every row NOT in one of
+      // these). Like `activeStatuses` it reads `statusField`, so it too requires one; and the two
+      // selectors are mutually exclusive — declaring both is ambiguous, so reject it.
+      if (isConfiguredStatusSelector(b?.terminalStatuses) && (typeof b?.statusField !== "string" || b.statusField.length === 0)) {
+        issues.push({
+          path: `instanceTracking[${i}].terminalStatuses`,
+          message: "terminalStatuses requires statusField",
+        });
+      }
+      // Mutual exclusion is gated on the same "configured" predicate the runtime uses, so an empty
+      // array (which the runtime treats as unset) does not spuriously trip the both-declared error.
+      if (isConfiguredStatusSelector(b?.activeStatuses) && isConfiguredStatusSelector(b?.terminalStatuses)) {
+        issues.push({
+          path: `instanceTracking[${i}].terminalStatuses`,
+          message: "activeStatuses and terminalStatuses are mutually exclusive; declare only one",
         });
       }
       // `pollMs`, when set, schedules a self-rescheduling timer; a non-number/NaN/non-positive

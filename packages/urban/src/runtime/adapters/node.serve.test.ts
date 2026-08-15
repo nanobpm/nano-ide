@@ -36,20 +36,32 @@ test("serveHttp with no hostname still serves (host default interface)", async (
 
 test("serveHttp rejects fast when the bind fails instead of hanging", async () => {
   const host = createNodeHost();
-  // An unassignable/unsupported hostname makes the underlying `listen` emit `error`. Without the
-  // wired-in `error` handler the startup promise would never settle and hang forever, so guard the
-  // failure path with a timeout and assert we reject rather than stall.
-  const start = host.serveHttp(
+  // Deterministically provoke the underlying `listen` error path with a guaranteed EADDRINUSE:
+  // hold a first server on a concrete loopback port, then try to bind a second server to the same
+  // host:port. (An unassignable/unsupported hostname is not portable — e.g. hosts with
+  // `net.ipv4.ip_nonlocal_bind=1` may still bind it — so a port clash is the reliable trigger.)
+  // Without the wired-in `error` handler the startup promise would never settle and hang forever,
+  // so guard the failure path with a timeout and assert we reject rather than stall.
+  const first = await host.serveHttp(
     0,
     () => ({ status: 200, body: "ok" }),
-    { hostname: "203.0.113.1" },
+    { hostname: "127.0.0.1" },
   );
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("serveHttp hung: bind failure did not reject")), 3000),
-  );
-  await assert.rejects(Promise.race([start, timeout]), (err: unknown) => {
-    assert.ok(err instanceof Error);
-    assert.doesNotMatch(err.message, /hung/, "rejected via the adapter, not the test timeout");
-    return true;
-  });
+  try {
+    const start = host.serveHttp(
+      first.port,
+      () => ({ status: 200, body: "ok" }),
+      { hostname: "127.0.0.1" },
+    );
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("serveHttp hung: bind failure did not reject")), 3000),
+    );
+    await assert.rejects(Promise.race([start, timeout]), (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.doesNotMatch(err.message, /hung/, "rejected via the adapter, not the test timeout");
+      return true;
+    });
+  } finally {
+    await first.stop();
+  }
 });

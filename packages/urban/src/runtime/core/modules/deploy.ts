@@ -90,6 +90,6 @@ export async function deployModels(ctx: RuntimeContext): Promise<{ deployed: num
     })),
   );
   const { deployed } = await ctx.engine.deployResources(resources);
-  ctx.host.log("info", "deploy: models deployed", { deployed, files, byConvention });
+  ctx.host.log("info", "deploy: resources deployed", { deployed, files, byConvention });
   return { deployed, files };
 }

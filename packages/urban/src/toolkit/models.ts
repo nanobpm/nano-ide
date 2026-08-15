@@ -2,7 +2,8 @@
 //
 // Unlike the pure derivers (migrations, domain, worker I/O), which transform strings, this
 // imports the app's `workflows/*.ts`, turns each `defineFlow` into executable BPMN via
-// `@nanobpm/workflow` (`toBpmn` + `bpmn-auto-layout` DI), and writes `processes/<id>.bpmn`.
+// `@nanobpm/workflow` (`toBpmn` + `bpmn-auto-layout` DI), and writes `resources/processes/<id>.bpmn`
+// (the deploy-by-convention `resources/` tree, ADR 0062 — see `PROCESSES_DIR`).
 // Executing the app's TypeScript needs a runtime module loader, so this is gated on the
 // optional `GenIO.importModule` (present on Node with type-stripping, and on Deno). When the
 // loader is absent — or the app authors its models directly (model-first) — derivation is a
@@ -70,7 +71,7 @@ export interface ModelError {
 }
 
 export interface DerivedModels {
-  /** `processes/<id>.bpmn` artifacts (path + provenance-stamped content). */
+  /** `resources/processes/<id>.bpmn` artifacts (path + provenance-stamped content). */
   artifacts: DerivedArtifact[];
   /** The same models, in-memory, for feeding the type-contract derivers (worker I/O, meta, messages). */
   models: ModelSource[];

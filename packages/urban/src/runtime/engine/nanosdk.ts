@@ -18,6 +18,7 @@ import type {
   JobHandler,
   ProcessInstanceSnapshot,
   ProcessInstanceState,
+  UserTaskState,
   UserTaskSummary,
   WorkerSubscription,
 } from "../core/host.ts";
@@ -221,6 +222,7 @@ export class SdkEngineClient implements EngineClient {
     processInstanceKey?: string;
     assignee?: string;
     candidateGroup?: string;
+    state?: UserTaskState;
   }): Promise<UserTaskSummary[]> {
     // User tasks are an eventually consistent read; ask for zero-wait consistency so
     // the search reflects what is currently visible without blocking.

@@ -171,10 +171,26 @@ test("/api/tasks surfaces the resolved form linkage", async () => {
   };
   const { tasks } = inboxRoutes(engine);
   const res = await call(tasks, { query: "processInstanceKey=pi-9" });
-  assert.deepEqual(seenFilter, { processInstanceKey: "pi-9" });
+  assert.deepEqual(seenFilter, { state: "CREATED", processInstanceKey: "pi-9" });
   const parsed = JSON.parse(String(res.body));
   assert.equal(parsed[0].formKey, "form-123");
   assert.equal(parsed[1].formKey, undefined);
+});
+
+test("/api/tasks constrains the search to open (CREATED) tasks", async () => {
+  let seenFilter: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    searchUserTasks: async (filter) => {
+      seenFilter = filter;
+      return [];
+    },
+  };
+  const { tasks } = inboxRoutes(engine);
+  await call(tasks);
+  // No processInstanceKey supplied, but the inbox must still pin state=CREATED so that
+  // already-answered/canceled tasks never surface as answerable (nanobpm/nano-ide#248).
+  assert.deepEqual(seenFilter, { state: "CREATED" });
 });
 
 test("/api/form resolves a linked form's schema", async () => {

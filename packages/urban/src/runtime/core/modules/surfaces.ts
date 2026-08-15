@@ -215,7 +215,14 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       source: "surface:taskInbox",
       handler: async (req) => {
         const pik = req.query.get("processInstanceKey") ?? undefined;
-        const tasks = await app.engine.searchUserTasks(pik ? { processInstanceKey: pik } : undefined);
+        // Constrain the inbox to open (answerable) tasks. Without a state filter the engine
+        // returns tasks in every state (CREATED/COMPLETED/CANCELED/...), so already-answered
+        // or withdrawn tasks would surface as if actionable — completing one then fails with
+        // "User task ... is not active". See nanobpm/nano-ide#248.
+        const tasks = await app.engine.searchUserTasks({
+          state: "CREATED",
+          ...(pik ? { processInstanceKey: pik } : {}),
+        });
         return json(tasks);
       },
     });

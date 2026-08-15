@@ -9,6 +9,7 @@
 // used to cause.
 
 import type { HostContext } from "./host.ts";
+import { isRecord } from "./guards.ts";
 import type {
   AppManifest,
   InstanceTracking as SchemaInstanceTracking,
@@ -87,21 +88,25 @@ export const BIND_MODES = ["loopback", "all"] as const;
  */
 export type BindMode = (typeof BIND_MODES)[number];
 
-/** App-level network settings (issue #235). Absent ⇒ loopback. */
+/**
+ * App-level network settings (issue #235). Absent ⇒ loopback.
+ *
+ * Mirrored locally — like the `api` binding (ADR 0058) — until `@nanobpm/nano-app-schema`
+ * folds `network` into `AppManifest` (the schema PR lands first). The manifest shape is
+ * owned by that package (ADR 0027), so we deliberately do NOT augment `AppManifest` via
+ * `declare module` (CI bans it): the field is threaded through the runtime-side helpers
+ * that take a `{ network?: NetworkConfig }` view and is read off the raw manifest object.
+ * Once the schema ships `network`, this local type (and the allow-list entry in
+ * validate.ts) can be deleted and the field flows from the schema like every other block.
+ */
 export interface NetworkConfig {
   /** HTTP bind interface. Default `"loopback"`. */
   bind?: BindMode;
 }
 
-// The manifest type is the single source of truth (ADR 0027) and is owned by
-// @nanobpm/nano-app-schema. `network` is threaded here as a runtime-side forward
-// declaration until that package's JSON Schema + generated types ship the field;
-// once they do, this augmentation (and the matching allow-list entry in validate.ts)
-// can be deleted and the field flows from the schema like every other block.
-declare module "@nanobpm/nano-app-schema" {
-  interface AppManifest {
-    network?: NetworkConfig;
-  }
+/** A runtime-side view of a manifest carrying the pending-schema `network` block. */
+export interface WithNetwork {
+  network?: NetworkConfig;
 }
 
 /** Loopback bind address — secure/local default. */
@@ -118,18 +123,30 @@ export function isBindMode(v: unknown): v is BindMode {
 }
 
 /**
+ * Read the pending-schema `network.bind` off a raw manifest object. Because `network` is
+ * mirrored locally (not yet in `AppManifest`'s static shape), it is read reflectively —
+ * the same way the `api` binding is threaded (ADR 0058) — and validated with
+ * {@link isBindMode} so this always returns a real {@link BindMode} or `undefined`.
+ */
+function manifestBind(manifest: AppManifest | WithNetwork): BindMode | undefined {
+  const network = Reflect.get(manifest, "network");
+  if (!isRecord(network)) return undefined;
+  return isBindMode(network.bind) ? network.bind : undefined;
+}
+
+/**
  * Resolve the effective HTTP bind mode: the `URBAN_BIND` env override wins when set to a
  * valid value, else the manifest's `network.bind`, else `"loopback"` (secure by default).
  * An env value that is present but invalid is ignored (falls through to the manifest/default);
  * callers that want to surface that can check {@link isBindMode} on the raw env value.
  */
 export function resolveBindMode(
-  manifest: Pick<AppManifest, "network">,
+  manifest: AppManifest | WithNetwork,
   lookup: (name: string) => string | undefined = () => undefined,
 ): BindMode {
   const envRaw = lookup(BIND_ENV_VAR);
   if (isBindMode(envRaw)) return envRaw;
-  return manifest.network?.bind ?? "loopback";
+  return manifestBind(manifest) ?? "loopback";
 }
 
 /** Map a {@link BindMode} to the concrete host address passed to the HTTP adapter. */
@@ -142,7 +159,7 @@ export function bindModeToHost(mode: BindMode): string {
  * `"loopback"` ⇒ `127.0.0.1` (default), `"all"` ⇒ `0.0.0.0`.
  */
 export function resolveBindHost(
-  manifest: Pick<AppManifest, "network">,
+  manifest: AppManifest | WithNetwork,
   lookup: (name: string) => string | undefined = () => undefined,
 ): string {
   return bindModeToHost(resolveBindMode(manifest, lookup));

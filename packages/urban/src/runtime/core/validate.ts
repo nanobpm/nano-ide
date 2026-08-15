@@ -55,8 +55,9 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
   // `network` (issue #235) is threaded as a runtime-side setting until
   // @nanobpm/nano-app-schema ships the field in its JSON Schema; allow it here so the
   // envelope check doesn't reject it. Remove this once the schema owns `network` (it
-  // then flows from `S.properties` like every other block). Matching type augmentation
-  // lives in manifest.ts.
+  // then flows from `S.properties` like every other block). The matching local type
+  // (NetworkConfig) lives in manifest.ts — mirrored like the `api` binding (ADR 0058),
+  // never via a `declare module` augmentation (CI bans augmenting the schema type).
   allowed.add("network");
   if (S.additionalProperties === false) {
     for (const k of Object.keys(obj)) {

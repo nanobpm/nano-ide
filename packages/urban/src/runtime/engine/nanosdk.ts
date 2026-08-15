@@ -228,7 +228,9 @@ export class SdkEngineClient implements EngineClient {
       // This method is contracted to return *open* tasks; constrain the read to
       // CREATED so answered/canceled tasks never surface as answerable (e.g. a
       // re-escalated instance whose prior escalation task is already COMPLETED).
-      { filter: { state: "CREATED", ...(filter ?? {}) } },
+      // Spread caller filters first and pin `state` last so a caller can never
+      // override the open-only (CREATED) constraint this method contracts to.
+      { filter: { ...(filter ?? {}), state: "CREATED" } },
       { consistency: { waitUpToMs: 0 } },
     );
     const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];

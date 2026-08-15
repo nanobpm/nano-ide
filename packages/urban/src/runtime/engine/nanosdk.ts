@@ -225,7 +225,10 @@ export class SdkEngineClient implements EngineClient {
     // User tasks are an eventually consistent read; ask for zero-wait consistency so
     // the search reflects what is currently visible without blocking.
     const body = await this.client.searchUserTasks(
-      { filter: { ...(filter ?? {}) } },
+      // This method is contracted to return *open* tasks; constrain the read to
+      // CREATED so answered/canceled tasks never surface as answerable (e.g. a
+      // re-escalated instance whose prior escalation task is already COMPLETED).
+      { filter: { state: "CREATED", ...(filter ?? {}) } },
       { consistency: { waitUpToMs: 0 } },
     );
     const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];

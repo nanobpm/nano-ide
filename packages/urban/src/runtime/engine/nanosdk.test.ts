@@ -177,8 +177,10 @@ test("publishMessage defaults correlationKey/variables", async () => {
 
 test("searchUserTasks passes zero-wait consistency and maps items", async () => {
   let consistency: unknown;
+  let input: any;
   const client = fakeSdkClient({
-    searchUserTasks: async (_input, c) => {
+    searchUserTasks: async (i, c) => {
+      input = i;
       consistency = c;
       return {
         items: [
@@ -192,6 +194,11 @@ test("searchUserTasks passes zero-wait consistency and maps items", async () => 
   const engine = new SdkEngineClient(client);
   const tasks = await engine.searchUserTasks({ processInstanceKey: "pi" });
   assert.deepEqual(consistency, { consistency: { waitUpToMs: 0 } });
+  // The search is constrained to open (CREATED) tasks so terminal tasks never
+  // surface as answerable, while caller filters (processInstanceKey) still apply.
+  assert.deepEqual(input, {
+    filter: { state: "CREATED", processInstanceKey: "pi" },
+  });
   assert.deepEqual(tasks, [
     { userTaskKey: "7", elementId: "task_a", variables: { x: 1 } },
     { userTaskKey: "8", elementId: undefined, variables: undefined },

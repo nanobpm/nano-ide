@@ -13,6 +13,7 @@
 
 import type { TestEngine } from "@nanobpm/engine-wasm";
 import {
+  applyAmbientLineage,
   type EngineClient,
   type EngineJob,
   isBpmnError,
@@ -245,7 +246,9 @@ export class WasmEngineClient implements EngineClient {
     const snap = this.#parseObj(
       this.#engine.createInstance(
         input.processDefinitionId,
-        JSON.stringify(input.variables ?? {}),
+        // Auto-thread the `_urban.lineage` envelope via the same shared step the live
+        // SdkEngineClient uses (No Drift Surfaces), so lineage is observable in-harness (issue #254).
+        JSON.stringify(applyAmbientLineage(input.variables)),
       ),
     );
     const processInstanceKey = requireCreated(snap.created);
@@ -274,7 +277,7 @@ export class WasmEngineClient implements EngineClient {
     this.#engine.correlateMessage(
       input.name,
       input.correlationKey ?? "",
-      JSON.stringify(input.variables ?? {}),
+      JSON.stringify(applyAmbientLineage(input.variables)),
     );
     await this.drain();
   }

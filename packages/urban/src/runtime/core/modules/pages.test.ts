@@ -371,6 +371,73 @@ test("renderer interpolates a column's per-cell template into DOM text (#214)", 
   assert.match(js, /const text = typeof col\.template === "string" \? interpTemplate\(col\.template, row\) : rawText;/);
 });
 
+test("renderer renders a column's subtitle as a muted second line, never an href (#257)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A column may render an optional muted second line beneath the primary text
+  // (the identity key under a title, GitHub/Linear style). The value comes from
+  // col.subtitleField (raw) or col.subtitleTemplate (interpolated), null/absent →
+  // "" → no extra line. Guard the shape: subtitleTemplate wins via interpTemplate,
+  // the subtitle is emitted as a .pc-cell-sub DOM-text line, and — crucially for
+  // the security posture — it is NEVER an href source (only linkField/keyField
+  // drive anchors; the subtitle stays plain text).
+  assert.match(js, /col\.subtitleField != null && row\[col\.subtitleField\] != null \? String\(row\[col\.subtitleField\]\) : ""/);
+  assert.match(js, /const subText = typeof col\.subtitleTemplate === "string" \? interpTemplate\(col\.subtitleTemplate, row\) : subRaw;/);
+  assert.match(js, /class: "pc-cell-sub"/);
+  // Absent subtitle (empty) and no truncation collapses back to the single inline
+  // node, so existing grids render exactly as before (backward compatible).
+  assert.match(js, /if \(subText === "" && !truncate\) return el\("td", \{\}, primary\);/);
+});
+
+test("renderer truncates a column to one line with an ellipsis + full-text tooltip (#257)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // col.truncate:true clamps the primary (and any subtitle) line to a single row
+  // with an ellipsis, carrying the full value in a native title= tooltip and
+  // aria-label so the clipped text stays recoverable on hover and to assistive
+  // tech. Guard the shape: opt-in on `=== true`, a .pc-truncate class is added to
+  // the line, and the full text is mirrored into title/aria-label.
+  assert.match(js, /const truncate = col\.truncate === true;/);
+  assert.match(js, /"pc-cell-main"\s*\+\s*\(truncate \? " pc-truncate" : ""\)/);
+  assert.match(js, /mainAttrs\.title = primaryText; mainAttrs\["aria-label"\] = primaryText;/);
+  assert.match(js, /"pc-cell-sub"\s*\+\s*\(truncate \? " pc-truncate" : ""\)/);
+});
+
+test("renderer emits a <colgroup> sizing columns by width/weight (#257)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A column may declare an explicit `width` ("40%", "22rem") or a relative
+  // integer `weight`, so table-layout:fixed stops splitting width equally. This
+  // emits a <colgroup> of <col style="width:…"> (fixed layout honours <col>
+  // widths). Guard the shape: an explicit width string wins verbatim, a positive
+  // weight is normalised across weighted columns into a percentage, unsized
+  // columns get no width (share the remainder), and no colgroup is emitted at all
+  // when no column declares sizing (so unsized grids are unchanged).
+  assert.match(js, /function buildColgroup\(cols, extraCount\)/);
+  assert.match(js, /if \(!hasSizing\) return null;/);
+  assert.match(js, /if \(typeof col\.width === "string" && col\.width !== ""\) return col\.width;/);
+  assert.match(js, /Math\.round\(\(col\.weight \/ weightTotal\) \* 10000\) \/ 100 \+ "%"/);
+  assert.match(js, /el\("col", w \? \{ style: "width:" \+ w \} : \{\}\)/);
+  // The colgroup precedes <thead> in the table, and only when sizing is present.
+  assert.match(js, /\? el\("table", \{ class: "pc-grid" \}, colgroup, thead, tbody\)/);
+});
+
+test("the shell styles the subtitle line muted and the truncate clamp to one line (#257)", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  // The muted subtitle line and the one-line clamp are styled in the shell CSS
+  // (served with the shell HTML, like the other pc-grid rules). Guard both rules.
+  const subRule = (html.match(/\.pc-cell-sub\s*\{[^}]*\}/) ?? [""])[0];
+  assert.ok(subRule, ".pc-cell-sub rule must be present");
+  assert.match(subRule, /color:var\(--nano-text-muted\)/);
+  assert.match(subRule, /font-size:\.8rem/);
+  const truncRule = (html.match(/\.pc-truncate\s*\{[^}]*\}/) ?? [""])[0];
+  assert.ok(truncRule, ".pc-truncate rule must be present");
+  assert.match(truncRule, /white-space:nowrap/);
+  assert.match(truncRule, /overflow:hidden/);
+  assert.match(truncRule, /text-overflow:ellipsis/);
+});
+
 test("renderer wires a column's processExplorer link to the console explorer", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";

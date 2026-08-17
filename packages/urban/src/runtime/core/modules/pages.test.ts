@@ -523,11 +523,15 @@ test("renderer wires a column's page link to an in-app scoped hash route", async
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
   // link: { kind: "page", page, keyField } → an in-app #/<page>/<key> hash link
-  // (no new tab, no server hit). The page id is safe-id-validated, the key is
-  // trimmed + URL-encoded into the param tail, and a blank/keyless cell stays text.
+  // (no new tab, no server hit). The route is built by the shared pageHashHref
+  // helper: the page id is safe-id-validated, the key is trimmed + URL-encoded
+  // into the param tail, and a blank/keyless cell stays text.
   assert.match(js, /col\.link && col\.link\.kind === "page" && col\.link\.page && col\.link\.keyField/);
-  assert.match(js, /safePageId\(col\.link\.page\)/);
-  assert.match(js, /"#\/" \+ encodeURIComponent\(col\.link\.page\) \+ "\/" \+ encodeURIComponent\(keyStr\)/);
+  assert.match(js, /const href = pageHashHref\(col\.link\.page, row\[col\.link\.keyField\]\)/);
+  // pageHashHref is the single source of truth: safe-id guard + encoded route.
+  assert.match(js, /function pageHashHref\(page, key\)/);
+  assert.match(js, /if \(!safePageId\(page\) \|\| keyStr === ""\) return ""/);
+  assert.match(js, /"#\/" \+ encodeURIComponent\(page\) \+ "\/" \+ encodeURIComponent\(keyStr\)/);
   // In-app: NOT a new-tab link (no target/rel on this anchor).
   assert.match(js, /el\("a", \{ class: "pc-link", href \}, text\)/);
 });
@@ -1192,4 +1196,150 @@ test("the renderer honours an optional Tier-2 page-level mobile layout variant (
   // lacks addEventListener, else the Tier-2 variant would never swap on rotation.
   assert.match(js, /typeof MOBILE_MQ\.addEventListener === "function"/);
   assert.match(js, /else if \(typeof MOBILE_MQ\.addListener === "function"\) MOBILE_MQ\.addListener\(renderPage\);/);
+});
+
+// --- Pipeline / stepper cell renderer (issue #265) ---------------------------
+// These guard the runtime shape the way the other column-mode tests do: the
+// renderer JS is asserted for the pipeline logic, and the shell CSS for the
+// .pc-pipe* chrome. Together they lock the six rendering requirements so the
+// primitive can't silently regress.
+
+test("renderer gates the pipeline cell on kind:\"pipeline\" and leaves other modes untouched", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A dataGrid column declaring kind:"pipeline" is dispatched to pipelineCell;
+  // the gate is a pure discriminator so absent it, every existing column mode
+  // (badge/linkField/link/template/truncate) renders exactly as before.
+  assert.match(js, /if\s*\(col\.kind === "pipeline"\) return pipelineCell\(col, row, text, subText, truncate, mob\)/);
+  assert.match(js, /function pipelineCell\(col, row, text, subText, truncate, tdAttrs\)/);
+});
+
+test("pipeline orders stages upstream-filled / active-lit / downstream-ghosted from activeField", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The active stage is located by matching activeField's value against
+  // stages[].key; stages before it are done/filled, the match is lit (active),
+  // and in-path stages after it are ghosted/upcoming. The lookup breaks on the
+  // first key match so a repeated key resolves deterministically to the first stage.
+  assert.match(js, /const activeKey = col\.activeField != null/);
+  // The row value is trimmed so a whitespace-padded key still matches its stage.
+  assert.match(js, /\? String\(row\[col\.activeField\]\)\.trim\(\) : ""/);
+  assert.match(js, /if \(String\(stages\[i\]\.key\) === activeKey\) \{\s*activeIdx = i;\s*break;\s*\}/);
+  assert.match(js, /i < activeIdx\) \{\s*cls = "pc-pipe-done"; word = "completed";/);
+  assert.match(js, /cls = "pc-pipe-upcoming"; word = "upcoming";/);
+  // The connector fills up to the active stage, but a not-in-path predecessor
+  // breaks the fill so a skipped stage is never implied to be on the path.
+  assert.match(js, /const filled =\s*activeIdx >= 0 && i <= activeIdx && !skipped && !skip\.has\(String\(stages\[i - 1\]\.key\)\)/);
+  assert.match(js, /class: "pc-pipe-conn" \+ filled/);
+});
+
+test("pipeline reads the not-in-path set per-row from a field, falling back to static config", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Skipped stages are dashed (.pc-pipe-skip). The set comes from notInPathField
+  // on the row when given, else the static col.notInPath — via toStageSet, which
+  // accepts an array or a comma/space-separated string, trimming + dropping
+  // empties on BOTH paths so whitespace-padded array keys still match.
+  assert.match(js, /col\.notInPathField != null && row\[col\.notInPathField\] != null/);
+  assert.match(js, /toStageSet\(row\[col\.notInPathField\]\)/);
+  assert.match(js, /toStageSet\(col\.notInPath\)/);
+  assert.match(js, /cls = "pc-pipe-skip"; word = "skipped";/);
+  assert.match(js, /function toStageSet\(v\)/);
+  assert.match(js, /Array\.isArray\(v\)\) return new Set\(v\.map\(\(s\) => String\(s\)\.trim\(\)\)\.filter\(\(s\) => s !== ""\)\)/);
+});
+
+test("pipeline keeps the active stage current even if its key is also in the not-in-path set (active wins over skip)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Precedence guard: the skipped predicate excludes the active index so a stage
+  // that is both the active stage AND in the not-in-path set still renders as the
+  // current step (active styling + aria-current), never as dashed/skipped. The
+  // skip branch is checked before i === activeIdx, so without this exclusion the
+  // active stage would silently lose aria-current="step".
+  assert.match(js, /const skipped = i !== activeIdx && skip\.has\(String\(s\.key\)\);/);
+});
+
+test("pipeline renders failure distinctly from success on the active stage (stateField)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // stateField drives the active stage's terminal treatment: ok → success ✓,
+  // failed → ✕, blocked → ⊘ — each a distinct class + glyph so success and
+  // failure are unmistakably different.
+  assert.match(js, /stRaw === "ok" \|\| stRaw === "failed" \|\| stRaw === "blocked" \? stRaw : "active"/);
+  assert.match(js, /state === "failed"\) \{ cls = "pc-pipe-active pc-pipe-failed"; word = "failed"; glyph = "\\u2715";/);
+  assert.match(js, /state === "ok"\) \{ cls = "pc-pipe-active pc-pipe-ok"; word = "done"; glyph = "\\u2713";/);
+  assert.match(js, /state === "blocked"\) \{ cls = "pc-pipe-active pc-pipe-blocked"; word = "blocked"; glyph = "\\u2298";/);
+});
+
+test("pipeline renders an active-stage badge from badgeField reusing .pc-badge tone classes", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The badge sits on the active stage, only when badgeField is non-empty, and
+  // reuses the existing .pc-badge tone classes (no new badge styles): warn for
+  // attention/escalation, danger for blocked/failure.
+  assert.match(js, /const badgeText = col\.badgeField != null && row\[col\.badgeField\] != null/);
+  assert.match(js, /const badgeTone = state === "failed" \|\| state === "blocked" \? "danger" : "warn"/);
+  assert.match(js, /current && badgeText\.trim\(\) !== ""/);
+  assert.match(js, /class: "pc-badge pc-badge-" \+ badgeTone, title: badgeText, "aria-label": badgeText/);
+});
+
+test("pipeline builds a locus link via the shared pageHashHref route builder, only when the key is non-empty", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The locus stage becomes a #/<page>/<key> in-app link built by the SAME
+  // pageHashHref helper the grid's page-link cell uses (single source of truth):
+  // safePageId guard + encodeURIComponent, a blank key yields "" so no link, and
+  // the anchor reuses .pc-link — no duplicated href construction.
+  assert.match(js, /function pageHashHref\(page, key\)/);
+  assert.match(js, /return "#\/" \+ encodeURIComponent\(page\) \+ "\/" \+ encodeURIComponent\(keyStr\)/);
+  // The grid page-link cell was refactored onto the shared builder too.
+  assert.match(js, /const href = pageHashHref\(col\.link\.page, row\[col\.link\.keyField\]\)/);
+  // The locus link uses it and the shared .pc-link class; blank key → "" → plain.
+  assert.match(js, /pageHashHref\(locus\.link\.page, locusKey\)/);
+  assert.match(js, /el\("a", \{ class: "pc-link pc-pipe-label", href: locusHref \}, label\)/);
+});
+
+test("pipeline exposes step semantics to assistive tech (role/list + aria-current)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The track is a labelled list; each stage is a listitem with an aria-label
+  // stating its label + status word; the current stage is marked aria-current.
+  assert.match(js, /class: "pc-pipe",\s*role: "list",\s*"aria-label": "Progress"/);
+  assert.match(js, /role: "listitem", "aria-label": label \+ " \\u2014 " \+ word/);
+  assert.match(js, /if \(current\) attrs\["aria-current"\] = "step"/);
+});
+
+test("pipeline degrades to plain cell text on missing/unknown config (never throws)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // No stages array → the cell falls back to plain text via cellTd, matching how
+  // an unknown link.kind falls back today. Null/undefined entries are filtered so
+  // a schema hole never throws on s.key.
+  assert.match(js, /const stages = Array\.isArray\(col\.stages\) \? col\.stages\.filter\(\(s\) => s != null\) : \[\]/);
+  assert.match(js, /if \(stages\.length === 0\) return cellTd\(text, text, subText, truncate, tdAttrs\)/);
+});
+
+test("pipeline cell inherits the mobile card attrs so it labels/classifies under the card flip (#268)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The pipeline <td> merges gridCell's mobile card attrs (data-label + role
+  // class) alongside its own pc-pipe-cell class, so a pipeline column is not left
+  // out of the CSS-only card flip. Single source of truth: the same `mob` object
+  // every other cell path receives.
+  assert.match(js, /const cellAttrs = \{ \.\.\.\(tdAttrs \|\| \{\}\), class: \(tdAttrs && tdAttrs\.class \? tdAttrs\.class \+ " " : ""\) \+ "pc-pipe-cell" \}/);
+  assert.match(js, /return el\("td", cellAttrs, track\)/);
+});
+
+test("shell CSS carries the .pc-pipe* track chrome reusing --nano-* tokens", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  // Structural track/stage styles only (badges/links reuse .pc-badge and .pc-link);
+  // all colours resolve through the shared token vocabulary so themes work.
+  assert.match(html, /\.pc-pipe \{ display:flex;/);
+  assert.match(html, /\.pc-pipe-done \{[^}]*border-color:var\(--nano-ok\)/);
+  assert.match(html, /\.pc-pipe-active \{[^}]*border-color:var\(--nano-accent\)/);
+  assert.match(html, /\.pc-pipe-active\.pc-pipe-failed \{[^}]*border-color:var\(--nano-danger\)/);
+  assert.match(html, /\.pc-pipe-active\.pc-pipe-ok \{[^}]*border-color:var\(--nano-ok\)/);
+  assert.match(html, /\.pc-pipe-skip \{[^}]*border-style:dashed/);
+  assert.match(html, /\.pc-pipe-upcoming \{[^}]*var\(--nano-text-faint\)/);
 });

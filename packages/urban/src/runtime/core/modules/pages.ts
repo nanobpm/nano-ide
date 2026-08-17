@@ -587,6 +587,30 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-count-badge { color:var(--nano-text); background:var(--nano-inset); border:1px solid var(--nano-edge); font-weight:600; }
 :root[data-appearance="light"] .pc-badge-warn { color:#fff; }
 @media (prefers-color-scheme: light) { :root:not([data-appearance]) .pc-badge-warn { color:#fff; } }
+/* Pipeline / stepper cell (issue #265): a per-row, multi-stage horizontal
+   progress track rendered by pipelineCell. Only the track/stage chrome lives
+   here (the .pc-pipe classes); the active-stage badge and locus links reuse the
+   .pc-badge and .pc-link classes.
+   All colours come from the shared --nano-* tokens so light/dark themes work.
+   Stage treatments: done = filled/ok-tinted, active = lit accent, active+ok =
+   success (✓), active+failed = danger (✕), active+blocked = warn (⊘), upcoming =
+   faint/ghosted, skip (not-in-path) = dashed. */
+.pc-pipe { display:flex; align-items:center; flex-wrap:wrap; gap:.15rem; font-size:.8rem; }
+.pc-pipe-stage { display:inline-flex; align-items:center; gap:.3rem; padding:.12rem .5rem; border:1px solid var(--nano-edge); border-radius:999px; background:transparent; color:var(--nano-text-muted); white-space:nowrap; }
+.pc-pipe-label { color:inherit; }
+.pc-pipe-mark { font-weight:700; line-height:1; }
+.pc-pipe-conn { flex:0 0 auto; width:.9rem; height:2px; border-radius:1px; background:var(--nano-edge); }
+.pc-pipe-conn.filled { background:var(--nano-ok); }
+.pc-pipe-done { color:var(--nano-text); border-color:var(--nano-ok); background:var(--nano-hover); }
+.pc-pipe-active { color:var(--nano-text); font-weight:650; border-color:var(--nano-accent); background:var(--nano-hover); box-shadow:0 0 0 1px var(--nano-accent) inset; }
+.pc-pipe-active.pc-pipe-ok { border-color:var(--nano-ok); box-shadow:0 0 0 1px var(--nano-ok) inset; }
+.pc-pipe-active.pc-pipe-ok .pc-pipe-mark { color:var(--nano-ok); }
+.pc-pipe-active.pc-pipe-failed { border-color:var(--nano-danger); box-shadow:0 0 0 1px var(--nano-danger) inset; }
+.pc-pipe-active.pc-pipe-failed .pc-pipe-mark { color:var(--nano-danger); }
+.pc-pipe-active.pc-pipe-blocked { border-color:var(--nano-warn); box-shadow:0 0 0 1px var(--nano-warn) inset; }
+.pc-pipe-active.pc-pipe-blocked .pc-pipe-mark { color:var(--nano-warn); }
+.pc-pipe-upcoming { color:var(--nano-text-faint); border-color:var(--nano-edge); opacity:.75; }
+.pc-pipe-skip { color:var(--nano-text-faint); border-style:dashed; opacity:.6; }
 .pc-child { margin:.6rem 0; }
 .pc-child-title { font-size:.8rem; font-weight:600; color:var(--nano-text-muted); margin-bottom:.25rem; }
 .pc-transcript { white-space:pre-wrap; max-height:22rem; overflow:auto; background:var(--nano-inset); padding:.5rem; border-radius:.4rem; font-size:.8rem; margin-top:.4rem; }
@@ -1153,6 +1177,30 @@ function renderButton(node) {
 // width/weight — see buildColgroup — to give the clip a bounded column). The
 // subtitle is ALWAYS plain DOM text, never an href source. With none of these
 // set the cell is a single inline node exactly as before (see cellTd).
+// Build an in-app hash route to another page, scoped to a row key: #/<page>/<key>.
+// The page id is validated against the safe-id charset and the key must be
+// non-empty (after trimming); either failing yields "" (no link). The key is
+// URL-encoded into the route's param tail, which parseRoute() decodes back
+// verbatim, so row data can't smuggle a path or scheme. SINGLE source of truth
+// for the page-link href so the grid's link cell and the pipeline locus link
+// (issue #265) can't drift on how the route is built.
+function pageHashHref(page, key) {
+  const keyStr = key == null ? "" : String(key).trim();
+  if (!safePageId(page) || keyStr === "") return "";
+  return "#/" + encodeURIComponent(page) + "/" + encodeURIComponent(keyStr);
+}
+
+// Coerce a not-in-path value (issue #265) into a Set of stage keys. Accepts an
+// array of keys or a comma/whitespace-separated string; null/undefined → empty
+// set. Used to mark the stages a given row skips (dashed/omitted).
+function toStageSet(v) {
+  // Trim + drop-empties on BOTH inputs so array entries with stray whitespace
+  // (e.g. from CSV/JSON munging) match stages[].key just like the string path.
+  if (Array.isArray(v)) return new Set(v.map((s) => String(s).trim()).filter((s) => s !== ""));
+  if (v == null) return new Set();
+  return new Set(String(v).split(/[\s,]+/).filter((s) => s !== ""));
+}
+
 function gridCell(col, row, role) {
   // Mobile card attributes stamped on every td so a dataGrid can flip to a
   // stacked card list below the breakpoint with no JS branching (#268):
@@ -1209,6 +1257,14 @@ function gridCell(col, row, role) {
     col.subtitleField != null && row[col.subtitleField] != null ? String(row[col.subtitleField]) : "";
   const subText = typeof col.subtitleTemplate === "string" ? interpTemplate(col.subtitleTemplate, row) : subRaw;
   const truncate = col.truncate === true;
+  // pipeline (issue #265): a dataGrid column declaring kind:"pipeline" renders
+  // the ordered stages as a per-row horizontal progress track (upstream-filled
+  // → active-lit → downstream-ghosted, not-in-path dashed). It owns the whole
+  // cell, so it returns here before the link chain below. Gated purely on the
+  // discriminator so every existing column mode is untouched when it is absent;
+  // unknown/missing pipeline config degrades to plain cell text (never throws),
+  // exactly as an unrecognised link.kind falls back today.
+  if (col.kind === "pipeline") return pipelineCell(col, row, text, subText, truncate, mob);
   // Primary inline content: an anchor for a valid link mode (checked in the same
   // badge < linkField < link(page) < link(processExplorer) precedence as before),
   // else the plain display text. Each link mode only claims the cell while
@@ -1222,16 +1278,13 @@ function gridCell(col, row, role) {
     }
   }
   if (primary === text && col.link && col.link.kind === "page" && col.link.page && col.link.keyField) {
-    // An in-app link to another page, scoped to this row: #/<page>/<key>. The
-    // key (e.g. a plan_key "owner/repo#123") is URL-encoded into the route's
-    // param tail, which parseRoute() decodes back verbatim; the page id is
+    // An in-app link to another page, scoped to this row: #/<page>/<key>. Built
+    // via pageHashHref (the single source of truth for the route): the page id is
     // validated against the safe-id charset and the key must be non-empty, so a
     // blank/keyless cell stays plain text. Navigation is a pure hash change
     // (no new tab, no server hit) — the SPA router re-renders in place.
-    const key = row[col.link.keyField];
-    const keyStr = key == null ? "" : String(key).trim();
-    if (text !== "" && safePageId(col.link.page) && keyStr !== "") {
-      const href = "#/" + encodeURIComponent(col.link.page) + "/" + encodeURIComponent(keyStr);
+    const href = pageHashHref(col.link.page, row[col.link.keyField]);
+    if (text !== "" && href !== "") {
       primary = el("a", { class: "pc-link", href }, text);
     }
   }
@@ -1331,6 +1384,134 @@ function mobileMoreCell(tr) {
     moreBtn.setAttribute("aria-expanded", String(open));
   });
   return el("td", { class: "pc-mcard-toggle" }, moreBtn);
+}
+
+// Pipeline / stepper cell (issue #265) — a dataGrid column with kind:"pipeline"
+// renders a per-row, multi-stage horizontal progress track. It is RENDER-ONLY:
+// stage state is read straight from the row fields the app supplies; no
+// app-specific stage derivation lives here. Column config (all fields are the
+// NAMES of row fields, mirroring the issue sketch):
+//   { kind:"pipeline",
+//     stages:[{key,label},...],   // ordered stage definitions (required)
+//     activeField:"stage",        // row field → the current stage's key
+//     stateField:"stage_state",   // row field → ok | active | failed | blocked
+//     badgeField:"attention",     // optional row field → badge text shown on the active stage
+//     notInPathField:"skipped",   // optional row field → stages this row skips
+//     notInPath:["converging"],   // static fallback used only when no field given
+//     locus:{ field:"pr_key", stage?:"<key>",
+//             link:{ kind:"page", page:"home" } } }  // optional out-link
+// Rendering: stages BEFORE the active one are filled/completed, the active stage
+// is lit (its treatment driven by stateField — success ✓ vs failure ✕ vs blocked
+// ⊘ are made unmistakably distinct), in-path stages AFTER it are ghosted, and any
+// stage in the row's not-in-path set is dashed. Reuses the .pc-badge and .pc-link
+// classes and the shared pageHashHref route builder — no parallel implementations. Unknown or
+// missing config (no stages array) degrades gracefully to plain cell text.
+function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
+  // Drop null/undefined entries defensively: a schema with a hole must still
+  // render (never throws on s.key) — same graceful-degradation goal as below.
+  const stages = Array.isArray(col.stages) ? col.stages.filter((s) => s != null) : [];
+  // Graceful fallback: an unrecognised/empty pipeline config renders plain text,
+  // exactly like an unknown link.kind — never throws.
+  if (stages.length === 0) return cellTd(text, text, subText, truncate, tdAttrs);
+  // The current stage's key, matched against stages[].key to find the active index.
+  // The row value is trimmed for consistency with the other row-derived keys
+  // (pageHashHref, toStageSet), so a whitespace-padded value still matches its stage
+  // instead of leaving the whole track rendered as upcoming.
+  // Stage keys identify a single stage, so stop at the first match: the result is
+  // deterministic even if a config accidentally repeats a key, and we avoid scanning
+  // the remaining stages on every row.
+  const activeKey = col.activeField != null && row[col.activeField] != null ? String(row[col.activeField]).trim() : "";
+  let activeIdx = -1;
+  for (let i = 0; i < stages.length; i++) {
+    if (String(stages[i].key) === activeKey) {
+      activeIdx = i;
+      break;
+    }
+  }
+  // The active stage's state drives its lit/failed/blocked treatment. Anything
+  // outside the allow-list (or absent) is treated as an in-progress "active".
+  const stRaw = col.stateField != null && row[col.stateField] != null ? String(row[col.stateField]) : "";
+  const state = stRaw === "ok" || stRaw === "failed" || stRaw === "blocked" ? stRaw : "active";
+  // Not-in-path (skipped) stages: driven per-row from notInPathField when given,
+  // else the static notInPath config (per the issue: "per row, from a field").
+  const skip =
+    col.notInPathField != null && row[col.notInPathField] != null
+      ? toStageSet(row[col.notInPathField])
+      : toStageSet(col.notInPath);
+  // Optional active-stage badge (escalation/attention → warn, blocked/failure →
+  // danger), reusing .pc-badge tone classes — no new badge styles. The badge text
+  // is a single row-level value (row[badgeField]) shown only on the active stage.
+  const badgeText = col.badgeField != null && row[col.badgeField] != null ? String(row[col.badgeField]) : "";
+  const badgeTone = state === "failed" || state === "blocked" ? "danger" : "warn";
+  // Optional locus out-link: the relevant stage (default the active one, or
+  // locus.stage by key) becomes an in-app page link when the row's locus key is
+  // non-empty. Href comes from the shared pageHashHref builder (safePageId guard,
+  // encodeURIComponent) — a blank key yields "" so the stage stays plain.
+  const locus = col.locus;
+  const locusKey = locus && locus.field != null && row[locus.field] != null ? String(row[locus.field]) : "";
+  const locusHref =
+    locus && locus.link && locus.link.kind === "page" && locus.link.page ? pageHashHref(locus.link.page, locusKey) : "";
+  const track = el("div", {
+    class: "pc-pipe",
+    role: "list",
+    "aria-label": "Progress" + (activeIdx >= 0 ? ": " + labelOf(stages[activeIdx]) : ""),
+  });
+  for (let i = 0; i < stages.length; i++) {
+    const s = stages[i];
+    // Active wins over skip: if the active stage's key is also in the not-in-path
+    // set, it must still render as the current step (active styling + aria-current),
+    // never as skipped. Excluding activeIdx here keeps that precedence consistent
+    // across the stage class, the aria-current mark, and the connector fill below.
+    const skipped = i !== activeIdx && skip.has(String(s.key));
+    // Connector between adjacent stages; filled up to and including the active
+    // stage, but never across a not-in-path stage — a skipped predecessor breaks
+    // the fill so we don't visually imply it was on the path.
+    if (i > 0) {
+      const filled =
+        activeIdx >= 0 && i <= activeIdx && !skipped && !skip.has(String(stages[i - 1].key)) ? " filled" : "";
+      track.append(el("span", { class: "pc-pipe-conn" + filled, "aria-hidden": "true" }));
+    }
+    let cls;
+    let word;
+    let glyph = "";
+    let current = false;
+    if (skipped) {
+      cls = "pc-pipe-skip"; word = "skipped";
+    } else if (activeIdx >= 0 && i < activeIdx) {
+      cls = "pc-pipe-done"; word = "completed";
+    } else if (i === activeIdx) {
+      current = true;
+      if (state === "failed") { cls = "pc-pipe-active pc-pipe-failed"; word = "failed"; glyph = "\u2715"; }
+      else if (state === "blocked") { cls = "pc-pipe-active pc-pipe-blocked"; word = "blocked"; glyph = "\u2298"; }
+      else if (state === "ok") { cls = "pc-pipe-active pc-pipe-ok"; word = "done"; glyph = "\u2713"; }
+      else { cls = "pc-pipe-active"; word = "current"; }
+    } else {
+      cls = "pc-pipe-upcoming"; word = "upcoming";
+    }
+    const isLocus = locusHref !== "" && (locus.stage != null ? String(s.key) === String(locus.stage) : i === activeIdx);
+    const label = labelOf(s);
+    const labelNode = isLocus
+      ? el("a", { class: "pc-link pc-pipe-label", href: locusHref }, label)
+      : el("span", { class: "pc-pipe-label" }, label);
+    const attrs = { class: "pc-pipe-stage " + cls, role: "listitem", "aria-label": label + " \u2014 " + word };
+    if (current) attrs["aria-current"] = "step";
+    const stage = el("span", attrs, labelNode);
+    if (glyph !== "") stage.append(el("span", { class: "pc-pipe-mark", "aria-hidden": "true" }, glyph));
+    if (current && badgeText.trim() !== "") {
+      stage.append(el("span", { class: "pc-badge pc-badge-" + badgeTone, title: badgeText, "aria-label": badgeText }, badgeText));
+    }
+    track.append(stage);
+  }
+  // The mobile card attrs (data-label + role class, #268) stamped by gridCell are
+  // merged onto the pipeline <td> too, alongside its own pc-pipe-cell class, so a
+  // pipeline column labels and classifies identically under the CSS-only card flip.
+  const cellAttrs = { ...(tdAttrs || {}), class: (tdAttrs && tdAttrs.class ? tdAttrs.class + " " : "") + "pc-pipe-cell" };
+  return el("td", cellAttrs, track);
+}
+
+// A stage's visible label: its declared label, else its key as a fallback.
+function labelOf(stage) {
+  return stage.label == null ? String(stage.key) : String(stage.label);
 }
 
 // Parse a "<number>%" width into its numeric percentage, or null if the string

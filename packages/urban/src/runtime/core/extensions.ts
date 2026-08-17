@@ -161,7 +161,10 @@ export interface UrbanExtension {
 export interface ExtensionHost extends Mounted {
   /** The typed taxonomy this host mounted the extensions onto. */
   readonly events: UrbanEvents;
-  /** Live listener count across the taxonomy — 0 after `stop()`. */
+  /** Live registration count on the bus — proxies `EventBus.listenerCount`, so it
+   *  counts every channel listener AND every `effect()` on the dispose ladder, not
+   *  only channel listeners. 0 after a `stop()` that owns its bus. Use it for leak
+   *  assertions. */
   readonly listenerCount: number;
 }
 
@@ -185,6 +188,18 @@ export async function mountExtensions(
   options: MountExtensionsOptions = {},
 ): Promise<ExtensionHost> {
   const log = api.log.child({ module: "extensions" });
+  // Share a caller-owned bus+taxonomy or build a private pair — never a mismatched
+  // one. With only `events`, listeners would register on its bus while `effect()`
+  // and disposal target a *different* private bus (leaked registrations, and a
+  // reused bus could redeclare channels); with only `bus`, callers lose the typed
+  // taxonomy they meant to share. Require both-or-neither.
+  if ((options.bus === undefined) !== (options.events === undefined)) {
+    throw new Error("mountExtensions: `bus` and `events` must be provided together or both omitted");
+  }
+  // Ownership: a bus we created is ours to dispose; a shared app-wide bus belongs
+  // to the caller (the runtime disposes it in teardown). `stop()` honours this so
+  // it never unwinds registrations it did not make.
+  const ownsBus = options.bus === undefined;
   const bus =
     options.bus ??
     new EventBus({
@@ -233,7 +248,10 @@ export async function mountExtensions(
       return bus.listenerCount;
     },
     async stop() {
-      bus.dispose();
+      // Only dispose a bus we own. When the runtime shares its app-wide bus, tearing
+      // it down here would unwind unrelated core registrations — disposal is then the
+      // owner's job (runtime teardown calls `bus.dispose()`).
+      if (ownsBus) bus.dispose();
     },
     describe() {
       return { extensions: ordered.map((e) => e.name), listeners: bus.listenerCount };

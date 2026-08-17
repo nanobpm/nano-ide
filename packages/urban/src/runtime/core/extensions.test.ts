@@ -67,9 +67,6 @@ test("mountExtensions — runs the connector-pack / agentic-family surface throu
 });
 
 test("composition — order + short-circuit via the security/gate waterfall, then disposal", async () => {
-  const bus = new EventBus();
-  const events = createUrbanEvents(bus);
-
   const audit: string[] = [];
   // Two connector-pack-style extensions each contribute a permission middleware.
   const allowAll: UrbanExtension = {
@@ -86,23 +83,32 @@ test("composition — order + short-circuit via the security/gate waterfall, the
     name: "deny-deploy",
     order: 10, // runs first — its short-circuit wins
     setup(ctx) {
-      ctx.events.securityGate.on((req) => {
+      ctx.events.securityGate.on((req, next) => {
         audit.push(`deny-deploy:${req.action}`);
         if (req.action === "deploy") return { allow: false, reason: "deploy locked" };
-        // Not our concern — but we must call next to continue the chain.
-        return { allow: true };
+        // Not our concern — delegate down the chain so later gates still run.
+        return next(req);
       });
     },
   };
 
-  const host = await mountExtensions(fakeApi(), [allowAll, denyDeploy], { bus, events });
+  // Private bus (no options): the host owns it, so `stop()` unwinds the whole ladder.
+  const host = await mountExtensions(fakeApi(), [allowAll, denyDeploy]);
 
   const base = (_req: GateRequest): GateDecision => ({ allow: true });
-  const decision = await events.securityGate.run({ subject: "u", action: "deploy", resource: "models" }, base);
+  const decision = await host.events.securityGate.run({ subject: "u", action: "deploy", resource: "models" }, base);
 
   // deny-deploy ran first and short-circuited: allow-all never saw the request.
   assert.deepEqual(decision, { allow: false, reason: "deploy locked" });
   assert.deepEqual(audit, ["deny-deploy:deploy"]);
+
+  // A non-deploy request is *not* deny-deploy's concern: it delegates via `next`, so
+  // the downstream allow-all also runs. (Returning a bare decision instead of
+  // `next(req)` would short-circuit the waterfall and starve allow-all.)
+  audit.length = 0;
+  const allowed = await host.events.securityGate.run({ subject: "u", action: "read", resource: "models" }, base);
+  assert.deepEqual(allowed, { allow: true });
+  assert.deepEqual(audit, ["deny-deploy:read", "allow-all:read"]);
 
   // Disposal: stop() unwinds every registration these extensions made.
   assert.ok(host.listenerCount >= 2);
@@ -141,8 +147,6 @@ test("containment — a throwing extension setup never strands app boot or its s
 });
 
 test("containment — a throwing listener does not strand a request going through the taxonomy", async () => {
-  const bus = new EventBus({ onError: () => {} });
-  const events = createUrbanEvents(bus);
   const throwing: UrbanExtension = {
     name: "throws-on-dispatch",
     setup(ctx) {
@@ -151,8 +155,8 @@ test("containment — a throwing listener does not strand a request going throug
       });
     },
   };
-  const host = await mountExtensions(fakeApi(), [throwing], { bus, events });
-  const res = await events.requestDispatch.run({ kind: "http", payload: "ping" }, (req) => ({
+  const host = await mountExtensions(fakeApi(), [throwing], { onError: () => {} });
+  const res = await host.events.requestDispatch.run({ kind: "http", payload: "ping" }, (req) => ({
     handled: true,
     payload: `pong:${String(req.payload)}`,
   }));
@@ -161,8 +165,6 @@ test("containment — a throwing listener does not strand a request going throug
 });
 
 test("HMR — start→stop→start leaks no listeners across cycles", async () => {
-  const bus = new EventBus();
-  const events = createUrbanEvents(bus);
   const ext: UrbanExtension = {
     name: "leaky-candidate",
     setup(ctx) {
@@ -173,11 +175,49 @@ test("HMR — start→stop→start leaks no listeners across cycles", async () =
   };
 
   for (let cycle = 0; cycle < 3; cycle++) {
-    const host = await mountExtensions(fakeApi(), [ext], { bus, events });
+    // Private bus per cycle: the host owns disposal, so stop() must fully unwind it.
+    const host = await mountExtensions(fakeApi(), [ext]);
     assert.ok(host.listenerCount >= 3, `cycle ${cycle} registered listeners`);
     await host.stop();
-    assert.equal(bus.listenerCount, 0, `cycle ${cycle} disposed cleanly`);
+    assert.equal(host.listenerCount, 0, `cycle ${cycle} disposed cleanly`);
   }
+});
+
+test("ownership — stop() leaves a shared app-wide bus for its owner to dispose", async () => {
+  const bus = new EventBus();
+  const events = createUrbanEvents(bus);
+  // A core registration the owner (e.g. the runtime) makes outside the extension host.
+  let coreDisposed = false;
+  events.lifecycle.on(() => {});
+  bus.effect(() => {
+    coreDisposed = true;
+  });
+
+  const ext: UrbanExtension = {
+    name: "pack",
+    setup(ctx) {
+      ctx.events.reconcile.on(() => {});
+    },
+  };
+  const host = await mountExtensions(fakeApi(), [ext], { bus, events });
+
+  await host.stop();
+  // stop() does not own the shared bus, so it tears nothing down — the owner's core
+  // registration survives until the owner itself disposes the bus.
+  assert.equal(coreDisposed, false);
+  assert.ok(bus.listenerCount >= 2);
+
+  // The owner (runtime teardown) unwinds the whole ladder in one call.
+  bus.dispose();
+  assert.equal(coreDisposed, true);
+  assert.equal(bus.listenerCount, 0);
+});
+
+test("mountExtensions — rejects a bus/events pair that is only half-provided", async () => {
+  const bus = new EventBus();
+  const events = createUrbanEvents(bus);
+  await assert.rejects(() => mountExtensions(fakeApi(), [], { bus }), /provided together or both omitted/);
+  await assert.rejects(() => mountExtensions(fakeApi(), [], { events }), /provided together or both omitted/);
 });
 
 test("effect() — an extension's arbitrary resource is torn down on stop", async () => {

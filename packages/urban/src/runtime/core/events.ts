@@ -275,7 +275,10 @@ export class EventBus {
     return entry;
   }
 
-  /** Total registered listeners across all channels — for leak assertions. */
+  /** Total live registrations on the dispose ladder — every channel listener AND
+   *  every `effect()` (arbitrary disposable), not only channel listeners. This is
+   *  the leak-assertion metric: it reads 0 exactly when the ladder is fully
+   *  unwound. */
   get listenerCount(): number {
     return this.ladder.size;
   }

@@ -110,6 +110,18 @@ export {
   API_CONTROLLER_TS,
 } from "./derivers/api.ts";
 
+export {
+  buildSystemBrief,
+  deriveSystemBrief,
+  emitSystemBriefMd,
+  foldOwnership,
+  scanModelDecisions,
+  systemBriefDeriver,
+  SYSTEM_BRIEF_JSON,
+  SYSTEM_BRIEF_MD,
+} from "./derivers/system-brief.ts";
+export type { DecisionRef, Ownership, SystemBrief } from "./derivers/system-brief.ts";
+
 // The OpenAPI machinery the deriver + runtime share (ADR 0058).
 export {
   collectOperations,
@@ -139,6 +151,7 @@ import { workerIoDeriver } from "./derivers/worker-io.ts";
 import { metaDeriver } from "./derivers/meta.ts";
 import { messagesDeriver } from "./derivers/messages.ts";
 import { apiDeriver } from "./derivers/api.ts";
+import { systemBriefDeriver } from "./derivers/system-brief.ts";
 export const DERIVERS = [
   migrationsDeriver,
   domainDeriver,
@@ -146,6 +159,7 @@ export const DERIVERS = [
   metaDeriver,
   messagesDeriver,
   apiDeriver,
+  systemBriefDeriver,
 ] as const;
 
 // Gen orchestrator + IO

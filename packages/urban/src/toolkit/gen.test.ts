@@ -74,7 +74,7 @@ function fixture(): Record<string, string> {
   };
 }
 
-test("runGen writes migrations, the worker index, the meta accessor, and the message map", async () => {
+test("runGen writes migrations, the worker index, the meta accessor, the message map, and the system brief", async () => {
   const io = memIO(fixture());
   const res = await runGen({ root: "/app", io });
   const paths = res.artifacts.map((a) => a.path).sort();
@@ -83,6 +83,8 @@ test("runGen writes migrations, the worker index, the meta accessor, and the mes
     "nano-generated/domain-rows.d.ts",
     "nano-generated/message-io.d.ts",
     "nano-generated/meta.ts",
+    "nano-generated/system-brief.json",
+    "nano-generated/system-brief.md",
     "nano-generated/worker-io.d.ts",
   ]);
   assert.ok(io.files["/app/nano-generated/app.schema.sql"].includes("CREATE TABLE"));
@@ -91,6 +93,27 @@ test("runGen writes migrations, the worker index, the meta accessor, and the mes
   assert.ok(io.files["/app/nano-generated/message-io.d.ts"].includes("export type MessageName"));
   assert.ok(io.files["/app/nano-generated/domain-rows.d.ts"].includes('"greetings": Greetings;'));
   assert.ok(io.files["/app/nano-generated/domain-rows.d.ts"].includes('"greeting": {'));
+  // The system brief threads the app id from the manifest and folds the process + call graph.
+  assert.ok(io.files["/app/nano-generated/system-brief.md"].includes("# demo — system brief"));
+  assert.ok(io.files["/app/nano-generated/system-brief.md"].includes("demo.do"));
+  const brief = JSON.parse(io.files["/app/nano-generated/system-brief.json"]);
+  assert.equal(brief.app, "demo");
+  assert.deepEqual(brief.processes, ["p"]);
+  assert.equal(brief.workers[0].taskType, "demo.do");
+});
+
+test("the system brief is drift-checked and swept like its sibling artifacts", async () => {
+  const io = memIO(fixture());
+  await runGen({ root: "/app", io });
+  // Drift gate owns the brief: a hand-edit is reported by --check.
+  io.files["/app/nano-generated/system-brief.json"] = "{ tampered: true }";
+  const check = await runGen({ root: "/app", io, check: true });
+  assert.ok(check.drift.includes("nano-generated/system-brief.json"), "brief drift is reported");
+  // Stale sweep owns the brief: a renamed-away brief artifact is removed on the next write.
+  io.files["/app/nano-generated/system-brief.old.md"] = "# stale brief";
+  const res = await runGen({ root: "/app", io });
+  assert.ok(res.swept.includes("nano-generated/system-brief.old.md"), "stale brief swept");
+  assert.ok("/app/nano-generated/system-brief.md" in io.files, "fresh brief kept");
 });
 
 test("gen --check reports no drift right after a write", async () => {

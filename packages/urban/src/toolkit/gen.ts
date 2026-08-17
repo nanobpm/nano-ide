@@ -12,6 +12,7 @@ import { deriveMeta } from "./derivers/meta.ts";
 import { deriveMessageBindings } from "./derivers/messages.ts";
 import { resolveShapes, scanModelShapes } from "./derivers/shapes.ts";
 import { deriveApi } from "./derivers/api.ts";
+import { deriveSystemBrief } from "./derivers/system-brief.ts";
 import { parseSpec, sharedRequestBodySchemas } from "../openapi/spec.ts";
 import { deriveModels, type DerivedModels, type ModelError, MODEL_PROVENANCE } from "./models.ts";
 
@@ -233,6 +234,11 @@ async function collectAll(opts: GenOptions): Promise<{ artifacts: DerivedArtifac
       artifacts.push(...deriveWorkerBindings(models, declaredTypeIds));
       artifacts.push(...deriveMeta(models));
       artifacts.push(...deriveMessageBindings(models, declaredTypeIds));
+      // Institutional-memory brief (ADR 0060): fold the same scanned model structure into the
+      // app's agent/human-readable system brief. Flows through `artifacts` like its siblings, so
+      // the `nano-generated/` stale sweep and the `urban gen --check` drift gate own the two new
+      // artifacts (system-brief.md / .json) with no extra bookkeeping.
+      artifacts.push(...deriveSystemBrief(models, manifest.id));
       // Surface genuine data-envelope conflicts: a taskType whose variants disagree on a field's
       // TYPE. The emitted contract is the union of the variants (sound for a shared handler), so a
       // type clash would silently widen to `A | B` — warn instead so the author unifies the envelope.

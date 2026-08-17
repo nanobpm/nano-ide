@@ -2169,8 +2169,12 @@ window.addEventListener("hashchange", renderPage);
 // Re-render when the viewport crosses the mobile breakpoint so a Tier-2 'mobile'
 // variant swaps in/out on rotation or a window resize (the grid card flip, nav
 // collapse and button stacking are pure CSS and need no re-render). teardown()
-// inside renderPage stops the outgoing page's grid polls first.
-MOBILE_MQ.addEventListener("change", renderPage);
+// inside renderPage stops the outgoing page's grid polls first. Prefer the modern
+// addEventListener but fall back to the deprecated addListener so older Safari/iOS
+// (< 14), where MediaQueryList.addEventListener is unimplemented, still swaps the
+// Tier-2 variant on rotation/resize instead of silently failing to register.
+if (typeof MOBILE_MQ.addEventListener === "function") MOBILE_MQ.addEventListener("change", renderPage);
+else if (typeof MOBILE_MQ.addListener === "function") MOBILE_MQ.addListener(renderPage);
 renderPage();
 `;
 

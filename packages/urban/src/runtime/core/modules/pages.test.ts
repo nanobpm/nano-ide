@@ -1188,4 +1188,8 @@ test("the renderer honours an optional Tier-2 page-level mobile layout variant (
   assert.match(js, /if \(isNarrow\(\) && doc && doc\.mobile && Array\.isArray\(doc\.mobile\.nodes\)\) return doc\.mobile\.nodes;/);
   assert.match(js, /const nodes = pickNodes\(doc\);/);
   assert.match(js, /MOBILE_MQ\.addEventListener\("change", renderPage\);/);
+  // …but degrade gracefully on older Safari/iOS (< 14) where MediaQueryList
+  // lacks addEventListener, else the Tier-2 variant would never swap on rotation.
+  assert.match(js, /typeof MOBILE_MQ\.addEventListener === "function"/);
+  assert.match(js, /else if \(typeof MOBILE_MQ\.addListener === "function"\) MOBILE_MQ\.addListener\(renderPage\);/);
 });

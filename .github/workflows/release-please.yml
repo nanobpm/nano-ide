@@ -45,7 +45,7 @@ jobs:
       # auto-merged.
       - name: Mint GitHub App token
         id: app-token
-        if: ${{ vars.RELEASE_PLEASE_APP_ID != '' }}
+        if: ${{ vars.RELEASE_PLEASE_APP_ID != '' && secrets.RELEASE_PLEASE_APP_PRIVATE_KEY != '' }}
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}

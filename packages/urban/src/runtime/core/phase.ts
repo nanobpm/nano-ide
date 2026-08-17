@@ -215,6 +215,12 @@ interface Frame {
  * to the `scopeChain`; every id-bearing element is recorded. A `zeebe:property name="nano:phase"`
  * encountered inside an element's `extensionElements` attaches its override to the nearest
  * enclosing id-bearing element (the scope/flow node it decorates).
+ *
+ * Exception to prefix-agnostic parsing: the `<zeebe:property>` phase-override detection matches the
+ * literal `zeebe:` prefix (not by local-name), so a model that binds the Zeebe namespace to a
+ * different prefix will not be detected. This is deliberate — it mirrors the rest of the toolkit's
+ * `<zeebe:property …>` scans and prevents unrelated `<bpmn:property>` data elements from
+ * masquerading as phase overrides. (The `nano:phase` start-tag attribute remains prefix-agnostic.)
  */
 export function buildScopeIndex(xml: string): ScopeIndex {
   const elements = new Map<string, ScopeElement>();
@@ -292,6 +298,7 @@ export function buildScopeIndex(xml: string): ScopeIndex {
 
     const id = attr(attrsText, "id");
     const nameAttr = attr(attrsText, "name");
+    const phaseOverride = phaseAttr(attrsText);
     const isScope = SCOPE_CONTAINERS.includes(type);
     const frame: Frame = {
       type,
@@ -299,7 +306,7 @@ export function buildScopeIndex(xml: string): ScopeIndex {
       scopeChain: [...scopeIds],
       ...(id != null ? { id } : {}),
       ...(nameAttr != null ? { name: nameAttr } : {}),
-      ...(phaseAttr(attrsText) != null ? { phaseOverride: phaseAttr(attrsText) } : {}),
+      ...(phaseOverride != null ? { phaseOverride } : {}),
     };
 
     if (selfClose) {

@@ -484,6 +484,14 @@ function rendererShell(homePage: string, apiDocsPath?: string): string {
 // console, so the defaults below stand on their own: dark by default, light when
 // the OS asks for it and nothing has themed us. `--pc-*` are kept as thin
 // aliases so existing class rules re-resolve through the shared tokens.
+// The single mobile breakpoint (max-width) for the urban responsive primitive
+// (#268). ONE source of truth: it is interpolated into both the shell CSS
+// `@media` query (which drives the pure-CSS card flip / nav collapse / button
+// stacking) AND the runtime's `matchMedia` mode-switch (which only Tier-2's
+// optional page-level `mobile` layout variant needs), so the two can never
+// drift apart on where "narrow" begins.
+const MOBILE_MAX_WIDTH = "640px";
+
 const RENDERER_CSS = `
 :root {
   color-scheme: dark;
@@ -626,6 +634,74 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-nav-link.active { background:var(--nano-accent); color:var(--nano-on-accent); }
 .pc-nav-icon { line-height:1; }
 .pc-nav-empty { color:var(--nano-text-faint); font-size:.85rem; padding:.4rem .7rem; }
+/* The per-row mobile "More" toggle (revealing mobile:{priority:"hidden"} columns)
+   only exists for the card view — hidden on the desktop table, shown by the
+   mobile @media below. Base-hidden here so a grid renders byte-for-byte
+   unchanged on desktop even when it carries hidden-column hints. */
+.pc-mcard-toggle { display:none; }
+/* ── Urban responsive / mobile primitive (#268) ──────────────────────────
+   Below MOBILE_MAX_WIDTH every app adapts to a phone with ZERO page-schema
+   change. The dense dataGrid — the one primitive CSS alone can't reflow — flips
+   from a wide <table> to a stacked card list purely from the per-cell
+   'data-label' the renderer already stamps on (no JS branching): thead is
+   hidden, each <tr> becomes a bordered card and each <td> a full-width
+   label:value line whose label is the column header. The nav collapses to a
+   thumb-reachable scrollable bottom bar, buttons/form actions go full-width
+   single column, and text reflows on its own. The breakpoint is interpolated
+   from the shared MOBILE_MAX_WIDTH constant so it can't drift from the runtime's
+   matchMedia. */
+@media (max-width:${MOBILE_MAX_WIDTH}) {
+  body { padding:1rem; }
+  /* dataGrid → card list. Once cells are display:block the fixed colgroup width
+     is irrelevant, so a wide table stops overflowing the phone. table-layout is
+     reset to auto so the block cells size to content. */
+  table.pc-grid { table-layout:auto; }
+  table.pc-grid, table.pc-grid tbody, table.pc-grid tr, table.pc-grid td { display:block; width:auto; }
+  table.pc-grid colgroup, table.pc-grid thead { display:none; }
+  table.pc-grid tr { border:1px solid var(--nano-edge); border-radius:.6rem; padding:.55rem .75rem; margin:.6rem 0; background:var(--nano-panel); }
+  table.pc-grid td { border-bottom:0; padding:.15rem 0; display:flex; gap:.75rem; justify-content:space-between; align-items:baseline; }
+  /* label:value — the column header (data-label) prefixes the value as a muted
+     caption on the same line. Suppressed for the title, chip, actions and any
+     colspan (group/empty/error) cells below. */
+  table.pc-grid td[data-label]::before { content:attr(data-label); color:var(--nano-text-muted); font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.03em; flex:0 0 auto; }
+  /* The derived (or mobile:{priority:"primary"}-hinted) card title leads the
+     card: larger, full width, no label caption. */
+  table.pc-grid td.pc-mcell-primary { display:block; font-size:1rem; font-weight:650; padding-top:.15rem; }
+  table.pc-grid td.pc-mcell-primary::before { content:none; }
+  /* A badge column becomes a left-aligned status chip with no caption. */
+  table.pc-grid td.pc-mcell-chip { justify-content:flex-start; }
+  table.pc-grid td.pc-mcell-chip::before { content:none; }
+  /* Low-value (mobile:{priority:"hidden"}) columns drop off the card until the
+     row's "More" toggle opens them; on desktop they render as normal columns. */
+  table.pc-grid td.pc-mcell-hidden { display:none; }
+  table.pc-grid tr.pc-open td.pc-mcell-hidden { display:flex; }
+  .pc-mcard-toggle { display:block; padding:.3rem 0 0; }
+  .pc-mcard-toggle .pc-more { width:100%; margin-right:0; }
+  /* Row actions stack full-width under the card body. */
+  table.pc-grid td.pc-row-actions { display:flex; flex-wrap:wrap; gap:.4rem; text-align:left; padding-top:.45rem; white-space:normal; }
+  table.pc-grid td.pc-row-actions::before { content:none; }
+  table.pc-grid td.pc-row-actions .pc-btn { flex:1 1 auto; margin-right:0; }
+  /* Group-header + empty/error rows span the full card width with no caption. */
+  table.pc-grid td[colspan] { display:block; }
+  table.pc-grid td[colspan]::before { content:none; }
+  .pc-group-header td { padding:0; }
+  /* Nav → scrollable bottom bar (bar) / inline stack (rail). The bar pins to the
+     bottom of the viewport as a thumb-reachable tab strip that scrolls sideways
+     when the pages overflow; a rail drops its fixed side column and flows. */
+  .pc-layout { display:block; }
+  .pc-rail-wrap { position:static; flex-basis:auto; width:auto; margin:0 0 1rem; }
+  .pc-rail .pc-nav-items { flex-direction:row; flex-wrap:wrap; }
+  .pc-bar { flex-wrap:nowrap; overflow-x:auto; }
+  .pc-bar.pc-sticky { position:sticky; }
+  .pc-bar .pc-nav-items { flex-wrap:nowrap; }
+  .pc-nav-link { white-space:nowrap; }
+  .pc-tabs { overflow-x:auto; }
+  /* Buttons / form actions go full-width single-column. */
+  .pc-buttonrow .pc-btn, .pc-card .pc-btn { width:100%; }
+  .pc-modal { max-width:100%; }
+  .pc-modal-actions { flex-direction:column; }
+  .pc-modal-actions .pc-btn { width:100%; }
+}
 `;
 
 // The schema-driven browser renderer (ADR 0042 §3). Plain ES module string served at
@@ -635,6 +711,14 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 const RENDERER_JS = String.raw`
 const root = document.getElementById("page");
 const HOME = root.dataset.home || "home";
+
+// Single mobile breakpoint, interpolated from the same MOBILE_MAX_WIDTH constant
+// as the shell CSS @media so the JS mode-switch and the pure-CSS card flip can
+// never drift on where "narrow" begins (#268). Only Tier-2 (an optional
+// page-level 'mobile' layout variant) needs this JS switch — the dataGrid card
+// flip, nav collapse and button/form stacking are all pure CSS + data-label.
+const MOBILE_MQ = window.matchMedia("(max-width:${MOBILE_MAX_WIDTH})");
+function isNarrow() { return MOBILE_MQ.matches; }
 
 // ── Multi-page routing (hash-based, reverse-proxy safe) ──────────────────
 // Pages are selected by the URL fragment (#/<page>) so navigation never hits
@@ -1058,7 +1142,21 @@ function renderButton(node) {
 // width/weight — see buildColgroup — to give the clip a bounded column). The
 // subtitle is ALWAYS plain DOM text, never an href source. With none of these
 // set the cell is a single inline node exactly as before (see cellTd).
-function gridCell(col, row) {
+function gridCell(col, row, role) {
+  // Mobile card attributes stamped on every td so a dataGrid can flip to a
+  // stacked card list below the breakpoint with no JS branching (#268):
+  // 'data-label' drives the pure-CSS label:value line (the column header, or a
+  // mobile:{label} override), and the role class picks the card region (title /
+  // status chip / secondary field / hidden). The role is derived by convention
+  // (classifyColumns) and refinable per-column via col.mobile.priority.
+  const mrole = role || "secondary";
+  const mlabel =
+    col.mobile && typeof col.mobile.label === "string"
+      ? col.mobile.label
+      : col.header != null
+        ? String(col.header)
+        : String(col.field == null ? "" : col.field);
+  const mob = { class: "pc-mcell pc-mcell-" + mrole, "data-label": mlabel };
   // Raw single-field value: drives the badge presence gate + tooltip and any
   // field-derived defaults. Kept separate from the (possibly templated) display
   // text so a template never re-lights or blanks a badge.
@@ -1077,13 +1175,13 @@ function gridCell(col, row) {
   //    field text is also mirrored into aria-label so assistive tech announces
   //    the incident/status text (the visible "1" glyph alone is not meaningful).
   if (col.badge) {
-    if (rawText.trim() === "") return el("td", {});
+    if (rawText.trim() === "") return el("td", { class: "pc-mcell pc-mcell-chip" });
     const t = col.badge.tone;
     const tone = t === "warn" || t === "ok" || t === "info" ? t : "danger";
     const label = col.badge.label == null ? "1" : String(col.badge.label);
     return el(
       "td",
-      {},
+      mob,
       el("span", { class: "pc-badge pc-badge-" + tone, title: rawText, "aria-label": rawText }, label),
     );
   }
@@ -1145,7 +1243,7 @@ function gridCell(col, row) {
       }, text);
     }
   }
-  return cellTd(primary, text, subText, truncate);
+  return cellTd(primary, text, subText, truncate, mob);
 }
 
 // Compose a grid <td> from its primary inline content (a string or an anchor),
@@ -1160,9 +1258,12 @@ function gridCell(col, row) {
 // aria-label= are ALSO mirrored onto it: HTML does not inherit those to
 // descendants, so hovering the link text or naming the anchor for assistive tech
 // would otherwise miss the full value the wrapper carries. The subtitle is set as
-// DOM text only — never an href.
-function cellTd(primary, primaryText, subText, truncate) {
-  if (subText === "" && !truncate) return el("td", {}, primary);
+// DOM text only — never an href. 'tdAttrs' (the mobile card attrs: data-label +
+// role class, see gridCell) is applied to whichever <td> shape is returned so
+// the CSS-only card flip labels every cell identically (#268).
+function cellTd(primary, primaryText, subText, truncate, tdAttrs) {
+  const td = tdAttrs || {};
+  if (subText === "" && !truncate) return el("td", td, primary);
   const mainAttrs = { class: "pc-cell-main" + (truncate ? " pc-truncate" : "") };
   if (truncate && primaryText !== "") {
     mainAttrs.title = primaryText; mainAttrs["aria-label"] = primaryText;
@@ -1171,10 +1272,33 @@ function cellTd(primary, primaryText, subText, truncate) {
     }
   }
   const main = el("div", mainAttrs, primary);
-  if (subText === "") return el("td", {}, main);
+  if (subText === "") return el("td", td, main);
   const subAttrs = { class: "pc-cell-sub" + (truncate ? " pc-truncate" : "") };
   if (truncate) { subAttrs.title = subText; subAttrs["aria-label"] = subText; }
-  return el("td", {}, main, el("div", subAttrs, subText));
+  return el("td", td, main, el("div", subAttrs, subText));
+}
+
+// Classify each grid column into a mobile-card region so a dataGrid flips to a
+// stacked card list below the breakpoint with ZERO page-schema change (#268).
+// Convention (Tier 0): the first non-badge column is the card title (primary), a
+// badge column is a status chip, and everything else is a secondary label:value
+// row. Tier 1 refines it — a column may carry mobile:{priority:"primary" |
+// "secondary" | "hidden"}: an explicit "primary" suppresses the auto title pick
+// so a later column can lead the card, "hidden" drops the column off the card
+// (behind the row's "More" toggle), and "secondary" forces a plain field row.
+function classifyColumns(cols) {
+  const list = cols || [];
+  const explicitPrimary = list.some((c) => c && c.mobile && c.mobile.priority === "primary");
+  let titleTaken = explicitPrimary;
+  return list.map((col) => {
+    const pr = col && col.mobile ? col.mobile.priority : null;
+    if (pr === "primary") return "primary";
+    if (pr === "secondary") return "secondary";
+    if (pr === "hidden") return "hidden";
+    if (col && col.badge) return "chip";
+    if (!titleTaken) { titleTaken = true; return "primary"; }
+    return "secondary";
+  });
 }
 
 // Parse a "<number>%" width into its numeric percentage, or null if the string
@@ -1412,6 +1536,12 @@ function renderDataGrid(node) {
     card.append(h2);
   }
   const cols = p.columns || [];
+  // Mobile card roles per column (derived by convention, refined by
+  // col.mobile.priority) so the grid can flip to a stacked card list on a phone
+  // (#268). 'hasHidden' gates the per-row "More" toggle that reveals the columns
+  // a mobile:{priority:"hidden"} hint drops off the card.
+  const roles = classifyColumns(cols);
+  const hasHidden = roles.indexOf("hidden") >= 0;
   const tabs = p.tabs || [];
   const rowActions = p.rowActions || [];
   const detail = p.detail || null;
@@ -1535,6 +1665,7 @@ function renderDataGrid(node) {
     const wrap = el("div", { class: "pc-child" });
     if (cg.title) wrap.append(el("div", { class: "pc-child-title" }, cg.title));
     const ccols = cg.columns || [];
+    const croles = classifyColumns(ccols);
     const cbody = el("tbody", {});
     const ccolgroup = buildColgroup(ccols, cg.lazyField ? 1 : 0);
     const cthead = el("thead", {}, el("tr", {}, ...ccols.map((c) => el("th", {}, c.header || c.field)),
@@ -1551,7 +1682,7 @@ function renderDataGrid(node) {
         cbody.append(el("tr", {}, el("td", { colspan: cspan }, "None")));
       }
       for (const cr of rows) {
-        const cells = ccols.map((c) => gridCell(c, cr));
+        const cells = ccols.map((c, i) => gridCell(c, cr, croles[i]));
         if (cg.lazyField) {
           const lf = cg.lazyField;
           const has = cr[lf.field] != null && String(cr[lf.field]).trim() !== "";
@@ -1605,7 +1736,7 @@ function renderDataGrid(node) {
   }
 
   function renderRow(row, sink) {
-    const cells = cols.map((c) => gridCell(c, row));
+    const cells = cols.map((c, i) => gridCell(c, row, roles[i]));
     const key = rowKeyOf(row);
     let toggle = null;
     if (hasExtra) {
@@ -1620,7 +1751,22 @@ function renderDataGrid(node) {
       }
       cells.push(actionCell);
     }
+    // Per-row "More" toggle: only when a mobile:{priority:"hidden"} hint drops
+    // columns off the card. The toggle cell is base-hidden (display:none) and
+    // shown only inside the mobile @media, so desktop is byte-for-byte unchanged;
+    // clicking flips .pc-open on the row to reveal the hidden cells (#268).
+    let moreBtn = null;
+    if (hasHidden) {
+      moreBtn = el("button", { class: "pc-btn pc-btn-sm pc-btn-ghost pc-more", type: "button" }, "More");
+      cells.push(el("td", { class: "pc-mcard-toggle" }, moreBtn));
+    }
     const tr = el("tr", {}, ...cells);
+    if (moreBtn) {
+      moreBtn.addEventListener("click", () => {
+        const open = tr.classList.toggle("pc-open");
+        moreBtn.textContent = open ? "Less" : "More";
+      });
+    }
     tbody.append(tr);
     // When grouping, the caller collects every <tr> this row produced (the data
     // row plus any detail row) so a group header can hide/show them as one unit.
@@ -1951,6 +2097,16 @@ function makeCollapsible(node, card) {
   return container;
 }
 
+// Tier-2 escape hatch (#268): a page may declare a distinct 'mobile' layout
+// variant — its own node list — for the rare case the derived card flip isn't
+// enough (reorder/omit sections, swap a dense grid for a summary card). It is
+// used ONLY on a narrow viewport; the default 'nodes' render everywhere else,
+// and anything malformed falls back to them, so the variant is purely additive.
+function pickNodes(doc) {
+  if (isNarrow() && doc && doc.mobile && Array.isArray(doc.mobile.nodes)) return doc.mobile.nodes;
+  return (doc && doc.nodes) || [];
+}
+
 // Render the page named by the current hash route. A rail nav is lifted into a
 // left <aside> and the rest of the nodes flow into a content column; otherwise
 // (bar nav or none) nodes render in document order. Re-runs on every hashchange,
@@ -1963,7 +2119,7 @@ async function renderPage() {
   try {
     const doc = await getJSON("/app/pages/" + encodeURIComponent(CURRENT));
     document.title = (doc && doc.title) || "Urban App";
-    const nodes = (doc && doc.nodes) || [];
+    const nodes = pickNodes(doc);
     const built = nodes.map((n) => ({ n, node: makeCollapsible(n, (RENDERERS[n.type] || (() => el("div")))(n)) }));
     const rail = built.find((b) => b.n.type === "nav" && b.n.props && b.n.props.variant === "rail");
     if (rail) {
@@ -1978,6 +2134,11 @@ async function renderPage() {
   }
 }
 window.addEventListener("hashchange", renderPage);
+// Re-render when the viewport crosses the mobile breakpoint so a Tier-2 'mobile'
+// variant swaps in/out on rotation or a window resize (the grid card flip, nav
+// collapse and button stacking are pure CSS and need no re-render). teardown()
+// inside renderPage stops the outgoing page's grid polls first.
+MOBILE_MQ.addEventListener("change", renderPage);
 renderPage();
 `;
 

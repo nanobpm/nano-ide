@@ -386,7 +386,7 @@ test("renderer renders a column's subtitle as a muted second line, never an href
   assert.match(js, /class: "pc-cell-sub"/);
   // Absent subtitle (empty) and no truncation collapses back to the single inline
   // node, so existing grids render exactly as before (backward compatible).
-  assert.match(js, /if \(subText === "" && !truncate\) return el\("td", \{\}, primary\);/);
+  assert.match(js, /if \(subText === "" && !truncate\) return el\("td", td, primary\);/);
 });
 
 test("renderer truncates a column to one line with an ellipsis + full-text tooltip (#257)", async () => {
@@ -1038,4 +1038,112 @@ test("rowLimit respects an explicit 0 and falls back for non-finite values", asy
   await run(Infinity);
   await run(undefined);
   assert.deepEqual(limits, ["0", "200", "200"]);
+});
+
+test("the shell ships a mobile @media block that flips a dataGrid into a card list (#268)", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  // Tier 0 — zero-declaration responsive default: a single (max-width) breakpoint
+  // reflows every app for a phone. The dense dataGrid — the one primitive CSS
+  // alone can't reflow — flips from a wide <table> to a stacked card list purely
+  // from the per-cell data-label the renderer stamps on (no JS branching).
+  const media = (html.match(/@media \(max-width:640px\) \{[\s\S]*?\n\}/) ?? [""])[0];
+  assert.ok(media, "a (max-width) media block must be present");
+  // thead hidden, rows/cells become blocks (the card flip).
+  assert.match(media, /table\.pc-grid colgroup, table\.pc-grid thead \{ display:none; \}/);
+  assert.match(media, /table\.pc-grid, table\.pc-grid tbody, table\.pc-grid tr, table\.pc-grid td \{ display:block[^}]*\}/);
+  // The column header prefixes each value as a label:value line via data-label.
+  assert.match(media, /td\[data-label\]::before \{ content:attr\(data-label\)/);
+  // The derived title leads the card with no caption; a badge column is a chip.
+  assert.match(media, /td\.pc-mcell-primary::before \{ content:none; \}/);
+  assert.match(media, /td\.pc-mcell-chip::before \{ content:none; \}/);
+  // Low-value (hidden) columns drop off the card until the row's More toggle opens them.
+  assert.match(media, /td\.pc-mcell-hidden \{ display:none; \}/);
+  assert.match(media, /tr\.pc-open td\.pc-mcell-hidden \{ display:flex; \}/);
+});
+
+test("the shell mobile block collapses the nav and stacks buttons/form actions (#268)", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  const media = (html.match(/@media \(max-width:640px\) \{[\s\S]*?\n\}/) ?? [""])[0];
+  // nav → scrollable bottom-ish bar (bar) / inline stack (rail); buttons and
+  // modal/form actions go full-width single column; text reflows on its own.
+  assert.match(media, /\.pc-bar \{ flex-wrap:nowrap; overflow-x:auto; \}/);
+  assert.match(media, /\.pc-rail \.pc-nav-items \{ flex-direction:row/);
+  assert.match(media, /\.pc-buttonrow \.pc-btn, \.pc-card \.pc-btn \{ width:100%; \}/);
+  assert.match(media, /\.pc-modal-actions \{ flex-direction:column; \}/);
+  // Row actions stack full-width under the card body.
+  assert.match(media, /td\.pc-row-actions \{ display:flex/);
+  // The per-row "More" toggle is base-hidden (outside the media block) so a grid
+  // with hidden-column hints renders unchanged on desktop, shown only on mobile.
+  assert.match(html, /\.pc-mcard-toggle \{ display:none; \}/);
+  assert.match(media, /\.pc-mcard-toggle \{ display:block/);
+});
+
+test("the mobile breakpoint has one source of truth shared by CSS and matchMedia (#268)", async () => {
+  // AGENTS.md: no drift surfaces. The breakpoint must appear identically in the
+  // shell CSS @media and the runtime's matchMedia — both interpolated from the
+  // single MOBILE_MAX_WIDTH constant — so "narrow" can never diverge between the
+  // pure-CSS card flip and the Tier-2 JS mode-switch.
+  const shell = (await dispatch("GET", "/")).body ?? "";
+  const js = (await dispatch("GET", "/app/runtime.js")).body ?? "";
+  assert.match(shell, /@media \(max-width:640px\)/);
+  assert.match(js, /window\.matchMedia\("\(max-width:640px\)"\)/);
+});
+
+test("the renderer classifies grid columns into mobile card regions by convention (#268)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Tier 0 heuristic (classifyColumns): the first non-badge column is the card
+  // title (primary), a badge column is a status chip, the rest are secondary
+  // label:value rows. Tier 1 refines it — mobile.priority ("primary"|"secondary"
+  // |"hidden") wins, and an explicit "primary" suppresses the auto title pick.
+  assert.match(js, /function classifyColumns\(cols\)/);
+  assert.match(js, /const explicitPrimary = list\.some\(\(c\) => c && c\.mobile && c\.mobile\.priority === "primary"\);/);
+  assert.match(js, /if \(pr === "primary"\) return "primary";/);
+  assert.match(js, /if \(pr === "hidden"\) return "hidden";/);
+  assert.match(js, /if \(col && col\.badge\) return "chip";/);
+  assert.match(js, /if \(!titleTaken\) \{ titleTaken = true; return "primary"; \}/);
+});
+
+test("the renderer stamps every grid cell with a data-label + mobile role class (#268)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Every td carries data-label (the mobile.label override or the column header)
+  // and a pc-mcell-<role> class so the card flip is pure CSS. The role is derived
+  // per column (classifyColumns) and threaded through gridCell into cellTd.
+  assert.match(js, /col\.mobile && typeof col\.mobile\.label === "string"\s*\n?\s*\? col\.mobile\.label/);
+  assert.match(js, /const mob = \{ class: "pc-mcell pc-mcell-" \+ mrole, "data-label": mlabel \};/);
+  assert.match(js, /function gridCell\(col, row, role\)/);
+  assert.match(js, /const cells = cols\.map\(\(c, i\) => gridCell\(c, row, roles\[i\]\)\);/);
+  assert.match(js, /return cellTd\(primary, text, subText, truncate, mob\);/);
+  // cellTd applies the mobile attrs to whichever td shape it returns.
+  assert.match(js, /function cellTd\(primary, primaryText, subText, truncate, tdAttrs\)/);
+  assert.match(js, /const td = tdAttrs \|\| \{\};/);
+});
+
+test("the renderer adds a per-row More toggle only when a column is mobile-hidden (#268)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Tier 1: mobile:{priority:"hidden"} columns are revealed behind a per-row
+  // "More" toggle. The toggle cell is base-hidden and shown only inside the
+  // mobile @media, so desktop is unchanged; it appears only when the grid
+  // actually has a hidden column.
+  assert.match(js, /const hasHidden = roles\.indexOf\("hidden"\) >= 0;/);
+  assert.match(js, /if \(hasHidden\) \{[\s\S]*?class: "pc-mcard-toggle"/);
+  assert.match(js, /const open = tr\.classList\.toggle\("pc-open"\);/);
+  assert.match(js, /moreBtn\.textContent = open \? "Less" : "More";/);
+});
+
+test("the renderer honours an optional Tier-2 page-level mobile layout variant (#268)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Tier 2 escape hatch: a page may declare a distinct `mobile` node list used
+  // ONLY on a narrow viewport (matchMedia), with the default nodes everywhere
+  // else and a fallback for anything malformed. The page re-renders when the
+  // viewport crosses the breakpoint so the variant swaps in/out on rotation.
+  assert.match(js, /function pickNodes\(doc\)/);
+  assert.match(js, /if \(isNarrow\(\) && doc && doc\.mobile && Array\.isArray\(doc\.mobile\.nodes\)\) return doc\.mobile\.nodes;/);
+  assert.match(js, /const nodes = pickNodes\(doc\);/);
+  assert.match(js, /MOBILE_MQ\.addEventListener\("change", renderPage\);/);
 });

@@ -214,31 +214,57 @@ so this works out of the box.
 
 Deployables are discovered by convention: with **no `models`** block in the
 manifest, `@nanobpm/urban` deploys everything under `resources/` — walked
-**shallow, one level deep** (`resources/*` and `resources/<subdir>/*`, never
-deeper). Content type is by extension: `.bpmn`/`.dmn` → BPMN/DMN, `.form` →
-form-js form, anything else → a `GenericScript` resource (this is how agent
-prompts are deployed — see below).
+**recursively**, every file at any depth. Content type is inferred by extension:
+`.bpmn`/`.dmn` → BPMN/DMN, `.form` → form-js form, `.md` → `text/markdown`,
+`.json` → `application/json`, `.txt` → `text/plain`, and anything else → an
+`application/octet-stream` generic resource. Non-model files (`.md`, `.txt`,
+`.json`, unknown) deploy as **generic resources** (this is how agent prompts,
+RPA/script files, etc. are deployed — see below).
 
 ```
 resources/
-  processes/  order.bpmn        ← deployed as a BPMN process
-  decisions/  route.dmn         ← deployed as a DMN decision
-  forms/      approve.form      ← deployed as a form
-  prompts/    review.md         ← deployed as a GenericScript (an agent prompt)
+  processes/  order.bpmn         ← deployed as a BPMN process
+  decisions/  route.dmn          ← deployed as a DMN decision
+  forms/      approve.form       ← deployed as a form
+  prompts/    review.md          ← generic resource, resourceId "prompts/review.md"
+  prompts/pr/ summarize.md       ← generic resource, resourceId "prompts/pr/summarize.md"
 ```
 
 `resources/` is **deploy-only**: everything under it deploys, and nothing outside
 it ever does — so docs (`docs/`, `AGENTS.md`, top-level `*.md`) live **outside**
-`resources/` and are never swept into a deployment. Resources are keyed by their
-**basename** (filename), so two files with the same name in different sub-dirs are
-a **hard error** — rename or relocate one. `urban gen` follows the same
-convention: with no `models`, its `nano:shape`/code-first model scan defaults to a
-**shallow** `resources/` walk — `.bpmn`/`.dmn` directly under `resources/` and one
-level down in `resources/<subdir>/`, never deeper — and derived models are written to
-`resources/processes/`, exactly where the convention deploy then finds them.
+`resources/` and are never swept into a deployment.
+
+A convention resource's **`resourceId` is its path relative to `resources/`**
+(POSIX-normalised), *including the extension* — `resources/prompts/review.md` →
+`prompts/review.md`. Using the relative path (not the bare filename) preserves
+sub-directory structure, so `resources/a/x.md` and `resources/b/x.md` deploy as
+two **distinct** resources (`a/x.md`, `b/x.md`) rather than colliding. A service
+task links a generic resource by that exact id:
+
+```xml
+<zeebe:linkedResource linkName="prompt" resourceType="GenericScript"
+                      bindingType="latest" resourceId="prompts/review.md" />
+```
+
+Content is deployed **verbatim** — there is no deploy-time `{{token}}`
+substitution (removed in ADR 0062), so a prompt/script file's text is deployed
+as-is. The deploy pipeline is **UTF-8 text only**, end-to-end (`host.readTextFile()`
+→ `content: string`), so "verbatim" means the UTF-8 text is passed through
+unchanged — not a promise of byte-for-byte *binary* fidelity; a non-UTF-8/binary
+file swept into `resources/` is not a supported input (`application/octet-stream`
+is only a conservative MIME label for an unrecognised *text* resource).
+Re-deploying an **unchanged** file is a no-op (the engine's
+name+checksum duplicate rule skips it — no version bump); **changing** its
+content deploys a **new version** and the `bindingType:latest` pointer advances,
+so a running process picks up the new prompt on its next job activation with **no
+model redeploy**. `urban gen` follows the same convention: with no `models`, its
+`nano:shape`/code-first model scan also walks `resources/` recursively for
+`.bpmn`/`.dmn`, and derived models are written to `resources/processes/`, exactly
+where the convention deploy then finds them.
 
 To opt out of the convention, declare `models` globs — they are used verbatim and
-the `resources/` walk is skipped:
+the `resources/` walk is skipped (override resources are keyed by basename, so a
+basename collision across the declared globs is a hard error):
 
 ```jsonc
 {
@@ -253,13 +279,14 @@ the `resources/` walk is skipped:
 
 To keep a large agent prompt out of a model's XML, author it as its own file under
 `resources/prompts/` (deployed as a `GenericScript`) and **link** it into the
-service task with a `zeebe:linkedResource` bound to the latest deployed version;
-the runtime resolves it with the `appendPrompt` FEEL helper at execution time:
+service task with a `zeebe:linkedResource` bound to the latest deployed version by
+its relative-path `resourceId`; the runtime resolves it with the `appendPrompt`
+FEEL helper at execution time:
 
 ```xml
-<!-- resources/processes/agent.bpmn -->
+<!-- resources/processes/agent.bpmn, linking resources/prompts/review.md -->
 <zeebe:linkedResource linkName="prompt" resourceType="GenericScript"
-                      bindingType="latest" resourceId="review" />
+                      bindingType="latest" resourceId="prompts/review.md" />
 ```
 
 This is the **only** supported prompt-modularity mechanism — there is no

@@ -21,9 +21,10 @@ import { isRecord } from "../runtime/core/guards.ts";
 export const DEFAULT_WORKFLOW_PATTERNS = ["workflows/*.ts"];
 
 /** Default output dir for derived models when the manifest declares no `models.processes`: under
- * the deploy-by-convention `resources/` tree (ADR 0062), one level deep, so a derived model lands
- * exactly where the convention deploy + codegen scan look for it. When `models.processes` IS set,
- * `processesOutDir` derives the dir from that glob instead (the model-first override). */
+ * the deploy-by-convention `resources/` tree (ADR 0062), so a derived model lands where the
+ * convention deploy + codegen scan (which walk `resources/` recursively) look for it. When
+ * `models.processes` IS set, `processesOutDir` derives the dir from that glob instead (the
+ * model-first override). */
 export const PROCESSES_DIR = "resources/processes";
 
 /** Marker stamped into every derived `.bpmn` (an XML comment) so re-gen overwrites and the

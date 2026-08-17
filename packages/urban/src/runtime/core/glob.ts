@@ -63,12 +63,13 @@ export async function expandPatterns(
 }
 
 /**
- * Discover deployables under a convention directory (`resources/`), **shallow, one level deep**:
- * the files directly under `dir` plus the files one sub-directory down (`dir/<subdir>/*`), but
- * never deeper. The shallow bound is deliberate — deploy dedupes by basename (filename only), so a
- * deep recursive walk would reintroduce cross-directory basename-collision risk. Sub-directory
- * descent needs `host.listSubdirs`; a host that can't enumerate directories yields only the
- * top-level files. Returns root-prefixed paths, sorted for determinism.
+ * Discover deployables under a convention directory (`resources/`), **recursively** — every file
+ * directly under `dir` and under every sub-directory at any depth (issue #231). Recursive descent
+ * is safe because deploy now keys a convention resource by its path *relative to* `resources/`
+ * (POSIX), not its bare basename, so two files sharing a filename in different sub-dirs
+ * (`a/x.md`, `b/x.md`) resolve to distinct `resourceId`s and can never collide. Descent needs
+ * `host.listSubdirs`; a host that can't enumerate directories yields only the top-level files.
+ * Returns root-prefixed paths, sorted for determinism.
  */
 export async function discoverResources(
   host: HostContext,
@@ -77,11 +78,13 @@ export async function discoverResources(
 ): Promise<string[]> {
   const base = joinPath(root, dir);
   const out: string[] = [];
-  for (const name of await host.listDir(base)) out.push(joinPath(base, name));
-  const subdirs = host.listSubdirs ? await host.listSubdirs(base) : [];
-  for (const sub of subdirs.slice().sort()) {
-    const subBase = joinPath(base, sub);
-    for (const name of await host.listDir(subBase)) out.push(joinPath(subBase, name));
-  }
+  const walk = async (current: string): Promise<void> => {
+    for (const name of await host.listDir(current)) out.push(joinPath(current, name));
+    const subdirs = host.listSubdirs ? await host.listSubdirs(current) : [];
+    for (const sub of subdirs.slice().sort()) {
+      await walk(joinPath(current, sub));
+    }
+  };
+  await walk(base);
   return out.sort();
 }

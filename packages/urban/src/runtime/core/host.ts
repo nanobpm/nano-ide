@@ -267,7 +267,10 @@ export interface FormSchema {
  * it against a live engine; tests implement it in-memory. Core modules depend only on this.
  */
 export interface EngineClient {
-  /** Deploy model resources (BPMN/DMN/forms). Returns the number deployed. */
+  /** Deploy model resources (BPMN/DMN/forms) and generic resources (prompts, scripts, and other
+   *  arbitrary files, content-typed e.g. `text/markdown`/`application/octet-stream`; the engine
+   *  versions each generic resource per its `resourceId` — carried on `name`). Returns the number
+   *  deployed. */
   deployResources(
     resources: { name: string; content: string; contentType: string }[],
   ): Promise<{ deployed: number }>;

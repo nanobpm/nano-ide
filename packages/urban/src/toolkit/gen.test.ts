@@ -368,13 +368,14 @@ test("readModels: a models block without processes suppresses the resources/ con
   const io = memIO({
     "/app/resources/a.bpmn": "<bpmn:definitions/>",
     "/app/resources/sub/b.bpmn": "<bpmn:definitions/>",
+    "/app/resources/sub/deeper/c.bpmn": "<bpmn:definitions/>",
   });
-  // No models block at all → convention scans resources/ (shallow, one level deep).
+  // No models block at all → convention scans resources/ recursively (issue #231).
   const byConvention = await readModels("/app", io, {});
   assert.deepEqual(
     byConvention.map((m) => m.path).sort(),
-    ["resources/a.bpmn", "resources/sub/b.bpmn"],
-    "with no models block, gen discovers under resources/ by convention",
+    ["resources/a.bpmn", "resources/sub/b.bpmn", "resources/sub/deeper/c.bpmn"],
+    "with no models block, gen discovers under resources/ recursively by convention",
   );
   // A declared models block (even one that resolves to zero process files) is an explicit override:
   // the convention scan must be skipped entirely, matching runtime deployModels.

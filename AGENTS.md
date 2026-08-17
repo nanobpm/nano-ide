@@ -72,6 +72,10 @@ packages use — copy it rather than inventing a variant:
   `package.json`'s intra-repo deps, so a package that depends on another
   workspace's `dist/` just works regardless of directory name order. Do **not**
   re-add a hand-ordered prebuild prefix to the root `build` script.
+- **Build before you typecheck a fresh clone.** A package that imports another
+  workspace (e.g. `packages/urban` → `@nanobpm/workflow`) fails `npm run typecheck`
+  with `Cannot find module @nanobpm/workflow` until root `npm run build` has emitted
+  the dependency's `dist/`. Working order: **build → typecheck → test → lint**.
 
 ## Database Migrations
 

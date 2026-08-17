@@ -17,6 +17,7 @@
 //     an unrelated package's PRs never leak into this package's provenance).
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { relative } from "node:path";
 
 const dirs = JSON.parse(execFileSync("npm", ["query", ".workspace"], { encoding: "utf8" }))
   .map((w) => w.path)
@@ -110,7 +111,7 @@ for (const dir of dirs) {
   if (live === p.version) {
     console.log(`= ${p.name}@${p.version} already on npm`);
     // Backfill provenance for an already-published version whose release is missing.
-    if (!ensureRelease(dir, p.name, p.version, targetSha)) releaseFailed++;
+    if (!ensureRelease(relative(process.cwd(), dir) || ".", p.name, p.version, targetSha)) releaseFailed++;
     continue;
   }
   let didPublish = false;
@@ -122,7 +123,7 @@ for (const dir of dirs) {
       if (attempt === 2) { console.error(`✗ ${p.name}@${p.version}`); failed++; }
     }
   }
-  if (didPublish && !ensureRelease(dir, p.name, p.version, targetSha)) releaseFailed++;
+  if (didPublish && !ensureRelease(relative(process.cwd(), dir) || ".", p.name, p.version, targetSha)) releaseFailed++;
 }
 console.log(`\npublished ${published}, failed ${failed}, release-provenance failures ${releaseFailed}`);
 // Release-provenance is best-effort (backfilled on a later run); only a failed

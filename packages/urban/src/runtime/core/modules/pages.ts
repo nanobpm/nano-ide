@@ -1185,13 +1185,20 @@ function colWidthPct(width) {
   return m ? parseFloat(m[1]) : null;
 }
 
+// A column carries an explicit width only when it is a non-empty string. Single
+// source of truth so colWidthStyle/buildColgroup can't drift on what "explicit"
+// means (which columns win verbatim, consume the remainder, or use their weight).
+function hasExplicitWidth(col) {
+  return typeof col.width === "string" && col.width !== "";
+}
+
 // A column's <col> width for the grid's <colgroup>: an explicit col.width string
 // ("40%", "22rem") wins verbatim; else a positive numeric col.weight is
 // normalised across the weighted columns into a percentage share of the width
 // left over by explicit columns (remainderPct); else null (no width — the column
 // shares the remainder equally under table-layout:fixed).
 function colWidthStyle(col, weightTotal, remainderPct) {
-  if (typeof col.width === "string" && col.width !== "") return col.width;
+  if (hasExplicitWidth(col)) return col.width;
   if (typeof col.weight === "number" && col.weight > 0 && weightTotal > 0) {
     return Math.round((col.weight / weightTotal) * remainderPct * 100) / 100 + "%";
   }
@@ -1205,11 +1212,16 @@ function colWidthStyle(col, weightTotal, remainderPct) {
 // data columns stay aligned with their headers.
 function buildColgroup(cols, extraCount) {
   const hasSizing = cols.some(
-    (c) => (typeof c.width === "string" && c.width !== "") || (typeof c.weight === "number" && c.weight > 0),
+    (c) => hasExplicitWidth(c) || (typeof c.weight === "number" && c.weight > 0),
   );
   if (!hasSizing) return null;
+  // Only columns that will actually use their weight (no explicit width — an
+  // explicit width wins verbatim in colWidthStyle and never consumes weight)
+  // contribute to weightTotal; counting a width-bearing column's weight here
+  // would inflate the divisor and shrink the truly-weighted columns' share.
   let weightTotal = 0;
-  for (const c of cols) if (typeof c.weight === "number" && c.weight > 0) weightTotal += c.weight;
+  for (const c of cols)
+    if (!hasExplicitWidth(c) && typeof c.weight === "number" && c.weight > 0) weightTotal += c.weight;
   // Weighted columns share only the width the explicit columns leave behind, so
   // mixing e.g. width:"40%" with weighted columns can't oversubscribe past 100%.
   // The remainder is only computable when every explicit width is a percentage;
@@ -1218,7 +1230,7 @@ function buildColgroup(cols, extraCount) {
   let explicitPctTotal = 0;
   let allExplicitArePct = true;
   for (const c of cols) {
-    if (typeof c.width === "string" && c.width !== "") {
+    if (hasExplicitWidth(c)) {
       const pct = colWidthPct(c.width);
       if (pct === null) allExplicitArePct = false;
       else explicitPctTotal += pct;

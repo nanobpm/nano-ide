@@ -422,7 +422,8 @@ test("renderer emits a <colgroup> sizing columns by width/weight (#257)", async 
   // declares sizing (so unsized grids are unchanged).
   assert.match(js, /function buildColgroup\(cols, extraCount\)/);
   assert.match(js, /if \(!hasSizing\) return null;/);
-  assert.match(js, /if \(typeof col\.width === "string" && col\.width !== ""\) return col\.width;/);
+  assert.match(js, /function hasExplicitWidth\(col\)/);
+  assert.match(js, /if \(hasExplicitWidth\(col\)\) return col\.width;/);
   assert.match(js, /Math\.round\(\(col\.weight \/ weightTotal\) \* remainderPct \* 100\) \/ 100 \+ "%"/);
   assert.match(js, /el\("col", w \? \{ style: "width:" \+ w \} : \{\}\)/);
   // Regression (#258 review): mixing explicit % widths with weighted columns
@@ -430,6 +431,10 @@ test("renderer emits a <colgroup> sizing columns by width/weight (#257)", async 
   // (100 - sum of explicit %), and only when every explicit width is a
   // percentage (rem/px explicit widths fall back to a share of the full width).
   assert.match(js, /const remainderPct = allExplicitArePct \? Math\.max\(0, 100 - explicitPctTotal\) : 100;/);
+  // Regression (#258 review): a column carrying both an explicit width and a
+  // weight uses its width verbatim and never consumes its weight, so it must be
+  // excluded from weightTotal or the truly-weighted columns' share is shrunk.
+  assert.match(js, /if \(!hasExplicitWidth\(c\) && typeof c\.weight === "number" && c\.weight > 0\) weightTotal \+= c\.weight;/);
   assert.match(js, /function colWidthPct\(width\)/);
   // The colgroup precedes <thead> in the table, and only when sizing is present.
   assert.match(js, /\? el\("table", \{ class: "pc-grid" \}, colgroup, thead, tbody\)/);

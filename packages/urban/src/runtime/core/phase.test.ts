@@ -101,6 +101,24 @@ test("buildScopeIndex ignores over-broad matches: bare `phase` attr and non-zeeb
   assert.equal(idx.elements.get("loose-prop")?.phaseOverride, undefined);
 });
 
+test("derivePhase: a scope element is its own leaf crumb, appended exactly once (no duplicate)", () => {
+  // Querying a subProcess id (an element that IS a scope) must place it as the leaf crumb after its
+  // enclosing scopes — never omitted and never duplicated. Guards the "always append the element as
+  // its own leaf" contract, since `scopeChain` excludes the element itself.
+  const idx = buildScopeIndex(MODEL);
+  const phase = derivePhase(idx, "trial-merge");
+  assert.ok(phase);
+  assert.deepEqual(
+    phase.breadcrumb.map((c) => c.label),
+    ["Plan Fanout", "Implement task", "Trial merge"],
+  );
+  assert.deepEqual(
+    phase.breadcrumb.map((c) => c.kind),
+    ["process", "subProcess", "subProcess"],
+  );
+  assert.equal(phase.fine, "Trial merge");
+});
+
 test("derivePhase builds a breadcrumb of enclosing named scopes down to the element", () => {
   const idx = buildScopeIndex(MODEL);
   const phase = derivePhase(idx, "review-plan");

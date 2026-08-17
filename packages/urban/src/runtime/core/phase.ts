@@ -361,8 +361,10 @@ export function derivePhase(
     const { label, source } = crumbLabel(scope);
     breadcrumb.push({ id: scope.id, type: scope.type, kind: crumbKind(scope), label, source });
   }
-  // The element itself is the leaf crumb — unless it IS the process/scope (then it already is the
-  // last crumb via being its own leaf). Only append when it is not already the innermost scope.
+  // The element itself is always the leaf crumb. `scopeChain` holds only the ENCLOSING scopes —
+  // each frame captures the open scope ids before pushing its own (see buildScopeIndex), so an
+  // element is never in its own chain. Thus even when the element is itself a scope/process, it is
+  // appended exactly once here as its own leaf; there is no duplicate to guard against.
   {
     const { label, source } = crumbLabel(el);
     breadcrumb.push({ id: el.id, type: el.type, kind: crumbKind(el), label, source });

@@ -91,7 +91,19 @@ test("deriveSystemBrief emits both artifacts with valid JSON", () => {
   const md = arts.find((a) => a.path.endsWith(SYSTEM_BRIEF_MD));
   const json = arts.find((a) => a.path.endsWith(SYSTEM_BRIEF_JSON));
   assert.ok(md && json);
-  const parsed = JSON.parse(json!.content) as SystemBrief;
+  const parsed: unknown = JSON.parse(json!.content);
+  assertSystemBriefShape(parsed);
   assert.equal(parsed.app, "acme-orders");
   assert.equal(parsed.workers[0].taskType, "charge-card");
 });
+
+/** Runtime-validate the parsed JSON shape (no `as` cast — banned in this repo) and narrow it to
+ * `SystemBrief` for the assertions that follow. */
+function assertSystemBriefShape(v: unknown): asserts v is SystemBrief {
+  assert.ok(typeof v === "object" && v !== null, "brief is an object");
+  assert.ok("app" in v && typeof v.app === "string", "app is a string");
+  assert.ok("workers" in v && Array.isArray(v.workers), "workers is an array");
+  assert.ok("processes" in v && Array.isArray(v.processes), "processes is an array");
+  assert.ok("decisions" in v && Array.isArray(v.decisions), "decisions is an array");
+  assert.ok("ownership" in v && typeof v.ownership === "object" && v.ownership !== null, "ownership is an object");
+}

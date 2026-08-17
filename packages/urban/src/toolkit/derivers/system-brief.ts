@@ -2,7 +2,7 @@
 // *institutional-memory* brief (ADR 0060). Where `worker-io.ts` emits worker *types* and
 // `meta.ts` emits a *typed accessor*, this deriver folds the SAME scanned structure into
 // agent- and human-readable **system context**: the app's processes, its service-task call
-// graph, the decisions it encodes, its message surface, and the ownership / "why" carried on
+// graph, the decisions it encodes, and the ownership / "why" carried on
 // the model as reserved `nano:meta` keys. It reuses the sibling scanners (single parse rule
 // per vocabulary) and is pure (models in, artifacts out) so `urban gen --check` keeps it
 // honest — the brief can never rot the way a hand-written README does (ADR 0060 §1).

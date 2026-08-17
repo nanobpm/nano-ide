@@ -243,11 +243,12 @@ export function buildLineageTree(
     node.causedByInstanceKey = e.causedByInstanceKey;
   }
 
+  // Attachments are an app extension point keyed by instance. MATERIALISE the target node even
+  // when no edge has been recorded for it yet, so an attachment for an as-yet-unstitched instance
+  // is preserved in `tree.nodes` (unattached until its edge lands) rather than silently dropped.
   for (const a of attachments) {
-    const node = nodes.get(a.nodeKey);
-    if (node) {
-      node.attachments.push({ nodeKey: a.nodeKey, kind: a.kind, ref: a.ref, ...(a.label ? { label: a.label } : {}) });
-    }
+    const node = ensure(a.nodeKey);
+    node.attachments.push({ nodeKey: a.nodeKey, kind: a.kind, ref: a.ref, ...(a.label ? { label: a.label } : {}) });
   }
 
   for (const node of nodes.values()) {
@@ -267,8 +268,15 @@ export function buildLineageTree(
   const rootIsPhantom =
     rootByKey.edgeType === undefined && rootByKey.children.length === 0 && rootByKey.attachments.length === 0;
   if (rootIsPhantom) {
+    // A candidate real root is a parentless node that is genuinely part of the causal structure —
+    // it has its own recorded edge or descendants. Attachment-only orphan nodes (materialised above
+    // with no edge and no children) are NOT candidates, so a stray attachment can never shadow the
+    // real parentless root and re-introduce the phantom-root bug guarded by the minted-root case.
     const parentlessInstances = [...nodes.values()].filter(
-      (n) => n !== rootByKey && n.causedByInstanceKey === undefined,
+      (n) =>
+        n !== rootByKey &&
+        n.causedByInstanceKey === undefined &&
+        (n.edgeType !== undefined || n.children.length > 0),
     );
     if (parentlessInstances.length === 1) {
       root = parentlessInstances[0];

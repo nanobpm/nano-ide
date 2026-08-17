@@ -151,6 +151,31 @@ test("buildLineageTree ignores edges from other roots and hangs attachments on t
   const child = tree.root.children[0];
   assert.equal(child.instanceKey, "child");
   assert.deepEqual(child.attachments, [{ nodeKey: "child", kind: "pull_request", ref: "owner/repo#1", label: "PR 1" }]);
+  // An attachment for an instance with no recorded edge yet is PRESERVED as an unattached node,
+  // never silently dropped — attachments are an extension point and must survive the projection.
+  const orphan = tree.nodes.find((n) => n.instanceKey === "missing");
+  assert.ok(orphan, "attachment for an un-stitched instance must materialise its node");
+  assert.deepEqual(orphan.attachments, [{ nodeKey: "missing", kind: "task", ref: "t-1" }]);
+  assert.equal(orphan.edgeType, undefined);
+  assert.equal(orphan.children.length, 0);
+});
+
+test("buildLineageTree: a stray orphan attachment does not shadow a MINTED root's real parentless instance", () => {
+  // Defect-class guard: materialising attachment-only nodes must not reintroduce the phantom-root
+  // bug. A minted (synthetic) rootRequestKey with an orphan attachment adds a second parentless
+  // node; the tree must still root at the real recorded instance, not the empty synthetic phantom.
+  const edges: LineageEdge[] = [
+    { rootRequestKey: "req-UUID", instanceKey: "inst-root", edgeType: "weak" },
+    { rootRequestKey: "req-UUID", instanceKey: "inst-child", causedByInstanceKey: "inst-root", edgeType: "strong" },
+  ];
+  const tree = buildLineageTree("req-UUID", edges, [{ nodeKey: "inst-orphan", kind: "note", ref: "n-1" }]);
+  assert.equal(tree.root.instanceKey, "inst-root");
+  assert.deepEqual(tree.root.children.map((c) => c.instanceKey), ["inst-child"]);
+  assert.equal(tree.nodes.some((n) => n.instanceKey === "req-UUID"), false);
+  // The orphan attachment is preserved (unattached), and the synthetic key never leaks as a node.
+  const orphan = tree.nodes.find((n) => n.instanceKey === "inst-orphan");
+  assert.ok(orphan, "orphan attachment node must be preserved");
+  assert.deepEqual(orphan.attachments, [{ nodeKey: "inst-orphan", kind: "note", ref: "n-1" }]);
 });
 
 test("buildLineageTree roots a MINTED (synthetic) rootRequestKey at the parentless instance, not a phantom", () => {

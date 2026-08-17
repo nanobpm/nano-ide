@@ -1068,7 +1068,9 @@ function resolveCopyText(text) {
 function openModal(m) {
   // Only one modal at a time — drop a second (e.g. double-click) open so we
   // never stack overlays or register duplicate document-level keydown handlers.
-  if (modalOpen) return;
+  // Return null (not a close fn) so a guarded caller (confirmModal) can tell the
+  // open was dropped and resolve rather than hang.
+  if (modalOpen) return null;
   modalOpen = true;
   const overlay = el("div", { class: "pc-modal-overlay" });
   // role="dialog" + aria-modal need an accessible name: label by the visible
@@ -1087,6 +1089,13 @@ function openModal(m) {
   // Remember what had focus so we can restore it on close — a keyboard/screen
   // reader user returns to where they were instead of being dumped at <body>.
   const prevFocus = document.activeElement;
+  // A dismissal (✕/Close button, backdrop, Escape, page switch) resolves with
+  // m.dismissValue; an action button overrides it before closing. onResult fires
+  // exactly once, from close(), so every exit path (button OR dismiss) reports a
+  // result — this is what lets confirmModal() gate on a real user choice inside a
+  // sandboxed iframe where native confirm() would silently return false (#276).
+  const onResult = typeof m.onResult === "function" ? m.onResult : null;
+  let resultValue = m.dismissValue;
   let closed = false;
   function close() {
     if (closed) return;
@@ -1099,6 +1108,9 @@ function openModal(m) {
     // accrete dead close() closures until the next page navigation runs teardown.
     const i = disposers.indexOf(close);
     if (i !== -1) disposers.splice(i, 1);
+    // A consumer-provided result callback must never abort teardown: if it throws,
+    // swallow it so focus restoration below (and Escape/backdrop close) still runs.
+    if (onResult) { try { onResult(resultValue); } catch (_e) {} }
     if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
   }
   // Focusable descendants of the dialog, in DOM order, for the Tab focus trap.
@@ -1131,7 +1143,29 @@ function openModal(m) {
   }
   const closeBtn = el("button", { class: "pc-btn pc-btn-sm pc-btn-ghost", type: "button" }, m.closeLabel || "Close");
   closeBtn.addEventListener("click", close);
-  actions.append(closeBtn);
+  // Custom action buttons (m.actions) turn this into a decision dialog — each
+  // sets the result then closes; the plain Close button is the default when none
+  // are given. This is the in-DOM replacement for native confirm()/alert(): one
+  // overlay + focus-trap + teardown machinery, no drift (AGENTS.md).
+  let focusBtn = closeBtn;
+  if (Array.isArray(m.actions) && m.actions.length) {
+    let firstActionBtn = null;
+    let defaultBtn = null;
+    for (const a of m.actions) {
+      const cls = "pc-btn pc-btn-sm" + (a.variant === "ghost" ? " pc-btn-ghost" : "");
+      const ab = el("button", { class: cls, type: "button" }, a.label);
+      ab.addEventListener("click", () => { resultValue = a.value; close(); });
+      actions.append(ab);
+      if (!firstActionBtn) firstActionBtn = ab;
+      if (a.default) defaultBtn = ab;
+    }
+    // Default focus lands on the FIRST action (typically Cancel), never the last:
+    // for confirmModal that keeps a stray Enter from accidentally triggering the
+    // destructive Confirm. An action can opt into autofocus with default:true.
+    focusBtn = defaultBtn || firstActionBtn;
+  } else {
+    actions.append(closeBtn);
+  }
   dialog.append(actions);
   overlay.append(dialog);
   // A click on the backdrop (never the dialog itself) dismisses.
@@ -1141,7 +1175,36 @@ function openModal(m) {
   // A page switch runs teardown() before the next render — dispose the modal
   // there too so navigating away never leaves a stale overlay + keydown listener.
   disposers.push(close);
-  closeBtn.focus();
+  focusBtn.focus();
+  return close;
+}
+
+// In-DOM confirm — an accessible replacement for native confirm() that works in
+// a sandboxed iframe (without allow-modals native confirm() silently returns
+// false, dead-ending every confirm-guarded action; #276). Renders the message
+// with Cancel/Confirm and resolves the user's choice; a dismissal (Escape /
+// backdrop / ✕) resolves false. If a modal is already open the guarded open is
+// dropped — resolve false so the caller doesn't hang.
+function confirmModal(message) {
+  return new Promise((resolve) => {
+    const opened = openModal({
+      title: "Confirm",
+      description: String(message),
+      dismissValue: false,
+      actions: [
+        { label: "Cancel", value: false, variant: "ghost" },
+        { label: "Confirm", value: true },
+      ],
+      onResult: (v) => resolve(!!v),
+    });
+    if (!opened) resolve(false);
+  });
+}
+
+// In-DOM error surface — replaces native alert(), which a sandboxed iframe also
+// suppresses, so action failures reported through it were invisible (#276).
+function alertModal(message) {
+  openModal({ title: "Error", description: String(message) });
 }
 
 // A standalone button node. Clicking it opens props.modal — used e.g. to surface
@@ -2085,14 +2148,18 @@ function renderDataGrid(node) {
     const b = el("button", { class: "pc-btn pc-btn-sm" }, ra.label);
     b.addEventListener("click", async (ev) => {
       ev.stopPropagation();
-      if (ra.confirm && !confirm(ra.confirm)) return;
+      // In-DOM confirm/error (openModal) instead of native confirm()/alert():
+      // a sandboxed iframe without allow-modals makes native confirm() return
+      // false and alert() a no-op, so every confirm-guarded action silently
+      // dead-ended and its errors vanished (#276).
+      if (ra.confirm && !(await confirmModal(ra.confirm))) return;
       b.disabled = true;
       try {
         await fireAction(ra.action, row);
         document.dispatchEvent(new CustomEvent("pc:refresh"));
       } catch (e) {
         b.disabled = false;
-        alert(String(e.message || e));
+        alertModal(String(e.message || e));
       }
     });
     return b;

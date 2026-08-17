@@ -1057,6 +1057,9 @@ test("the shell ships a mobile @media block that flips a dataGrid into a card li
   // The derived title leads the card with no caption; a badge column is a chip.
   assert.match(media, /td\.pc-mcell-primary::before \{ content:none; \}/);
   assert.match(media, /td\.pc-mcell-chip::before \{ content:none; \}/);
+  // An empty badge cell (blank field value) carries the chip class but no content;
+  // it must collapse on mobile so it doesn't leave a stray blank flex row in the card.
+  assert.match(media, /td\.pc-mcell-chip:empty \{ display:none; \}/);
   // Low-value (hidden) columns drop off the card until the row's More toggle opens them.
   assert.match(media, /td\.pc-mcell-hidden \{ display:none; \}/);
   assert.match(media, /tr\.pc-open td\.pc-mcell-hidden \{ display:flex; \}/);
@@ -1128,11 +1131,34 @@ test("the renderer adds a per-row More toggle only when a column is mobile-hidde
   // Tier 1: mobile:{priority:"hidden"} columns are revealed behind a per-row
   // "More" toggle. The toggle cell is base-hidden and shown only inside the
   // mobile @media, so desktop is unchanged; it appears only when the grid
-  // actually has a hidden column.
+  // actually has a hidden column. The cell is built by the shared mobileMoreCell
+  // helper and appended to the row (both the top-level grid and child grids use it).
   assert.match(js, /const hasHidden = roles\.indexOf\("hidden"\) >= 0;/);
-  assert.match(js, /if \(hasHidden\) \{[\s\S]*?class: "pc-mcard-toggle"/);
+  assert.match(js, /if \(hasHidden\) tr\.append\(mobileMoreCell\(tr\)\);/);
+  assert.match(js, /function mobileMoreCell\(tr\)/);
+  assert.match(js, /class: "pc-mcard-toggle"/);
   assert.match(js, /const open = tr\.classList\.toggle\("pc-open"\);/);
   assert.match(js, /moreBtn\.textContent = open \? "Less" : "More";/);
+});
+
+test("the per-row More toggle exposes its reveal state via aria-expanded (#268)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The toggle is a button that shows/hides card content, so assistive tech needs
+  // aria-expanded: it starts collapsed ("false") and is updated on every toggle.
+  assert.match(js, /"aria-expanded": "false"/);
+  assert.match(js, /moreBtn\.setAttribute\("aria-expanded", String\(open\)\);/);
+});
+
+test("child grids reuse the same per-row More toggle for hidden columns (#268)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Child grids classify columns into the same mobile roles (including "hidden"),
+  // so — like the top-level grid — they must render the shared More toggle, or a
+  // mobile:{priority:"hidden"} child column would be permanently unreachable on a
+  // narrow viewport. Derived from the same mobileMoreCell helper (no drift).
+  assert.match(js, /const chasHidden = croles\.indexOf\("hidden"\) >= 0;/);
+  assert.match(js, /if \(chasHidden\) ctr\.append\(mobileMoreCell\(ctr\)\);/);
 });
 
 test("the renderer honours an optional Tier-2 page-level mobile layout variant (#268)", async () => {

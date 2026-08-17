@@ -671,6 +671,10 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
   /* A badge column becomes a left-aligned status chip with no caption. */
   table.pc-grid td.pc-mcell-chip { justify-content:flex-start; }
   table.pc-grid td.pc-mcell-chip::before { content:none; }
+  /* An empty badge cell (row value blank) still carries the chip class but has no
+     child content; without this it renders as a blank flex row (padding/gap) that
+     leaves a stray empty line in the card. Collapse those empty chip cells (#268). */
+  table.pc-grid td.pc-mcell-chip:empty { display:none; }
   /* Low-value (mobile:{priority:"hidden"}) columns drop off the card until the
      row's "More" toggle opens them; on desktop they render as normal columns. */
   table.pc-grid td.pc-mcell-hidden { display:none; }
@@ -1301,6 +1305,23 @@ function classifyColumns(cols) {
   });
 }
 
+// Per-row mobile "More" toggle cell: reveals the mobile:{priority:"hidden"} columns
+// a narrow viewport drops off the card. The cell is base-hidden (display:none) so
+// the desktop table is byte-for-byte unchanged; clicking flips .pc-open on the row,
+// swaps the label, and updates aria-expanded so the reveal state is exposed to
+// assistive tech (#268). One implementation shared by the top-level grid and child
+// grids so the affordance — and its accessibility — can't drift between them.
+function mobileMoreCell(tr) {
+  const moreBtn = el("button",
+    { class: "pc-btn pc-btn-sm pc-btn-ghost pc-more", type: "button", "aria-expanded": "false" }, "More");
+  moreBtn.addEventListener("click", () => {
+    const open = tr.classList.toggle("pc-open");
+    moreBtn.textContent = open ? "Less" : "More";
+    moreBtn.setAttribute("aria-expanded", String(open));
+  });
+  return el("td", { class: "pc-mcard-toggle" }, moreBtn);
+}
+
 // Parse a "<number>%" width into its numeric percentage, or null if the string
 // is not a bare percentage (e.g. "22rem", "120px") — used to decide whether the
 // remainder left for weighted columns can be computed.
@@ -1666,6 +1687,7 @@ function renderDataGrid(node) {
     if (cg.title) wrap.append(el("div", { class: "pc-child-title" }, cg.title));
     const ccols = cg.columns || [];
     const croles = classifyColumns(ccols);
+    const chasHidden = croles.indexOf("hidden") >= 0;
     const cbody = el("tbody", {});
     const ccolgroup = buildColgroup(ccols, cg.lazyField ? 1 : 0);
     const cthead = el("thead", {}, el("tr", {}, ...ccols.map((c) => el("th", {}, c.header || c.field)),
@@ -1699,7 +1721,13 @@ function renderDataGrid(node) {
           }
           cells.push(cell);
         }
-        cbody.append(el("tr", {}, ...cells));
+        // Child grids classify columns into the same mobile roles (including
+        // "hidden") as the top-level grid, so they need the same per-row "More"
+        // toggle — without it a mobile:{priority:"hidden"} child column would be
+        // permanently unreachable on a narrow viewport (#268).
+        const ctr = el("tr", {}, ...cells);
+        if (chasHidden) ctr.append(mobileMoreCell(ctr));
+        cbody.append(ctr);
       }
     } catch (e) {
       cbody.append(el("tr", {}, el("td", { colspan: cspan }, String(e.message || e))));
@@ -1752,21 +1780,11 @@ function renderDataGrid(node) {
       cells.push(actionCell);
     }
     // Per-row "More" toggle: only when a mobile:{priority:"hidden"} hint drops
-    // columns off the card. The toggle cell is base-hidden (display:none) and
-    // shown only inside the mobile @media, so desktop is byte-for-byte unchanged;
-    // clicking flips .pc-open on the row to reveal the hidden cells (#268).
-    let moreBtn = null;
-    if (hasHidden) {
-      moreBtn = el("button", { class: "pc-btn pc-btn-sm pc-btn-ghost pc-more", type: "button" }, "More");
-      cells.push(el("td", { class: "pc-mcard-toggle" }, moreBtn));
-    }
+    // columns off the card. Appended after the <tr> is built (the toggle wires a
+    // click against its own row) and shared with child grids via mobileMoreCell so
+    // the reveal affordance and its aria state can't drift (#268).
     const tr = el("tr", {}, ...cells);
-    if (moreBtn) {
-      moreBtn.addEventListener("click", () => {
-        const open = tr.classList.toggle("pc-open");
-        moreBtn.textContent = open ? "Less" : "More";
-      });
-    }
+    if (hasHidden) tr.append(mobileMoreCell(tr));
     tbody.append(tr);
     // When grouping, the caller collects every <tr> this row produced (the data
     // row plus any detail row) so a group header can hide/show them as one unit.

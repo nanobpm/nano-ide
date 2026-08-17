@@ -8,6 +8,37 @@ export type {
   UrbanApp,
 } from "./core/runtime.ts";
 
+// Extension-event taxonomy + microkernel (issue #262)
+export { EventBus } from "./core/events.ts";
+export type {
+  DispatchMode,
+  Disposer,
+  EmitChannel,
+  ErrorSink,
+  EventBusOptions,
+  Listener,
+  Middleware,
+  ParallelChannel,
+  SerialChannel,
+  WaterfallChannel,
+} from "./core/events.ts";
+export { URBAN_EVENT_MODES, createUrbanEvents, mountExtensions, urbanEventMode } from "./core/extensions.ts";
+export type {
+  DispatchRequest,
+  DispatchResponse,
+  ExtensionHost,
+  ExtensionRegistered,
+  ExtensionSetupContext,
+  GateDecision,
+  GateRequest,
+  LifecycleEvent,
+  MountExtensionsOptions,
+  ReconcileEvent,
+  UrbanEventName,
+  UrbanEvents,
+  UrbanExtension,
+} from "./core/extensions.ts";
+
 // Manifest
 export {
   bindModeToHost,

@@ -178,10 +178,13 @@ export interface MountExtensionsOptions {
 }
 
 /** Run `extensions` through the taxonomy: deterministically order them, `setup()`
- *  each behind the `extension/register` serial checkpoint (a throwing extension is
- *  contained and never strands the others or app boot), and return a `Mounted`
- *  whose `stop()` unwinds the whole dispose ladder LIFO — so a start→stop→start
- *  cycle (or HMR reload) leaks no listeners. */
+ *  each directly (a throwing extension is contained and never strands the others
+ *  or app boot), then notify the `extension/register` serial checkpoint so
+ *  observers react in a deterministic order, and return a `Mounted` whose `stop()`
+ *  disposes the bus — unwinding the whole dispose ladder LIFO — only when
+ *  `mountExtensions` created that bus; onto a shared app-wide bus, disposal is the
+ *  caller's responsibility. So a start→stop→start cycle (or HMR reload) over an
+ *  owned bus leaks no listeners. */
 export async function mountExtensions(
   api: AppApi,
   extensions: readonly UrbanExtension[],

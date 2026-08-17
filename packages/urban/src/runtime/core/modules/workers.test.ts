@@ -332,7 +332,7 @@ async function dataLayerWithSqlite(): Promise<{ data: DataLayer; db: Provisioned
     close: () => db.close(),
   };
   const data = new DataLayer(new Map([["main", src]]), "main", {});
-  return { data, db, cleanup: async () => { db.close(); await rm(dir, { recursive: true, force: true }); } };
+  return { data, db, cleanup: async () => { try { db.close(); } catch { /* already closed */ } await rm(dir, { recursive: true, force: true }); } };
 }
 
 test("mountWorkers threads the lineage rootRequestKey into the ambient job context", async () => {
@@ -400,4 +400,25 @@ test("mountWorkers records nothing when the app has no default data source (abse
   await mountWorkers(ctx, makeApp());
   await engine.deliver("work", { jobKey: "j1", jobType: "work", processInstanceKey: "pi", variables: {} });
   assert.ok(!logs.some((l) => l.level === "error"));
+});
+
+test("mountWorkers surfaces a real provisioning failure as a warn (not the silent absent case)", async () => {
+  const engine = new MiniEngine();
+  const { ctx, logs } = makeCtx({ workers: [{ taskType: "work", handler: "workers/work.ts" }] }, engine);
+  const handler: AppJobHandler = () => ({ ok: true });
+  ctx.host.importModule = async () => ({ default: handler });
+  const { data, db, cleanup } = await dataLayerWithSqlite();
+  try {
+    // A default source IS configured, but provisioning the projection fails (closed db). This is a
+    // genuine fault, not the absent case, so it must be logged at `warn` with the error — never
+    // disguised as an expected "no default data source" debug, and never a failed worker mount.
+    db.close();
+    await mountWorkers(ctx, makeApp({ data }));
+    await engine.deliver("work", { jobKey: "j1", jobType: "work", processInstanceKey: "pi", variables: {} });
+    const warned = logs.find((l) => l.level === "warn" && l.msg.includes("failed to provision"));
+    assert.ok(warned, "a configured-but-broken datasource must warn, not silently degrade");
+    assert.ok(!logs.some((l) => l.msg.includes("no default data source")), "must not claim the datasource is absent");
+  } finally {
+    await cleanup();
+  }
 });

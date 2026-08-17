@@ -1168,14 +1168,23 @@ function cellTd(primary, primaryText, subText, truncate) {
   return el("td", {}, main, el("div", subAttrs, subText));
 }
 
+// Parse a "<number>%" width into its numeric percentage, or null if the string
+// is not a bare percentage (e.g. "22rem", "120px") — used to decide whether the
+// remainder left for weighted columns can be computed.
+function colWidthPct(width) {
+  const m = /^\s*([0-9]*\.?[0-9]+)%\s*$/.exec(width);
+  return m ? parseFloat(m[1]) : null;
+}
+
 // A column's <col> width for the grid's <colgroup>: an explicit col.width string
 // ("40%", "22rem") wins verbatim; else a positive numeric col.weight is
-// normalised across all weighted columns into a percentage share; else null
-// (no width — the column shares the remainder equally under table-layout:fixed).
-function colWidthStyle(col, weightTotal) {
+// normalised across the weighted columns into a percentage share of the width
+// left over by explicit columns (remainderPct); else null (no width — the column
+// shares the remainder equally under table-layout:fixed).
+function colWidthStyle(col, weightTotal, remainderPct) {
   if (typeof col.width === "string" && col.width !== "") return col.width;
   if (typeof col.weight === "number" && col.weight > 0 && weightTotal > 0) {
-    return Math.round((col.weight / weightTotal) * 10000) / 100 + "%";
+    return Math.round((col.weight / weightTotal) * remainderPct * 100) / 100 + "%";
   }
   return null;
 }
@@ -1192,8 +1201,23 @@ function buildColgroup(cols, extraCount) {
   if (!hasSizing) return null;
   let weightTotal = 0;
   for (const c of cols) if (typeof c.weight === "number" && c.weight > 0) weightTotal += c.weight;
+  // Weighted columns share only the width the explicit columns leave behind, so
+  // mixing e.g. width:"40%" with weighted columns can't oversubscribe past 100%.
+  // The remainder is only computable when every explicit width is a percentage;
+  // if any uses an absolute/relative unit (rem/px) we can't subtract it from
+  // 100%, so weighted columns fall back to a share of the full width.
+  let explicitPctTotal = 0;
+  let allExplicitArePct = true;
+  for (const c of cols) {
+    if (typeof c.width === "string" && c.width !== "") {
+      const pct = colWidthPct(c.width);
+      if (pct === null) allExplicitArePct = false;
+      else explicitPctTotal += pct;
+    }
+  }
+  const remainderPct = allExplicitArePct ? Math.max(0, 100 - explicitPctTotal) : 100;
   const colEls = cols.map((c) => {
-    const w = colWidthStyle(c, weightTotal);
+    const w = colWidthStyle(c, weightTotal, remainderPct);
     return el("col", w ? { style: "width:" + w } : {});
   });
   for (let i = 0; i < extraCount; i++) colEls.push(el("col", {}));

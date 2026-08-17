@@ -410,14 +410,21 @@ test("renderer emits a <colgroup> sizing columns by width/weight (#257)", async 
   // integer `weight`, so table-layout:fixed stops splitting width equally. This
   // emits a <colgroup> of <col style="width:…"> (fixed layout honours <col>
   // widths). Guard the shape: an explicit width string wins verbatim, a positive
-  // weight is normalised across weighted columns into a percentage, unsized
-  // columns get no width (share the remainder), and no colgroup is emitted at all
-  // when no column declares sizing (so unsized grids are unchanged).
+  // weight is normalised across weighted columns into a percentage of the width
+  // the explicit columns leave (the remainder), unsized columns get no width
+  // (share the remainder), and no colgroup is emitted at all when no column
+  // declares sizing (so unsized grids are unchanged).
   assert.match(js, /function buildColgroup\(cols, extraCount\)/);
   assert.match(js, /if \(!hasSizing\) return null;/);
   assert.match(js, /if \(typeof col\.width === "string" && col\.width !== ""\) return col\.width;/);
-  assert.match(js, /Math\.round\(\(col\.weight \/ weightTotal\) \* 10000\) \/ 100 \+ "%"/);
+  assert.match(js, /Math\.round\(\(col\.weight \/ weightTotal\) \* remainderPct \* 100\) \/ 100 \+ "%"/);
   assert.match(js, /el\("col", w \? \{ style: "width:" \+ w \} : \{\}\)/);
+  // Regression (#258 review): mixing explicit % widths with weighted columns
+  // must not oversubscribe past 100% — weighted columns share only the remainder
+  // (100 - sum of explicit %), and only when every explicit width is a
+  // percentage (rem/px explicit widths fall back to a share of the full width).
+  assert.match(js, /const remainderPct = allExplicitArePct \? Math\.max\(0, 100 - explicitPctTotal\) : 100;/);
+  assert.match(js, /function colWidthPct\(width\)/);
   // The colgroup precedes <thead> in the table, and only when sizing is present.
   assert.match(js, /\? el\("table", \{ class: "pc-grid" \}, colgroup, thead, tbody\)/);
 });

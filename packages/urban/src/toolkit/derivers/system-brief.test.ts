@@ -58,6 +58,24 @@ test("foldOwnership folds reserved meta keys, accumulating repeated `adr`", () =
   assert.equal(own.team, undefined);
 });
 
+// `nano:meta` keys are user-authored, so a crafted key that collides with an
+// `Object.prototype` member (e.g. `toString`) must NOT be treated as a reserved
+// ownership key. Guards against prototype-chain membership checks (`k in OWNERSHIP_KEYS`).
+test("foldOwnership ignores Object.prototype keys in crafted meta", () => {
+  const xml = `
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+  <bpmn:process id="hostile">
+    <bpmn:extensionElements>
+      <nano:meta xmlns:nano="urn:nano" key="toString" value="pwned" />
+      <nano:meta xmlns:nano="urn:nano" key="constructor" value="pwned" />
+      <nano:meta xmlns:nano="urn:nano" key="hasOwnProperty" value="pwned" />
+    </bpmn:extensionElements>
+  </bpmn:process>
+</bpmn:definitions>`;
+  const own = foldOwnership([{ path: "hostile.bpmn", xml }]);
+  assert.deepEqual(own, { adrs: [] });
+});
+
 test("buildSystemBrief folds processes, call graph, decisions, ownership", () => {
   const b: SystemBrief = buildSystemBrief(models, "acme-orders");
   assert.equal(b.app, "acme-orders");

@@ -649,6 +649,7 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-md-pre { background:var(--nano-inset); border:1px solid var(--nano-edge); border-radius:.4rem; padding:.7rem .8rem; overflow:auto; margin:.6rem 0; }
 .pc-md-pre code { font:.82rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--nano-text); white-space:pre; }
 .pc-md-code { background:var(--nano-inset); border-radius:.3rem; padding:.05rem .3rem; font:.85em ui-monospace,SFMono-Regular,Menlo,monospace; }
+.pc-md-hr { border:0; border-top:1px solid var(--nano-edge); margin:1rem 0; }
 .pc-prose-body a { color:var(--nano-accent-strong); }
 /* A standalone button node + the modal it opens (e.g. a copy-pasteable prompt). */
 .pc-buttonrow { margin:1rem 0; }
@@ -1959,7 +1960,7 @@ function renderProse(node) {
   let measure = Number(p.measure);
   if (!Number.isFinite(measure)) measure = 66;
   measure = Math.max(40, Math.min(100, Math.round(measure)));
-  const activeFilter = data.filter || [];
+  const activeFilter = Array.isArray(data.filter) ? data.filter : [];
 
   function itemFor(row) {
     const item = el("article", { class: "pc-prose-item" });

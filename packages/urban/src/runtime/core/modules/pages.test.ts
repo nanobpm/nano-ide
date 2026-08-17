@@ -904,6 +904,9 @@ test("the renderer ships a data-bound prose/markdown list node (#274)", async ()
   // A param-scoped list with no route param renders nothing (no field=empty query),
   // mirroring the grid's eqParam short-circuit.
   assert.match(js, /paramScoped && PARAM === ""/);
+  // The active filter is Array.isArray-guarded (matching other malformed-schema
+  // guards) so a truthy non-array filter degrades to [] instead of throwing on .some.
+  assert.match(js, /const activeFilter = Array\.isArray\(data\.filter\) \? data\.filter : \[\]/);
   // Per-item: a header template (interpTemplate, text-only) over one markdown body field.
   assert.match(js, /el\("div", \{ class: "pc-prose-head" \}, interpTemplate\(headerTpl, row\)\)/);
   assert.match(js, /const bodyField = p\.body/);
@@ -946,6 +949,8 @@ test("the prose renderer ships a safe, dependency-free markdown → DOM converte
   assert.match(js, /el\("code", \{ class: "pc-md-code" \}/);
   assert.match(js, /el\("pre", \{ class: "pc-md-pre" \}/);
   assert.match(js, /el\("blockquote", \{ class: "pc-md-quote" \}/);
+  // Thematic breaks emit a themed <hr> (styled via .pc-md-hr), not a bare default rule.
+  assert.match(js, /el\("hr", \{ class: "pc-md-hr" \}\)/);
   assert.match(js, /const MD_UL = \/\^\[-\*\+\]\\s\+\//);
   assert.match(js, /const MD_OL = \/\^\\d\+\[\.\)\]\\s\+\//);
   // Underscore emphasis is word-boundary guarded so snake_case identifiers survive.
@@ -967,6 +972,8 @@ test("the shell styles the prose/markdown list at a comfortable reading measure 
   assert.match(html, /\.pc-prose-head \{/);
   assert.match(html, /\.pc-md-pre \{[^}]*var\(--nano-inset\)[^}]*\}/);
   assert.match(html, /\.pc-md-quote \{[^}]*var\(--nano-edge-strong\)[^}]*\}/);
+  // Thematic breaks are themed via --nano-* tokens, matching the other markdown blocks.
+  assert.match(html, /\.pc-md-hr \{[^}]*var\(--nano-edge\)[^}]*\}/);
   assert.match(html, /\.pc-prose-body a \{ color:var\(--nano-accent-strong\); \}/);
 });
 

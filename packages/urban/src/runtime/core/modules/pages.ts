@@ -589,7 +589,7 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 @media (prefers-color-scheme: light) { :root:not([data-appearance]) .pc-badge-warn { color:#fff; } }
 /* Pipeline / stepper cell (issue #265): a per-row, multi-stage horizontal
    progress track rendered by pipelineCell. Only the track/stage chrome lives
-   here (the .pc-pipe classes); per-stage badges and locus links reuse the
+   here (the .pc-pipe classes); the active-stage badge and locus links reuse the
    .pc-badge and .pc-link classes.
    All colours come from the shared --nano-* tokens so light/dark themes work.
    Stage treatments: done = filled/ok-tinted, active = lit accent, active+ok =
@@ -1393,7 +1393,7 @@ function mobileMoreCell(tr) {
 //     stages:[{key,label},...],   // ordered stage definitions (required)
 //     activeField:"stage",        // row field → the current stage's key
 //     stateField:"stage_state",   // row field → ok | active | failed | blocked
-//     badgeField:"attention",     // optional row field → per-stage badge text
+//     badgeField:"attention",     // optional row field → badge text shown on the active stage
 //     notInPathField:"skipped",   // optional row field → stages this row skips
 //     notInPath:["converging"],   // static fallback used only when no field given
 //     locus:{ field:"pr_key", stage?:"<key>",
@@ -1401,8 +1401,8 @@ function mobileMoreCell(tr) {
 // Rendering: stages BEFORE the active one are filled/completed, the active stage
 // is lit (its treatment driven by stateField — success ✓ vs failure ✕ vs blocked
 // ⊘ are made unmistakably distinct), in-path stages AFTER it are ghosted, and any
-// stage in the row's not-in-path set is dashed. Reuses .pc-badge*/.pc-link and
-// the shared pageHashHref route builder — no parallel implementations. Unknown or
+// stage in the row's not-in-path set is dashed. Reuses the .pc-badge and .pc-link
+// classes and the shared pageHashHref route builder — no parallel implementations. Unknown or
 // missing config (no stages array) degrades gracefully to plain cell text.
 function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
   const stages = Array.isArray(col.stages) ? col.stages : [];
@@ -1423,8 +1423,9 @@ function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
     col.notInPathField != null && row[col.notInPathField] != null
       ? toStageSet(row[col.notInPathField])
       : toStageSet(col.notInPath);
-  // Optional per-stage badge (escalation/attention → warn, blocked/failure →
-  // danger), reusing .pc-badge tone classes — no new badge styles.
+  // Optional active-stage badge (escalation/attention → warn, blocked/failure →
+  // danger), reusing .pc-badge tone classes — no new badge styles. The badge text
+  // is a single row-level value (row[badgeField]) shown only on the active stage.
   const badgeText = col.badgeField != null && row[col.badgeField] != null ? String(row[col.badgeField]) : "";
   const badgeTone = state === "failed" || state === "blocked" ? "danger" : "warn";
   // Optional locus out-link: the relevant stage (default the active one, or

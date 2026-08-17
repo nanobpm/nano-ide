@@ -174,7 +174,10 @@ export interface ExtensionHost extends Mounted {
 }
 
 export interface MountExtensionsOptions {
-  /** Reports a contained extension throw (defaults to the app logger's `warn`). */
+  /** Reports a contained extension throw (defaults to the app logger's `warn`).
+   *  Only honoured when `mountExtensions` creates its *own* private bus (i.e. `bus`
+   *  and `events` are omitted). When a shared `bus` is passed, that bus already owns
+   *  its error sink and this option is ignored — set the sink on the shared bus. */
   onError?: (err: unknown, info: { event: string; mode: DispatchMode }) => void;
   /** A pre-built taxonomy/bus to mount onto (the runtime shares one app-wide). When
    *  omitted a private bus is created — handy for isolated tests. */

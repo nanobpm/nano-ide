@@ -186,6 +186,30 @@ test("containment — a throwing listener does not strand a request going throug
   await host.stop();
 });
 
+test("onError — the option is ignored on a shared bus; the shared bus's own sink contains the throw", async () => {
+  const sharedErrors: string[] = [];
+  const optionErrors: string[] = [];
+  const bus = new EventBus({ onError: (_e, info) => sharedErrors.push(info.event) });
+  const events = createUrbanEvents(bus);
+  const throwing: UrbanExtension = {
+    name: "throws-on-lifecycle",
+    setup(ctx) {
+      ctx.events.lifecycle.on(() => {
+        throw new Error("bad listener");
+      });
+    },
+  };
+  const host = await mountExtensions(fakeApi(), [throwing], {
+    bus,
+    events,
+    onError: (_e, info) => optionErrors.push(info.event),
+  });
+  events.lifecycle.emit({ app: "test", phase: "starting" });
+  assert.deepEqual(optionErrors, [], "onError option must be ignored when a shared bus is passed");
+  assert.ok(sharedErrors.length > 0, "the shared bus's own error sink must contain the throw");
+  await host.stop();
+});
+
 test("HMR — start→stop→start leaks no listeners across cycles", async () => {
   const ext: UrbanExtension = {
     name: "leaky-candidate",

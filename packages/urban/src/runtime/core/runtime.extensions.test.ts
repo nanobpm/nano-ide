@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeHost } from "../adapters/node.ts";
 import { createUrbanApp } from "./runtime.ts";
-import type { EngineClient, JobHandler, WorkerSubscription } from "./host.ts";
+import type { EngineClient, WorkerSubscription } from "./host.ts";
 import type { LifecycleEvent, UrbanExtension } from "./extensions.ts";
 
 // A no-op engine double: the taxonomy wiring exercises lifecycle + extensions, so

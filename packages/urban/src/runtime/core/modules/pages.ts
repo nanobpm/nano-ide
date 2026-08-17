@@ -1458,7 +1458,11 @@ function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
   });
   for (let i = 0; i < stages.length; i++) {
     const s = stages[i];
-    const skipped = skip.has(String(s.key));
+    // Active wins over skip: if the active stage's key is also in the not-in-path
+    // set, it must still render as the current step (active styling + aria-current),
+    // never as skipped. Excluding activeIdx here keeps that precedence consistent
+    // across the stage class, the aria-current mark, and the connector fill below.
+    const skipped = i !== activeIdx && skip.has(String(s.key));
     // Connector between adjacent stages; filled up to and including the active
     // stage, but never across a not-in-path stage — a skipped predecessor breaks
     // the fill so we don't visually imply it was on the path.

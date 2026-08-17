@@ -1248,6 +1248,17 @@ test("pipeline reads the not-in-path set per-row from a field, falling back to s
   assert.match(js, /Array\.isArray\(v\)\) return new Set\(v\.map\(\(s\) => String\(s\)\.trim\(\)\)\.filter\(\(s\) => s !== ""\)\)/);
 });
 
+test("pipeline keeps the active stage current even if its key is also in the not-in-path set (active wins over skip)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Precedence guard: the skipped predicate excludes the active index so a stage
+  // that is both the active stage AND in the not-in-path set still renders as the
+  // current step (active styling + aria-current), never as dashed/skipped. The
+  // skip branch is checked before i === activeIdx, so without this exclusion the
+  // active stage would silently lose aria-current="step".
+  assert.match(js, /const skipped = i !== activeIdx && skip\.has\(String\(s\.key\)\);/);
+});
+
 test("pipeline renders failure distinctly from success on the active stage (stateField)", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
@@ -1322,7 +1333,7 @@ test("pipeline cell inherits the mobile card attrs so it labels/classifies under
 test("shell CSS carries the .pc-pipe* track chrome reusing --nano-* tokens", async () => {
   const res = await dispatch("GET", "/");
   const html = res.body ?? "";
-  // Structural track/stage styles only (badges/links reuse .pc-badge*/.pc-link);
+  // Structural track/stage styles only (badges/links reuse .pc-badge and .pc-link);
   // all colours resolve through the shared token vocabulary so themes work.
   assert.match(html, /\.pc-pipe \{ display:flex;/);
   assert.match(html, /\.pc-pipe-done \{[^}]*border-color:var\(--nano-ok\)/);

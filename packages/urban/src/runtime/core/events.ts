@@ -271,14 +271,22 @@ export class EventBus {
    *  It makes a unit of work atomic — e.g. one extension's `setup()` — so a throw
    *  after partial registration can roll back exactly what that unit added and
    *  nothing else. Contained end-to-end, like `dispose()`; the ladder entries it
-   *  runs are idempotent, so a later `dispose()` won't double-run them. */
+   *  runs are idempotent, so a later `dispose()` won't double-run them. Keeps
+   *  unwinding until no registration made after the scope point remains, so an
+   *  effect a rolled-back disposer registers *during* rollback is still torn down
+   *  rather than stranded live (mirrors `dispose()`). */
   scope(): Disposer {
     const before = new Set(this.ladder);
     return () => {
-      const added = [...this.ladder].filter((entry) => !before.has(entry));
-      for (let i = added.length - 1; i >= 0; i--) {
+      for (;;) {
+        let entry: Disposer | undefined;
+        for (const candidate of this.ladder) {
+          if (!before.has(candidate)) entry = candidate;
+        }
+        if (entry === undefined) return;
+        this.ladder.delete(entry);
         try {
-          added[i]();
+          entry();
         } catch (err) {
           this.contain(err);
         }

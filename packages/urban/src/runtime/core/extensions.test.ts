@@ -9,6 +9,7 @@ import {
   urbanEventMode,
   type GateDecision,
   type GateRequest,
+  type UrbanEventName,
   type UrbanExtension,
 } from "./extensions.ts";
 import { EventBus } from "./events.ts";
@@ -47,6 +48,27 @@ test("taxonomy — createUrbanEvents declares every seam exactly once on a bus",
   assert.equal(events.requestDispatch.mode, "waterfall");
   assert.equal(events.securityGate.mode, "waterfall");
   assert.equal(events.reconcile.mode, "parallel");
+});
+
+test("taxonomy — every typed channel derives its mode from URBAN_EVENT_MODES, with exact seam coverage (no drift)", () => {
+  const bus = new EventBus();
+  const events = createUrbanEvents(bus);
+  // Bind each typed channel to its canonical seam name, then assert the mode is
+  // read from URBAN_EVENT_MODES rather than hardcoded — so changing the table (or
+  // a channel's declared mode) without matching the other fails this guard.
+  const bindings: ReadonlyArray<[{ readonly event: string; readonly mode: string }, UrbanEventName]> = [
+    [events.lifecycle, "lifecycle"],
+    [events.extensionRegister, "extension/register"],
+    [events.requestDispatch, "request/dispatch"],
+    [events.securityGate, "security/gate"],
+    [events.reconcile, "reconcile"],
+  ];
+  for (const [channel, seam] of bindings) {
+    assert.equal(channel.event, seam, `channel declares seam "${channel.event}", expected "${seam}"`);
+    assert.equal(channel.mode, URBAN_EVENT_MODES[seam], `channel "${seam}" mode drifted from URBAN_EVENT_MODES`);
+  }
+  // Coverage is exact: every documented seam is bound to a channel and vice versa.
+  assert.deepEqual(new Set(bindings.map(([, seam]) => seam)), new Set(Object.keys(URBAN_EVENT_MODES)));
 });
 
 test("mountExtensions — runs the connector-pack / agentic-family surface through the taxonomy in a deterministic order", async () => {

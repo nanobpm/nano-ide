@@ -32,8 +32,11 @@ import {
 //
 // Each seam is a canonical event *name* paired with its deliberate *dispatch
 // mode*. This object is the single source of truth for the modes; the ADR's
-// "feature → mechanism map" and the typed `UrbanEvents` channels below both derive
-// from it, so the docs and the code cannot drift.
+// "feature → mechanism map" and the typed `UrbanEvents` channels below are both
+// checked against it — `createUrbanEvents` enumerates the seams by hand, but a
+// drift-guard test asserts every channel's `.mode` equals `URBAN_EVENT_MODES`
+// for its seam (and that coverage is exact), so the docs and the code cannot
+// silently drift.
 // ---------------------------------------------------------------------------
 
 export const URBAN_EVENT_MODES = {

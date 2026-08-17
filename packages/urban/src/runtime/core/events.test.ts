@@ -289,3 +289,25 @@ test("scope() — rolls back only registrations made after the scope opened, LIF
   assert.deepEqual(order, ["before"]);
   assert.equal(bus.listenerCount, 0);
 });
+
+test("scope() — keeps unwinding when a rolled-back disposer registers a new effect mid-rollback (truly atomic)", () => {
+  const bus = new EventBus();
+  const order: string[] = [];
+  const before = bus.effect(() => order.push("before"));
+  const rollback = bus.scope();
+  bus.effect(() => order.push("scoped-1"));
+  // A scoped disposer that registers ANOTHER effect while it is being rolled
+  // back: that late registration is still "after" the scope point, so an atomic
+  // rollback (like dispose()) must unwind it too rather than strand it live.
+  bus.effect(() => {
+    order.push("scoped-2");
+    bus.effect(() => order.push("scoped-late"));
+  });
+  assert.equal(bus.listenerCount, 3);
+  rollback();
+  assert.deepEqual(order, ["scoped-2", "scoped-late", "scoped-1"]);
+  // The pre-scope registration survives; nothing added after the scope leaks.
+  assert.equal(bus.listenerCount, 1);
+  void before;
+  bus.dispose();
+});

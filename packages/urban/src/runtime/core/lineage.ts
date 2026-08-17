@@ -190,7 +190,9 @@ export interface LineageNode {
 /** The stitched descendant tree for one `rootRequestKey`. */
 export interface LineageTree {
   readonly rootRequestKey: string;
-  /** The root node (the top-level request's instance), present even with no descendants. */
+  /** The root node of the stitched tree, always present. Normally the top-level request's own
+   *  instance; when `rootRequestKey` is a minted synthetic key, the parentless root instance it
+   *  threads. Falls back to a synthetic node keyed by `rootRequestKey` when no edges exist. */
   readonly root: LineageNode;
   /** Every node keyed by instance, in insertion order — a convenience flat view. */
   readonly nodes: LineageNode[];
@@ -201,8 +203,10 @@ export interface LineageTree {
  * When both edge sources connect the SAME node, the STRONG (engine execution) edge wins — it
  * is the authoritative parent — so #808's native edge supersedes the envelope's weak guess
  * without duplicating it. Nodes whose parent chain does not reach the root stay unattached
- * (they still appear in `nodes`). Pure and deterministic — the store is a thin persistence
- * layer over this.
+ * (they still appear in `nodes`). The root is the instance keyed by `rootRequestKey` when that
+ * is itself an instance, else the single parentless recorded instance (a minted `rootRequestKey`
+ * is a synthetic correlation key, not an instance), else a synthetic node. Pure and
+ * deterministic — the store is a thin persistence layer over this.
  */
 export function buildLineageTree(
   rootRequestKey: string,
@@ -229,8 +233,9 @@ export function buildLineageTree(
     return n;
   };
 
-  // The root always exists, even with no inbound edge and no descendants.
-  ensure(rootRequestKey);
+  // Speculatively materialise the `rootRequestKey` node so descendants whose cause IS the root
+  // (a child inherits the root's own instance key as `rootRequestKey`) can attach to it below.
+  const rootByKey = ensure(rootRequestKey);
 
   for (const e of byInstance.values()) {
     const node = ensure(e.instanceKey);
@@ -252,7 +257,25 @@ export function buildLineageTree(
     }
   }
 
-  const root = ensure(rootRequestKey);
+  // Resolve the root node. Usually `rootRequestKey` IS the root instance's own key, so `rootByKey`
+  // carries that instance's edge and descendants. But a genuine top-level request (no ambient job)
+  // MINTS a synthetic `rootRequestKey` — a UUID that is not any instance — so `rootByKey` is an
+  // empty phantom while the real root is the single recorded instance with no cause. Prefer that
+  // parentless instance and drop the phantom, so the tree is never rooted at a childless synthetic
+  // node with the real root left floating detached (the bug this guards against).
+  let root = rootByKey;
+  const rootIsPhantom =
+    rootByKey.edgeType === undefined && rootByKey.children.length === 0 && rootByKey.attachments.length === 0;
+  if (rootIsPhantom) {
+    const parentlessInstances = [...nodes.values()].filter(
+      (n) => n !== rootByKey && n.causedByInstanceKey === undefined,
+    );
+    if (parentlessInstances.length === 1) {
+      root = parentlessInstances[0];
+      nodes.delete(rootRequestKey);
+    }
+  }
+
   return { rootRequestKey, root, nodes: [...nodes.values()] };
 }
 

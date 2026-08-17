@@ -152,3 +152,39 @@ test("buildLineageTree ignores edges from other roots and hangs attachments on t
   assert.equal(child.instanceKey, "child");
   assert.deepEqual(child.attachments, [{ nodeKey: "child", kind: "pull_request", ref: "owner/repo#1", label: "PR 1" }]);
 });
+
+test("buildLineageTree roots a MINTED (synthetic) rootRequestKey at the parentless instance, not a phantom", () => {
+  // A genuine top-level request MINTS a UUID `rootRequestKey` that is NOT any instance key
+  // (`deriveLineage` with no ambient job). The real root instance carries that key with no
+  // cause, and its descendants hang off the instance. The tree must be rooted at the real
+  // parentless instance — never at an empty synthetic node while the real root floats detached.
+  const edges: LineageEdge[] = [
+    { rootRequestKey: "req-UUID", instanceKey: "inst-root", edgeType: "weak" },
+    { rootRequestKey: "req-UUID", instanceKey: "inst-child", causedByInstanceKey: "inst-root", edgeType: "weak" },
+    { rootRequestKey: "req-UUID", instanceKey: "inst-grand", causedByInstanceKey: "inst-child", edgeType: "strong" },
+  ];
+  const tree = buildLineageTree("req-UUID", edges);
+  assert.equal(tree.root.instanceKey, "inst-root");
+  assert.deepEqual(tree.root.children.map((c) => c.instanceKey), ["inst-child"]);
+  assert.deepEqual(tree.root.children[0].children.map((c) => c.instanceKey), ["inst-grand"]);
+  // The synthetic correlation key must not leak into the flat view as a phantom node.
+  assert.equal(tree.nodes.some((n) => n.instanceKey === "req-UUID"), false);
+  assert.equal(tree.nodes.length, 3);
+});
+
+test("buildLineageTree keeps a lone real root (parentless, no descendants) as the tree root", () => {
+  // Guard the fallback boundary: a real root instance whose key IS the rootRequestKey and which
+  // has no descendants must stay the root — it must not be mistaken for a replaceable phantom.
+  const edges: LineageEdge[] = [{ rootRequestKey: "root", instanceKey: "root", edgeType: "weak" }];
+  const tree = buildLineageTree("root", edges);
+  assert.equal(tree.root.instanceKey, "root");
+  assert.equal(tree.root.children.length, 0);
+  assert.equal(tree.nodes.length, 1);
+});
+
+test("buildLineageTree keeps the synthetic root when no edges exist at all", () => {
+  const tree = buildLineageTree("req-UUID", []);
+  assert.equal(tree.root.instanceKey, "req-UUID");
+  assert.equal(tree.root.children.length, 0);
+  assert.deepEqual(tree.nodes.map((n) => n.instanceKey), ["req-UUID"]);
+});

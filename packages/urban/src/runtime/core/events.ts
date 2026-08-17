@@ -62,6 +62,13 @@ const defaultErrorSink: ErrorSink = (err, info) => {
   console.warn(`[urban events] listener for "${info.event}" (${info.mode}) threw and was contained`, err);
 };
 
+/** Whether a value is a thenable (any promise-like, including non-native / cross-realm
+ *  promises that are not `instanceof Promise`). `Promise.resolve` adopts such a value,
+ *  so routing it through `Promise.resolve(...).catch(...)` contains its rejection. */
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === "object" && value !== null && "then" in value && typeof value.then === "function";
+}
+
 /** An ordered set of listeners plus the ladder bookkeeping shared by channels. A
  *  channel owns one of these; the bus owns the global dispose ladder that every
  *  channel pushes its per-listener disposers onto. */
@@ -131,8 +138,10 @@ export class EmitChannel<T> extends ChannelBase<Listener<T>> {
     for (const listener of [...this.listeners.keys()]) {
       try {
         const result: unknown = listener(payload);
-        if (result instanceof Promise) {
-          result.catch((err: unknown) => {
+        if (isThenable(result)) {
+          // `Promise.resolve` returns a native Promise unchanged and adopts any other
+          // thenable, so a non-native promise's rejection is contained too.
+          Promise.resolve(result).catch((err: unknown) => {
             this.contain(err);
           });
         }

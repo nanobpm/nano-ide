@@ -42,6 +42,25 @@ test("emit — a rejecting async listener is contained, not an unhandled rejecti
   assert.deepEqual(contained, ["boom"]);
 });
 
+test("emit — a rejecting thenable (non-native promise) listener is contained", async () => {
+  const contained: string[] = [];
+  const bus = new EventBus({ onError: (_e, info) => contained.push(info.event) });
+  const channel = bus.emit<void>("boom");
+  const seen: string[] = [];
+  // A cross-realm / userland promise is a thenable but not `instanceof Promise`.
+  channel.on(() => ({
+    then(_resolve: (value: unknown) => void, reject: (reason: unknown) => void) {
+      reject(new Error("thenable nope"));
+    },
+  }));
+  channel.on(() => seen.push("ran"));
+  channel.emit();
+  assert.deepEqual(seen, ["ran"]);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(contained, ["boom"]);
+});
+
 test("emit — listeners are snapshotted; one registered mid-dispatch is not run this emission", () => {
   const bus = new EventBus();
   const channel = bus.emit<void>("note");

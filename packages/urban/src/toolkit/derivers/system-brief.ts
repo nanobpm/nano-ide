@@ -61,7 +61,7 @@ function attr(tag: string, name: string): string | undefined {
 }
 
 function processId(xml: string): string | undefined {
-  const m = xml.match(/<[\w.-]*:?process\b[^>]*>/);
+  const m = xml.match(/<bpmn:process\b[^>]*>/);
   return m ? attr(m[0], "id") : undefined;
 }
 
@@ -125,10 +125,18 @@ export function buildSystemBrief(models: ModelSource[], app?: string): SystemBri
   return { app, processes, workers, decisions, ownership: foldOwnership(models) };
 }
 
+/** Escape a Markdown table cell: neutralise `|` and newlines, which would otherwise break the
+ * table. Ownership values come from model-authored `nano:meta`, so this both keeps rendering
+ * honest and blunts Markdown/prompt injection into the agent-facing brief. Backticks are left
+ * intact — the emitter deliberately wraps ids in code spans. */
+function mdCell(s: string): string {
+  return s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
 function mdTable(headers: string[], rows: string[][]): string {
   if (rows.length === 0) return "_none_\n";
   const head = `| ${headers.join(" | ")} |\n| ${headers.map(() => "---").join(" | ")} |\n`;
-  return head + rows.map((r) => `| ${r.map((c) => c || "").join(" | ")} |`).join("\n") + "\n";
+  return head + rows.map((r) => `| ${r.map((c) => mdCell(c || "")).join(" | ")} |`).join("\n") + "\n";
 }
 
 /** Emit the agent- and human-readable `system-brief.md` from the machine model. Compact by

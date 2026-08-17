@@ -589,7 +589,8 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 @media (prefers-color-scheme: light) { :root:not([data-appearance]) .pc-badge-warn { color:#fff; } }
 /* Pipeline / stepper cell (issue #265): a per-row, multi-stage horizontal
    progress track rendered by pipelineCell. Only the track/stage chrome lives
-   here (.pc-pipe*); per-stage badges and locus links reuse .pc-badge*/.pc-link.
+   here (the .pc-pipe classes); per-stage badges and locus links reuse the
+   .pc-badge and .pc-link classes.
    All colours come from the shared --nano-* tokens so light/dark themes work.
    Stage treatments: done = filled/ok-tinted, active = lit accent, active+ok =
    success (✓), active+failed = danger (✕), active+blocked = warn (⊘), upcoming =
@@ -1442,7 +1443,7 @@ function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
   for (let i = 0; i < stages.length; i++) {
     const s = stages[i];
     const skipped = skip.has(String(s.key));
-    // Connector between adjacent stages; filled once we're past the active stage.
+    // Connector between adjacent stages; filled up to and including the active stage.
     if (i > 0) {
       const filled = activeIdx >= 0 && i <= activeIdx && !skipped ? " filled" : "";
       track.append(el("span", { class: "pc-pipe-conn" + filled, "aria-hidden": "true" }));

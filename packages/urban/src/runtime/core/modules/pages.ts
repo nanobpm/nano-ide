@@ -1156,11 +1156,20 @@ function gridCell(col, row) {
 // line and, if a subtitle is present, a .pc-cell-sub line beneath it. truncate
 // adds .pc-truncate (nowrap + ellipsis) to each line and mirrors the full text
 // into title=/aria-label so the clipped value is still recoverable on hover and
-// to assistive tech. The subtitle is set as DOM text only — never an href.
+// to assistive tech. When the primary is an element (a link cell's <a>), title=/
+// aria-label= are ALSO mirrored onto it: HTML does not inherit those to
+// descendants, so hovering the link text or naming the anchor for assistive tech
+// would otherwise miss the full value the wrapper carries. The subtitle is set as
+// DOM text only — never an href.
 function cellTd(primary, primaryText, subText, truncate) {
   if (subText === "" && !truncate) return el("td", {}, primary);
   const mainAttrs = { class: "pc-cell-main" + (truncate ? " pc-truncate" : "") };
-  if (truncate && primaryText !== "") { mainAttrs.title = primaryText; mainAttrs["aria-label"] = primaryText; }
+  if (truncate && primaryText !== "") {
+    mainAttrs.title = primaryText; mainAttrs["aria-label"] = primaryText;
+    if (primary && typeof primary.setAttribute === "function") {
+      primary.setAttribute("title", primaryText); primary.setAttribute("aria-label", primaryText);
+    }
+  }
   const main = el("div", mainAttrs, primary);
   if (subText === "") return el("td", {}, main);
   const subAttrs = { class: "pc-cell-sub" + (truncate ? " pc-truncate" : "") };

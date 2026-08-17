@@ -400,6 +400,12 @@ test("renderer truncates a column to one line with an ellipsis + full-text toolt
   assert.match(js, /const truncate = col\.truncate === true;/);
   assert.match(js, /"pc-cell-main"\s*\+\s*\(truncate \? " pc-truncate" : ""\)/);
   assert.match(js, /mainAttrs\.title = primaryText; mainAttrs\["aria-label"\] = primaryText;/);
+  // title/aria-label are NOT inherited by descendants in HTML, so a link cell's
+  // <a> primary would miss the full-text tooltip/accessible name the wrapper div
+  // carries. Guard that they're also mirrored onto the primary element itself when
+  // it's a node (an anchor), so link cells get the same full-text recovery as text.
+  assert.match(js, /if \(primary && typeof primary\.setAttribute === "function"\) \{/);
+  assert.match(js, /primary\.setAttribute\("title", primaryText\); primary\.setAttribute\("aria-label", primaryText\);/);
   assert.match(js, /"pc-cell-sub"\s*\+\s*\(truncate \? " pc-truncate" : ""\)/);
 });
 

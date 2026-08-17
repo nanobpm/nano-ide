@@ -45,7 +45,7 @@ export const SCOPE_CONTAINERS: readonly string[] = [
 export type CrumbKind = "process" | "subProcess" | "element";
 
 /** Where a crumb's label came from: the model's structure (a scope/element `name`, or an
- *  id/type fallback when unnamed), or an explicit `nano:phase` override (Tier 1). */
+ *  id fallback when unnamed), or an explicit `nano:phase` override (Tier 1). */
 export type CrumbSource = "structural" | "override";
 
 /** One crumb of a phase breadcrumb — a single enclosing scope, or the leaf element. */
@@ -57,7 +57,7 @@ export interface PhaseCrumb {
   /** Whether this crumb is the root process, an intermediate scope, or the leaf element. */
   readonly kind: CrumbKind;
   /** The display label: the `nano:phase` override if present, else the `name`, else an
-   *  id/type fallback so a crumb is never blank. */
+   *  id fallback so a crumb is never blank. */
   readonly label: string;
   /** Whether {@link label} came from structure or an explicit override. */
   readonly source: CrumbSource;
@@ -341,7 +341,7 @@ export function buildScopeIndex(xml: string): ScopeIndex {
   return { elements, ...(process != null ? { process } : {}) };
 }
 
-/** Resolve a crumb's label: override wins, else `name`, else an id/type fallback so it is never
+/** Resolve a crumb's label: override wins, else `name`, else an id fallback so it is never
  *  blank. Reports the source so a UI can distinguish an authored phase from a structural one. */
 function crumbLabel(el: ScopeElement): { label: string; source: CrumbSource } {
   if (el.phaseOverride != null && el.phaseOverride.length > 0) {
@@ -469,7 +469,8 @@ export interface LineagePhaseRollup {
   /** The frontier — the most-recently-advanced contributor's phase — or undefined when no node in
    *  the tree has a derived phase. This is the parent/epic's domain phase. */
   readonly frontier?: InstancePhase;
-  /** Every stitched instance that has a derived phase, in tree (depth-first) order. */
+  /** Every stitched instance that has a derived phase: those reachable from `tree.root` first, in
+   *  depth-first order, followed by any unattached `tree.nodes` not yet stitched to the tree. */
   readonly contributions: readonly InstancePhase[];
 }
 

@@ -17,7 +17,12 @@
 //      globs is a hard error, detected up front.
 //
 // Content is deployed **verbatim** — there is no deploy-time `{{token}}` substitution (removed in
-// ADR 0062) — so a generic resource (a prompt `.md`, an RPA/script file) is deployed byte-for-byte.
+// ADR 0062) — so a generic resource (a prompt `.md`, an RPA/script file) is deployed as-is.
+// The deploy pipeline is **UTF-8 text only**, end-to-end: `host.readTextFile()` yields a `string`
+// and the engine's `deployResources` takes `content: string`, so there is no byte channel and
+// arbitrary binary is out of scope by design. "Verbatim" therefore means the UTF-8 text is passed
+// through unchanged; a non-UTF-8/binary file swept into `resources/` is not a supported input (see
+// `contentTypeFor`'s `application/octet-stream` note).
 
 import type { RuntimeContext } from "../context.ts";
 import { discoverResources, expandPatterns } from "../glob.ts";
@@ -29,7 +34,11 @@ export const RESOURCES_DIR = "resources";
  * Classify a file into an engine content type by extension. Models get their real XML/JSON types;
  * generic resources get a real text content type where the extension is known (`.md`, `.json`,
  * `.txt`), falling back to `application/octet-stream` for anything unrecognised (so an unknown
- * binary is never mislabelled). The engine deploys a non-model content type as a generic resource
+ * extension is never mislabelled as a specific text type). Note the deploy pipeline is UTF-8 text
+ * only (`readTextFile` → engine `content: string`): the `octet-stream` fallback is a conservative
+ * MIME label for an unrecognised *text* resource (e.g. a script with an uncommon extension), not a
+ * promise of binary fidelity — a genuinely binary file cannot be preserved byte-for-byte and is
+ * out of scope. The engine deploys a non-model content type as a generic resource
  * (versioned per `resourceId`); a service task resolves it via
  * `zeebe:linkedResource resourceId="<id>" bindingType:latest`.
  */

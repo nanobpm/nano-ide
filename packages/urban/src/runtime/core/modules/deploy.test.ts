@@ -26,7 +26,7 @@ interface Harness {
 
 /** A virtual-filesystem host over `files` (keyed by absolute path) plus a recording engine. The
  *  host implements `listDir` (files under a dir) and `listSubdirs` (immediate sub-directories), so
- *  the convention walk (`resources/*` + `resources/<subdir>/*`) can be exercised. */
+ *  the recursive convention walk (every file under `resources/` at any depth) can be exercised. */
 function makeHarness(
   files: Record<string, string>,
   manifest: Partial<AppManifest>,

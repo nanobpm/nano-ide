@@ -915,15 +915,19 @@ test("row-action confirm/error route through the in-DOM modal, never native conf
   // caller's default (dismissValue).
   assert.match(js, /Array\.isArray\(m\.actions\)/);
   assert.match(js, /resultValue = a\.value; close\(\);/);
-  assert.match(js, /if \(onResult\) onResult\(resultValue\)/);
+  // Match the semantic call site only — teardown wraps onResult in a try/catch so
+  // a throwing callback can't abort focus restoration, so don't pin the control flow.
+  assert.match(js, /onResult\(resultValue\)/);
   // Defect-class guard: NO native confirm()/alert()/prompt() CALL (invoked with a
-  // string/identifier argument) survives anywhere in the served bundle — they are
-  // all false/no-ops under a sandboxed iframe. This also catches qualified calls
-  // (window.confirm(...) / globalThis.alert(...)): the lookbehind only excludes a
-  // preceding word char (so confirmModal(...) / alertModal(...) don't match), not a
-  // preceding ".", so a member call still trips the guard. Empty-paren mentions in
+  // string/identifier/template argument) survives anywhere in the served bundle —
+  // they are all false/no-ops under a sandboxed iframe. This also catches qualified
+  // calls (window.confirm(...) / globalThis.alert(...)): the lookbehind only excludes
+  // a preceding word char (so confirmModal(...) / alertModal(...) don't match), not a
+  // preceding ".", so a member call still trips the guard. The argument-start class
+  // covers string/template literals and identifier heads including $ and _
+  // (e.g. confirm(_msg), alert($msg), prompt(`...`)). Empty-paren mentions in
   // comments (e.g. "native confirm()") are documentation, not calls, so are not matched.
-  assert.doesNotMatch(js, /(?<!\w)(?:confirm|alert|prompt)\(\s*["'a-zA-Z]/);
+  assert.doesNotMatch(js, /(?<!\w)(?:confirm|alert|prompt)\(\s*["'`$_a-zA-Z]/);
 });
 
 

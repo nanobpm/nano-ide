@@ -1108,7 +1108,9 @@ function openModal(m) {
     // accrete dead close() closures until the next page navigation runs teardown.
     const i = disposers.indexOf(close);
     if (i !== -1) disposers.splice(i, 1);
-    if (onResult) onResult(resultValue);
+    // A consumer-provided result callback must never abort teardown: if it throws,
+    // swallow it so focus restoration below (and Escape/backdrop close) still runs.
+    if (onResult) { try { onResult(resultValue); } catch (_e) {} }
     if (prevFocus && typeof prevFocus.focus === "function") prevFocus.focus();
   }
   // Focusable descendants of the dialog, in DOM order, for the Tab focus trap.
@@ -1147,13 +1149,20 @@ function openModal(m) {
   // overlay + focus-trap + teardown machinery, no drift (AGENTS.md).
   let focusBtn = closeBtn;
   if (Array.isArray(m.actions) && m.actions.length) {
+    let firstActionBtn = null;
+    let defaultBtn = null;
     for (const a of m.actions) {
       const cls = "pc-btn pc-btn-sm" + (a.variant === "ghost" ? " pc-btn-ghost" : "");
       const ab = el("button", { class: cls, type: "button" }, a.label);
       ab.addEventListener("click", () => { resultValue = a.value; close(); });
       actions.append(ab);
-      focusBtn = ab;
+      if (!firstActionBtn) firstActionBtn = ab;
+      if (a.default) defaultBtn = ab;
     }
+    // Default focus lands on the FIRST action (typically Cancel), never the last:
+    // for confirmModal that keeps a stray Enter from accidentally triggering the
+    // destructive Confirm. An action can opt into autofocus with default:true.
+    focusBtn = defaultBtn || firstActionBtn;
   } else {
     actions.append(closeBtn);
   }

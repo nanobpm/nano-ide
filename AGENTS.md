@@ -32,6 +32,31 @@ All BPMN Models need DI for rendering for humans.
 
 Type assertions (`as T`) bypass the type system and are banned across the authored TypeScript source. This is enforced in CI by a Biome GritQL plugin (`plugins/no-unsafe-type-assertion.grit`, wired via `biome.json`; run `npm run lint`). Use a type guard, declaration-site annotation, narrowing, or `satisfies` instead. Exceptions: `as const` and `import`/`export` renames are allowed. If a cast is genuinely unavoidable (e.g. an untyped host/runtime boundary), add a `// biome-ignore lint/plugin: <reason>` comment with a concrete justification.
 
+## Releasing (never bump versions by hand)
+
+Releases are **derived**, not declared. Do **not** edit a `package.json`
+`version`, write a CHANGELOG, or add a `chore(release):` commit — those collide
+the moment two agents touch the repo at once.
+
+- **Write Conventional Commit PR titles.** main is squash-merged, so the PR title
+  is the commit subject release-please reads: `feat:` → minor, `fix:`/`perf:` →
+  patch, `!`/`BREAKING CHANGE` → major; other types (`chore`, `docs`, `refactor`,
+  …) land but don't bump. The title is CI-gated (`.github/workflows/pr-title-lint.yml`).
+  Scope by package when it helps (`fix(urban): …`).
+- **release-please owns versions.** `.github/workflows/release-please.yml` keeps a
+  single batched **release PR** open that bumps every affected package (and its
+  intra-repo dependents) + CHANGELOG + lockfile from the accumulated commits.
+  Config: `release-please-config.json` + `.release-please-manifest.json` (manifest
+  mode, one component per publishable `packages/*`, tag format `<name>@<version>`).
+- **Merging the release PR publishes.** On merge it tags `<name>@<version>` and
+  cuts the per-package GitHub Release (the `capability → version` provenance index,
+  nano-workforce#263); `scripts/publish.mjs` (via `release.yml`, gated on green CI,
+  npm OIDC Trusted Publisher) then publishes the bumped versions. The release PR
+  auto-merges once its required checks pass — no manual step, no bypass token.
+- **Depending on an unreleased change in this repo?** Don't guess the version.
+  Land your change, let release-please cut the release, then pin against the
+  published `<name>@<version>` (see nano-workforce#263).
+
 ## Adding a Workspace Package
 
 **First decide whether you need a *package* at all.** A new published unit under

@@ -891,6 +891,39 @@ test("the renderer ships a button node that opens a copy-pasteable modal", async
 });
 
 
+test("row-action confirm/error route through the in-DOM modal, never native confirm()/alert() (#276)", async () => {
+  // A sandboxed iframe without `allow-modals` makes window.confirm() return false
+  // WITHOUT prompting and turns alert()/prompt() into no-ops — so every
+  // confirm-guarded row action silently dead-ended (the !confirm(...) guard was
+  // always true → fireAction never ran) and its errors vanished. The fix routes
+  // both through urban's in-DOM openModal overlay, which works with no host
+  // sandbox change.
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The confirm gate awaits an in-DOM dialog and only proceeds on a real choice.
+  assert.match(js, /if \(ra\.confirm && !\(await confirmModal\(ra\.confirm\)\)\) return/);
+  // Errors surface through the in-DOM alert instead of the suppressed native one.
+  assert.match(js, /alertModal\(String\(e\.message \|\| e\)\)/);
+  // The primitives exist and are built on the shared openModal overlay (no drift).
+  assert.match(js, /function confirmModal\(message\)/);
+  assert.match(js, /return new Promise\(\(resolve\) => \{/);
+  assert.match(js, /function alertModal\(message\)/);
+  // A dropped guarded open (a modal already showing) resolves false, never hangs.
+  assert.match(js, /if \(!opened\) resolve\(false\)/);
+  // openModal grew action buttons + a single-fire result callback so it can back a
+  // decision dialog; a dismissal (Escape/backdrop/✕/page switch) resolves the
+  // caller's default (dismissValue).
+  assert.match(js, /Array\.isArray\(m\.actions\)/);
+  assert.match(js, /resultValue = a\.value; close\(\);/);
+  assert.match(js, /if \(onResult\) onResult\(resultValue\)/);
+  // Defect-class guard: NO native confirm()/alert()/prompt() CALL (invoked with a
+  // string/identifier argument) survives anywhere in the served bundle — they are
+  // all false/no-ops under a sandboxed iframe. Empty-paren mentions in comments
+  // (e.g. "native confirm()") are documentation, not calls, so are not matched.
+  assert.doesNotMatch(js, /(?<![.\w])(?:confirm|alert|prompt)\(\s*["'a-zA-Z]/);
+});
+
+
 test("the renderer ships a data-bound prose/markdown list node (#274)", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";

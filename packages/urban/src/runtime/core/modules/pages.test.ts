@@ -1222,6 +1222,8 @@ test("pipeline orders stages upstream-filled / active-lit / downstream-ghosted f
   // and in-path stages after it are ghosted/upcoming. The lookup breaks on the
   // first key match so a repeated key resolves deterministically to the first stage.
   assert.match(js, /const activeKey = col\.activeField != null/);
+  // The row value is trimmed so a whitespace-padded key still matches its stage.
+  assert.match(js, /\? String\(row\[col\.activeField\]\)\.trim\(\) : ""/);
   assert.match(js, /if \(String\(stages\[i\]\.key\) === activeKey\) \{\s*activeIdx = i;\s*break;\s*\}/);
   assert.match(js, /i < activeIdx\) \{\s*cls = "pc-pipe-done"; word = "completed";/);
   assert.match(js, /cls = "pc-pipe-upcoming"; word = "upcoming";/);
@@ -1258,7 +1260,7 @@ test("pipeline renders failure distinctly from success on the active stage (stat
   assert.match(js, /state === "blocked"\) \{ cls = "pc-pipe-active pc-pipe-blocked"; word = "blocked"; glyph = "\\u2298";/);
 });
 
-test("pipeline renders a per-stage badge from badgeField reusing .pc-badge tone classes", async () => {
+test("pipeline renders an active-stage badge from badgeField reusing .pc-badge tone classes", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
   // The badge sits on the active stage, only when badgeField is non-empty, and

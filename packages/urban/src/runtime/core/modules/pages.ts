@@ -1414,10 +1414,13 @@ function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
   // exactly like an unknown link.kind — never throws.
   if (stages.length === 0) return cellTd(text, text, subText, truncate, tdAttrs);
   // The current stage's key, matched against stages[].key to find the active index.
+  // The row value is trimmed for consistency with the other row-derived keys
+  // (pageHashHref, toStageSet), so a whitespace-padded value still matches its stage
+  // instead of leaving the whole track rendered as upcoming.
   // Stage keys identify a single stage, so stop at the first match: the result is
   // deterministic even if a config accidentally repeats a key, and we avoid scanning
   // the remaining stages on every row.
-  const activeKey = col.activeField != null && row[col.activeField] != null ? String(row[col.activeField]) : "";
+  const activeKey = col.activeField != null && row[col.activeField] != null ? String(row[col.activeField]).trim() : "";
   let activeIdx = -1;
   for (let i = 0; i < stages.length; i++) {
     if (String(stages[i].key) === activeKey) {

@@ -182,11 +182,6 @@ function decodeXml(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
-/** The `nano:phase` override carried as a `zeebe:property name="nano:phase" value="…"` (any
- *  prefix on `property`) — the extension-property form, matching how the toolkit reads
- *  `io.nanobpm.dataEnvelope` properties. */
-const PHASE_PROPERTY_RE = /<[\w.-]*:?property\b([^>]*?)\/?>/g;
-
 /** Extract a `nano:phase` override from a start-tag's own attributes: a literal `nano:phase`
  *  attribute (any prefix, local-name `phase`). Returns undefined when absent. */
 function phaseAttr(attrsText: string): string | undefined {
@@ -269,7 +264,7 @@ export function buildScopeIndex(xml: string): ScopeIndex {
     // A `zeebe:property name="nano:phase" value="…"` decorates the nearest open id-bearing element.
     if (type === "property") {
       const propName = attr(attrsText, "name");
-      if (propName === "nano:phase" || propName === "phase") {
+      if (propName === "nano:phase") {
         const value = attr(attrsText, "value");
         if (value != null && value.length > 0) {
           for (let i = stack.length - 1; i >= 0; i--) {

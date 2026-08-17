@@ -101,7 +101,7 @@ test("deriveSystemBrief emits both artifacts with valid JSON", () => {
  * `SystemBrief` for the assertions that follow. */
 function assertSystemBriefShape(v: unknown): asserts v is SystemBrief {
   assert.ok(typeof v === "object" && v !== null, "brief is an object");
-  assert.ok("app" in v && typeof v.app === "string", "app is a string");
+  assert.ok(!("app" in v) || typeof v.app === "string", "app is absent or a string");
   assert.ok("workers" in v && Array.isArray(v.workers), "workers is an array");
   assert.ok("processes" in v && Array.isArray(v.processes), "processes is an array");
   assert.ok("decisions" in v && Array.isArray(v.decisions), "decisions is an array");

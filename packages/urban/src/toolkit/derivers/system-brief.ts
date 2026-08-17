@@ -101,7 +101,7 @@ export function foldOwnership(models: ModelSource[]): Ownership {
       const k = key.trim().toLowerCase();
       if (k === "adr") {
         if (value && !own.adrs.includes(value)) own.adrs.push(value);
-      } else if (k in OWNERSHIP_KEYS) {
+      } else if (Object.hasOwn(OWNERSHIP_KEYS, k)) {
         own[OWNERSHIP_KEYS[k]] = value ?? "";
       }
     }

@@ -891,6 +891,86 @@ test("the renderer ships a button node that opens a copy-pasteable modal", async
 });
 
 
+test("the renderer ships a data-bound prose/markdown list node (#274)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // prose is a first-class node type alongside dataGrid.
+  assert.match(js, /prose: renderProse/);
+  assert.match(js, /function renderProse\(node\)/);
+  // It binds a datasource like dataGrid via the SHARED dataUrl builder (no drift):
+  // dataUrl is hoisted to module scope and used by both renderers.
+  assert.match(js, /function dataUrl\(source, tbl, filters, order\)/);
+  assert.match(js, /getJSON\(dataUrl\(data\.source, data\.table, activeFilter, data\.orderBy\)\)/);
+  // A param-scoped list with no route param renders nothing (no field=empty query),
+  // mirroring the grid's eqParam short-circuit.
+  assert.match(js, /paramScoped && PARAM === ""/);
+  // Per-item: a header template (interpTemplate, text-only) over one markdown body field.
+  assert.match(js, /el\("div", \{ class: "pc-prose-head" \}, interpTemplate\(headerTpl, row\)\)/);
+  assert.match(js, /const bodyField = p\.body/);
+  assert.match(js, /for \(const b of mdToNodes\(raw\)\) bodyEl\.append\(b\)/);
+  // The reading measure is clamped to a sane ch range (default ~66) and applied inline.
+  assert.match(js, /measure = Math\.max\(40, Math\.min\(100, Math\.round\(measure\)\)\)/);
+  assert.match(js, /"max-width:" \+ measure \+ "ch"/);
+  // Own-property gate on the body field (matching interpTemplate) so it can't pick
+  // up prototype cruft.
+  assert.match(js, /Object\.prototype\.hasOwnProperty\.call\(row, bodyField\)/);
+  // It polls + honours pc:refresh like dataGrid, and registers disposers so a page
+  // switch stops the poll / removes the listener.
+  assert.match(js, /document\.addEventListener\("pc:refresh", refresh\)/);
+  assert.match(js, /const timer = setInterval\(refresh, p\.refreshMs\)/);
+  assert.match(js, /disposers\.push\(\(\) => clearInterval\(timer\)\)/);
+  // It returns a pc-card with an <h2> title so makeCollapsible gives it
+  // collapsible/defaultCollapsed parity for free.
+  assert.match(js, /el\("h2", \{\}, p\.title\)/);
+});
+
+test("the prose renderer ships a safe, dependency-free markdown → DOM converter (#274)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // Block + inline parsers exist.
+  assert.match(js, /function mdToNodes\(src\)/);
+  assert.match(js, /function mdInline\(text\)/);
+  // NEVER innerHTML: the whole renderer builds DOM via el()/textContent only, so a
+  // record's markdown body can't become an HTML/script injection vector.
+  assert.doesNotMatch(js, /\.innerHTML\s*=/);
+  // Nodes are materialised as known elements with text set via createTextNode.
+  assert.match(js, /nodes\.push\(document\.createTextNode\(buf\)\)/);
+  // Links are scheme-sanitised: only http(s)/mailto become anchors; anything else
+  // degrades to plain label text (no javascript:/data: hrefs).
+  assert.match(js, /function mdSafeHref\(href\)/);
+  assert.match(js, /\^\(\?:https\?:\|mailto:\)/);
+  assert.match(js, /el\("a", \{ href: href, target: "_blank", rel: "noopener noreferrer" \}/);
+  // Emphasis, strong, inline code, headings, lists, quotes, fences are supported.
+  assert.match(js, /el\("strong", \{\}/);
+  assert.match(js, /el\("em", \{\}/);
+  assert.match(js, /el\("code", \{ class: "pc-md-code" \}/);
+  assert.match(js, /el\("pre", \{ class: "pc-md-pre" \}/);
+  assert.match(js, /el\("blockquote", \{ class: "pc-md-quote" \}/);
+  assert.match(js, /const MD_UL = \/\^\[-\*\+\]\\s\+\//);
+  assert.match(js, /const MD_OL = \/\^\\d\+\[\.\)\]\\s\+\//);
+  // Underscore emphasis is word-boundary guarded so snake_case identifiers survive.
+  assert.match(js, /function mdIsWordChar\(c\)/);
+  assert.match(js, /!mdIsWordChar\(s\[i - 1\]\)/);
+  // The code backtick is built from a char code so this source stays inside the
+  // String.raw template literal.
+  assert.match(js, /const MD_BACKTICK = String\.fromCharCode\(96\)/);
+});
+
+test("the shell styles the prose/markdown list at a comfortable reading measure (#274)", async () => {
+  const res = await dispatch("GET", "/");
+  const html = res.body ?? "";
+  // The list stacks items; each body is clamped to ~66ch by default (the JS sets
+  // the per-node measure inline, this is the no-JS fallback).
+  assert.match(html, /\.pc-prose-list \{[^}]*flex-direction:column[^}]*\}/);
+  assert.match(html, /\.pc-prose-body \{ max-width:66ch; \}/);
+  // The item header is a small muted caption; markdown blocks reuse --nano-* tokens.
+  assert.match(html, /\.pc-prose-head \{/);
+  assert.match(html, /\.pc-md-pre \{[^}]*var\(--nano-inset\)[^}]*\}/);
+  assert.match(html, /\.pc-md-quote \{[^}]*var\(--nano-edge-strong\)[^}]*\}/);
+  assert.match(html, /\.pc-prose-body a \{ color:var\(--nano-accent-strong\); \}/);
+});
+
+
 test("GET /app/data/<source>/<table> returns rows", async () => {
   const res = await dispatch("GET", "/app/data/app/orders");
   assert.equal(res.status, 200);

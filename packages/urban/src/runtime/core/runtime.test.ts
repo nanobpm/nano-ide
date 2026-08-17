@@ -41,6 +41,9 @@ class FakeEngine implements EngineClient {
   async searchUserTasks() {
     return this.userTasks;
   }
+  async openUserTasks() {
+    return this.userTasks;
+  }
   async getForm() {
     return null;
   }

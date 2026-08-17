@@ -20,6 +20,7 @@ import type {
   ProcessInstanceState,
   UserTaskState,
   UserTaskSummary,
+  UserTaskFilter,
   WorkerSubscription,
 } from "../core/host.ts";
 import { isBpmnError } from "../core/host.ts";
@@ -230,10 +231,7 @@ export class SdkEngineClient implements EngineClient {
     });
   }
 
-  async searchUserTasks(filter?: {
-    processInstanceKey?: string;
-    assignee?: string;
-    candidateGroup?: string;
+  async searchUserTasks(filter?: UserTaskFilter & {
     state?: UserTaskState;
   }): Promise<UserTaskSummary[]> {
     // User tasks are an eventually consistent read; ask for zero-wait consistency so
@@ -259,6 +257,13 @@ export class SdkEngineClient implements EngineClient {
         ...pickFormLinkage(it),
       }];
     });
+  }
+
+  /** The open (answerable) user tasks — `searchUserTasks` pinned to `state: "CREATED"`.
+   *  The single safe accessor for reconcile/affordance paths (see `EngineClient.openUserTasks`);
+   *  derives from `searchUserTasks` so the two cannot drift. */
+  openUserTasks(filter?: UserTaskFilter): Promise<UserTaskSummary[]> {
+    return this.searchUserTasks({ ...filter, state: "CREATED" });
   }
 
   async getForm(input: { formKey?: string; formId?: string }): Promise<FormSchema | null> {

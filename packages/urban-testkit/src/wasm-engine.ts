@@ -19,6 +19,7 @@ import {
   isBpmnError,
   type JobHandler,
   type UserTaskState,
+  type UserTaskFilter,
   type WorkerSubscription,
 } from "@nanobpm/urban/runtime";
 
@@ -282,10 +283,7 @@ export class WasmEngineClient implements EngineClient {
     await this.drain();
   }
 
-  async searchUserTasks(filter?: {
-    processInstanceKey?: string;
-    assignee?: string;
-    candidateGroup?: string;
+  async searchUserTasks(filter?: UserTaskFilter & {
     state?: UserTaskState;
   }): Promise<{
     userTaskKey: string;
@@ -337,6 +335,19 @@ export class WasmEngineClient implements EngineClient {
           ...(externalFormReference ? { externalFormReference } : {}),
         };
       });
+  }
+
+  /** The open (answerable) user tasks — `searchUserTasks` pinned to `state: "CREATED"`.
+   *  Mirrors `SdkEngineClient.openUserTasks`: the single safe accessor for reconcile/
+   *  affordance paths, derived from `searchUserTasks` so the two cannot drift. */
+  openUserTasks(filter?: UserTaskFilter): Promise<{
+    userTaskKey: string;
+    elementId?: string;
+    variables?: Record<string, unknown>;
+    formKey?: string;
+    externalFormReference?: string;
+  }[]> {
+    return this.searchUserTasks({ ...filter, state: "CREATED" });
   }
 
   /** Resolve a captured form-js schema by key or by (latest) id. Structurally matches

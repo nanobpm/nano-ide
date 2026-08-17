@@ -17,6 +17,7 @@ class MiniEngine implements EngineClient {
   async cancelInstance(): Promise<void> {}
   async publishMessage(): Promise<void> {}
   async searchUserTasks(): Promise<[]> { return []; }
+  async openUserTasks(): Promise<[]> { return []; }
   async getForm(): Promise<null> { return null; }
   async completeUserTask(): Promise<void> {}
   async searchProcessInstances(): Promise<[]> { return []; }

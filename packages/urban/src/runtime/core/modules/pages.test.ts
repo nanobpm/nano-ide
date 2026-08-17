@@ -40,6 +40,7 @@ function fakeEngine(): { engine: EngineClient; calls: FakeEngineCalls } {
       calls.messages.push(input);
     },
     async searchUserTasks() { return []; },
+    async openUserTasks() { return []; },
     async getForm() { return null; },
     async completeUserTask() {},
     async searchProcessInstances() { return []; },

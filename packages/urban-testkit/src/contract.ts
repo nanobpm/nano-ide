@@ -205,7 +205,18 @@ export function runEngineClientContract(
       assert.equal(tasks.length, 1);
       assert.equal(tasks[0].elementId, "review");
 
+      // openUserTasks is the safe accessor: while the task is open it reports the same task
+      // as an unfiltered search, but it pins state=CREATED so a later completion can't leak.
+      const openBefore = await engine.openUserTasks({ processInstanceKey });
+      assert.equal(openBefore.length, 1, "openUserTasks surfaces the open task");
+      assert.equal(openBefore[0].userTaskKey, tasks[0].userTaskKey);
+
       await engine.completeUserTask(tasks[0].userTaskKey);
+      // Once answered, openUserTasks must never surface it as still-actionable (the footgun a
+      // bare searchUserTasks leaves open). Poll to tolerate an eventually consistent adapter.
+      await waitFor(async () =>
+        (await engine.openUserTasks({ processInstanceKey })).length === 0
+      );
       await waitFor(async () =>
         (await engine.searchProcessInstances({ processInstanceKeys: [processInstanceKey] }))[0]
           ?.state === "COMPLETED"

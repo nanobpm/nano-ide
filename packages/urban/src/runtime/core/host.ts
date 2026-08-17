@@ -250,6 +250,18 @@ export interface UserTaskSummary {
 }
 
 /**
+ * The lifecycle-state-agnostic selectors for a user-task search: which process instance,
+ * assignee, and/or candidate group to match. Shared by {@link EngineClient.searchUserTasks}
+ * (which adds an optional `state`) and {@link EngineClient.openUserTasks} (which pins
+ * `state: "CREATED"` for you), so the two accessors cannot drift on how a task is selected.
+ */
+export interface UserTaskFilter {
+  processInstanceKey?: string;
+  assignee?: string;
+  candidateGroup?: string;
+}
+
+/**
  * A deployed form's form-js schema plus its identifying metadata, as
  * {@link EngineClient.getForm} returns it. `schema` is the parsed form-js document
  * (`{ type: "default", schemaVersion, components: [...] }`) that the surface renders
@@ -292,13 +304,28 @@ export interface EngineClient {
    *  By default this is unfiltered by lifecycle state and may return tasks in any state
    *  (e.g. completed/canceled); pass `state: "CREATED"` to constrain the search to open
    *  (answerable) tasks. Each result carries the task's resolved form linkage
-   *  (`formKey`/`externalFormReference`) when present. */
-  searchUserTasks(filter?: {
-    processInstanceKey?: string;
-    assignee?: string;
-    candidateGroup?: string;
+   *  (`formKey`/`externalFormReference`) when present.
+   *
+   *  **Footgun:** because this defaults to *any* lifecycle state and lags a completion,
+   *  a just-answered task is still returned for a moment — so treating mere *existence*
+   *  of a result as "open / actionable" projects a completed task as if a human could
+   *  still act on it (a torn read-model row). {@link UserTaskSummary} deliberately omits
+   *  `state`, so a caller cannot re-filter results defensively. If you are deciding
+   *  whether a human can act — any reconcile / affordance path — use
+   *  {@link EngineClient.openUserTasks} instead; reserve `searchUserTasks` for the rare
+   *  legitimate "any lifecycle state" audit/read case. */
+  searchUserTasks(filter?: UserTaskFilter & {
     state?: UserTaskState;
   }): Promise<UserTaskSummary[]>;
+  /** The user tasks that are actually *open* (answerable) — semantically the accessor to
+   *  reach for whenever you are deciding whether a human can act (reconcile / affordance
+   *  paths). A thin, intent-named wrapper that pins the lifecycle-state invariant the SDK
+   *  documents: exactly `searchUserTasks({ ...filter, state: "CREATED" })`, since `CREATED`
+   *  is the only open state ({@link UserTaskState}). Unlike a bare `searchUserTasks`, it
+   *  cannot surface a completed/canceled task as if it were still actionable — the footgun
+   *  described on `searchUserTasks`. Same selectors as `searchUserTasks` minus `state`
+   *  (pinned to `CREATED`). */
+  openUserTasks(filter?: UserTaskFilter): Promise<UserTaskSummary[]>;
   /**
    * Fetch a deployed form's form-js schema for the `taskInbox` surface. Resolve by
    * `formKey` (the linkage the engine attaches to a user task) or, as a best-effort

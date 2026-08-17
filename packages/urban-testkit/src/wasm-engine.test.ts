@@ -205,6 +205,42 @@ test("wasm: searchUserTasks honors the optional state filter (not hardcoded to C
   }
 });
 
+test("wasm: openUserTasks returns only open (CREATED) tasks, excluding completed", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    // A process that parks on a single native user task.
+    const model = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="human" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f1" sourceRef="s" targetRef="review"/>
+    <userTask id="review"><extensionElements><zeebe:userTask/></extensionElements></userTask>
+    <sequenceFlow id="f2" sourceRef="review" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+</definitions>`;
+    await engine.deployResources([
+      { name: "human.bpmn", content: model, contentType: "text/xml" },
+    ]);
+    const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "human" });
+
+    // While the task is open, openUserTasks surfaces it — exactly as searchUserTasks({ state: "CREATED" }).
+    const open = await engine.openUserTasks({ processInstanceKey });
+    assert.equal(open.length, 1, "openUserTasks returns the open task");
+    assert.equal(open[0].elementId, "review");
+
+    // Answer the task. openUserTasks must now exclude it (the footgun searchUserTasks leaves open):
+    // a bare searchUserTasks with no state filter would still report the just-completed task.
+    await engine.completeUserTask(open[0].userTaskKey);
+    const stillOpen = await engine.openUserTasks({ processInstanceKey });
+    assert.equal(stillOpen.length, 0, "openUserTasks never surfaces a completed task as actionable");
+  } finally {
+    await engine.close();
+  }
+});
+
 test("wasm: advanceTime fires a timer and drains resulting work", async () => {
   const engine = await createWasmEngineClient();
   try {

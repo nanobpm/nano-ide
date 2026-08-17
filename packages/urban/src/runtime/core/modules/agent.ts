@@ -19,6 +19,7 @@ import { SYSTEM_BRIEF_JSON, SYSTEM_BRIEF_MD } from "../../../toolkit/derivers/sy
 import type { RuntimeContext } from "../context.ts";
 import type { HttpResponse } from "../host.ts";
 import { json, type Route } from "../router.ts";
+import { resolveAppPath } from "./datasource.ts";
 
 /** The app-relative path of a generated brief artifact. */
 const briefPath = (name: string): string => `${GENERATED_DIR}/${name}`;
@@ -35,35 +36,39 @@ function markdown(body: string): HttpResponse {
 
 /**
  * Mount the `/app/agent` (+ `/app/agent.json`) institutional-memory brief routes. Reads the
- * `urban gen`-derived artifacts through the host file port; a missing artifact (gen never ran, or
- * the app has no models) yields a 404 rather than an error.
+ * `urban gen`-derived artifacts through the host file port, resolving each under `ctx.root` via
+ * the shared `resolveAppPath` (like every other runtime module) so serving never depends on the
+ * host's current working directory. A genuinely absent artifact — checked with `host.exists`
+ * rather than a blanket catch — yields a 404 (gen never ran, or the app has no models); any other
+ * read failure (permissions, transient I/O) is left to surface as a 500 rather than being masked
+ * as "not generated".
  */
 export function mountAgent(ctx: RuntimeContext): AgentHandle {
+  const artifactPath = (name: string): string => resolveAppPath(ctx.root, briefPath(name));
+  const notGenerated = (): HttpResponse =>
+    json({ error: "system brief not generated — run `urban gen`" }, 404);
+  const serve = async (name: string, toResponse: (body: string) => HttpResponse): Promise<HttpResponse> => {
+    const path = artifactPath(name);
+    if (!(await ctx.host.exists(path))) return notGenerated();
+    return toResponse(await ctx.host.readTextFile(path));
+  };
   const routes: Route[] = [
     {
       method: "GET",
       path: "/app/agent",
       source: "surface:agent",
-      handler: async () => {
-        try {
-          return markdown(await ctx.host.readTextFile(briefPath(SYSTEM_BRIEF_MD)));
-        } catch {
-          return json({ error: "system brief not generated — run `urban gen`" }, 404);
-        }
-      },
+      handler: () => serve(SYSTEM_BRIEF_MD, markdown),
     },
     {
       method: "GET",
       path: "/app/agent.json",
       source: "surface:agent",
-      handler: async () => {
-        try {
-          const body = await ctx.host.readTextFile(briefPath(SYSTEM_BRIEF_JSON));
-          return { status: 200, headers: { "content-type": "application/json" }, body };
-        } catch {
-          return json({ error: "system brief not generated — run `urban gen`" }, 404);
-        }
-      },
+      handler: () =>
+        serve(SYSTEM_BRIEF_JSON, (body) => ({
+          status: 200,
+          headers: { "content-type": "application/json" },
+          body,
+        })),
     },
   ];
   ctx.host.log("info", "agent brief surface mounted", { routes: routes.length });

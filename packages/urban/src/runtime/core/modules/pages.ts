@@ -549,6 +549,16 @@ table.pc-grid { width:100%; border-collapse:collapse; font-size:.9rem; table-lay
    neighbours. */
 table.pc-grid th, table.pc-grid td { text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--nano-edge); overflow-wrap:anywhere; word-wrap:break-word; vertical-align:top; }
 table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
+/* A cell's optional muted second line (col.subtitleField / subtitleTemplate):
+   the identity key rendered under the title, GitHub/Linear style. Plain DOM
+   text (never a link/href source), smaller and muted so the primary line leads. */
+.pc-cell-sub { font-size:.8rem; color:var(--nano-text-muted); margin-top:.1rem; }
+/* One-line clamp (col.truncate): stop a bounded column wrapping and show an
+   ellipsis, with the full value carried in a title=/aria-label tooltip. Needs a
+   bounded column (per-column width/weight) to clip against; a native <col> width
+   is honoured under table-layout:fixed. Applied to the primary and, when present,
+   the subtitle line so both stay single-line. */
+.pc-truncate { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .pc-tabs { display:flex; gap:.5rem; margin-bottom:.75rem; }
 .pc-tab { padding:.35rem .8rem; border:1px solid var(--nano-edge); border-radius:.4rem; background:transparent; color:inherit; font:inherit; cursor:pointer; }
 .pc-tab.active { background:var(--nano-accent); color:var(--nano-on-accent); border-color:var(--nano-accent); }
@@ -1039,6 +1049,15 @@ function renderButton(node) {
 // tooltip stay keyed to the raw 'field' value (a badge shows a fixed glyph, not
 // the field text), so a template does not change badge behaviour. Sorting,
 // groupBy and orderBy also key off real fields, never the rendered template.
+//
+// Two-line identity + one-line clamp (additive, opt-in, backward-compatible):
+// a column may also declare 'subtitleField'/'subtitleTemplate' to render a muted
+// second line under the primary text (the identity key beneath a title, GitHub/
+// Linear style) and 'truncate: true' to clamp each line to one row with an
+// ellipsis and a full-text title/aria-label tooltip (pairs with a per-column
+// width/weight — see buildColgroup — to give the clip a bounded column). The
+// subtitle is ALWAYS plain DOM text, never an href source. With none of these
+// set the cell is a single inline node exactly as before (see cellTd).
 function gridCell(col, row) {
   // Raw single-field value: drives the badge presence gate + tooltip and any
   // field-derived defaults. Kept separate from the (possibly templated) display
@@ -1068,17 +1087,28 @@ function gridCell(col, row) {
       el("span", { class: "pc-badge pc-badge-" + tone, title: rawText, "aria-label": rawText }, label),
     );
   }
+  // Optional second line (col.subtitleField / subtitleTemplate): a muted key
+  // under the primary title. subtitleTemplate wins (interpolated from the row);
+  // else the raw subtitleField value. Absent/null → "" → no extra line. It is
+  // ALWAYS plain DOM text (see cellTd), never a link/href source — a subtitle
+  // cannot smuggle a scheme or path, only linkField/keyField drive hrefs.
+  const subRaw =
+    col.subtitleField != null && row[col.subtitleField] != null ? String(row[col.subtitleField]) : "";
+  const subText = typeof col.subtitleTemplate === "string" ? interpTemplate(col.subtitleTemplate, row) : subRaw;
+  const truncate = col.truncate === true;
+  // Primary inline content: an anchor for a valid link mode (checked in the same
+  // badge < linkField < link(page) < link(processExplorer) precedence as before),
+  // else the plain display text. Each link mode only claims the cell while
+  // 'primary' is still the bare text — an invalid href falls through to the next
+  // mode and ultimately to plain text, exactly as the early-return chain did.
+  let primary = text;
   if (col.linkField) {
     const href = row[col.linkField] == null ? "" : String(row[col.linkField]);
     if (text !== "" && /^https?:\/\//i.test(href)) {
-      return el(
-        "td",
-        {},
-        el("a", { class: "pc-link", href, target: "_blank", rel: "noopener noreferrer" }, text),
-      );
+      primary = el("a", { class: "pc-link", href, target: "_blank", rel: "noopener noreferrer" }, text);
     }
   }
-  if (col.link && col.link.kind === "page" && col.link.page && col.link.keyField) {
+  if (primary === text && col.link && col.link.kind === "page" && col.link.page && col.link.keyField) {
     // An in-app link to another page, scoped to this row: #/<page>/<key>. The
     // key (e.g. a plan_key "owner/repo#123") is URL-encoded into the route's
     // param tail, which parseRoute() decodes back verbatim; the page id is
@@ -1089,37 +1119,130 @@ function gridCell(col, row) {
     const keyStr = key == null ? "" : String(key).trim();
     if (text !== "" && safePageId(col.link.page) && keyStr !== "") {
       const href = "#/" + encodeURIComponent(col.link.page) + "/" + encodeURIComponent(keyStr);
-      return el("td", {}, el("a", { class: "pc-link", href }, text));
+      primary = el("a", { class: "pc-link", href }, text);
     }
   }
-  if (col.link && col.link.kind === "processExplorer" && col.link.keyField) {
+  if (primary === text && col.link && col.link.kind === "processExplorer" && col.link.keyField) {
     const key = row[col.link.keyField];
     const keyStr = key == null ? "" : String(key).trim();
     if (text !== "" && keyStr !== "") {
       const href = "/console/explorer?instance=" + encodeURIComponent(keyStr);
-      return el(
-        "td",
-        {},
-        el("a", {
-          class: "pc-link",
-          href,
-          target: "_blank",
-          rel: "noopener noreferrer",
-          // Embedded in the console a plain primary click routes the host's
-          // explorer in place (via the nano-navigate bridge) instead of opening
-          // a new window. A non-primary button (middle/right = new-tab/context
-          // intent), a modified click (⌘/ctrl/shift/alt = new-tab intent) and
-          // any standalone run fall through to the native anchor above.
-          onclick: (ev) => {
-            if (ev.button !== 0) return;
-            if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-            if (hostNavigate("processExplorer", { instance: keyStr })) ev.preventDefault();
-          },
-        }, text),
-      );
+      primary = el("a", {
+        class: "pc-link",
+        href,
+        target: "_blank",
+        rel: "noopener noreferrer",
+        // Embedded in the console a plain primary click routes the host's
+        // explorer in place (via the nano-navigate bridge) instead of opening
+        // a new window. A non-primary button (middle/right = new-tab/context
+        // intent), a modified click (⌘/ctrl/shift/alt = new-tab intent) and
+        // any standalone run fall through to the native anchor above.
+        onclick: (ev) => {
+          if (ev.button !== 0) return;
+          if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+          if (hostNavigate("processExplorer", { instance: keyStr })) ev.preventDefault();
+        },
+      }, text);
     }
   }
-  return el("td", {}, text);
+  return cellTd(primary, text, subText, truncate);
+}
+
+// Compose a grid <td> from its primary inline content (a string or an anchor),
+// an optional muted subtitle line, and optional one-line truncation. With
+// NEITHER a subtitle nor truncation the cell is exactly the single inline node
+// as before, so existing grids render byte-for-byte unchanged (backward
+// compatible). When either is set the content is wrapped in a .pc-cell-main
+// line and, if a subtitle is present, a .pc-cell-sub line beneath it. truncate
+// adds .pc-truncate (nowrap + ellipsis) to each line and mirrors the full text
+// into title=/aria-label so the clipped value is still recoverable on hover and
+// to assistive tech. When the primary is an element (a link cell's <a>), title=/
+// aria-label= are ALSO mirrored onto it: HTML does not inherit those to
+// descendants, so hovering the link text or naming the anchor for assistive tech
+// would otherwise miss the full value the wrapper carries. The subtitle is set as
+// DOM text only — never an href.
+function cellTd(primary, primaryText, subText, truncate) {
+  if (subText === "" && !truncate) return el("td", {}, primary);
+  const mainAttrs = { class: "pc-cell-main" + (truncate ? " pc-truncate" : "") };
+  if (truncate && primaryText !== "") {
+    mainAttrs.title = primaryText; mainAttrs["aria-label"] = primaryText;
+    if (primary && typeof primary.setAttribute === "function") {
+      primary.setAttribute("title", primaryText); primary.setAttribute("aria-label", primaryText);
+    }
+  }
+  const main = el("div", mainAttrs, primary);
+  if (subText === "") return el("td", {}, main);
+  const subAttrs = { class: "pc-cell-sub" + (truncate ? " pc-truncate" : "") };
+  if (truncate) { subAttrs.title = subText; subAttrs["aria-label"] = subText; }
+  return el("td", {}, main, el("div", subAttrs, subText));
+}
+
+// Parse a "<number>%" width into its numeric percentage, or null if the string
+// is not a bare percentage (e.g. "22rem", "120px") — used to decide whether the
+// remainder left for weighted columns can be computed.
+function colWidthPct(width) {
+  const m = /^\s*([0-9]*\.?[0-9]+)%\s*$/.exec(width);
+  return m ? parseFloat(m[1]) : null;
+}
+
+// A column carries an explicit width only when it is a non-empty string. Single
+// source of truth so colWidthStyle/buildColgroup can't drift on what "explicit"
+// means (which columns win verbatim, consume the remainder, or use their weight).
+function hasExplicitWidth(col) {
+  return typeof col.width === "string" && col.width !== "";
+}
+
+// A column's <col> width for the grid's <colgroup>: an explicit col.width string
+// ("40%", "22rem") wins verbatim; else a positive numeric col.weight is
+// normalised across the weighted columns into a percentage share of the width
+// left over by explicit columns (remainderPct); else null (no width — the column
+// shares the remainder equally under table-layout:fixed).
+function colWidthStyle(col, weightTotal, remainderPct) {
+  if (hasExplicitWidth(col)) return col.width;
+  if (typeof col.weight === "number" && col.weight > 0 && weightTotal > 0) {
+    return Math.round((col.weight / weightTotal) * remainderPct * 100) / 100 + "%";
+  }
+  return null;
+}
+
+// Build a <colgroup> that sizes the grid's columns so table-layout:fixed stops
+// splitting width equally. Returns null when no column declares width/weight, so
+// an unsized grid emits no colgroup and lays out exactly as today. 'extraCount'
+// adds trailing unsized <col>s for the row-actions/detail column so the sized
+// data columns stay aligned with their headers.
+function buildColgroup(cols, extraCount) {
+  const hasSizing = cols.some(
+    (c) => hasExplicitWidth(c) || (typeof c.weight === "number" && c.weight > 0),
+  );
+  if (!hasSizing) return null;
+  // Only columns that will actually use their weight (no explicit width — an
+  // explicit width wins verbatim in colWidthStyle and never consumes weight)
+  // contribute to weightTotal; counting a width-bearing column's weight here
+  // would inflate the divisor and shrink the truly-weighted columns' share.
+  let weightTotal = 0;
+  for (const c of cols)
+    if (!hasExplicitWidth(c) && typeof c.weight === "number" && c.weight > 0) weightTotal += c.weight;
+  // Weighted columns share only the width the explicit columns leave behind, so
+  // mixing e.g. width:"40%" with weighted columns can't oversubscribe past 100%.
+  // The remainder is only computable when every explicit width is a percentage;
+  // if any uses an absolute/relative unit (rem/px) we can't subtract it from
+  // 100%, so weighted columns fall back to a share of the full width.
+  let explicitPctTotal = 0;
+  let allExplicitArePct = true;
+  for (const c of cols) {
+    if (hasExplicitWidth(c)) {
+      const pct = colWidthPct(c.width);
+      if (pct === null) allExplicitArePct = false;
+      else explicitPctTotal += pct;
+    }
+  }
+  const remainderPct = allExplicitArePct ? Math.max(0, 100 - explicitPctTotal) : 100;
+  const colEls = cols.map((c) => {
+    const w = colWidthStyle(c, weightTotal, remainderPct);
+    return el("col", w ? { style: "width:" + w } : {});
+  });
+  for (let i = 0; i < extraCount; i++) colEls.push(el("col", {}));
+  return el("colgroup", {}, ...colEls);
 }
 
 function renderActionForm(node) {
@@ -1315,7 +1438,13 @@ function renderDataGrid(node) {
   if (hasExtra) headCells.push(el("th", {}, ""));
   const thead = el("thead", {}, el("tr", {}, ...headCells));
   const tbody = el("tbody", {});
-  const table = el("table", { class: "pc-grid" }, thead, tbody);
+  // A <colgroup> (present only when a column declares width/weight) sizes the
+  // columns so table-layout:fixed stops splitting width equally; it must precede
+  // <thead> in the table.
+  const colgroup = buildColgroup(cols, hasExtra ? 1 : 0);
+  const table = colgroup
+    ? el("table", { class: "pc-grid" }, colgroup, thead, tbody)
+    : el("table", { class: "pc-grid" }, thead, tbody);
   card.append(table);
   const span = String((cols.length || 1) + (hasExtra ? 1 : 0));
 
@@ -1407,9 +1536,12 @@ function renderDataGrid(node) {
     if (cg.title) wrap.append(el("div", { class: "pc-child-title" }, cg.title));
     const ccols = cg.columns || [];
     const cbody = el("tbody", {});
-    const ctable = el("table", { class: "pc-grid" },
-      el("thead", {}, el("tr", {}, ...ccols.map((c) => el("th", {}, c.header || c.field)),
-        ...(cg.lazyField ? [el("th", {}, "")] : []))), cbody);
+    const ccolgroup = buildColgroup(ccols, cg.lazyField ? 1 : 0);
+    const cthead = el("thead", {}, el("tr", {}, ...ccols.map((c) => el("th", {}, c.header || c.field)),
+      ...(cg.lazyField ? [el("th", {}, "")] : [])));
+    const ctable = ccolgroup
+      ? el("table", { class: "pc-grid" }, ccolgroup, cthead, cbody)
+      : el("table", { class: "pc-grid" }, cthead, cbody);
     wrap.append(ctable);
     try {
       const { rows } = await getJSON(dataUrl(cg.source || "app", cg.table,

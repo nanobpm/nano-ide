@@ -1225,7 +1225,9 @@ test("pipeline orders stages upstream-filled / active-lit / downstream-ghosted f
   assert.match(js, /if \(String\(stages\[i\]\.key\) === activeKey\) \{\s*activeIdx = i;\s*break;\s*\}/);
   assert.match(js, /i < activeIdx\) \{\s*cls = "pc-pipe-done"; word = "completed";/);
   assert.match(js, /cls = "pc-pipe-upcoming"; word = "upcoming";/);
-  // The connector fills up to the active stage.
+  // The connector fills up to the active stage, but a not-in-path predecessor
+  // breaks the fill so a skipped stage is never implied to be on the path.
+  assert.match(js, /const filled =\s*activeIdx >= 0 && i <= activeIdx && !skipped && !skip\.has\(String\(stages\[i - 1\]\.key\)\)/);
   assert.match(js, /class: "pc-pipe-conn" \+ filled/);
 });
 
@@ -1234,12 +1236,14 @@ test("pipeline reads the not-in-path set per-row from a field, falling back to s
   const js = res.body ?? "";
   // Skipped stages are dashed (.pc-pipe-skip). The set comes from notInPathField
   // on the row when given, else the static col.notInPath — via toStageSet, which
-  // accepts an array or a comma/space-separated string.
+  // accepts an array or a comma/space-separated string, trimming + dropping
+  // empties on BOTH paths so whitespace-padded array keys still match.
   assert.match(js, /col\.notInPathField != null && row\[col\.notInPathField\] != null/);
   assert.match(js, /toStageSet\(row\[col\.notInPathField\]\)/);
   assert.match(js, /toStageSet\(col\.notInPath\)/);
   assert.match(js, /cls = "pc-pipe-skip"; word = "skipped";/);
   assert.match(js, /function toStageSet\(v\)/);
+  assert.match(js, /Array\.isArray\(v\)\) return new Set\(v\.map\(\(s\) => String\(s\)\.trim\(\)\)\.filter\(\(s\) => s !== ""\)\)/);
 });
 
 test("pipeline renders failure distinctly from success on the active stage (stateField)", async () => {
@@ -1296,8 +1300,9 @@ test("pipeline degrades to plain cell text on missing/unknown config (never thro
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
   // No stages array → the cell falls back to plain text via cellTd, matching how
-  // an unknown link.kind falls back today.
-  assert.match(js, /const stages = Array\.isArray\(col\.stages\) \? col\.stages : \[\]/);
+  // an unknown link.kind falls back today. Null/undefined entries are filtered so
+  // a schema hole never throws on s.key.
+  assert.match(js, /const stages = Array\.isArray\(col\.stages\) \? col\.stages\.filter\(\(s\) => s != null\) : \[\]/);
   assert.match(js, /if \(stages\.length === 0\) return cellTd\(text, text, subText, truncate, tdAttrs\)/);
 });
 

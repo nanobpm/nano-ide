@@ -1194,7 +1194,9 @@ function pageHashHref(page, key) {
 // array of keys or a comma/whitespace-separated string; null/undefined → empty
 // set. Used to mark the stages a given row skips (dashed/omitted).
 function toStageSet(v) {
-  if (Array.isArray(v)) return new Set(v.map((s) => String(s)));
+  // Trim + drop-empties on BOTH inputs so array entries with stray whitespace
+  // (e.g. from CSV/JSON munging) match stages[].key just like the string path.
+  if (Array.isArray(v)) return new Set(v.map((s) => String(s).trim()).filter((s) => s !== ""));
   if (v == null) return new Set();
   return new Set(String(v).split(/[\s,]+/).filter((s) => s !== ""));
 }
@@ -1405,7 +1407,9 @@ function mobileMoreCell(tr) {
 // classes and the shared pageHashHref route builder — no parallel implementations. Unknown or
 // missing config (no stages array) degrades gracefully to plain cell text.
 function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
-  const stages = Array.isArray(col.stages) ? col.stages : [];
+  // Drop null/undefined entries defensively: a schema with a hole must still
+  // render (never throws on s.key) — same graceful-degradation goal as below.
+  const stages = Array.isArray(col.stages) ? col.stages.filter((s) => s != null) : [];
   // Graceful fallback: an unrecognised/empty pipeline config renders plain text,
   // exactly like an unknown link.kind — never throws.
   if (stages.length === 0) return cellTd(text, text, subText, truncate, tdAttrs);
@@ -1452,9 +1456,12 @@ function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
   for (let i = 0; i < stages.length; i++) {
     const s = stages[i];
     const skipped = skip.has(String(s.key));
-    // Connector between adjacent stages; filled up to and including the active stage.
+    // Connector between adjacent stages; filled up to and including the active
+    // stage, but never across a not-in-path stage — a skipped predecessor breaks
+    // the fill so we don't visually imply it was on the path.
     if (i > 0) {
-      const filled = activeIdx >= 0 && i <= activeIdx && !skipped ? " filled" : "";
+      const filled =
+        activeIdx >= 0 && i <= activeIdx && !skipped && !skip.has(String(stages[i - 1].key)) ? " filled" : "";
       track.append(el("span", { class: "pc-pipe-conn" + filled, "aria-hidden": "true" }));
     }
     let cls;

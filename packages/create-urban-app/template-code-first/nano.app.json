@@ -6,6 +6,8 @@
 	"codename": "Urban",
 	"runtime": { "engine": "embedded", "node": "single" },
 
+	"network": { "bind": "all" },
+
 	"data": {
 		"default": "app",
 		"sources": {

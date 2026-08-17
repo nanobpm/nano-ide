@@ -73,6 +73,25 @@ test("headless preset keeps the control-only ui block (enabled:false)", async ()
   });
 });
 
+test("scaffolded apps default network.bind to \"all\" (0.0.0.0) so a worker fleet can reach them", async () => {
+  // A fresh urban app is a server meant to be reachable by its distributed workers/agents over
+  // its hostname (e.g. http://host.local:3000). Urban's runtime default is loopback (secure by
+  // default), which silently makes the app unreachable off-box — the failure mode that wedged the
+  // nano-workforce fleet when its liveness endpoint refused hostname connections. The scaffolder
+  // therefore emits an explicit `network.bind: "all"` so new apps are reachable out of the box;
+  // an operator can still tighten it to "loopback" (or override via URBAN_BIND) per deployment.
+  for (const opts of [
+    { name: "Full App", preset: "full" as const },
+    { name: "Headless App", preset: "headless" as const },
+    { name: "Code First", style: "code" as const },
+  ]) {
+    const dir = await mkdtemp(join(tmpdir(), "urban-bind-"));
+    await scaffold({ dir, ...opts });
+    const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
+    assert.deepEqual(manifest.network, { bind: "all" }, `${opts.name}: network.bind should default to "all"`);
+  }
+});
+
 test("full preset scaffolds a runnable app with substituted tokens", async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-full-"));
   const res = await scaffold({ name: "Hello Urban", dir, preset: "full" });

@@ -207,7 +207,12 @@ export function runEngineClientContract(
 
       // openUserTasks is the safe accessor: while the task is open it reports the same task
       // as an unfiltered search, but it pins state=CREATED so a later completion can't leak.
-      const openBefore = await engine.openUserTasks({ processInstanceKey });
+      // The state-filtered search can lag the unfiltered one on an eventually consistent
+      // adapter, so poll rather than assuming it surfaces immediately.
+      const openBefore = await waitForValue(async () => {
+        const found = await engine.openUserTasks({ processInstanceKey });
+        return found.length > 0 ? found : undefined;
+      });
       assert.equal(openBefore.length, 1, "openUserTasks surfaces the open task");
       assert.equal(openBefore[0].userTaskKey, tasks[0].userTaskKey);
 

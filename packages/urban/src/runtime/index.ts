@@ -209,6 +209,32 @@ export type {
   LineageStoreOptions,
 } from "./core/modules/lineage-store.ts";
 
+// Phase — the framework-level *domain phase* primitive (issue #266): derive "which phase is this
+// instance in?" from the BPMN scope hierarchy + write-provenance (Tier 0, zero declaration), an
+// optional `nano:phase` override (Tier 1), and a lineage rollup for the epic frontier (Tier 2).
+export {
+  buildScopeIndex,
+  derivePhase,
+  deriveInstancePhases,
+  furthestReached,
+  rollupLineagePhase,
+  SCOPE_CONTAINERS,
+} from "./core/phase.ts";
+export type {
+  CrumbKind,
+  CrumbSource,
+  DerivePhaseOptions,
+  FurthestReached,
+  InstancePhase,
+  LineagePhaseRollup,
+  Phase,
+  PhaseCrumb,
+  PhaseGranularity,
+  ProvenanceProgressRow,
+  ScopeElement,
+  ScopeIndex,
+} from "./core/phase.ts";
+
 // Model deploy (deploy-by-convention under `resources/`, ADR 0062)
 export { deployModels, RESOURCES_DIR } from "./core/modules/deploy.ts";
 export { defaultScheduler, MAX_TIMER_DELAY_MS } from "./core/modules/scheduler.ts";

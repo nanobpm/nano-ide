@@ -158,14 +158,24 @@ function localName(name: string): string {
   return i === -1 ? name : name.slice(i + 1);
 }
 
+/** Read the raw (still entity-encoded) value of the first attribute whose name matches `namePattern`
+ *  (a regex fragment). Accepts either quote style — double (`"…"`) or single (`'…'`) — because both
+ *  are valid XML; the delimiter is captured and back-referenced so an inner occurrence of the
+ *  *other* quote (e.g. an apostrophe inside a double-quoted value) does not terminate it early.
+ *  Returns undefined when no such attribute is present. */
+function readAttrValue(attrsText: string, namePattern: string): string | undefined {
+  const m = attrsText.match(new RegExp(`(?:^|\\s)${namePattern}\\s*=\\s*(["'])([\\s\\S]*?)\\1`));
+  return m ? m[2] : undefined;
+}
+
 /** Read an attribute value from a start-tag's attribute text. Matches either an unprefixed name
  *  or any-prefixed local-name (so `name=` and `nano:phase`/`x:phase` both resolve), preferring an
  *  exact match. Returns undefined when absent. */
 function attr(attrsText: string, name: string): string | undefined {
-  const exact = attrsText.match(new RegExp(`(?:^|\\s)${escapeRe(name)}\\s*=\\s*"([^"]*)"`));
-  if (exact) return decodeXml(exact[1]);
-  const local = attrsText.match(new RegExp(`(?:^|\\s)[\\w.-]*:${escapeRe(name)}\\s*=\\s*"([^"]*)"`));
-  return local ? decodeXml(local[1]) : undefined;
+  const exact = readAttrValue(attrsText, escapeRe(name));
+  if (exact != null) return decodeXml(exact);
+  const local = readAttrValue(attrsText, `[\\w.-]*:${escapeRe(name)}`);
+  return local != null ? decodeXml(local) : undefined;
 }
 
 function escapeRe(s: string): string {
@@ -188,9 +198,9 @@ function decodeXml(s: string): string {
  *  matching bare `phase` would broaden it and risk colliding with unrelated attributes. Returns
  *  undefined when absent. */
 function phaseAttr(attrsText: string): string | undefined {
-  const m = attrsText.match(/(?:^|\s)[\w.-]+:phase\s*=\s*"([^"]*)"/);
-  if (m == null) return undefined;
-  const v = decodeXml(m[1]);
+  const raw = readAttrValue(attrsText, `[\\w.-]+:phase`);
+  if (raw == null) return undefined;
+  const v = decodeXml(raw);
   return v.length > 0 ? v : undefined;
 }
 

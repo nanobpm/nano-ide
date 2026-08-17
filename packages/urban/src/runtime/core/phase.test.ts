@@ -232,6 +232,19 @@ test("buildScopeIndex tolerates a literal `>` inside a quoted attribute value (n
   assert.deepEqual(idx.elements.get("t")?.scopeChain, ["p", "s"]);
 });
 
+test("buildScopeIndex parses single-quoted attribute values (id/name/nano:phase, valid XML)", () => {
+  // XML permits single-quoted attribute values; `attr()`/`phaseAttr()` must recognize them so
+  // ids, names, and namespaced phase overrides are not silently dropped (which would break scope
+  // chains). A double-quoted value that itself contains an apostrophe must survive intact too.
+  const idx = buildScopeIndex(
+    `<process id='p' name='Root'><subProcess id='s' name="Ada's Wave"><task id='t' name='Go' nano:phase='Do &amp; Review' /></subProcess></process>`,
+  );
+  assert.equal(idx.elements.get("s")?.name, "Ada's Wave");
+  assert.equal(idx.elements.get("t")?.name, "Go");
+  assert.equal(idx.elements.get("t")?.phaseOverride, "Do & Review");
+  assert.deepEqual(idx.elements.get("t")?.scopeChain, ["p", "s"]);
+});
+
 test("furthestReached picks the greatest seq per instance and ignores null joins", () => {
   const rows: ProvenanceProgressRow[] = [
     { instance_key: "i1", element_id: "start", seq: 1, at: "2024-01-01T00:00:00Z" },

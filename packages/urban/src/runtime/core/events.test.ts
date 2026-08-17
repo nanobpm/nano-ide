@@ -42,6 +42,34 @@ test("emit — a rejecting async listener is contained, not an unhandled rejecti
   assert.deepEqual(contained, ["boom"]);
 });
 
+test("emit — listeners are snapshotted; one registered mid-dispatch is not run this emission", () => {
+  const bus = new EventBus();
+  const channel = bus.emit<void>("note");
+  const seen: string[] = [];
+  channel.on(() => {
+    seen.push("first");
+    channel.on(() => seen.push("late")); // registered during dispatch
+  });
+  channel.on(() => seen.push("second"));
+  channel.emit();
+  assert.deepEqual(seen, ["first", "second"]); // "late" only runs on the next emit
+  channel.emit();
+  assert.deepEqual(seen, ["first", "second", "first", "second", "late"]);
+});
+
+test("serial — listeners are snapshotted; one registered mid-dispatch is not run this checkpoint", async () => {
+  const bus = new EventBus();
+  const channel = bus.serial<void>("checkpoint");
+  const seen: string[] = [];
+  channel.on(async () => {
+    seen.push("first");
+    channel.on(() => seen.push("late")); // registered during dispatch
+  });
+  channel.on(() => seen.push("second"));
+  await channel.run();
+  assert.deepEqual(seen, ["first", "second"]); // "late" only runs on the next run
+});
+
 test("serial — listeners run in registration order, each awaited", async () => {
   const bus = new EventBus();
   const channel = bus.serial<number>("checkpoint");
@@ -225,4 +253,18 @@ test("a seam cannot be redeclared under a different mode", () => {
   const bus = new EventBus();
   bus.emit<void>("x");
   assert.throws(() => bus.serial<void>("x"), /already declared as "emit"/);
+});
+
+test("dispose ladder — an effect registered by a disposer during dispose is still unwound", () => {
+  const bus = new EventBus();
+  const order: string[] = [];
+  bus.effect(() => {
+    order.push("outer");
+    // A disposer that registers another effect mid-teardown: the ladder must
+    // keep unwinding until empty rather than dropping the late registration.
+    bus.effect(() => order.push("late"));
+  });
+  bus.dispose();
+  assert.deepEqual(order, ["outer", "late"]);
+  assert.equal(bus.listenerCount, 0);
 });

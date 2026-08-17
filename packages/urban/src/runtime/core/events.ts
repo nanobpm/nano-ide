@@ -118,9 +118,11 @@ export class EmitChannel<T> extends ChannelBase<Listener<T>> {
   /** Notify every listener synchronously; a throw is contained, the rest still
    *  run. A listener may return a promise, but `emit` does not await it — its
    *  rejection is still contained (fire-and-forget `.catch`) so an `async`
-   *  listener can never surface as an unhandled rejection. */
+   *  listener can never surface as an unhandled rejection. Listeners are
+   *  snapshotted at dispatch start (as in `parallel`/`waterfall`), so a listener
+   *  registered mid-emission is not observed until the next `emit`. */
   emit(payload: T): void {
-    for (const listener of this.listeners) {
+    for (const listener of [...this.listeners]) {
       try {
         const result: unknown = listener(payload);
         if (result instanceof Promise) {
@@ -142,9 +144,12 @@ export class SerialChannel<T> extends ChannelBase<Listener<T>> {
   }
 
   /** Run every listener in order, awaiting each. A throw is contained and the
-   *  next listener still runs — one failing checkpoint never strands the rest. */
+   *  next listener still runs — one failing checkpoint never strands the rest.
+   *  Listeners are snapshotted at dispatch start (as in `parallel`/`waterfall`),
+   *  so a listener registered mid-checkpoint is not observed until the next
+   *  `run`. */
   async run(payload: T): Promise<void> {
-    for (const listener of this.listeners) {
+    for (const listener of [...this.listeners]) {
       try {
         await listener(payload);
       } catch (err) {
@@ -293,17 +298,20 @@ export class EventBus {
   /** Unwind the whole dispose ladder LIFO: every registration made through this
    *  bus is torn down. Contained end-to-end, so one bad disposer can't strand the
    *  rest. Idempotent — a second call is a no-op. This is what makes a
-   *  `start → stop → start` cycle (and dev-server HMR) leak-free. */
+   *  `start → stop → start` cycle (and dev-server HMR) leak-free. Keeps unwinding
+   *  until the ladder is empty, so an effect a disposer registers *during*
+   *  teardown is still run rather than silently dropped. */
   dispose(): void {
-    const disposers = [...this.ladder].reverse();
-    for (const dispose of disposers) {
+    while (this.ladder.size > 0) {
+      const remaining = [...this.ladder];
+      const dispose = remaining[remaining.length - 1];
+      this.ladder.delete(dispose);
       try {
         dispose();
       } catch (err) {
         this.contain(err);
       }
     }
-    this.ladder.clear();
   }
 
   private contain(err: unknown): void {

@@ -95,6 +95,7 @@ export type {
   SqliteDb,
   UserTaskState,
   UserTaskSummary,
+  UserTaskFilter,
   WatchHandle,
   WorkerSubscription,
 } from "./core/host.ts";

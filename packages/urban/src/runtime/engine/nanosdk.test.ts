@@ -231,6 +231,24 @@ test("searchUserTasks forwards a caller-provided lifecycle state filter", async 
   assert.equal(input?.filter?.processInstanceKey, "pi");
 });
 
+test("openUserTasks pins state=CREATED onto the underlying search", async () => {
+  let input: { filter?: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    searchUserTasks: async (i) => {
+      input = i;
+      return { items: [{ userTaskKey: 9, elementId: "approve" }] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const tasks = await engine.openUserTasks({ processInstanceKey: "pi" });
+  // openUserTasks is the safe accessor: it derives from searchUserTasks with state pinned to
+  // CREATED, so a completed/canceled task can never surface through it. The caller's other
+  // selectors pass through unchanged.
+  assert.equal(input?.filter?.state, "CREATED", "openUserTasks pins state=CREATED");
+  assert.equal(input?.filter?.processInstanceKey, "pi");
+  assert.deepEqual(tasks, [{ userTaskKey: "9", elementId: "approve", variables: undefined }]);
+});
+
 test("searchUserTasks surfaces the resolved form linkage", async () => {
   const client = fakeSdkClient({
     searchUserTasks: async () => ({

@@ -13,6 +13,7 @@ const fakeEngine: EngineClient = {
   cancelInstance: async () => {},
   publishMessage: async () => {},
   searchUserTasks: async () => [],
+  openUserTasks: async () => [],
   getForm: async () => null,
   completeUserTask: async () => {},
   searchProcessInstances: async () => [],

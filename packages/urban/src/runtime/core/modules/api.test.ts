@@ -28,6 +28,7 @@ const engine: EngineClient = {
   cancelInstance: async () => {},
   publishMessage: async () => {},
   searchUserTasks: async () => [],
+  openUserTasks: async () => [],
   getForm: async () => null,
   searchProcessInstances: async () => [],
   completeUserTask: async () => {},

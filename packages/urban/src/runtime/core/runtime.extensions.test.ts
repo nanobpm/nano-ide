@@ -22,6 +22,9 @@ class NoopEngine implements EngineClient {
   async searchUserTasks() {
     return [];
   }
+  async openUserTasks() {
+    return [];
+  }
   async getForm() {
     return null;
   }

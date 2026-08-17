@@ -247,8 +247,13 @@ task links a generic resource by that exact id:
 ```
 
 Content is deployed **verbatim** — there is no deploy-time `{{token}}`
-substitution (removed in ADR 0062), so a prompt/script file is deployed
-byte-for-byte. Re-deploying an **unchanged** file is a no-op (the engine's
+substitution (removed in ADR 0062), so a prompt/script file's text is deployed
+as-is. The deploy pipeline is **UTF-8 text only**, end-to-end (`host.readTextFile()`
+→ `content: string`), so "verbatim" means the UTF-8 text is passed through
+unchanged — not a promise of byte-for-byte *binary* fidelity; a non-UTF-8/binary
+file swept into `resources/` is not a supported input (`application/octet-stream`
+is only a conservative MIME label for an unrecognised *text* resource).
+Re-deploying an **unchanged** file is a no-op (the engine's
 name+checksum duplicate rule skips it — no version bump); **changing** its
 content deploys a **new version** and the `bindingType:latest` pointer advances,
 so a running process picks up the new prompt on its next job activation with **no

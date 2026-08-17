@@ -45,7 +45,14 @@ jobs:
       # auto-merged.
       - name: Mint GitHub App token
         id: app-token
-        if: ${{ vars.RELEASE_PLEASE_APP_ID != '' && secrets.RELEASE_PLEASE_APP_PRIVATE_KEY != '' }}
+        # The `secrets` context is NOT available in `if:` (only `vars` is), so
+        # gate on the App-id variable alone — referencing a secret here is a
+        # compile-time error that fails the whole workflow at startup. If the id
+        # is set but the private key is missing/invalid the mint fails, but
+        # `continue-on-error` keeps that from wedging releases: the steps below
+        # fall back to GITHUB_TOKEN (release PR opened, just not auto-merged).
+        if: ${{ vars.RELEASE_PLEASE_APP_ID != '' }}
+        continue-on-error: true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}

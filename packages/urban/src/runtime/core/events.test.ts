@@ -268,3 +268,24 @@ test("dispose ladder — an effect registered by a disposer during dispose is st
   assert.deepEqual(order, ["outer", "late"]);
   assert.equal(bus.listenerCount, 0);
 });
+
+test("scope() — rolls back only registrations made after the scope opened, LIFO, and stays idempotent under dispose", () => {
+  const bus = new EventBus();
+  const order: string[] = [];
+  const before = bus.effect(() => order.push("before"));
+  const rollback = bus.scope();
+  bus.effect(() => order.push("scoped-1"));
+  bus.effect(() => order.push("scoped-2"));
+  assert.equal(bus.listenerCount, 3);
+  rollback();
+  // Only the two effects added after the scope opened are unwound, newest-first.
+  assert.deepEqual(order, ["scoped-2", "scoped-1"]);
+  // The pre-scope registration is untouched.
+  assert.equal(bus.listenerCount, 1);
+  // A later dispose must not double-run the already-rolled-back effects.
+  order.length = 0;
+  void before;
+  bus.dispose();
+  assert.deepEqual(order, ["before"]);
+  assert.equal(bus.listenerCount, 0);
+});

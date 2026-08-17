@@ -143,8 +143,10 @@ export interface ExtensionSetupContext {
   readonly events: UrbanEvents;
   readonly log: Logger;
   /** Register a disposable effect (a timer, listener, subscription). It joins the
-   *  dispose ladder, so `stop()` / HMR tears it down with everything else. */
-  effect(dispose: Disposer): void;
+   *  dispose ladder, so `stop()` / HMR tears it down with everything else. Returns
+   *  the idempotent disposer so an extension can clean up early — which also detaches
+   *  the effect from the ladder, so `stop()` won't run it a second time. */
+  effect(dispose: Disposer): Disposer;
 }
 
 /** A pluggable Urban extension — the uniform shape an agentic family or a
@@ -225,16 +227,21 @@ export async function mountExtensions(
     events,
     log,
     effect(dispose) {
-      bus.effect(dispose);
+      return bus.effect(dispose);
     },
   };
 
   for (const extension of ordered) {
-    // `setup()` is the checkpoint's unit of work. A throw is contained here so one
-    // bad extension never strands app boot or its siblings — it warns and delegates.
+    // `setup()` is the checkpoint's unit of work, made atomic by a per-extension
+    // rollback scope: a throw is contained here so one bad extension never strands
+    // app boot or its siblings, AND its partial registrations are rolled back so a
+    // "failed" extension can't leave live listeners/effects that influence later
+    // dispatches or leak on teardown.
+    const rollback = bus.scope();
     try {
       await extension.setup(context);
     } catch (err) {
+      rollback();
       log.warn("extension setup threw and was contained", { extension: extension.name, error: String(err) });
       continue;
     }

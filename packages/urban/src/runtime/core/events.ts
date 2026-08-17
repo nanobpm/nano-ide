@@ -266,6 +266,26 @@ export class EventBus {
     return new WaterfallChannel<T, R>(event, "waterfall", this.ladder, this.onError);
   }
 
+  /** Open a rollback point over the dispose ladder: returns a disposer that unwinds
+   *  every registration made *after* this call (LIFO), leaving earlier ones intact.
+   *  It makes a unit of work atomic — e.g. one extension's `setup()` — so a throw
+   *  after partial registration can roll back exactly what that unit added and
+   *  nothing else. Contained end-to-end, like `dispose()`; the ladder entries it
+   *  runs are idempotent, so a later `dispose()` won't double-run them. */
+  scope(): Disposer {
+    const before = new Set(this.ladder);
+    return () => {
+      const added = [...this.ladder].filter((entry) => !before.has(entry));
+      for (let i = added.length - 1; i >= 0; i--) {
+        try {
+          added[i]();
+        } catch (err) {
+          this.contain(err);
+        }
+      }
+    };
+  }
+
   /** Register an arbitrary disposable effect (a timer, a subscription, a
    *  registration made elsewhere) directly onto the dispose ladder, so
    *  `dispose()` unwinds it with everything else — the dispose-ladder contract is

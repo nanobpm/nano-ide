@@ -273,3 +273,57 @@ test("reconcile — parallel fan-out gives every extension's listener an indepen
   assert.deepEqual(ticks.sort(), ["a", "c"]);
   await host.stop();
 });
+
+test("effect() — returns the idempotent disposer so an extension can detach early before stop", async () => {
+  let cleared = 0;
+  let earlyDisposer: (() => void) | undefined;
+  const ext: UrbanExtension = {
+    name: "early-detach",
+    setup(ctx) {
+      earlyDisposer = ctx.effect(() => {
+        cleared++;
+      });
+    },
+  };
+  const host = await mountExtensions(fakeApi(), [ext]);
+  // `effect()` must hand back the disposer so the author can clean up early AND
+  // remove the effect from the ladder so `stop()` won't run it a second time.
+  assert.equal(typeof earlyDisposer, "function");
+  earlyDisposer?.();
+  assert.equal(cleared, 1);
+  assert.equal(host.listenerCount, 0);
+  await host.stop();
+  assert.equal(cleared, 1, "already-detached effect must not run again on stop");
+});
+
+test("containment — a throwing setup rolls back its own partial registrations (atomic)", async () => {
+  const bus = new EventBus({ onError: () => {} });
+  const events = createUrbanEvents(bus);
+  const seen: string[] = [];
+  const partial: UrbanExtension = {
+    name: "registers-then-throws",
+    order: 1,
+    setup(ctx) {
+      ctx.events.lifecycle.on(() => seen.push("partial-listener"));
+      ctx.effect(() => {});
+      throw new Error("boom after partial registration");
+    },
+  };
+  const healthy: UrbanExtension = {
+    name: "healthy",
+    order: 2,
+    setup(ctx) {
+      ctx.events.lifecycle.on(() => seen.push("healthy-listener"));
+    },
+  };
+  const host = await mountExtensions(fakeApi(), [partial, healthy], { bus, events });
+  // The failed extension left nothing live: only the healthy listener remains.
+  assert.equal(host.listenerCount, 1);
+  // A contained-and-skipped extension must not influence later dispatches.
+  events.lifecycle.emit({ app: "x", phase: "started" });
+  assert.deepEqual(seen, ["healthy-listener"]);
+  await host.stop();
+  // Bus is caller-owned, so the owner disposes it; the healthy listener then unwinds.
+  bus.dispose();
+  assert.equal(bus.listenerCount, 0);
+});

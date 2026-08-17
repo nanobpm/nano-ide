@@ -220,6 +220,18 @@ test("derivePhase tolerates namespace prefixes and entity-encoded names", () => 
   );
 });
 
+test("buildScopeIndex tolerates a literal `>` inside a quoted attribute value (no tag truncation)", () => {
+  const idx = buildScopeIndex(
+    `<process id="p" name="Root"><subProcess id="s" name="Wave > 1"><task id="t" name="Go" nano:phase="P > Q" /></subProcess></process>`,
+  );
+  // The `>` inside `name="Wave > 1"` must not truncate the subProcess tag: its id/name and the
+  // task's namespaced phase override (which follows the inner `>`) all parse intact.
+  assert.equal(idx.elements.get("s")?.name, "Wave > 1");
+  assert.equal(idx.elements.get("t")?.name, "Go");
+  assert.equal(idx.elements.get("t")?.phaseOverride, "P > Q");
+  assert.deepEqual(idx.elements.get("t")?.scopeChain, ["p", "s"]);
+});
+
 test("furthestReached picks the greatest seq per instance and ignores null joins", () => {
   const rows: ProvenanceProgressRow[] = [
     { instance_key: "i1", element_id: "start", seq: 1, at: "2024-01-01T00:00:00Z" },

@@ -229,8 +229,11 @@ export function buildScopeIndex(xml: string): ScopeIndex {
   const stack: Frame[] = [];
   const scopeIds: string[] = [];
 
-  // Match every tag: `<name …>`, `<name …/>`, or `</name>`. Comments/CDATA/PIs are skipped.
-  const tagRe = /<(\/)?([\w.:-]+)\b([^>]*?)(\/)?>|<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g;
+  // Match every tag: `<name …>`, `<name …/>`, or `</name>`. Comments/CDATA/PIs are skipped. The
+  // attribute run consumes whole quoted strings (`"…"`/`'…'`) so a literal `>` inside an attribute
+  // value — valid XML, e.g. `name="Wave > 1"` — does not terminate the tag early and truncate it.
+  const tagRe =
+    /<(\/)?([\w.:-]+)\b((?:"[^"]*"|'[^']*'|[^>])*?)(\/)?>|<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g;
 
   const record = (frame: Frame): void => {
     if (frame.id == null) return;

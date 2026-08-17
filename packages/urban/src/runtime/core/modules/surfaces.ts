@@ -11,6 +11,7 @@ import type { AppApi, RuntimeContext } from "../context.ts";
 import { presentFormIdentifier } from "../host.ts";
 import { html, json, noContent, normalizeRoutePath, type Route } from "../router.ts";
 import { mountActions } from "./actions.ts";
+import { mountAgent } from "./agent.ts";
 import { mountApi } from "./api.ts";
 import { mountPages } from "./pages.ts";
 
@@ -298,6 +299,14 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
     routes.push(...api.routes);
     enabled.push("api");
   }
+
+  // The app-scoped institutional-memory brief (ADR 0060 §2): `/app/agent` + `/app/agent.json`,
+  // the app-level mirror of the node `/agent`. Mounted unconditionally (before the generic pages
+  // routes, though its exact paths never collide) — the brief is a property of the app's models,
+  // not an opt-in surface, and reads through to the `urban gen`-derived artifacts.
+  const agent = mountAgent(ctx);
+  routes.push(...agent.routes);
+  enabled.push("agent@/app/agent");
 
   // The pages surface (the schema-driven page runtime) mounts its own routes.
   const pages = mountPages(ctx, app);

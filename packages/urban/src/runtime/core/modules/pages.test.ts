@@ -918,9 +918,12 @@ test("row-action confirm/error route through the in-DOM modal, never native conf
   assert.match(js, /if \(onResult\) onResult\(resultValue\)/);
   // Defect-class guard: NO native confirm()/alert()/prompt() CALL (invoked with a
   // string/identifier argument) survives anywhere in the served bundle — they are
-  // all false/no-ops under a sandboxed iframe. Empty-paren mentions in comments
-  // (e.g. "native confirm()") are documentation, not calls, so are not matched.
-  assert.doesNotMatch(js, /(?<![.\w])(?:confirm|alert|prompt)\(\s*["'a-zA-Z]/);
+  // all false/no-ops under a sandboxed iframe. This also catches qualified calls
+  // (window.confirm(...) / globalThis.alert(...)): the lookbehind only excludes a
+  // preceding word char (so confirmModal(...) / alertModal(...) don't match), not a
+  // preceding ".", so a member call still trips the guard. Empty-paren mentions in
+  // comments (e.g. "native confirm()") are documentation, not calls, so are not matched.
+  assert.doesNotMatch(js, /(?<!\w)(?:confirm|alert|prompt)\(\s*["'a-zA-Z]/);
 });
 
 

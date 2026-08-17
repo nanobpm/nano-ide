@@ -1179,9 +1179,9 @@ function openModal(m) {
 function confirmModal(message) {
   return new Promise((resolve) => {
     const opened = openModal({
+      title: "Confirm",
       description: String(message),
       dismissValue: false,
-      confirmLabel: "Confirm",
       actions: [
         { label: "Cancel", value: false, variant: "ghost" },
         { label: "Confirm", value: true },

@@ -114,22 +114,21 @@ function jobExecContext(job: EngineJob, jobType: string): JobExecContext {
  * a failed worker mount.
  */
 function tryLineageStore(app: AppApi, log: RuntimeContext["host"]["log"]): LineageStore | undefined {
-  let source: ReturnType<AppApi["data"]["source"]>;
-  try {
-    source = app.data.source();
-  } catch {
-    // No default data source configured — lineage is a sidecar on the app's own source, so this
-    // is the expected absent case (like write-provenance): record nothing, silently.
+  if (!app.data.hasDefaultSource()) {
+    // No default data source configured at all — lineage is a sidecar on the app's own source, so
+    // this is the expected absent case (like write-provenance): record nothing, silently.
     log("debug", "lineage: no default data source; lineage recording disabled");
     return undefined;
   }
   try {
+    const source = app.data.source();
     const store = new LineageStore(source.db);
     store.ensureSchema();
     return store;
   } catch (err) {
-    // A datasource exists but provisioning the projection failed (schema/DB error) — a genuine
-    // fault, not the absent case, so surface it at `warn` rather than disguising it as "no source".
+    // A default IS configured but resolving or provisioning it failed — a missing named source
+    // (`no such data source`) or a schema/DB error. That is a genuine fault, not the absent case,
+    // so surface it at `warn` rather than disguising it as "no source".
     log("warn", "lineage: failed to provision projection store; lineage recording disabled", { error: String(err) });
     return undefined;
   }

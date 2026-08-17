@@ -281,6 +281,15 @@ export class DataLayer {
     return s;
   }
 
+  /**
+   * Whether a default data source is *configured* — not whether it provisions. Lets a caller
+   * distinguish the expected "no source at all" case from a genuine misconfiguration (a default is
+   * named but its source is missing, so {@link source} throws `no such data source`).
+   */
+  hasDefaultSource(): boolean {
+    return this.defaultSource !== undefined;
+  }
+
   /** A typed accessor for a declared domain type (uses the default source). */
   repo(typeName: string, sourceName?: string): TypeRepo {
     const def = this.types[typeName];

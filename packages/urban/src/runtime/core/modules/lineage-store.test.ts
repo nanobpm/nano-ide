@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createNodeHost } from "../../adapters/node.ts";
 import type { SqliteDb } from "../host.ts";
+import { makeGateway } from "./gateway.ts";
 import {
   LINEAGE_ATTACHMENTS_TABLE,
   LINEAGE_EDGES_TABLE,
@@ -39,6 +40,19 @@ function normaliseSql(sql: string): string {
 
 const migrationPath = fileURLToPath(new URL("../../../../../../db/migrations/004_urban_lineage.sql", import.meta.url));
 
+test("the lineage projection tables are framework bookkeeping — `_urban_`-prefixed and hidden from the domain model", async () => {
+  // The gateway hides `_urban_%` / `_nano_%` tables from the domain model / DB Manager. These
+  // projection tables are framework sidecars (not user/domain tables), so their names MUST carry
+  // that prefix or they would leak into apps' schemas.
+  assert.match(LINEAGE_EDGES_TABLE, /^_urban_/, "lineage edge table must be `_urban_`-prefixed to stay hidden");
+  assert.match(LINEAGE_ATTACHMENTS_TABLE, /^_urban_/, "lineage attachment table must be `_urban_`-prefixed to stay hidden");
+  await withStore(async (_store, db) => {
+    const surfaced = (await makeGateway(db).schema()).map((t) => t.name);
+    assert.ok(!surfaced.includes(LINEAGE_EDGES_TABLE), "lineage edge table must not surface in the domain model");
+    assert.ok(!surfaced.includes(LINEAGE_ATTACHMENTS_TABLE), "lineage attachment table must not surface in the domain model");
+  });
+});
+
 test("the boot migration and LineageStore's DDL do not drift", () => {
   const migrationSql = readFileSync(migrationPath, "utf8");
   assert.equal(
@@ -50,8 +64,8 @@ test("the boot migration and LineageStore's DDL do not drift", () => {
 
 test("the boot migration is forward-only and additive (IF NOT EXISTS, no drops/alters)", () => {
   const migrationSql = readFileSync(migrationPath, "utf8");
-  assert.match(migrationSql, /CREATE TABLE IF NOT EXISTS urban_lineage_edges/);
-  assert.match(migrationSql, /CREATE TABLE IF NOT EXISTS urban_lineage_attachments/);
+  assert.match(migrationSql, /CREATE TABLE IF NOT EXISTS _urban_lineage_edges/);
+  assert.match(migrationSql, /CREATE TABLE IF NOT EXISTS _urban_lineage_attachments/);
   assert.doesNotMatch(migrationSql, /\bDROP\b/i);
   assert.doesNotMatch(migrationSql, /\bALTER\b/i);
   // Numbering is a shared surface; guard the prefix so a rebase renumber is caught here.

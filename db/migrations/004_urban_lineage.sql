@@ -15,7 +15,7 @@
 -- (`parentProcessInstanceKey`, Magikcraft/nano-bpm#808). The `(instance_key, edge_type)` primary
 -- key holds both for one node and makes a re-record idempotent. Expand-and-contract: additive only,
 -- no drops. Numbering takes the next free prefix (004) after 001/002/003.
-CREATE TABLE IF NOT EXISTS urban_lineage_edges (
+CREATE TABLE IF NOT EXISTS _urban_lineage_edges (
   root_request_key       TEXT NOT NULL,
   instance_key           TEXT NOT NULL,
   caused_by_instance_key TEXT,
@@ -23,8 +23,8 @@ CREATE TABLE IF NOT EXISTS urban_lineage_edges (
   created_at             TEXT NOT NULL,
   PRIMARY KEY (instance_key, edge_type)
 );
-CREATE INDEX IF NOT EXISTS idx_urban_lineage_edges_root ON urban_lineage_edges (root_request_key);
-CREATE TABLE IF NOT EXISTS urban_lineage_attachments (
+CREATE INDEX IF NOT EXISTS idx__urban_lineage_edges_root ON _urban_lineage_edges (root_request_key);
+CREATE TABLE IF NOT EXISTS _urban_lineage_attachments (
   root_request_key TEXT NOT NULL,
   node_key         TEXT NOT NULL,
   kind             TEXT NOT NULL,
@@ -33,4 +33,4 @@ CREATE TABLE IF NOT EXISTS urban_lineage_attachments (
   created_at       TEXT NOT NULL,
   PRIMARY KEY (node_key, kind, ref)
 );
-CREATE INDEX IF NOT EXISTS idx_urban_lineage_attachments_root ON urban_lineage_attachments (root_request_key);
+CREATE INDEX IF NOT EXISTS idx__urban_lineage_attachments_root ON _urban_lineage_attachments (root_request_key);

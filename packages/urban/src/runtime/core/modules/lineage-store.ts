@@ -21,19 +21,21 @@ import {
   readLineage,
 } from "../lineage.ts";
 
-/** The lineage edge table name. */
-export const LINEAGE_EDGES_TABLE = "urban_lineage_edges";
-/** The lineage attachment table name (app-registered domain rows on a node). */
-export const LINEAGE_ATTACHMENTS_TABLE = "urban_lineage_attachments";
+/** The lineage edge table name. Framework bookkeeping, so `_urban_`-prefixed to stay hidden from
+ * the domain model / DB Manager (see `SqliteGateway.schema()`), like the migrations ledger. */
+export const LINEAGE_EDGES_TABLE = "_urban_lineage_edges";
+/** The lineage attachment table name (app-registered domain rows on a node). `_urban_`-prefixed for
+ * the same reason as {@link LINEAGE_EDGES_TABLE}. */
+export const LINEAGE_ATTACHMENTS_TABLE = "_urban_lineage_attachments";
 
 /**
  * The canonical lineage DDL — the single source of truth applied by
  * {@link LineageStore.ensureSchema}, mirrored verbatim by the boot migration
  * `db/migrations/004_urban_lineage.sql` (a drift-guard test asserts they match).
  *
- * Forward-only and additive. `urban_lineage_edges` is keyed by `(instance_key, edge_type)` so a
+ * Forward-only and additive. `_urban_lineage_edges` is keyed by `(instance_key, edge_type)` so a
  * node can hold both its weak (envelope) and strong (execution) edge at once and a re-record is a
- * no-op; `urban_lineage_attachments` is keyed by `(node_key, kind, ref)` so re-attaching the same
+ * no-op; `_urban_lineage_attachments` is keyed by `(node_key, kind, ref)` so re-attaching the same
  * domain row is idempotent. Both carry `root_request_key` with an index so a `getLineage(root)`
  * reads only that thread.
  */

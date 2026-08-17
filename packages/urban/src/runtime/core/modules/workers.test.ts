@@ -422,3 +422,19 @@ test("mountWorkers surfaces a real provisioning failure as a warn (not the silen
     await cleanup();
   }
 });
+
+test("mountWorkers surfaces a configured-but-missing default source as a warn (not the silent absent case)", async () => {
+  const engine = new MiniEngine();
+  const { ctx, logs } = makeCtx({ workers: [{ taskType: "work", handler: "workers/work.ts" }] }, engine);
+  const handler: AppJobHandler = () => ({ ok: true });
+  ctx.host.importModule = async () => ({ default: handler });
+  // A default source is NAMED but no such source is provisioned, so `data.source()` throws
+  // `no such data source "main"`. That is a genuine misconfiguration — it must warn, never be
+  // disguised as the expected "no default data source" absent case.
+  const data = new DataLayer(new Map(), "main", {});
+  await mountWorkers(ctx, makeApp({ data }));
+  await engine.deliver("work", { jobKey: "j1", jobType: "work", processInstanceKey: "pi", variables: {} });
+  const warned = logs.find((l) => l.level === "warn" && l.msg.includes("failed to provision"));
+  assert.ok(warned, "a configured-but-missing default source must warn, not silently degrade");
+  assert.ok(!logs.some((l) => l.msg.includes("no default data source")), "must not claim the datasource is absent");
+});

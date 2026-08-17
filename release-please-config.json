@@ -1,0 +1,97 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "include-component-in-tag": true,
+  "include-v-in-tag": false,
+  "separator": "@",
+  "separate-pull-requests": false,
+  "plugins": [
+    "node-workspace"
+  ],
+  "packages": {
+    "packages/agentic": {
+      "component": "@nanobpm/agentic"
+    },
+    "packages/app-deno-gui": {
+      "component": "@nanobpm/nano-ide-app-deno-gui"
+    },
+    "packages/app-embedded-graalvm-native": {
+      "component": "@nanobpm/nano-ide-app-embedded-graalvm-native"
+    },
+    "packages/app-embedded-jvm": {
+      "component": "@nanobpm/nano-ide-app-embedded-jvm"
+    },
+    "packages/app-embedded-nano": {
+      "component": "@nanobpm/nano-ide-app-embedded-nano"
+    },
+    "packages/app-urban": {
+      "component": "@nanobpm/nano-ide-app-urban"
+    },
+    "packages/app-workflow": {
+      "component": "@nanobpm/nano-ide-app-workflow"
+    },
+    "packages/connector-slack": {
+      "component": "@nanobpm/nano-ide-connector-slack"
+    },
+    "packages/create-urban-app": {
+      "component": "create-urban-app"
+    },
+    "packages/example-csharp-throughput": {
+      "component": "@nanobpm/nano-ide-example-csharp-throughput"
+    },
+    "packages/example-java-throughput": {
+      "component": "@nanobpm/nano-ide-example-java-throughput"
+    },
+    "packages/example-node-throughput": {
+      "component": "@nanobpm/nano-ide-example-node-throughput"
+    },
+    "packages/example-python-throughput": {
+      "component": "@nanobpm/nano-ide-example-python-throughput"
+    },
+    "packages/example-rust-throughput": {
+      "component": "@nanobpm/nano-ide-example-rust-throughput"
+    },
+    "packages/ext-types": {
+      "component": "@nanobpm/nano-ide-ext-types"
+    },
+    "packages/lang-csharp": {
+      "component": "@nanobpm/nano-ide-lang-csharp"
+    },
+    "packages/lang-java": {
+      "component": "@nanobpm/nano-ide-lang-java"
+    },
+    "packages/lang-node": {
+      "component": "@nanobpm/nano-ide-lang-node"
+    },
+    "packages/lang-python": {
+      "component": "@nanobpm/nano-ide-lang-python"
+    },
+    "packages/lang-rust": {
+      "component": "@nanobpm/nano-ide-lang-rust"
+    },
+    "packages/theme-nord": {
+      "component": "@nanobpm/nano-ide-theme-nord"
+    },
+    "packages/theme-solarized": {
+      "component": "@nanobpm/nano-ide-theme-solarized"
+    },
+    "packages/theme-synthwave": {
+      "component": "@nanobpm/nano-ide-theme-synthwave"
+    },
+    "packages/trigger-mqtt": {
+      "component": "@nanobpm/nano-ide-trigger-mqtt"
+    },
+    "packages/urban": {
+      "component": "@nanobpm/urban"
+    },
+    "packages/urban-agent-client": {
+      "component": "@nanobpm/urban-agent-client"
+    },
+    "packages/urban-testkit": {
+      "component": "@nanobpm/urban-testkit"
+    },
+    "packages/workflow": {
+      "component": "@nanobpm/workflow"
+    }
+  }
+}

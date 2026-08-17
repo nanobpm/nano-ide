@@ -1,0 +1,78 @@
+name: Release Please
+
+# Maintains ONE batched "release PR" on main. As feat:/fix:/perf: commits land
+# (squash-merged PR titles — gated by pr-title-lint.yml), release-please keeps a
+# single PR open that bumps every affected package's version + CHANGELOG (and its
+# intra-repo dependents, via the node-workspace plugin) and refreshes the root
+# lockfile. On merge it tags `<name>@<version>` and cuts the per-package GitHub
+# Release; scripts/publish.mjs (via release.yml, gated on green CI) then publishes
+# the bumped versions to npm. The `<name>@<version>` tag format matches the
+# provenance tags already on the repo (nano-workforce#263), so the current
+# releases seed release-please's baseline — no bootstrap mega-PR.
+#
+# Auto-merge is enabled on the release PR so releases flow near-continuously with
+# NO ruleset-bypass token: the PR still passes every required check
+# (build/urban-deno/intellisense + Copilot review) before GitHub squash-merges it.
+#
+# CI-trigger caveat: a PR opened by the default GITHUB_TOKEN does NOT trigger
+# ci.yml (`on: pull_request`), so its required checks never run and auto-merge
+# can't complete. To make the release PR run CI, release-please authors it with a
+# GitHub App token (repo variable RELEASE_PLEASE_APP_ID + secret
+# RELEASE_PLEASE_APP_PRIVATE_KEY — a contents+PR-write App, NOT a bypass token).
+# Without those the workflow still runs and the release PR appears, but it must be
+# merged by hand. One-time setup also needs "Allow auto-merge" enabled in repo
+# settings.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      # Prefer a GitHub App token so the release PR's events trigger ci.yml
+      # (required for auto-merge). Falls back to GITHUB_TOKEN when the App
+      # variable/secret are absent — the release PR is then opened but not
+      # auto-merged.
+      - name: Mint GitHub App token
+        id: app-token
+        if: ${{ vars.RELEASE_PLEASE_APP_ID != '' }}
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ vars.RELEASE_PLEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PLEASE_APP_PRIVATE_KEY }}
+
+      - name: Run release-please
+        id: rp
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # Turn on auto-merge for the open release PR. `--auto` waits for the
+      # required checks + Copilot review, then squash-merges. No bypass: if any
+      # check fails the PR simply stays open. Skipped on runs that only cut
+      # releases (no open PR) or when release-please opened nothing.
+      - name: Enable auto-merge on the release PR
+        if: ${{ steps.rp.outputs.pr != '' }}
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.GITHUB_TOKEN }}
+          PR_JSON: ${{ steps.rp.outputs.pr }}
+        run: |
+          NUM=$(printf '%s' "$PR_JSON" | jq -r '.number // empty')
+          if [ -n "$NUM" ]; then
+            echo "Enabling auto-merge on release PR #$NUM"
+            gh pr merge "$NUM" --auto --squash --repo "${{ github.repository }}"
+          else
+            echo "No release PR number in output; nothing to auto-merge."
+          fi

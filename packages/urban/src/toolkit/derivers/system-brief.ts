@@ -2,8 +2,8 @@
 // *institutional-memory* brief (ADR 0060). Where `worker-io.ts` emits worker *types* and
 // `meta.ts` emits a *typed accessor*, this deriver folds the SAME scanned structure into
 // agent- and human-readable **system context**: the app's processes, its service-task call
-// graph, the decisions it encodes, and the ownership / "why" carried on the model as reserved
-// `nano:meta` keys. It reuses the sibling scanners (single parse rule
+// graph, the decisions it encodes, and the ownership / "why" carried on
+// the model as reserved `nano:meta` keys. It reuses the sibling scanners (single parse rule
 // per vocabulary) and is pure (models in, artifacts out) so `urban gen --check` keeps it
 // honest — the brief can never rot the way a hand-written README does (ADR 0060 §1).
 //
@@ -61,7 +61,7 @@ function attr(tag: string, name: string): string | undefined {
 }
 
 function processId(xml: string): string | undefined {
-  const m = xml.match(/<[\w.-]*:?process\b[^>]*>/);
+  const m = xml.match(/<bpmn:process\b[^>]*>/);
   return m ? attr(m[0], "id") : undefined;
 }
 
@@ -125,10 +125,18 @@ export function buildSystemBrief(models: ModelSource[], app?: string): SystemBri
   return { app, processes, workers, decisions, ownership: foldOwnership(models) };
 }
 
+/** Escape a Markdown table cell: neutralise `|` and newlines, which would otherwise break the
+ * table. Ownership values come from model-authored `nano:meta`, so this both keeps rendering
+ * honest and blunts Markdown/prompt injection into the agent-facing brief. Backticks are left
+ * intact — the emitter deliberately wraps ids in code spans. */
+function mdCell(s: string): string {
+  return s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ");
+}
+
 function mdTable(headers: string[], rows: string[][]): string {
   if (rows.length === 0) return "_none_\n";
   const head = `| ${headers.join(" | ")} |\n| ${headers.map(() => "---").join(" | ")} |\n`;
-  return head + rows.map((r) => `| ${r.map((c) => c || "").join(" | ")} |`).join("\n") + "\n";
+  return head + rows.map((r) => `| ${r.map((c) => mdCell(c || "")).join(" | ")} |`).join("\n") + "\n";
 }
 
 /** Emit the agent- and human-readable `system-brief.md` from the machine model. Compact by

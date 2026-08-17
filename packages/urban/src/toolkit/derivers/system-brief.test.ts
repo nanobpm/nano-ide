@@ -104,12 +104,47 @@ test("emitSystemBriefMd degrades gracefully with no ownership meta", () => {
   assert.match(md, /## Processes/);
 });
 
+test("emitSystemBriefMd escapes `|` and newlines in model-authored ownership cells", () => {
+  const evil = `<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL">
+    <bpmn:process id="p1">
+      <bpmn:extensionElements>
+        <nano:meta xmlns:nano="urn:nano" key="owner" value="a | b" />
+      </bpmn:extensionElements>
+    </bpmn:process></bpmn:definitions>`;
+  const md = emitSystemBriefMd(buildSystemBrief([{ path: "p.bpmn", xml: evil }]));
+  const ownerLine = md.split("\n").find((l) => l.startsWith("| Owner |"));
+  assert.ok(ownerLine, "owner row rendered");
+  // The literal `|` from the meta value must be escaped so it can't add a phantom column.
+  assert.match(ownerLine!, /a \\\| b/);
+});
+
+test("processId only recognises `bpmn:process` (consistent with scanModelWorkers)", () => {
+  // A non-`bpmn:`-prefixed process must not be listed, otherwise the brief would show a process
+  // id while every worker/decision row carried an empty Process column.
+  const other = `<definitions xmlns:foo="urn:foo">
+    <foo:process id="not-bpmn"></foo:process></definitions>`;
+  const b = buildSystemBrief([{ path: "o.bpmn", xml: other }]);
+  assert.deepEqual(b.processes, []);
+});
+
 test("deriveSystemBrief emits both artifacts with valid JSON", () => {
   const arts = deriveSystemBrief(models, "acme-orders");
   const md = arts.find((a) => a.path.endsWith(SYSTEM_BRIEF_MD));
   const json = arts.find((a) => a.path.endsWith(SYSTEM_BRIEF_JSON));
   assert.ok(md && json);
-  const parsed = JSON.parse(json!.content);
+  const parsed: unknown = JSON.parse(json!.content);
+  assertSystemBriefShape(parsed);
   assert.equal(parsed.app, "acme-orders");
   assert.equal(parsed.workers[0].taskType, "charge-card");
 });
+
+/** Runtime-validate the parsed JSON shape (no `as` cast — banned in this repo) and narrow it to
+ * `SystemBrief` for the assertions that follow. */
+function assertSystemBriefShape(v: unknown): asserts v is SystemBrief {
+  assert.ok(typeof v === "object" && v !== null, "brief is an object");
+  assert.ok(!("app" in v) || typeof v.app === "string", "app is absent or a string");
+  assert.ok("workers" in v && Array.isArray(v.workers), "workers is an array");
+  assert.ok("processes" in v && Array.isArray(v.processes), "processes is an array");
+  assert.ok("decisions" in v && Array.isArray(v.decisions), "decisions is an array");
+  assert.ok("ownership" in v && typeof v.ownership === "object" && v.ownership !== null, "ownership is an object");
+}

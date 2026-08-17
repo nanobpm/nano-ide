@@ -21,6 +21,11 @@ export interface JobExecContext {
   elementId?: string;
   /** The job type (worker) currently executing. */
   jobType?: string;
+  /** The lineage `rootRequestKey` the running instance belongs to (its own envelope's root,
+   *  or — for a root instance with no envelope — its own instance key). Threaded so that when a
+   *  handler spawns an instance or publishes a message, the SDK propagates the same root and
+   *  sets `causedByInstanceKey` to {@link instanceKey} (issue #254, see `./lineage.ts`). */
+  rootRequestKey?: string;
 }
 
 let store: AsyncStore<JobExecContext> | undefined;

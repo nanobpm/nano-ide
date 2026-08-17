@@ -5,7 +5,7 @@ import {
   createWasmEngineClient,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
-import { BpmnError } from "@nanobpm/urban/runtime";
+import { BpmnError, readLineage } from "@nanobpm/urban/runtime";
 
 // The shared contract, executed against the in-process WASM adapter.
 runEngineClientContract("wasm", () => createWasmEngineClient());
@@ -392,6 +392,66 @@ test("wasm: a throwing observer is isolated — the job still completes, no inci
       processInstanceKeys: [processInstanceKey],
     });
     assert.equal(inst?.state, "COMPLETED", "the job completed — no failure/incident from the observer");
+  } finally {
+    await engine.close();
+  }
+});
+
+const LINEAGE_PROBE_MODEL = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="lineageprobe" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f1" sourceRef="s" targetRef="probe"/>
+    <serviceTask id="probe">
+      <extensionElements><zeebe:taskDefinition type="probe"/></extensionElements>
+    </serviceTask>
+    <sequenceFlow id="f2" sourceRef="probe" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+</definitions>`;
+
+test("wasm: createInstance auto-threads the _urban.lineage envelope, observable in-harness (issue #254)", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    let seen: Record<string, unknown> | undefined;
+    await engine.registerWorker("probe", (job) => {
+      seen = job.variables;
+      return {};
+    });
+    await engine.deployResources([
+      { name: "lineageprobe.bpmn", content: LINEAGE_PROBE_MODEL, contentType: "application/bpmn+xml" },
+    ]);
+    // A genuine top-level request (no ambient job context) mints a fresh root, threaded onto the
+    // instance variables — the worker sees it on its job, straight off the engine.
+    await engine.createInstance({ processDefinitionId: "lineageprobe", variables: { payload: 42 } });
+    const env = readLineage(seen);
+    assert.ok(env, "the instance carries an _urban.lineage envelope");
+    assert.notEqual(env?.rootRequestKey, "");
+    assert.equal(env?.causedByInstanceKey, undefined, "a fresh top-level root has no cause");
+    assert.equal(seen?.payload, 42, "caller variables are preserved alongside the envelope");
+  } finally {
+    await engine.close();
+  }
+});
+
+test("wasm: an explicit caller-supplied lineage envelope is preserved (override wins)", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    let seen: Record<string, unknown> | undefined;
+    await engine.registerWorker("probe", (job) => {
+      seen = job.variables;
+      return {};
+    });
+    await engine.deployResources([
+      { name: "lineageprobe.bpmn", content: LINEAGE_PROBE_MODEL, contentType: "application/bpmn+xml" },
+    ]);
+    await engine.createInstance({
+      processDefinitionId: "lineageprobe",
+      variables: { _urban: { lineage: { rootRequestKey: "explicit-root", causedByInstanceKey: "up" } } },
+    });
+    assert.deepEqual(readLineage(seen), { rootRequestKey: "explicit-root", causedByInstanceKey: "up" });
   } finally {
     await engine.close();
   }

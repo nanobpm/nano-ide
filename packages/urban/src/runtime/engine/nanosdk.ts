@@ -31,6 +31,7 @@ import {
 } from "../core/form-contract.ts";
 import type { EngineSdkClient } from "./sdk.ts";
 import { isRecord } from "../core/guards.ts";
+import { applyAmbientLineage } from "../core/lineage.ts";
 
 /** Coerce an engine response's process-instance key to a non-empty string, or
  * throw — a missing key means a malformed/partial response, not a real instance. */
@@ -193,9 +194,12 @@ export class SdkEngineClient implements EngineClient {
     variables?: Record<string, unknown>;
     awaitCompletion?: boolean;
   }): Promise<{ processInstanceKey: string; variables?: Record<string, unknown> }> {
+    // Auto-thread the `_urban.lineage` envelope (issue #254): a handler that spawns an
+    // instance propagates its `rootRequestKey` and stamps `causedByInstanceKey`; a genuine
+    // top-level request mints a fresh root. An explicit caller-supplied envelope wins.
     const body = await this.client.createProcessInstance({
       processDefinitionId: input.processDefinitionId,
-      variables: input.variables ?? {},
+      variables: applyAmbientLineage(input.variables),
       awaitCompletion: input.awaitCompletion ?? false,
     });
     const rawKey = body.processInstanceKey ?? body.key;
@@ -217,10 +221,12 @@ export class SdkEngineClient implements EngineClient {
     correlationKey?: string;
     variables?: Record<string, unknown>;
   }): Promise<void> {
+    // Message-started instances inherit lineage too (issue #254): thread the envelope onto the
+    // message variables so the instance the message starts carries `_urban.lineage`.
     await this.client.publishMessage({
       name: input.name,
       correlationKey: input.correlationKey ?? "",
-      variables: input.variables ?? {},
+      variables: applyAmbientLineage(input.variables),
     });
   }
 

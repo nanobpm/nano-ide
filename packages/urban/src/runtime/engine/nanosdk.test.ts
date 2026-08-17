@@ -11,6 +11,9 @@ import {
   type NanoSdkJobWorkerConfig,
 } from "./nanosdk.ts";
 import { BpmnError } from "../core/host.ts";
+import { __resetExecStoreForTests, installExecStore, runInJobContext } from "../core/execContext.ts";
+import { readLineage } from "../core/lineage.ts";
+import { createNodeHost } from "../adapters/node.ts";
 
 /** A fake nano-sdk client that records calls and lets a test drive its job worker. */
 function fakeSdkClient(overrides: Partial<NanoSdkClient> = {}): NanoSdkClient & {
@@ -133,7 +136,8 @@ test("createInstance routes through the SDK and coerces the key", async () => {
   const engine = new SdkEngineClient(client);
   const res = await engine.createInstance({ processDefinitionId: "p", variables: { a: 1 } });
   assert.equal(res.processInstanceKey, "99");
-  assert.deepEqual(res.variables, { a: 1 });
+  // Caller variables are preserved (the SDK also auto-threads a `_urban.lineage` envelope, tested below).
+  assert.equal(res.variables?.a, 1);
   assert.ok(client.calls.includes("createProcessInstance"));
 });
 
@@ -162,7 +166,7 @@ test("cancelInstance routes through the SDK", async () => {
   assert.ok(client.calls.includes("cancelProcessInstance") || seen !== undefined);
 });
 
-test("publishMessage defaults correlationKey/variables", async () => {
+test("publishMessage defaults correlationKey and auto-threads lineage onto variables", async () => {
   let seen: Record<string, unknown> | undefined;
   const client = fakeSdkClient({
     publishMessage: async (input) => {
@@ -172,7 +176,12 @@ test("publishMessage defaults correlationKey/variables", async () => {
   });
   const engine = new SdkEngineClient(client);
   await engine.publishMessage({ name: "m" });
-  assert.deepEqual(seen, { name: "m", correlationKey: "", variables: {} });
+  assert.equal(seen?.name, "m");
+  assert.equal(seen?.correlationKey, "");
+  // With no ambient job context this is a top-level publish: a fresh root envelope is minted.
+  const env = readLineage(seen?.variables);
+  assert.ok(env, "a lineage envelope is threaded onto the message variables");
+  assert.equal(env?.causedByInstanceKey, undefined);
 });
 
 test("searchUserTasks passes zero-wait consistency and maps items", async () => {
@@ -669,4 +678,89 @@ test("createNanoSdkEngineClient uses an injected client factory with the resolve
   });
   assert.deepEqual(seen, { restAddress: "http://x/v2", token: "t", transport: "falcon" });
   assert.ok(engine);
+});
+
+// --- Lineage auto-threading (issue #254) ---------------------------------------
+
+/** A fake client that captures the variables handed to createProcessInstance/publishMessage. */
+function capturingClient(): NanoSdkClient & { createVars?: Record<string, unknown>; msgVars?: Record<string, unknown> } {
+  const base = fakeSdkClient();
+  const cap: NanoSdkClient & { createVars?: Record<string, unknown>; msgVars?: Record<string, unknown> } = {
+    ...base,
+    async createProcessInstance(input) {
+      cap.createVars = input.variables;
+      return { processInstanceKey: 99, variables: input.variables };
+    },
+    async publishMessage(input) {
+      cap.msgVars = input.variables;
+      return { key: 1 };
+    },
+  };
+  return cap;
+}
+
+test("createInstance mints a fresh root envelope for a top-level request (no ambient)", async () => {
+  __resetExecStoreForTests();
+  const client = capturingClient();
+  const engine = new SdkEngineClient(client);
+  await engine.createInstance({ processDefinitionId: "p", variables: { a: 1 } });
+  const env = readLineage(client.createVars);
+  assert.ok(env, "an envelope was threaded onto the variables");
+  assert.notEqual(env?.rootRequestKey, "");
+  assert.equal(env?.causedByInstanceKey, undefined, "a fresh root has no cause");
+  assert.equal(client.createVars?.a, 1, "caller variables are preserved");
+});
+
+test("createInstance propagates the ambient lineage and stamps causedByInstanceKey", async () => {
+  __resetExecStoreForTests();
+  const host = createNodeHost({ cwd: process.cwd(), log: () => {} });
+  installExecStore(() => host.createAsyncStore?.());
+  const client = capturingClient();
+  const engine = new SdkEngineClient(client);
+  try {
+    await runInJobContext({ instanceKey: "pi-parent", rootRequestKey: "root-1", jobType: "w" }, () =>
+      engine.createInstance({ processDefinitionId: "child" }),
+    );
+  } finally {
+    __resetExecStoreForTests();
+  }
+  assert.deepEqual(readLineage(client.createVars), {
+    rootRequestKey: "root-1",
+    causedByInstanceKey: "pi-parent",
+  });
+});
+
+test("createInstance leaves an explicit caller-supplied envelope untouched (override wins)", async () => {
+  __resetExecStoreForTests();
+  const host = createNodeHost({ cwd: process.cwd(), log: () => {} });
+  installExecStore(() => host.createAsyncStore?.());
+  const client = capturingClient();
+  const engine = new SdkEngineClient(client);
+  try {
+    await runInJobContext({ instanceKey: "pi-parent", rootRequestKey: "root-1", jobType: "w" }, () =>
+      engine.createInstance({
+        processDefinitionId: "child",
+        variables: { _urban: { lineage: { rootRequestKey: "explicit" } } },
+      }),
+    );
+  } finally {
+    __resetExecStoreForTests();
+  }
+  assert.deepEqual(readLineage(client.createVars), { rootRequestKey: "explicit", causedByInstanceKey: undefined });
+});
+
+test("publishMessage threads lineage so message-started instances inherit it", async () => {
+  __resetExecStoreForTests();
+  const host = createNodeHost({ cwd: process.cwd(), log: () => {} });
+  installExecStore(() => host.createAsyncStore?.());
+  const client = capturingClient();
+  const engine = new SdkEngineClient(client);
+  try {
+    await runInJobContext({ instanceKey: "pi-9", rootRequestKey: "root-9", jobType: "w" }, () =>
+      engine.publishMessage({ name: "start" }),
+    );
+  } finally {
+    __resetExecStoreForTests();
+  }
+  assert.deepEqual(readLineage(client.msgVars), { rootRequestKey: "root-9", causedByInstanceKey: "pi-9" });
 });

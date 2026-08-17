@@ -4,8 +4,20 @@ import assert from "node:assert/strict";
 import type { AppApi, RuntimeContext } from "../context.ts";
 import type { EngineClient, EngineJob, HostContext, JobHandler, WorkerSubscription } from "../host.ts";
 import type { AppManifest } from "../manifest.ts";
-import { DataLayer } from "./datasource.ts";
+import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { mountWorkers, sdkDecisionEvaluator, type AppJobHandler } from "./workers.ts";
+import { makeGateway } from "./gateway.ts";
+import { LineageStore } from "./lineage-store.ts";
+import {
+  __resetExecStoreForTests,
+  currentJobContext,
+  installExecStore,
+  type JobExecContext,
+} from "../execContext.ts";
+import { createNodeHost } from "../../adapters/node.ts";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 /** A tiny engine that records registrations and can deliver a job to a handler. */
 class MiniEngine implements EngineClient {
@@ -302,4 +314,127 @@ test("AppJobHandler carries optional In/Out variable types", async () => {
   assert.deepEqual(await inOnly(job, app), { echoed: "p1" });
   assert.deepEqual(await open(openJob, app), { count: 2 });
   assert.equal(await voidReturn(job, app), undefined);
+});
+
+// --- Lineage threading + projection recording (issue #254) ---------------------
+
+/** A DataLayer with a single default sqlite source, so `tryLineageStore` can record into it. */
+async function dataLayerWithSqlite(): Promise<{ data: DataLayer; db: ProvisionedSource["db"]; cleanup: () => Promise<void> }> {
+  const dir = await mkdtemp(join(tmpdir(), "urban-workers-lineage-"));
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const db = host.openSqlite(join(dir, "app.db"));
+  const src: ProvisionedSource = {
+    name: "main",
+    driver: "sqlite",
+    db,
+    source: makeGateway(db),
+    migrationsApplied: [],
+    close: () => db.close(),
+  };
+  const data = new DataLayer(new Map([["main", src]]), "main", {});
+  return { data, db, cleanup: async () => { try { db.close(); } catch { /* already closed */ } await rm(dir, { recursive: true, force: true }); } };
+}
+
+test("mountWorkers threads the lineage rootRequestKey into the ambient job context", async () => {
+  __resetExecStoreForTests();
+  const host = createNodeHost({ cwd: process.cwd(), log: () => {} });
+  installExecStore(() => host.createAsyncStore?.<JobExecContext>());
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx({ workers: [{ taskType: "spawn", handler: "workers/spawn.ts" }] }, engine);
+  const seen: Array<JobExecContext | undefined> = [];
+  const handler: AppJobHandler = () => {
+    seen.push(currentJobContext());
+  };
+  ctx.host.importModule = async () => ({ default: handler });
+  try {
+    await mountWorkers(ctx, makeApp());
+    // An instance carrying an envelope propagates its root.
+    await engine.deliver("spawn", {
+      jobKey: "j1",
+      jobType: "spawn",
+      processInstanceKey: "pi-child",
+      variables: { _urban: { lineage: { rootRequestKey: "ROOT", causedByInstanceKey: "pi-parent" } } },
+    });
+    // An instance with no envelope is treated as its own root.
+    await engine.deliver("spawn", { jobKey: "j2", jobType: "spawn", processInstanceKey: "pi-solo", variables: {} });
+    assert.equal(seen[0]?.rootRequestKey, "ROOT");
+    assert.equal(seen[1]?.rootRequestKey, "pi-solo");
+  } finally {
+    __resetExecStoreForTests();
+  }
+});
+
+test("mountWorkers records each activated job's lineage edge into the projection (idempotently)", async () => {
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx({ workers: [{ taskType: "work", handler: "workers/work.ts" }] }, engine);
+  const handler: AppJobHandler = () => ({ ok: true });
+  ctx.host.importModule = async () => ({ default: handler });
+  const { data, db, cleanup } = await dataLayerWithSqlite();
+  try {
+    await mountWorkers(ctx, makeApp({ data }));
+    const job = {
+      jobKey: "j1",
+      jobType: "work",
+      processInstanceKey: "pi-child",
+      variables: { _urban: { lineage: { rootRequestKey: "ROOT", causedByInstanceKey: "pi-root" } } },
+    };
+    await engine.deliver("work", job);
+    await engine.deliver("work", { ...job, jobKey: "j2" }); // re-activation → idempotent
+
+    const tree = new LineageStore(db).getLineage("ROOT");
+    const child = tree.nodes.find((n) => n.instanceKey === "pi-child");
+    assert.equal(child?.causedByInstanceKey, "pi-root");
+    assert.equal(child?.edgeType, "weak");
+    assert.equal(new LineageStore(db).edges("ROOT").length, 1, "re-activation does not duplicate the edge");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("mountWorkers records nothing when the app has no default data source (absent-safe)", async () => {
+  const engine = new MiniEngine();
+  const { ctx, logs } = makeCtx({ workers: [{ taskType: "work", handler: "workers/work.ts" }] }, engine);
+  const handler: AppJobHandler = () => ({ ok: true });
+  ctx.host.importModule = async () => ({ default: handler });
+  // makeApp's DataLayer has no default source; mounting + delivering must not throw.
+  await mountWorkers(ctx, makeApp());
+  await engine.deliver("work", { jobKey: "j1", jobType: "work", processInstanceKey: "pi", variables: {} });
+  assert.ok(!logs.some((l) => l.level === "error"));
+});
+
+test("mountWorkers surfaces a real provisioning failure as a warn (not the silent absent case)", async () => {
+  const engine = new MiniEngine();
+  const { ctx, logs } = makeCtx({ workers: [{ taskType: "work", handler: "workers/work.ts" }] }, engine);
+  const handler: AppJobHandler = () => ({ ok: true });
+  ctx.host.importModule = async () => ({ default: handler });
+  const { data, db, cleanup } = await dataLayerWithSqlite();
+  try {
+    // A default source IS configured, but provisioning the projection fails (closed db). This is a
+    // genuine fault, not the absent case, so it must be logged at `warn` with the error — never
+    // disguised as an expected "no default data source" debug, and never a failed worker mount.
+    db.close();
+    await mountWorkers(ctx, makeApp({ data }));
+    await engine.deliver("work", { jobKey: "j1", jobType: "work", processInstanceKey: "pi", variables: {} });
+    const warned = logs.find((l) => l.level === "warn" && l.msg.includes("failed to provision"));
+    assert.ok(warned, "a configured-but-broken datasource must warn, not silently degrade");
+    assert.ok(!logs.some((l) => l.msg.includes("no default data source")), "must not claim the datasource is absent");
+  } finally {
+    await cleanup();
+  }
+});
+
+test("mountWorkers surfaces a configured-but-missing default source as a warn (not the silent absent case)", async () => {
+  const engine = new MiniEngine();
+  const { ctx, logs } = makeCtx({ workers: [{ taskType: "work", handler: "workers/work.ts" }] }, engine);
+  const handler: AppJobHandler = () => ({ ok: true });
+  ctx.host.importModule = async () => ({ default: handler });
+  // A default source is NAMED but no such source is provisioned, so `data.source()` throws
+  // `no such data source "main"`. That is a genuine misconfiguration — it must warn, never be
+  // disguised as the expected "no default data source" absent case.
+  const data = new DataLayer(new Map(), "main", {});
+  await mountWorkers(ctx, makeApp({ data }));
+  await engine.deliver("work", { jobKey: "j1", jobType: "work", processInstanceKey: "pi", variables: {} });
+  const warned = logs.find((l) => l.level === "warn" && l.msg.includes("failed to provision"));
+  assert.ok(warned, "a configured-but-missing default source must warn, not silently degrade");
+  assert.ok(!logs.some((l) => l.msg.includes("no default data source")), "must not claim the datasource is absent");
 });

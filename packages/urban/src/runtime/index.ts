@@ -143,6 +143,41 @@ export type {
 } from "./core/modules/llm.ts";
 export { evalCorrelation } from "./core/modules/triggers.ts";
 
+// Lineage — the framework-level lineage primitive (issue #254): the `_urban.lineage`
+// envelope + auto-threading, and the generic read projection that stitches user intent →
+// progress (a root request → the instances/PRs/tasks it causes).
+export {
+  applyAmbientLineage,
+  buildLineageTree,
+  deriveLineage,
+  LINEAGE_KEY,
+  LINEAGE_NAMESPACE,
+  mintRootRequestKey,
+  readLineage,
+  writeLineage,
+} from "./core/lineage.ts";
+export type {
+  ApplyLineageOptions,
+  LineageAttachment,
+  LineageEdge,
+  LineageEdgeType,
+  LineageEnvelope,
+  LineageNode,
+  LineageTree,
+} from "./core/lineage.ts";
+export {
+  LINEAGE_ATTACHMENTS_TABLE,
+  LINEAGE_EDGES_TABLE,
+  LINEAGE_SCHEMA_SQL,
+  LineageStore,
+  systemClock as lineageSystemClock,
+} from "./core/modules/lineage-store.ts";
+export type {
+  Clock as LineageClock,
+  LineageJobLike,
+  LineageStoreOptions,
+} from "./core/modules/lineage-store.ts";
+
 // Model deploy (deploy-by-convention under `resources/`, ADR 0062)
 export { deployModels, RESOURCES_DIR } from "./core/modules/deploy.ts";
 export { defaultScheduler, MAX_TIMER_DELAY_MS } from "./core/modules/scheduler.ts";

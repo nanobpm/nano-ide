@@ -8,6 +8,9 @@ import type { EngineJob, JobHandler, WorkerSubscription } from "../host.ts";
 import { workerJobType, type Worker } from "../manifest.ts";
 import { type DecisionEvaluator, type LlmRuntime, runLlmJob } from "./llm.ts";
 import { runInJobContext } from "../execContext.ts";
+import type { JobExecContext } from "../execContext.ts";
+import { readLineage } from "../lineage.ts";
+import { LineageStore } from "./lineage-store.ts";
 
 /** The subset of the engine SDK the LLM decision-rails need: evaluate a DMN decision,
  *  whose `output` comes back as a JSON string (the orchestration-cluster contract). */
@@ -87,6 +90,60 @@ function withJobLog(app: AppApi, job: EngineJob): AppApi {
 }
 
 /**
+ * Build the ambient {@link JobExecContext} a worker runs its handler within. Beyond the
+ * instance/element/jobType used for write-provenance, it resolves the lineage
+ * `rootRequestKey` (issue #254): the job's own `_urban.lineage` envelope root when present,
+ * else the instance's own key — so an instance with no envelope is treated as a root and any
+ * instance/message its handler spawns inherits that root with `causedByInstanceKey` set.
+ */
+function jobExecContext(job: EngineJob, jobType: string): JobExecContext {
+  return {
+    instanceKey: job.processInstanceKey,
+    elementId: job.elementId,
+    jobType,
+    rootRequestKey: readLineage(job.variables)?.rootRequestKey ?? job.processInstanceKey,
+  };
+}
+
+/**
+ * Build the framework lineage projection store over the app's DEFAULT data source, or `undefined`
+ * when the app configures none. The store records the `_urban.lineage` edge every activated job
+ * reveals (issue #254), so intent→progress lineage materialises for free — but it is a sidecar on
+ * the app's own source (like write-provenance), so an app with no datasource simply records
+ * nothing. Absent- and error-safe: any failure to provision degrades to no lineage recording, never
+ * a failed worker mount.
+ */
+function tryLineageStore(app: AppApi, log: RuntimeContext["host"]["log"]): LineageStore | undefined {
+  if (!app.data.hasDefaultSource()) {
+    // No default data source configured at all — lineage is a sidecar on the app's own source, so
+    // this is the expected absent case (like write-provenance): record nothing, silently.
+    log("debug", "lineage: no default data source; lineage recording disabled");
+    return undefined;
+  }
+  try {
+    const source = app.data.source();
+    const store = new LineageStore(source.db);
+    store.ensureSchema();
+    return store;
+  } catch (err) {
+    // A default IS configured but resolving or provisioning it failed — a missing named source
+    // (`no such data source`) or a schema/DB error. That is a genuine fault, not the absent case,
+    // so surface it at `warn` rather than disguising it as "no source".
+    log("warn", "lineage: failed to provision projection store; lineage recording disabled", { error: String(err) });
+    return undefined;
+  }
+}
+
+/** Record an activated job's lineage edge, never letting a projection write break the job. */
+function recordJobLineage(store: LineageStore, job: EngineJob, log: RuntimeContext["host"]["log"]): void {
+  try {
+    store.recordFromJob(job);
+  } catch (err) {
+    log("warn", "lineage: failed to record job edge", { jobType: job.jobType, error: String(err) });
+  }
+}
+
+/**
  * Resolve a handler for `jobType` from a loaded module, in priority order:
  *   1. `handlers[jobType]`            (a map keyed by job type — the multi-type module case)
  *   2. a named export matching jobType (or its last dotted segment)
@@ -115,6 +172,11 @@ export async function mountWorkers(ctx: RuntimeContext, app: AppApi): Promise<Wo
   const decls = ctx.manifest.workers ?? [];
   const subs: WorkerSubscription[] = [];
   const jobTypes: string[] = [];
+
+  // The framework lineage projection (issue #254): each activated job records the `_urban.lineage`
+  // edge its instance carries, so intent→progress lineage materialises for free. Absent when the
+  // app configures no default data source.
+  const lineageStore = tryLineageStore(app, ctx.host.log);
 
   // Cache module loads so a multi-type handler module is imported once.
   const moduleCache = new Map<string, Record<string, unknown>>();
@@ -157,11 +219,13 @@ export async function mountWorkers(ctx: RuntimeContext, app: AppApi): Promise<Wo
         env: (n) => app.env(n),
         evaluateDecision: app.sdk ? sdkDecisionEvaluator(app.sdk) : undefined,
       };
-      const wrapped: JobHandler = (job) =>
-        runInJobContext(
-          { instanceKey: job.processInstanceKey, elementId: job.elementId, jobType },
+      const wrapped: JobHandler = (job) => {
+        if (lineageStore) recordJobLineage(lineageStore, job, ctx.host.log);
+        return runInJobContext(
+          jobExecContext(job, jobType),
           () => runLlmJob(job.variables, binding, rt),
         );
+      };
       const sub = await ctx.engine.registerWorker(jobType, wrapped, {
         workerName: `${ctx.manifest.id}:${jobType}`,
       });
@@ -178,11 +242,13 @@ export async function mountWorkers(ctx: RuntimeContext, app: AppApi): Promise<Wo
           `(expected handlers["${jobType}"], a named export, or a default function)`,
       );
     }
-    const wrapped: JobHandler = (job) =>
-      runInJobContext(
-        { instanceKey: job.processInstanceKey, elementId: job.elementId, jobType },
+    const wrapped: JobHandler = (job) => {
+      if (lineageStore) recordJobLineage(lineageStore, job, ctx.host.log);
+      return runInJobContext(
+        jobExecContext(job, jobType),
         () => handler(job, withJobLog(app, job)),
       );
+    };
     const sub = await ctx.engine.registerWorker(jobType, wrapped, {
       workerName: `${ctx.manifest.id}:${jobType}`,
     });

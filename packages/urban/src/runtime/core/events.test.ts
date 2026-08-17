@@ -173,6 +173,30 @@ test("waterfall — a throwing middleware that never called next is contained an
   assert.deepEqual(contained, ["dispatch"]);
 });
 
+test("waterfall — next() is idempotent within a middleware: a second call re-advances nothing", async () => {
+  const bus = new EventBus();
+  const channel = bus.waterfall<string, string>("reentrant");
+  let downstreamRuns = 0;
+  // Inner middleware counts how often the chain advances past the outer one.
+  channel.on(async (value, next) => {
+    downstreamRuns += 1;
+    return next(value);
+  });
+  let firstPromise: Promise<string> | undefined;
+  let secondPromise: Promise<string> | undefined;
+  channel.on((value, next) => {
+    firstPromise = next(value);
+    // A buggy or defensive middleware calling next() twice must not run the
+    // downstream chain (or its side effects) a second time.
+    secondPromise = next(value);
+    return firstPromise;
+  });
+  const out = await channel.run("v", (v) => `base:${v}`);
+  assert.equal(out, "base:v");
+  assert.equal(downstreamRuns, 1);
+  assert.strictEqual(firstPromise, secondPromise);
+});
+
 test("dispose ladder — a listener disposer detaches it and is idempotent", () => {
   const bus = new EventBus();
   const channel = bus.emit<void>("e");

@@ -255,8 +255,11 @@ test("effect() — an extension's arbitrary resource is torn down on stop", asyn
     },
   };
   const host = await mountExtensions(fakeApi(), [ext]);
-  assert.equal(timerCleared, false);
-  await host.stop();
+  try {
+    assert.equal(timerCleared, false);
+  } finally {
+    await host.stop();
+  }
   assert.equal(timerCleared, true);
 });
 

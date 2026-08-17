@@ -205,7 +205,10 @@ export class WaterfallChannel<T, R> extends ChannelBase<Middleware<T, R>> {
       const middleware = middlewares[index];
       let advanced: Promise<R> | undefined;
       const next = (forwarded: T): Promise<R> => {
-        advanced = dispatch(index + 1, forwarded);
+        // Advance the chain at most once per middleware invocation: a middleware
+        // that calls next() again gets the same downstream promise, so downstream
+        // side effects never run twice and the first promise is never orphaned.
+        if (advanced === undefined) advanced = dispatch(index + 1, forwarded);
         return advanced;
       };
       try {

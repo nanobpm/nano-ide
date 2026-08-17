@@ -142,6 +142,10 @@ test("runtime — extensions dispose cleanly across a start→stop→start cycle
     assert.equal(liveTimers, 0);
     assert.equal(app.events.lifecycle.size, 0);
   } finally {
+    // stop() is idempotent (drains an already-empty ladder on the happy path), so
+    // calling it here guarantees the interval is cleared even if an assertion above
+    // threw before the in-body stop() ran — no leaked timer keeps Node alive.
+    await app.stop();
     await rm(dir, { recursive: true, force: true });
   }
 });

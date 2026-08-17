@@ -689,9 +689,10 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
   table.pc-grid td[colspan] { display:block; }
   table.pc-grid td[colspan]::before { content:none; }
   .pc-group-header td { padding:0; }
-  /* Nav → scrollable bottom bar (bar) / inline stack (rail). The bar pins to the
-     bottom of the viewport as a thumb-reachable tab strip that scrolls sideways
-     when the pages overflow; a rail drops its fixed side column and flows. */
+  /* Nav → horizontally-scrollable bar (bar) / inline stack (rail). The bar keeps
+     its normal top-of-flow position and scrolls sideways when the pages overflow;
+     an opt-in sticky bar stays pinned to the top via the desktop .pc-sticky rule
+     (top:0). A rail drops its fixed side column and flows inline. */
   .pc-layout { display:block; }
   .pc-rail-wrap { position:static; flex-basis:auto; width:auto; margin:0 0 1rem; }
   .pc-rail .pc-nav-items { flex-direction:row; flex-wrap:wrap; }
@@ -762,6 +763,12 @@ let CURRENT = currentPage();
 // this) and to {{param}} text interpolation, so one page template can scope
 // every section to a selected entity (e.g. an epic's plan_key).
 let PARAM = parseRoute().param;
+// Monotonic render token. renderPage() is async and fires from both hashchange
+// and the matchMedia viewport-crossing handler, so two invocations can overlap
+// and their fetches resolve out of order. Each render captures the token it
+// bumped to; after its await it only touches the DOM if it is still the latest,
+// so a stale navigation/viewport render can't overwrite a newer one.
+let renderSeq = 0;
 
 // Per-render teardown. Each dataGrid registers its poll interval + pc:refresh
 // listener here; navigating to another page runs every disposer before the new
@@ -1179,7 +1186,11 @@ function gridCell(col, row, role) {
   //    field text is also mirrored into aria-label so assistive tech announces
   //    the incident/status text (the visible "1" glyph alone is not meaningful).
   if (col.badge) {
-    if (rawText.trim() === "") return el("td", { class: "pc-mcell pc-mcell-chip" });
+    // Even when blank, stamp data-label (the "every td carries data-label"
+    // invariant): the cell still collapses on mobile via the pc-mcell-chip:empty
+    // rule (attributes don't defeat :empty), so this keeps empty and non-empty
+    // badge cells consistent without re-lighting the label.
+    if (rawText.trim() === "") return el("td", { class: "pc-mcell pc-mcell-chip", "data-label": mlabel });
     const t = col.badge.tone;
     const tone = t === "warn" || t === "ok" || t === "info" ? t : "danger";
     const label = col.badge.label == null ? "1" : String(col.badge.label);
@@ -2131,11 +2142,13 @@ function pickNodes(doc) {
 // tearing down the previous page's grid polls first.
 async function renderPage() {
   teardown();
+  const mySeq = ++renderSeq;
   const route = parseRoute();
   CURRENT = route.page;
   PARAM = route.param;
   try {
     const doc = await getJSON("/app/pages/" + encodeURIComponent(CURRENT));
+    if (mySeq !== renderSeq) return;
     document.title = (doc && doc.title) || "Urban App";
     const nodes = pickNodes(doc);
     const built = nodes.map((n) => ({ n, node: makeCollapsible(n, (RENDERERS[n.type] || (() => el("div")))(n)) }));
@@ -2148,6 +2161,7 @@ async function renderPage() {
       root.replaceChildren(...built.map((b) => b.node));
     }
   } catch (e) {
+    if (mySeq !== renderSeq) return;
     root.replaceChildren(el("p", { class: "pc-msg err" }, "Failed to load page: " + String((e && e.message) || e)));
   }
 }

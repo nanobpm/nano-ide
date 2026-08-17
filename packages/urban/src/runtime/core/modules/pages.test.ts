@@ -344,6 +344,14 @@ test("renderer wires a column's badge to a tone-classed pill shown only when pre
   assert.match(js, /class:\s*"pc-badge pc-badge-"\s*\+\s*tone/);
   assert.match(js, /title:\s*rawText/);
   assert.match(js, /"aria-label":\s*rawText/);
+  // Even a blank badge cell stamps data-label, upholding the "every td carries
+  // data-label" invariant so empty and non-empty badge cells stay consistent
+  // (the mobile pc-mcell-chip:empty rule still collapses it — attributes don't
+  // defeat :empty).
+  assert.match(
+    js,
+    /rawText\.trim\(\)\s*===\s*""\s*\)\s*return el\("td",\s*\{ class: "pc-mcell pc-mcell-chip", "data-label": mlabel \}\)/,
+  );
 });
 
 test("renderer interpolates a column's per-cell template into DOM text (#214)", async () => {
@@ -781,6 +789,14 @@ test("the renderer routes between pages by hash and tears down grid polls", asyn
   assert.match(js, /location\.hash/);
   assert.match(js, /window\.addEventListener\("hashchange", renderPage\)/);
   assert.match(js, /async function renderPage\(\)/);
+  // renderPage() fires from both hashchange and the matchMedia viewport handler,
+  // so overlapping async renders must not apply out of order: each captures a
+  // monotonic token and bails after its await if a newer render superseded it
+  // (guarding both the success path and the stale error render).
+  assert.match(js, /let renderSeq = 0/);
+  assert.match(js, /const mySeq = \+\+renderSeq/);
+  assert.match(js, /const doc = await getJSON\([\s\S]*?\);\s*if \(mySeq !== renderSeq\) return;/);
+  assert.match(js, /catch \(e\) \{\s*if \(mySeq !== renderSeq\) return;/);
   // Navigation runs every registered disposer first, so a switched-away grid's
   // poll interval + pc:refresh listener are removed rather than leaking forever.
   assert.match(js, /const disposers = \[\]/);

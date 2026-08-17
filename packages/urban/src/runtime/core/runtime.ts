@@ -20,6 +20,8 @@ import { mountTriggers } from "./modules/triggers.ts";
 import { mountInstanceTracking } from "./modules/instance-tracking.ts";
 import type { SchedulerDeps } from "./modules/scheduler.ts";
 import { mountSecurity, type SecurityPolicy } from "./modules/security.ts";
+import { EventBus } from "./events.ts";
+import { createUrbanEvents, mountExtensions, type UrbanEvents, type UrbanExtension } from "./extensions.ts";
 
 /** Resolve the HTTP port: explicit option, else $PORT, else 8090. Throws a clear
  * error when $PORT is set but not a valid integer in 0..65535. */
@@ -82,6 +84,14 @@ export interface CreateUrbanAppOptions {
    * so one injected scheduler drives them both (no per-module wiring, no drift).
    */
   scheduler?: SchedulerDeps;
+  /**
+   * Pluggable Urban {@link UrbanExtension}s — the agentic families and connector
+   * packs that extend the app lifecycle through the typed extension-event taxonomy
+   * (issue #262) instead of editing the runtime. The runtime runs each through the
+   * `extension/register` serial checkpoint in a deterministic order and disposes
+   * everything they register on `stop()` / HMR. Empty by default.
+   */
+  extensions?: readonly UrbanExtension[];
 }
 
 export interface UrbanApp {
@@ -112,6 +122,14 @@ export interface UrbanApp {
    * `undefined` before `start()`, after `stop()`, and on hosts that don't surface one (Deno).
    */
   readonly httpServer: object | undefined;
+  /**
+   * The app's typed extension-event taxonomy (issue #262): lifecycle notifications,
+   * the extension-registration checkpoint, request/security waterfall gates, and
+   * the reconcile fan-out — each a channel with a declared dispatch mode. Modules
+   * and {@link UrbanExtension}s hook onto these seams instead of wiring directly;
+   * every registration is an effect on a dispose ladder that `stop()` unwinds.
+   */
+  readonly events: UrbanEvents;
 }
 
 export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<UrbanApp> {
@@ -136,6 +154,20 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
   // `app.log`) and the per-invocation `AppApi.log` (workers/route delegates `child()` it with their
   // correlation context).
   const appLog = createLogger((l, m, f) => host.log(l, m, f));
+
+  // The app-wide extension-event microkernel (issue #262): one typed taxonomy over
+  // one dispose ladder. Contained listener throws land in the structured log rather
+  // than stranding the pipeline. Modules and extensions hook onto `events`; the
+  // whole ladder unwinds on teardown.
+  const bus = new EventBus({
+    onError: (err, info) =>
+      appLog.warn("extension listener threw and was contained", {
+        event: info.event,
+        mode: info.mode,
+        error: String(err),
+      }),
+  });
+  const events = createUrbanEvents(bus);
 
   // Install the ambient job-execution store once per process (idempotent) so worker dispatch can
   // stamp write-provenance onto DataLayer inserts. Absent-safe: a host without `createAsyncStore`
@@ -162,6 +194,8 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
   // Release every mounted resource and reset internal state so a subsequent
   // start() begins clean. Used by stop() and by start()'s failure path.
   const teardown = async () => {
+    // Notify lifecycle listeners before we start tearing seams down (issue #262).
+    events.lifecycle.emit({ app: manifest.id, phase: "stopping" });
     if (server) {
       try {
         await server.stop();
@@ -189,12 +223,18 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     data = undefined;
     security = undefined;
     started = false;
+    // Terminal lifecycle notification, then unwind the whole dispose ladder LIFO:
+    // every extension listener/effect (and the lifecycle channel itself) is torn
+    // down, so a subsequent start() — or a dev-server HMR reload — leaks nothing.
+    events.lifecycle.emit({ app: manifest.id, phase: "stopped" });
+    bus.dispose();
   };
 
   const app: UrbanApp = {
     manifest,
     root,
     log: appLog,
+    events,
     get data() {
       return data;
     },
@@ -212,6 +252,7 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
     async start() {
       if (started) throw new Error("app already started");
       started = true;
+      events.lifecycle.emit({ app: manifest.id, phase: "starting" });
       try {
         if (flags.security) security = mountSecurity(ctx);
         if (flags.deploy) describe.deploy = await deployModels(ctx);
@@ -236,6 +277,13 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
           mounted.push(c);
           if (c.jobTypes.length > 0) describe.connectors = c.describe?.();
         }
+
+        // Run the agentic-family / connector-pack extension surface through the
+        // typed taxonomy (issue #262). Everything an extension registers rides the
+        // shared dispose ladder, so teardown's single `bus.dispose()` unwinds it —
+        // the extension host is deliberately NOT pushed onto `mounted`.
+        const extHost = await mountExtensions(api, opts.extensions ?? [], { bus, events });
+        describe.extensions = extHost.describe?.();
 
         const routes: Route[] = [];
         let hasUiSurfaces = false;
@@ -308,6 +356,7 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
           }
         }
         host.log("info", `urban app "${manifest.id}" started`, {});
+        events.lifecycle.emit({ app: manifest.id, phase: "started" });
       } catch (err) {
         // A failed start must not leave the app half-mounted (leaked workers,
         // a bound port) or wedged in the "already started" state.

@@ -4,6 +4,8 @@ import { runDev, shouldReload, type DevDeps } from "./devserver.ts";
 import type { HostContext } from "./core/host.ts";
 import type { UrbanApp } from "./core/runtime.ts";
 import { createLogger } from "./core/logger.ts";
+import { createUrbanEvents } from "./core/extensions.ts";
+import { EventBus } from "./core/events.ts";
 
 const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -232,6 +234,7 @@ function fakeApp(stops: string[], id: string): UrbanApp {
     security: undefined,
     httpPort: undefined,
     httpServer: undefined,
+    events: createUrbanEvents(new EventBus()),
   };
 }
 

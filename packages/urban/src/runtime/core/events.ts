@@ -66,7 +66,7 @@ const defaultErrorSink: ErrorSink = (err, info) => {
  *  channel owns one of these; the bus owns the global dispose ladder that every
  *  channel pushes its per-listener disposers onto. */
 class ChannelBase<F> {
-  protected readonly listeners = new Set<F>();
+  protected readonly listeners = new Map<F, Disposer>();
   readonly event: string;
   readonly mode: DispatchMode;
   private readonly ladder: Set<Disposer>;
@@ -80,9 +80,14 @@ class ChannelBase<F> {
   }
 
   /** Register `listener` as an effect: it joins this channel AND the bus dispose
-   *  ladder. The returned disposer removes it from both and is idempotent. */
+   *  ladder. The returned disposer removes it from both and is idempotent.
+   *  Registration is itself idempotent per listener — registering the same
+   *  function twice coalesces to one ladder entry and hands back the *same*
+   *  disposer, so `listenerCount` never drifts from the actual listener set and
+   *  disposing one registration can't silently strand a phantom ladder entry. */
   protected register(listener: F): Disposer {
-    this.listeners.add(listener);
+    const existing = this.listeners.get(listener);
+    if (existing !== undefined) return existing;
     let disposed = false;
     const dispose: Disposer = () => {
       if (disposed) return;
@@ -90,6 +95,7 @@ class ChannelBase<F> {
       this.listeners.delete(listener);
       this.ladder.delete(dispose);
     };
+    this.listeners.set(listener, dispose);
     this.ladder.add(dispose);
     return dispose;
   }
@@ -122,7 +128,7 @@ export class EmitChannel<T> extends ChannelBase<Listener<T>> {
    *  snapshotted at dispatch start (as in `parallel`/`waterfall`), so a listener
    *  registered mid-emission is not observed until the next `emit`. */
   emit(payload: T): void {
-    for (const listener of [...this.listeners]) {
+    for (const listener of [...this.listeners.keys()]) {
       try {
         const result: unknown = listener(payload);
         if (result instanceof Promise) {
@@ -149,7 +155,7 @@ export class SerialChannel<T> extends ChannelBase<Listener<T>> {
    *  so a listener registered mid-checkpoint is not observed until the next
    *  `run`. */
   async run(payload: T): Promise<void> {
-    for (const listener of [...this.listeners]) {
+    for (const listener of [...this.listeners.keys()]) {
       try {
         await listener(payload);
       } catch (err) {
@@ -170,7 +176,7 @@ export class ParallelChannel<T> extends ChannelBase<Listener<T>> {
    *  `session/flush` durability checkpoint). */
   async run(payload: T): Promise<void> {
     await Promise.all(
-      [...this.listeners].map(async (listener) => {
+      [...this.listeners.keys()].map(async (listener) => {
         try {
           await listener(payload);
         } catch (err) {
@@ -193,7 +199,7 @@ export class WaterfallChannel<T, R> extends ChannelBase<Middleware<T, R>> {
    *  (the chain continues with the unchanged value) so it never strands the
    *  pipeline. */
   async run(seed: T, base: (value: T) => R | Promise<R>): Promise<R> {
-    const middlewares = [...this.listeners];
+    const middlewares = [...this.listeners.keys()];
     const dispatch = async (index: number, value: T): Promise<R> => {
       if (index >= middlewares.length) return base(value);
       const middleware = middlewares[index];

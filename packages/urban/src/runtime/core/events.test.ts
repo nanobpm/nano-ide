@@ -311,3 +311,29 @@ test("scope() — keeps unwinding when a rolled-back disposer registers a new ef
   void before;
   bus.dispose();
 });
+
+test("register — .on(sameListener) twice is idempotent: one ladder entry, shared disposer, no drift", () => {
+  const bus = new EventBus();
+  const channel = bus.emit<string>("e");
+  const seen: string[] = [];
+  const listener = (m: string) => seen.push(m);
+
+  const off1 = channel.on(listener);
+  const off2 = channel.on(listener);
+  // A duplicate registration must not inflate the leak metric nor the channel.
+  assert.equal(channel.size, 1);
+  assert.equal(bus.listenerCount, 1);
+  // The same disposer is handed back, so callers can't get out of sync.
+  assert.equal(off1, off2);
+
+  // The coalesced listener fires exactly once per emit.
+  channel.emit("x");
+  assert.deepEqual(seen, ["x"]);
+
+  // Disposing once fully removes it — the ladder does not strand a phantom entry.
+  off1();
+  assert.equal(channel.size, 0);
+  assert.equal(bus.listenerCount, 0);
+  off2(); // idempotent second disposer call
+  assert.equal(bus.listenerCount, 0);
+});

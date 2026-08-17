@@ -107,31 +107,32 @@ export async function expandPattern(root: string, io: GenIO, pattern: string): P
 }
 
 /** The deploy-by-convention directory (ADR 0062): when the manifest declares no `models`, both the
- *  runtime deploy and this codegen scan discover deployables/models under it — shallow, one level
- *  deep (`resources/*` and `resources/<subdir>/*`). Deploy-only by convention. */
+ *  runtime deploy and this codegen scan discover deployables/models under it — **recursively**,
+ *  every file at any depth (issue #231). Deploy-only by convention. */
 export const RESOURCES_DIR = "resources";
 
 /** Model file extensions the `nano:shape`/code-first scan reads by convention (BPMN + DMN). */
 const MODEL_EXTS = [".bpmn", ".dmn"];
 
 /**
- * Discover model files under `resources/` by convention — shallow, one level deep (`resources/*`
- * and `resources/<subdir>/*`), never deeper — mirroring the runtime deploy walk so the codegen scan
- * and the deploy see the same set. Returns root-relative paths, sorted. Descending one level needs
+ * Discover model files under `resources/` by convention — **recursively**, every `.bpmn`/`.dmn`
+ * under `resources/` at any depth (issue #231) — mirroring the runtime deploy walk so the codegen
+ * scan and the deploy see the same set. Returns root-relative paths, sorted. Descending needs
  * `io.listSubdirs`; without it only the files directly under `resources/` are scanned.
  */
 export async function discoverResourceModels(root: string, io: GenIO): Promise<string[]> {
   const isModel = (n: string): boolean => MODEL_EXTS.some((e) => n.endsWith(e));
   const out: string[] = [];
-  for (const n of await io.listDir(join(root, RESOURCES_DIR))) {
-    if (isModel(n)) out.push(`${RESOURCES_DIR}/${n}`);
-  }
-  const subdirs = io.listSubdirs ? await io.listSubdirs(join(root, RESOURCES_DIR)) : [];
-  for (const sub of subdirs.slice().sort()) {
-    for (const n of await io.listDir(join(root, `${RESOURCES_DIR}/${sub}`))) {
-      if (isModel(n)) out.push(`${RESOURCES_DIR}/${sub}/${n}`);
+  const walk = async (rel: string): Promise<void> => {
+    for (const n of await io.listDir(join(root, rel))) {
+      if (isModel(n)) out.push(`${rel}/${n}`);
     }
-  }
+    const subdirs = io.listSubdirs ? await io.listSubdirs(join(root, rel)) : [];
+    for (const sub of subdirs.slice().sort()) {
+      await walk(`${rel}/${sub}`);
+    }
+  };
+  await walk(RESOURCES_DIR);
   return out.sort();
 }
 

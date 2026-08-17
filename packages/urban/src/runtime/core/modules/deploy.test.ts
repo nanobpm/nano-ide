@@ -27,7 +27,11 @@ interface Harness {
 /** A virtual-filesystem host over `files` (keyed by absolute path) plus a recording engine. The
  *  host implements `listDir` (files under a dir) and `listSubdirs` (immediate sub-directories), so
  *  the convention walk (`resources/*` + `resources/<subdir>/*`) can be exercised. */
-function makeHarness(files: Record<string, string>, manifest: Partial<AppManifest>): Harness {
+function makeHarness(
+  files: Record<string, string>,
+  manifest: Partial<AppManifest>,
+  engineOverride?: { deployResources: (r: DeployedResource[]) => Promise<{ deployed: number }> },
+): Harness {
   const logs: Harness["logs"] = [];
   const deployed: DeployedResource[] = [];
   const dirsUnder = (dir: string): Set<string> => {
@@ -58,7 +62,7 @@ function makeHarness(files: Record<string, string>, manifest: Partial<AppManifes
         .map((f) => f.slice(f.lastIndexOf("/") + 1)),
     listSubdirs: async (dir: string) => [...dirsUnder(dir)],
   } as unknown as HostContext;
-  const engine = {
+  const engine = engineOverride ?? {
     deployResources: async (resources: DeployedResource[]) => {
       deployed.push(...resources);
       return { deployed: resources.length };
@@ -138,43 +142,107 @@ test("deployModels discovers resources/ by convention when no models are declare
     {},
   );
   const res = await deployModels(ctx);
+  // Convention resources are keyed by their path RELATIVE to resources/ (POSIX), not the basename.
   const names = deployed.map((d) => d.name).sort();
-  assert.deepEqual(names, ["decide.dmn", "greet.form", "order.bpmn", "review.md"]);
+  assert.deepEqual(names, ["decide.dmn", "forms/greet.form", "order.bpmn", "prompts/review.md"]);
   assert.equal(res.deployed, 4);
-  // A prompt (.md under resources/) is a GenericScript resource → octet-stream content type.
-  const prompt = deployed.find((d) => d.name === "review.md");
-  assert.equal(prompt?.contentType, "application/octet-stream");
+  // A prompt (.md under resources/) is a generic resource content-typed text/markdown, deployed
+  // verbatim and keyed by its relative-path resourceId.
+  const prompt = deployed.find((d) => d.name === "prompts/review.md");
+  assert.equal(prompt?.contentType, "text/markdown");
   assert.equal(prompt?.content, "Do the review");
   assert.ok(logs.some((l) => l.fields?.byConvention === true));
 });
 
-test("deployModels convention walk is shallow — one level deep only", async () => {
+test("deployModels convention walk is recursive — every file at any depth", async () => {
   const { ctx, deployed } = makeHarness(
     {
       "/app/resources/top.bpmn": "<a/>",
       "/app/resources/sub/one.bpmn": "<b/>",
-      // Two levels deep: NOT swept in (shallow-by-convention).
+      // Two levels deep: now swept in (recursive-by-convention, issue #231).
       "/app/resources/sub/deeper/two.bpmn": "<c/>",
     },
     {},
   );
   await deployModels(ctx);
   const names = deployed.map((d) => d.name).sort();
-  assert.deepEqual(names, ["one.bpmn", "top.bpmn"]);
+  assert.deepEqual(names, ["sub/deeper/two.bpmn", "sub/one.bpmn", "top.bpmn"]);
 });
 
-test("deployModels errors on a basename collision across resources/ subdirs", async () => {
-  const { ctx } = makeHarness(
+test("deployModels keys same-named files in different subdirs as distinct relative-path resources", async () => {
+  // resources/a/x.md and resources/b/x.md share a basename but deploy as distinct resourceIds —
+  // no collision (issue #231).
+  const { ctx, deployed } = makeHarness(
     {
-      "/app/resources/a/order.bpmn": "<a/>",
-      "/app/resources/b/order.bpmn": "<b/>",
+      "/app/resources/a/order.md": "<a/>",
+      "/app/resources/b/order.md": "<b/>",
     },
     {},
   );
-  await assert.rejects(deployModels(ctx), /basename collision/);
+  const res = await deployModels(ctx);
+  assert.equal(res.deployed, 2);
+  const byName = Object.fromEntries(deployed.map((d) => [d.name, d]));
+  assert.equal(byName["a/order.md"].content, "<a/>");
+  assert.equal(byName["b/order.md"].content, "<b/>");
 });
 
-test("deployModels errors on a basename collision under an explicit override too", async () => {
+test("deployModels infers a content type per extension for generic resources", async () => {
+  const { ctx, deployed } = makeHarness(
+    {
+      "/app/resources/prompts/plan.md": "# plan",
+      "/app/resources/data/config.json": "{}",
+      "/app/resources/notes/readme.txt": "hi",
+      "/app/resources/bin/blob.rpa": "\u0000binary",
+    },
+    {},
+  );
+  await deployModels(ctx);
+  const byName = Object.fromEntries(deployed.map((d) => [d.name, d]));
+  assert.equal(byName["prompts/plan.md"].contentType, "text/markdown");
+  assert.equal(byName["data/config.json"].contentType, "application/json");
+  assert.equal(byName["notes/readme.txt"].contentType, "text/plain");
+  // Unknown extension → octet-stream, deployed verbatim (never mislabelled/mangled).
+  assert.equal(byName["bin/blob.rpa"].contentType, "application/octet-stream");
+  assert.equal(byName["bin/blob.rpa"].content, "\u0000binary");
+});
+
+test("deployModels deploys a generic resource verbatim (no {{token}} substitution)", async () => {
+  const { ctx, deployed } = makeHarness(
+    { "/app/resources/prompts/review.md": "Review {{pr}} carefully" },
+    {},
+  );
+  await deployModels(ctx);
+  assert.equal(deployed[0].content, "Review {{pr}} carefully");
+});
+
+test("deployModels redeploy is idempotent per resourceId+content, new content bumps the version", async () => {
+  // Model the engine's name+checksum duplicate rule: identical resourceId+content is skipped (no
+  // version bump); changed content advances the latest pointer (issue #231 acceptance).
+  const versions = new Map<string, string[]>();
+  const engine = {
+    deployResources: async (resources: DeployedResource[]) => {
+      let deployed = 0;
+      for (const r of resources) {
+        const history = versions.get(r.name) ?? [];
+        if (history[history.length - 1] !== r.content) {
+          history.push(r.content);
+          versions.set(r.name, history);
+          deployed++;
+        }
+      }
+      return { deployed };
+    },
+  };
+  const files: Record<string, string> = { "/app/resources/prompts/plan.md": "v1" };
+  const mk = () => makeHarness(files, {}, engine).ctx;
+  assert.equal((await deployModels(mk())).deployed, 1); // first deploy → v1
+  assert.equal((await deployModels(mk())).deployed, 0); // unchanged → no-op
+  files["/app/resources/prompts/plan.md"] = "v2";
+  assert.equal((await deployModels(mk())).deployed, 1); // changed → new version
+  assert.deepEqual(versions.get("prompts/plan.md"), ["v1", "v2"]);
+});
+
+test("deployModels errors on a basename collision under an explicit override", async () => {
   const { ctx } = makeHarness(
     {
       "/app/processes/order.bpmn": "<a/>",

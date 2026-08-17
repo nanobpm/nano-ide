@@ -26,6 +26,22 @@ test("emit — a throwing listener is contained; the rest still run", () => {
   assert.deepEqual(contained, ["boom"]);
 });
 
+test("emit — a rejecting async listener is contained, not an unhandled rejection", async () => {
+  const contained: string[] = [];
+  const bus = new EventBus({ onError: (_e, info) => contained.push(info.event) });
+  const channel = bus.emit<void>("boom");
+  const seen: string[] = [];
+  channel.on(async () => {
+    throw new Error("async nope");
+  });
+  channel.on(() => seen.push("ran"));
+  channel.emit();
+  assert.deepEqual(seen, ["ran"]);
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(contained, ["boom"]);
+});
+
 test("serial — listeners run in registration order, each awaited", async () => {
   const bus = new EventBus();
   const channel = bus.serial<number>("checkpoint");

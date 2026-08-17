@@ -116,11 +116,18 @@ export class EmitChannel<T> extends ChannelBase<Listener<T>> {
   }
 
   /** Notify every listener synchronously; a throw is contained, the rest still
-   *  run. A listener may return a promise, but `emit` does not await it. */
+   *  run. A listener may return a promise, but `emit` does not await it — its
+   *  rejection is still contained (fire-and-forget `.catch`) so an `async`
+   *  listener can never surface as an unhandled rejection. */
   emit(payload: T): void {
     for (const listener of this.listeners) {
       try {
-        void listener(payload);
+        const result: unknown = listener(payload);
+        if (result instanceof Promise) {
+          result.catch((err: unknown) => {
+            this.contain(err);
+          });
+        }
       } catch (err) {
         this.contain(err);
       }

@@ -627,6 +627,30 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-group-toggle { display:flex; align-items:center; gap:.5rem; width:100%; padding:.4rem .6rem; background:transparent; border:0; color:inherit; font:inherit; font-weight:600; cursor:pointer; text-align:left; }
 .pc-group-toggle:hover { background:var(--nano-hover); }
 .pc-group-title { font-size:.9rem; }
+/* Data-bound prose/markdown list (renderProse, #274). Long-form narrative
+   records — plan-review findings, coordination notes, escalation bodies — read
+   as a stacked, full-width document at a comfortable measure (~66ch) instead of
+   being jammed into a grid column. Each item stacks a small header over a
+   markdown-rendered body; the body max-width is set inline per node (props.measure)
+   with this rule as the no-JS fallback. */
+.pc-prose-list { display:flex; flex-direction:column; gap:1.1rem; }
+.pc-prose-item { border-top:1px solid var(--nano-edge); padding-top:.9rem; }
+.pc-prose-item:first-child { border-top:0; padding-top:0; }
+.pc-prose-head { font-size:.8rem; font-weight:600; color:var(--nano-text-muted); text-transform:uppercase; letter-spacing:.03em; margin:0 0 .35rem; }
+.pc-prose-empty { color:var(--nano-text-faint); }
+.pc-prose-body { max-width:66ch; }
+.pc-prose-body > :first-child { margin-top:0; }
+.pc-prose-body > :last-child { margin-bottom:0; }
+.pc-md-p { margin:.55rem 0; overflow-wrap:anywhere; }
+.pc-md-h { font-size:1.05rem; font-weight:650; margin:.95rem 0 .4rem; }
+.pc-md-list { margin:.45rem 0; padding-left:1.35rem; }
+.pc-md-list li { margin:.15rem 0; }
+.pc-md-quote { margin:.6rem 0; padding:.1rem .9rem; border-left:3px solid var(--nano-edge-strong); color:var(--nano-text-muted); }
+.pc-md-pre { background:var(--nano-inset); border:1px solid var(--nano-edge); border-radius:.4rem; padding:.7rem .8rem; overflow:auto; margin:.6rem 0; }
+.pc-md-pre code { font:.82rem/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--nano-text); white-space:pre; }
+.pc-md-code { background:var(--nano-inset); border-radius:.3rem; padding:.05rem .3rem; font:.85em ui-monospace,SFMono-Regular,Menlo,monospace; }
+.pc-md-hr { border:0; border-top:1px solid var(--nano-edge); margin:1rem 0; }
+.pc-prose-body a { color:var(--nano-accent-strong); }
 /* A standalone button node + the modal it opens (e.g. a copy-pasteable prompt). */
 .pc-buttonrow { margin:1rem 0; }
 .pc-btn-ghost { background:transparent; color:var(--nano-text-muted); border:1px solid var(--nano-edge); }
@@ -735,8 +759,8 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 
 // The schema-driven browser renderer (ADR 0042 §3). Plain ES module string served at
 // /app/runtime.js — it does NOT ship Craft.js (authoring is console-side only). It
-// fetches the home page's page.json and renders text / actionForm / dataGrid nodes,
-// wiring actionForm → /app/actions/start and dataGrid → /app/data (with a refresh).
+// fetches the home page's page.json and renders text / actionForm / dataGrid / prose
+// nodes, wiring actionForm → /app/actions/start and dataGrid/prose → /app/data (with a refresh).
 const RENDERER_JS = String.raw`
 const root = document.getElementById("page");
 const HOME = root.dataset.home || "home";
@@ -1735,6 +1759,248 @@ function renderActionForm(node) {
 // Single source of truth for both the initial render and every refresh below.
 function rowCountLabel(n) { return n + (n === 1 ? " row" : " rows"); }
 
+// Build the /app/data/<source>/<table> URL a data-bound list renderer fetches,
+// threading the whitelisted where/order query params. Shared by dataGrid and the
+// prose renderer so the two can't drift on how a filter/orderBy is encoded. A
+// filter is { field, in:[…] } (IN set), { field, eqParam:true } (bound to the
+// current route PARAM — "show the selected entity's rows"), or { field, eq } (a
+// literal equals); orderBy is { field, dir }. The source/table/field names are
+// server-side whitelisted (the /app/data route rejects unknown columns).
+function dataUrl(source, tbl, filters, order) {
+  let u = "/app/data/" + encodeURIComponent(source) + "/" + encodeURIComponent(tbl);
+  const qs = [];
+  for (const f of filters || []) {
+    if (Array.isArray(f.in)) qs.push("where=" + encodeURIComponent(f.field + ":in:" + f.in.join(",")));
+    else if (f.eqParam) qs.push("where=" + encodeURIComponent(f.field + ":" + PARAM));
+    else qs.push("where=" + encodeURIComponent(f.field + ":" + f.eq));
+  }
+  if (order && order.field) qs.push("order=" + encodeURIComponent(order.field + ":" + (order.dir || "asc")));
+  return qs.length ? u + "?" + qs.join("&") : u;
+}
+
+// ── Minimal, safe Markdown → DOM (no innerHTML) — used by the prose renderer ──
+// A dependency-free CommonMark subset. It NEVER sets innerHTML: every block and
+// inline token is materialised as a known element via el(), with text set through
+// textContent / createTextNode — so a record's body field may carry markdown
+// WITHOUT ever becoming an HTML/script injection vector (the same text-only
+// guarantee interpTemplate gives a grid cell). Supported: ATX headings
+// (#..######), fenced + inline code, bold (**/__), italic (*/_), links
+// [text](url) (http/https/mailto only — every other scheme degrades to its plain
+// label), unordered (-,*,+) and ordered (1. / 1)) lists, blockquotes (>),
+// thematic breaks (---), and blank-line-separated paragraphs. The backtick used
+// for code spans/fences is built from a char code so this source stays inside the
+// String.raw template literal (which is itself delimited by a backtick).
+const MD_BACKTICK = String.fromCharCode(96);
+function mdIsWordChar(c) { return typeof c === "string" && /[0-9A-Za-z]/.test(c); }
+// Only http(s)/mailto hrefs become anchors; anything else (javascript:, data:,
+// vbscript:, a bare relative path, …) returns "" so the caller renders the label
+// as plain text rather than a clickable, potentially-hostile link.
+function mdSafeHref(href) {
+  const h = String(href == null ? "" : href).trim();
+  return /^(?:https?:|mailto:)/i.test(h) ? h : "";
+}
+// Find the closing run of 'marker' at or after 'from'. For underscore emphasis the
+// close must not be intra-word (a following alphanumeric means snake_case, not a
+// delimiter), so keep scanning past such runs; -1 when there is no valid close.
+function mdFindClose(s, marker, from, underscore) {
+  let j = from;
+  while (true) {
+    const k = s.indexOf(marker, j);
+    if (k < 0) return -1;
+    if (!underscore || !mdIsWordChar(s[k + marker.length])) return k;
+    j = k + marker.length;
+  }
+}
+function mdInline(text) {
+  const s = String(text == null ? "" : text);
+  const nodes = [];
+  let buf = "";
+  const flush = () => { if (buf) { nodes.push(document.createTextNode(buf)); buf = ""; } };
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    // Backslash escape: the next char is emitted literally, never as a delimiter.
+    if (ch === "\\" && i + 1 < s.length) { buf += s[i + 1]; i += 2; continue; }
+    // Inline code span — verbatim, no nested inline parsing.
+    if (ch === MD_BACKTICK) {
+      const end = s.indexOf(MD_BACKTICK, i + 1);
+      if (end > i) { flush(); nodes.push(el("code", { class: "pc-md-code" }, s.slice(i + 1, end))); i = end + 1; continue; }
+    }
+    // Strong (** or __). Underscore only when it opens on a word boundary so an
+    // identifier like a__b doesn't get mangled into emphasis.
+    if ((ch === "*" || ch === "_") && s[i + 1] === ch) {
+      const underscore = ch === "_";
+      if (!underscore || !mdIsWordChar(s[i - 1])) {
+        const marker = ch + ch;
+        const end = mdFindClose(s, marker, i + 2, underscore);
+        if (end > i + 1) { flush(); nodes.push(el("strong", {}, ...mdInline(s.slice(i + 2, end)))); i = end + 2; continue; }
+      }
+    }
+    // Emphasis (* or _), same word-boundary guard for underscore.
+    if (ch === "*" || ch === "_") {
+      const underscore = ch === "_";
+      if (!underscore || !mdIsWordChar(s[i - 1])) {
+        const end = mdFindClose(s, ch, i + 1, underscore);
+        if (end > i + 1) { flush(); nodes.push(el("em", {}, ...mdInline(s.slice(i + 1, end)))); i = end + 1; continue; }
+      }
+    }
+    // Link [label](href): href sanitised; an unsafe scheme drops to the label text.
+    if (ch === "[") {
+      const close = s.indexOf("]", i + 1);
+      if (close > i && s[close + 1] === "(") {
+        const paren = s.indexOf(")", close + 2);
+        if (paren > close) {
+          const href = mdSafeHref(s.slice(close + 2, paren));
+          const label = mdInline(s.slice(i + 1, close));
+          flush();
+          if (href) nodes.push(el("a", { href: href, target: "_blank", rel: "noopener noreferrer" }, ...label));
+          else for (const l of label) nodes.push(l);
+          i = paren + 1; continue;
+        }
+      }
+    }
+    buf += ch; i++;
+  }
+  flush();
+  return nodes;
+}
+// Regexes that classify a block-opening line; shared by the block loop and the
+// paragraph terminator so the two can't disagree on where a paragraph ends.
+const MD_HEADING = /^(#{1,6})\s+(.*)$/;
+const MD_QUOTE = /^>\s?/;
+const MD_UL = /^[-*+]\s+/;
+const MD_OL = /^\d+[.)]\s+/;
+const MD_HR = /^([-*_])(?:\s*\1){2,}\s*$/;
+function mdBlockStart(t) {
+  return t.slice(0, 3) === MD_BACKTICK + MD_BACKTICK + MD_BACKTICK
+    || MD_HEADING.test(t) || MD_QUOTE.test(t) || MD_UL.test(t) || MD_OL.test(t) || MD_HR.test(t);
+}
+// Parse a markdown string into an array of block-level DOM nodes.
+function mdToNodes(src) {
+  const out = [];
+  const fence = MD_BACKTICK + MD_BACKTICK + MD_BACKTICK;
+  const lines = String(src == null ? "" : src).replace(/\r\n?/g, "\n").split("\n");
+  let i = 0;
+  while (i < lines.length) {
+    const t = lines[i].trim();
+    if (t === "") { i++; continue; }
+    // Fenced code block — content is verbatim (no inline parsing).
+    if (t.slice(0, 3) === fence) {
+      const body = [];
+      i++;
+      while (i < lines.length && lines[i].trim().slice(0, 3) !== fence) { body.push(lines[i]); i++; }
+      if (i < lines.length) i++; // consume the closing fence
+      out.push(el("pre", { class: "pc-md-pre" }, el("code", {}, body.join("\n"))));
+      continue;
+    }
+    // Thematic break (checked before lists so "***"/"---" isn't read as a bullet).
+    if (MD_HR.test(t)) { out.push(el("hr", { class: "pc-md-hr" })); i++; continue; }
+    // ATX heading.
+    const h = MD_HEADING.exec(t);
+    if (h) { out.push(el("h" + h[1].length, { class: "pc-md-h" }, ...mdInline(h[2].trim()))); i++; continue; }
+    // Blockquote — strip one '>' per line and re-parse the inner block(s).
+    if (MD_QUOTE.test(t)) {
+      const inner = [];
+      while (i < lines.length && MD_QUOTE.test(lines[i].trim())) { inner.push(lines[i].trim().replace(MD_QUOTE, "")); i++; }
+      const bq = el("blockquote", { class: "pc-md-quote" });
+      for (const b of mdToNodes(inner.join("\n"))) bq.append(b);
+      out.push(bq); continue;
+    }
+    // Unordered list.
+    if (MD_UL.test(t)) {
+      const ul = el("ul", { class: "pc-md-list" });
+      while (i < lines.length && MD_UL.test(lines[i].trim())) {
+        ul.append(el("li", {}, ...mdInline(lines[i].trim().replace(MD_UL, ""))));
+        i++;
+      }
+      out.push(ul); continue;
+    }
+    // Ordered list.
+    if (MD_OL.test(t)) {
+      const ol = el("ol", { class: "pc-md-list" });
+      while (i < lines.length && MD_OL.test(lines[i].trim())) {
+        ol.append(el("li", {}, ...mdInline(lines[i].trim().replace(MD_OL, ""))));
+        i++;
+      }
+      out.push(ol); continue;
+    }
+    // Paragraph — soft-wrapped lines joined with a space until a blank line or the
+    // next block opener.
+    const para = [];
+    while (i < lines.length) {
+      const lt = lines[i].trim();
+      if (lt === "" || mdBlockStart(lt)) break;
+      para.push(lt); i++;
+    }
+    out.push(el("p", { class: "pc-md-p" }, ...mdInline(para.join(" "))));
+  }
+  return out;
+}
+
+// A data-bound prose/markdown list (#274). Binds a datasource like dataGrid
+// (props.data = { source, table, orderBy, filter }) but renders each row as a
+// stacked prose block — a small header template (props.header, e.g.
+// "Round {{round}} · {{approved}}") over one body field (props.body) rendered as
+// sanitised markdown at a comfortable measure (props.measure ch, ~66 default).
+// This is the primitive for narrative records (plan-review findings, coordination
+// notes, escalation bodies) that read as a document, not a squeezed table cell.
+// It inherits collapsible/defaultCollapsed for free via makeCollapsible (which
+// unwraps the <h2> title), and refreshMs polling + pc:refresh like dataGrid.
+function renderProse(node) {
+  const p = node.props || {};
+  const data = p.data || {};
+  const card = el("section", { class: "pc-card" });
+  if (p.title) card.append(el("h2", {}, p.title));
+  const listEl = el("div", { class: "pc-prose-list" });
+  card.append(listEl);
+  const headerTpl = typeof p.header === "string" ? p.header : null;
+  const bodyField = p.body;
+  // Clamp the reading measure to a sane range so a malformed schema can't set a
+  // 5000ch (full-bleed) or 2ch (one-word-per-line) body. ~66ch is the default.
+  let measure = Number(p.measure);
+  if (!Number.isFinite(measure)) measure = 66;
+  measure = Math.max(40, Math.min(100, Math.round(measure)));
+  const activeFilter = Array.isArray(data.filter) ? data.filter : [];
+
+  function itemFor(row) {
+    const item = el("article", { class: "pc-prose-item" });
+    if (headerTpl) item.append(el("div", { class: "pc-prose-head" }, interpTemplate(headerTpl, row)));
+    const bodyEl = el("div", { class: "pc-prose-body", style: "max-width:" + measure + "ch" });
+    // Own-property gate (matching interpTemplate) so a body field name that
+    // collides with a prototype key can't pick up prototype cruft.
+    const raw = bodyField != null && Object.prototype.hasOwnProperty.call(row, bodyField) && row[bodyField] != null
+      ? String(row[bodyField])
+      : "";
+    for (const b of mdToNodes(raw)) bodyEl.append(b);
+    item.append(bodyEl);
+    return item;
+  }
+
+  async function refresh() {
+    try {
+      // A param-scoped list ("show the selected entity's records") with no route
+      // param present renders nothing rather than a field=empty-string query.
+      const paramScoped = (activeFilter || []).some((f) => f && f.eqParam);
+      const { rows } = paramScoped && PARAM === ""
+        ? { rows: [] }
+        : await getJSON(dataUrl(data.source, data.table, activeFilter, data.orderBy));
+      listEl.replaceChildren();
+      if (!rows.length) { listEl.append(el("p", { class: "pc-prose-empty" }, p.empty || "No records")); return; }
+      for (const row of rows) listEl.append(itemFor(row));
+    } catch (e) {
+      listEl.replaceChildren(el("p", { class: "pc-msg err" }, String((e && e.message) || e)));
+    }
+  }
+  document.addEventListener("pc:refresh", refresh);
+  disposers.push(() => document.removeEventListener("pc:refresh", refresh));
+  if (p.refreshMs && p.refreshMs > 0) {
+    const timer = setInterval(refresh, p.refreshMs);
+    disposers.push(() => clearInterval(timer));
+  }
+  refresh();
+  return card;
+}
+
 function renderDataGrid(node) {
   const p = node.props;
   const card = el("section", { class: "pc-card" });
@@ -1807,18 +2073,6 @@ function renderDataGrid(node) {
     const v = row[p.rowKey];
     return v == null ? null : String(v);
   };
-
-  function dataUrl(source, tbl, filters, order) {
-    let u = "/app/data/" + encodeURIComponent(source) + "/" + encodeURIComponent(tbl);
-    const qs = [];
-    for (const f of filters || []) {
-      if (Array.isArray(f.in)) qs.push("where=" + encodeURIComponent(f.field + ":in:" + f.in.join(",")));
-      else if (f.eqParam) qs.push("where=" + encodeURIComponent(f.field + ":" + PARAM));
-      else qs.push("where=" + encodeURIComponent(f.field + ":" + f.eq));
-    }
-    if (order && order.field) qs.push("order=" + encodeURIComponent(order.field + ":" + (order.dir || "asc")));
-    return qs.length ? u + "?" + qs.join("&") : u;
-  }
 
   async function fireAction(action, row) {
     // Route-driven row action: POST the action's body template (default {})
@@ -2225,7 +2479,7 @@ function renderNav(node) {
   return nav;
 }
 
-const RENDERERS = { text: renderText, actionForm: renderActionForm, dataGrid: renderDataGrid, nav: renderNav, button: renderButton };
+const RENDERERS = { text: renderText, actionForm: renderActionForm, dataGrid: renderDataGrid, prose: renderProse, nav: renderNav, button: renderButton };
 
 // Durable per-node UI state. localStorage is keyed by the home page id + node
 // id so two grids on the same page (or the same grid across pages) don't clash,

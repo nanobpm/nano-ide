@@ -77,6 +77,30 @@ test("buildScopeIndex captures nano:phase overrides in attribute and zeebe:prope
   assert.equal(idx.elements.get("draft-plan")?.phaseOverride, undefined);
 });
 
+test("buildScopeIndex ignores over-broad matches: bare `phase` attr and non-zeebe/loose `property`", () => {
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+  <bpmn:process id="p" name="P">
+    <!-- A bare, unprefixed phase="…" attribute must NOT be treated as an override. -->
+    <bpmn:serviceTask id="bare-attr" name="Bare attr" phase="not an override" />
+    <!-- A bpmn:property (non-zeebe) carrying name="nano:phase" must NOT override. -->
+    <bpmn:serviceTask id="bpmn-prop" name="Bpmn prop">
+      <bpmn:extensionElements>
+        <bpmn:property name="nano:phase" value="not an override" />
+      </bpmn:extensionElements>
+    </bpmn:serviceTask>
+    <!-- A zeebe:property outside any extensionElements block must NOT override. -->
+    <bpmn:serviceTask id="loose-prop" name="Loose prop">
+      <zeebe:property name="nano:phase" value="not an override" />
+    </bpmn:serviceTask>
+  </bpmn:process>
+</bpmn:definitions>`;
+  const idx = buildScopeIndex(xml);
+  assert.equal(idx.elements.get("bare-attr")?.phaseOverride, undefined);
+  assert.equal(idx.elements.get("bpmn-prop")?.phaseOverride, undefined);
+  assert.equal(idx.elements.get("loose-prop")?.phaseOverride, undefined);
+});
+
 test("derivePhase builds a breadcrumb of enclosing named scopes down to the element", () => {
   const idx = buildScopeIndex(MODEL);
   const phase = derivePhase(idx, "review-plan");

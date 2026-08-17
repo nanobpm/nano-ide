@@ -182,11 +182,16 @@ function decodeXml(s: string): string {
     .replace(/&amp;/g, "&");
 }
 
-/** Extract a `nano:phase` override from a start-tag's own attributes: a literal `nano:phase`
- *  attribute (any prefix, local-name `phase`). Returns undefined when absent. */
+/** Extract a `nano:phase` override from a start-tag's own attributes: a namespace-prefixed
+ *  `*:phase` attribute (e.g. `nano:phase`, prefix-agnostic). A bare, unprefixed `phase="…"`
+ *  attribute is intentionally NOT matched — the override contract is a namespaced attribute, and
+ *  matching bare `phase` would broaden it and risk colliding with unrelated attributes. Returns
+ *  undefined when absent. */
 function phaseAttr(attrsText: string): string | undefined {
-  const v = attr(attrsText, "phase");
-  return v != null && v.length > 0 ? v : undefined;
+  const m = attrsText.match(/(?:^|\s)[\w.-]+:phase\s*=\s*"([^"]*)"/);
+  if (m == null) return undefined;
+  const v = decodeXml(m[1]);
+  return v.length > 0 ? v : undefined;
 }
 
 /** A mutable frame on the element-nesting stack during {@link buildScopeIndex}. */
@@ -261,8 +266,15 @@ export function buildScopeIndex(xml: string): ScopeIndex {
       continue;
     }
 
-    // A `zeebe:property name="nano:phase" value="…"` decorates the nearest open id-bearing element.
-    if (type === "property") {
+    // A `zeebe:property name="nano:phase" value="…"` inside an `extensionElements` block decorates
+    // the nearest open id-bearing element. Match only the `zeebe:` prefix inside `extensionElements`
+    // (matching the rest of the toolkit's `<zeebe:property …>` scans) so unrelated `<bpmn:property>`
+    // data elements can never masquerade as a phase override.
+    if (
+      name.startsWith("zeebe:") &&
+      type === "property" &&
+      stack.some((f) => f.type === "extensionElements")
+    ) {
       const propName = attr(attrsText, "name");
       if (propName === "nano:phase") {
         const value = attr(attrsText, "value");

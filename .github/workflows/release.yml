@@ -11,8 +11,10 @@ on:
     types: [completed]
     branches: [main]
 
+# `contents: write` lets scripts/publish.mjs cut the per-package GitHub Release
+# that serves as the `capability -> version` provenance index (nano-workforce#263).
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -27,6 +29,10 @@ jobs:
           # Check out the exact commit CI validated, not the branch tip, so we
           # never publish a commit that CI has not (yet) passed on.
           ref: ${{ github.event.workflow_run.head_sha }}
+          # Full history + tags: publish.mjs derives each release's provenance
+          # (issues/PRs since the package's previous `<name>@<version>` tag) from
+          # git log, so it needs the tags and the commit range, not a shallow tip.
+          fetch-depth: 0
       - uses: actions/setup-node@v5
         with:
           node-version: 22
@@ -45,10 +51,15 @@ jobs:
       - run: npm ci
       - run: npm run validate
       - run: npm run build
-      # Publishes each workspace whose version isn't on npm yet (idempotent).
-      # Auth is via GitHub Actions OIDC — the workflow's id-token is exchanged
-      # for a short-lived npm publish token per package, so no long-lived
-      # NPM_TOKEN secret is needed. Each target package on npm must have the
-      # matching Trusted Publisher configured (repo: nanobpm/nano-ide, workflow:
-      # release.yml). Provenance is signed automatically.
+      # Publishes each workspace whose version isn't on npm yet (idempotent), then
+      # ensures a GitHub Release (the `capability -> version` provenance index,
+      # nano-workforce#263) exists for it. Auth is via GitHub Actions OIDC — the
+      # workflow's id-token is exchanged for a short-lived npm publish token per
+      # package, so no long-lived NPM_TOKEN secret is needed. Each target package
+      # on npm must have the matching Trusted Publisher configured (repo:
+      # nanobpm/nano-ide, workflow: release.yml). Provenance is signed
+      # automatically. GH_TOKEN authorises `gh release create` (persist-credentials
+      # is false, so gh cannot fall back to the git remote's credentials).
       - run: node scripts/publish.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}

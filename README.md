@@ -69,9 +69,15 @@ it. See [Contributing a guided journey](#contributing-a-guided-journey).
 ```
 npm ci
 npm run validate     # check every nano-ide.ext.json
+npm run build        # build workspace deps FIRST — typecheck/test resolve @nanobpm/* from dist/
 npm run typecheck
-npm run build
+npm run test
+npm run lint
 ```
+**Build before typecheck.** In a fresh clone, packages that import another
+workspace (e.g. `packages/urban` → `@nanobpm/workflow`) fail typecheck with
+`Cannot find module @nanobpm/workflow` until root `npm run build` has produced
+the dependency's `dist/`. The working order is **build → typecheck → test → lint**.
 Publish via `node scripts/publish.mjs` (CI on main). Version each pack independently; the
 script publishes only versions not yet on npm.
 

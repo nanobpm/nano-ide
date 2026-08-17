@@ -1219,9 +1219,10 @@ test("pipeline orders stages upstream-filled / active-lit / downstream-ghosted f
   const js = res.body ?? "";
   // The active stage is located by matching activeField's value against
   // stages[].key; stages before it are done/filled, the match is lit (active),
-  // and in-path stages after it are ghosted/upcoming.
+  // and in-path stages after it are ghosted/upcoming. The lookup breaks on the
+  // first key match so a repeated key resolves deterministically to the first stage.
   assert.match(js, /const activeKey = col\.activeField != null/);
-  assert.match(js, /if \(String\(stages\[i\]\.key\) === activeKey\) activeIdx = i/);
+  assert.match(js, /if \(String\(stages\[i\]\.key\) === activeKey\) \{\s*activeIdx = i;\s*break;\s*\}/);
   assert.match(js, /i < activeIdx\) \{\s*cls = "pc-pipe-done"; word = "completed";/);
   assert.match(js, /cls = "pc-pipe-upcoming"; word = "upcoming";/);
   // The connector fills up to the active stage.

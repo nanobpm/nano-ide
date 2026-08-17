@@ -1410,9 +1410,17 @@ function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
   // exactly like an unknown link.kind — never throws.
   if (stages.length === 0) return cellTd(text, text, subText, truncate, tdAttrs);
   // The current stage's key, matched against stages[].key to find the active index.
+  // Stage keys identify a single stage, so stop at the first match: the result is
+  // deterministic even if a config accidentally repeats a key, and we avoid scanning
+  // the remaining stages on every row.
   const activeKey = col.activeField != null && row[col.activeField] != null ? String(row[col.activeField]) : "";
   let activeIdx = -1;
-  for (let i = 0; i < stages.length; i++) if (String(stages[i].key) === activeKey) activeIdx = i;
+  for (let i = 0; i < stages.length; i++) {
+    if (String(stages[i].key) === activeKey) {
+      activeIdx = i;
+      break;
+    }
+  }
   // The active stage's state drives its lit/failed/blocked treatment. Anything
   // outside the allow-list (or absent) is treated as an in-progress "active".
   const stRaw = col.stateField != null && row[col.stateField] != null ? String(row[col.stateField]) : "";

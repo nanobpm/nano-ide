@@ -194,11 +194,12 @@ export class WasmEngineClient implements EngineClient {
     // The runtime's `deployModels` sends every deployable here — BPMN + DMN (`text/xml`),
     // `.form` (`application/json`), and, under ADR 0062 deploy-by-convention, any other file
     // swept from `resources/`. Only executable models can run under the WASM engine: BPMN/DMN
-    // are parsed by the engine. Forms and other generic resources are read back through the
-    // engine's real read model (`getFormByKey`/`getResourceByKey`), not a JS shadow store —
-    // their *write* path lands with Magikcraft/nano-bpm#815; until then a `.form` is accepted
-    // (and counted) but not yet resolvable, exactly as it would be against a gateway that has
-    // not yet indexed it. Every non-executable resource is inert to the BPMN parser here.
+    // are parsed by the engine. A `.form` is read back through the engine's real read model
+    // (`getFormByKey`), not a JS shadow store; any *other* generic resource has no read surface on
+    // this adapter yet (it is accepted and counted, but not resolvable). The form *write* path
+    // lands with Magikcraft/nano-bpm#815; until then a `.form` is accepted (and counted) but not
+    // yet resolvable, exactly as it would be against a gateway that has not yet indexed it. Every
+    // non-executable resource is inert to the BPMN parser here.
     for (const r of resources) {
       if (isEngineModel(r)) this.#engine.deploy(r.content);
     }
@@ -293,8 +294,11 @@ export class WasmEngineClient implements EngineClient {
         // The read model already resolves a `<zeebe:formDefinition formId="X" />` linkage to the
         // latest deployed form's key server-side, so `formKey`/`externalFormReference` arrive
         // resolved on the row — no client-side id→key map (the deleted `#formKeyById` shadow).
-        const formKey = present(str(t.formKey));
-        const externalFormReference = present(str(t.externalFormReference));
+        // Presence is type-aware (mirrors the shared form contract's `pickFormLinkage`): a
+        // `formKey` counts only when a string/number, an `externalFormReference` only when a
+        // string, so a non-string value can never coerce into a garbage `"[object Object]"` id.
+        const formKey = presentKey(t.formKey);
+        const externalFormReference = presentString(t.externalFormReference);
         return [{
           userTaskKey: str(userTaskKey),
           elementId: typeof t.elementId === "string" ? t.elementId : undefined,
@@ -329,9 +333,10 @@ export class WasmEngineClient implements EngineClient {
     // Mirror `SdkEngineClient.getForm`'s identifier normalization exactly (a behavioral
     // drift surface guarded by a test): an empty/whitespace-only identifier is *absent*, so a
     // blank `formKey` falls through to a valid `formId`. The engine addresses a form by a single
-    // key; like the REST gateway it accepts either a deploy key or an authored id as that value,
-    // so pass whichever is present straight through to `getFormByKey` (no local id→key map — the
-    // read model owns that resolution now).
+    // deploy key, so pass whichever identifier is present straight through to `getFormByKey` (no
+    // local id→key map — the read model owns that resolution now). A malformed key — e.g. an
+    // authored `formId` handed through as the fallback — makes `getFormByKey` *throw*; like the
+    // REST gateway's 404, that is treated below as "no such form" (null), not propagated.
     const key = present(input.formKey) ?? present(input.formId);
     if (key == null) return null;
     // The engine addresses a form by a numeric deploy key and *throws* on a malformed key (e.g. an
@@ -349,8 +354,11 @@ export class WasmEngineClient implements EngineClient {
     // tolerate an already-parsed object too. A form with no valid schema is treated as absent.
     const schema = parseFormSchema(body.schema);
     if (!schema) return null;
-    const formKey = present(str(body.formKey));
-    const formId = present(str(body.formId));
+    // Type-aware presence (mirrors the shared form contract's `buildFormSchema`): a `formKey`
+    // counts only when a string/number, a `formId` only when a string — so a non-string value
+    // can never coerce into a garbage `"[object Object]"` identifier.
+    const formKey = presentKey(body.formKey);
+    const formId = presentString(body.formId);
     return {
       ...(formKey ? { formKey } : {}),
       ...(formId ? { formId } : {}),
@@ -596,6 +604,27 @@ function str(v: unknown): string {
 function present(v: string | undefined): string | undefined {
   const t = v?.trim();
   return t ? t : undefined;
+}
+
+/** Presence-check a possibly-numeric form key under the shared trim rule — mirrors the urban
+ *  form contract's `presentKey` (`packages/urban/src/runtime/core/form-contract.ts`). The
+ *  read-model body may carry a `formKey` as a number, so coerce a *number* to a string; a string
+ *  is taken as-is; **any other type is absent**. It deliberately never `String(...)`-coerces an
+ *  arbitrary value, so a non-string (e.g. an object) can't leak in as a truthy `"[object Object]"`
+ *  identifier. Re-declared locally (not imported) for the same long-published-API-floor reason as
+ *  `present`/`str` above. Exported for the coercion-defect-class guard in the test suite. */
+export function presentKey(v: unknown): string | undefined {
+  if (typeof v === "number") return present(String(v));
+  if (typeof v === "string") return present(v);
+  return undefined;
+}
+
+/** Presence-check a string-only identifier (`externalFormReference`/`formId`) under the shared
+ *  trim rule — mirrors the urban form contract, which treats these as present only when a string.
+ *  A number or any other type is absent, and it never `String(...)`-coerces, so a non-string can't
+ *  leak in as a garbage identifier. Exported for the coercion-defect-class guard in the tests. */
+export function presentString(v: unknown): string | undefined {
+  return typeof v === "string" ? present(v) : undefined;
 }
 
 /** Parse a form-js schema from a read-model `FormResult.schema`: the engine serializes it as a

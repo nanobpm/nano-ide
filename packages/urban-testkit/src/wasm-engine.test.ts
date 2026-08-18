@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { runEngineClientContract } from "./contract.ts";
 import {
   createWasmEngineClient,
+  presentKey,
+  presentString,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
 import { BpmnError, readLineage } from "@nanobpm/urban/runtime";
@@ -19,6 +21,36 @@ test("wasm: Terminating projects as TERMINATED (REST parity)", () => {
   assert.equal(wasmStateToProcessInstanceState("Completed"), "COMPLETED");
   assert.equal(wasmStateToProcessInstanceState("bogus"), undefined);
   assert.equal(wasmStateToProcessInstanceState(42), undefined);
+});
+
+// Guards the form-identifier coercion defect class (matches urban's shared form contract): a
+// read-model row's `formKey`/`externalFormReference`/`formId` must be presence-checked by *type*,
+// so a non-string value (e.g. a nested object) is treated as absent rather than coerced by
+// `String(...)` into a truthy `"[object Object]"` identifier that would leak onto the result.
+test("wasm: presentKey accepts only string/number, never coercing other types", () => {
+  assert.equal(presentKey("k1"), "k1");
+  assert.equal(presentKey("  k2  "), "k2", "trims like the shared presence rule");
+  assert.equal(presentKey(2251799813685250), "2251799813685250", "numeric key stringified");
+  assert.equal(presentKey("   "), undefined, "whitespace-only is absent");
+  assert.equal(presentKey(""), undefined);
+  assert.equal(presentKey(undefined), undefined);
+  assert.equal(presentKey(null), undefined);
+  assert.equal(presentKey({}), undefined, "an object never coerces to \"[object Object]\"");
+  assert.equal(presentKey({ nested: 1 }), undefined);
+  assert.equal(presentKey([1, 2]), undefined, "an array never coerces to a truthy id");
+  assert.equal(presentKey(true), undefined);
+});
+
+test("wasm: presentString accepts only strings, never coercing other types", () => {
+  assert.equal(presentString("ref-1"), "ref-1");
+  assert.equal(presentString("  ref-2  "), "ref-2", "trims like the shared presence rule");
+  assert.equal(presentString("   "), undefined, "whitespace-only is absent");
+  assert.equal(presentString(""), undefined);
+  assert.equal(presentString(undefined), undefined);
+  assert.equal(presentString(null), undefined);
+  assert.equal(presentString(42), undefined, "a number is absent (string-only identifier)");
+  assert.equal(presentString({}), undefined, "an object never coerces to \"[object Object]\"");
+  assert.equal(presentString([1]), undefined);
 });
 
 test("wasm: a BpmnError from a worker is routed as a BPMN error, not a failure", async () => {

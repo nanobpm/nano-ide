@@ -53,12 +53,28 @@ class FakeElement {
   }
 }
 
-function installFakeDom(): void {
-  const doc = { createElement: (tag: string) => new FakeElement(tag) };
+// Installs the fake DOM on globalThis and returns a restore function that undoes
+// the mutation, so a test can register `t.after(restore)` and never leak
+// `globalThis.document` into later tests (which would be racy if node:test ran
+// files/tests concurrently). Captures the prior descriptor so the original
+// value — including `undefined` — is faithfully restored.
+function installFakeDom(): () => void {
+  const doc = {
+    createElement: (tag: string) => new FakeElement(tag),
+    getElementById: () => null,
+  };
+  const prior = Reflect.getOwnPropertyDescriptor(globalThis, "document");
   // Reflect.set writes through the untyped host boundary (globalThis.document is
   // typed Document under the DOM lib; our fake only implements what the renderer
   // touches) without an `as` cast (banned repo-wide).
   Reflect.set(globalThis, "document", doc);
+  return () => {
+    if (prior) {
+      Reflect.defineProperty(globalThis, "document", prior);
+    } else {
+      Reflect.deleteProperty(globalThis, "document");
+    }
+  };
 }
 
 test("#291: RENDERERS is a real importable registry keyed exactly by PAGE_NODE_TYPES", () => {
@@ -77,8 +93,8 @@ test("#291: RENDERERS is a real importable registry keyed exactly by PAGE_NODE_T
   }
 });
 
-test("#291: renderText renders the heading/sub/body variant with the right tag + class", () => {
-  installFakeDom();
+test("#291: renderText renders the heading/sub/body variant with the right tag + class", (t) => {
+  t.after(installFakeDom());
   const heading = renderText({ type: "text", props: { variant: "heading", text: "Hello" } });
   assert.equal(heading.tagName, "H1");
   assert.equal(heading.className, "pc-heading");
@@ -94,8 +110,8 @@ test("#291: renderText renders the heading/sub/body variant with the right tag +
   assert.equal(body.textContent, "Body copy");
 });
 
-test("#291: renderText degrades to empty text (never throws) on a missing text prop", () => {
-  installFakeDom();
+test("#291: renderText degrades to empty text (never throws) on a missing text prop", (t) => {
+  t.after(installFakeDom());
   const node = renderText({ type: "text", props: {} });
   assert.equal(node.tagName, "P");
   assert.equal(node.textContent, "");

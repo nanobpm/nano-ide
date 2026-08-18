@@ -65,7 +65,9 @@ function resolve(
   }
   return {
     threshold: validateThreshold(config.threshold ?? base.threshold),
-    preprocessors: config.preprocessors ?? base.preprocessors,
+    // Defensive-copy so a caller mutating their array after configureSimilarity()
+    // can't silently rewrite the stored global/default preprocessors.
+    preprocessors: [...(config.preprocessors ?? base.preprocessors)],
     adapter: config.adapter ?? base.adapter,
   };
 }
@@ -101,6 +103,8 @@ export async function matchesSemantically(
     resolved.adapter.embed(actualText),
     resolved.adapter.embed(expectedText),
   ]);
+  assertEmbeddingLength(actualVector, resolved.adapter.dimension, "actual");
+  assertEmbeddingLength(expectedVector, resolved.adapter.dimension, "expected");
   const score = cosineSimilarity(actualVector, expectedVector);
   if (score >= resolved.threshold) {
     return;
@@ -110,6 +114,25 @@ export async function matchesSemantically(
       `${resolved.threshold} — actual ${describeText(actualText)} vs expected ` +
       `${describeText(expectedText)}`,
   );
+}
+
+/**
+ * Guards the embedding seam's fixed-size contract: an adapter that returns a vector whose
+ * length disagrees with its declared `dimension` (or that changes length between calls) would
+ * let cosine similarity run on an invalid shape. Fail loudly with an actionable message
+ * instead, mirroring the length checks in `src/ai/record-replay.ts`.
+ */
+function assertEmbeddingLength(
+  vector: readonly number[],
+  dimension: number,
+  label: "actual" | "expected",
+): void {
+  if (vector.length !== dimension) {
+    throw new Error(
+      `matchesSemantically embedding for ${label} text has length ${vector.length}, ` +
+        `expected adapter.dimension ${dimension}`,
+    );
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -125,6 +148,8 @@ function isEmbeddingModelAdapter(value: unknown): value is EmbeddingModelAdapter
     isRecord(value) &&
     typeof value.modelId === "string" &&
     typeof value.dimension === "number" &&
+    Number.isInteger(value.dimension) &&
+    value.dimension > 0 &&
     typeof value.embed === "function"
   );
 }

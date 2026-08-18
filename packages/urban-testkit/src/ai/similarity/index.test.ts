@@ -165,3 +165,39 @@ test("toSimilarityConfig recovers a valid config and validates its threshold at 
   const recovered = toSimilarityConfig({ threshold: 0.5 });
   assert.deepEqual(recovered, { threshold: 0.5 });
 });
+
+test("configureSimilarity defensively copies preprocessors so later caller mutation can't rewrite defaults", async () => {
+  const identity: TextPreprocessor = (input) => input;
+  const flipToColor: TextPreprocessor = (input) => input.replace(/colour/g, "color");
+  const mutable = [identity];
+  configureSimilarity({ threshold: 0.99, preprocessors: mutable });
+  // Mutating the caller's array after configuring must NOT change the stored default.
+  mutable.push(flipToColor);
+  await assert.rejects(
+    matchesSemantically("the colour is bright", "the color is bright"),
+    /matchesSemantically failed/,
+    "post-configure mutation leaked into the stored default preprocessors",
+  );
+});
+
+test("toSimilarityConfig rejects an adapter whose dimension is non-integer or non-positive", () => {
+  for (const dimension of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () => toSimilarityConfig({ adapter: { modelId: "m", dimension, embed: async () => [] } }),
+      /adapter must be an EmbeddingModelAdapter/,
+      `expected dimension ${dimension} to be rejected`,
+    );
+  }
+});
+
+test("matchesSemantically rejects an adapter whose embedding length disagrees with its dimension", async () => {
+  const liar = {
+    modelId: "liar",
+    dimension: 8,
+    embed: async () => [1, 2, 3],
+  };
+  await assert.rejects(
+    matchesSemantically("a", "b", { adapter: liar, threshold: 0.5 }),
+    /has length 3, expected adapter\.dimension 8/,
+  );
+});

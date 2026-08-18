@@ -76,8 +76,9 @@ Behind the two seams live **real** backends that are OFF by default. Each seam h
 OpenAI-compatible service — the chat adapter also serves the optional image part for vision
 judging) and a **local / on-device** adapter (`LocalEmbeddingAdapter` /
 `LocalChatModelAdapter`, over Transformers.js). Their heavy SDKs are declared as
-**`optionalDependencies`** and are never imported at module load — the barrel stays
-import-safe even when they are not installed.
+**optional peer dependencies** (`peerDependencies` + `peerDependenciesMeta.optional`), so a
+plain install never pulls them in, and they are never imported at module load — the barrel
+stays import-safe even when they are not installed.
 
 `seamInventory()` reports `hasReal: true` with a `docRef` for both seams **unconditionally**
 (a static existence fact registered at import — no opt-in, no network). This is decoupled

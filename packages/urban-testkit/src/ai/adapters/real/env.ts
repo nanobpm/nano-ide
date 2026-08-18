@@ -94,7 +94,7 @@ export async function importOptionalDependency(specifier: string): Promise<unkno
     // module-resolution error as the cause instead of leaking it uncontextualized.
     throw new Error(
       `optional dependency '${specifier}' could not be loaded; install it to activate ` +
-        `this real AI adapter (it is omitted from the default install)`,
+        `this real AI adapter (it is an optional peer dependency and may not be installed)`,
       { cause },
     );
   }

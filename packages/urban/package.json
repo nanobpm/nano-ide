@@ -51,6 +51,35 @@
 			"types": "./dist/effect/index.d.ts",
 			"default": "./dist/effect/index.js"
 		},
+		"./context": {
+			"types": "./dist/context/index.d.ts",
+			"default": "./dist/context/index.js"
+		},
+		"./context/binding": {
+			"types": "./dist/context/binding/index.d.ts",
+			"default": "./dist/context/binding/index.js"
+		},
+		"./context/schema": {
+			"types": "./dist/context/schema/index.d.ts",
+			"default": "./dist/context/schema/index.js"
+		},
+		"./context/pii": {
+			"types": "./dist/context/pii/index.d.ts",
+			"default": "./dist/context/pii/index.js"
+		},
+		"./context/git": {
+			"types": "./dist/context/git/index.d.ts",
+			"default": "./dist/context/git/index.js"
+		},
+		"./context/retrieval": {
+			"types": "./dist/context/retrieval/index.d.ts",
+			"default": "./dist/context/retrieval/index.js"
+		},
+		"./context/conformance": {
+			"types": "./dist/context/conformance/index.d.ts",
+			"default": "./dist/context/conformance/index.js"
+		},
+		"./context/source": "./src/context/index.ts",
 		"./source": "./src/index.ts"
 	},
 	"files": [
@@ -65,6 +94,8 @@
 		"gen:runtime": "node scripts/gen-runtime.mjs",
 		"check:runtime": "node scripts/gen-runtime.mjs --check",
 		"test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+		"test:conformance": "node --test --experimental-strip-types \"src/context/conformance/**/*.conformance.ts\"",
+		"check:pii": "node --experimental-strip-types scripts/check-pii.ts",
 		"test:deno": "deno test -A --no-check src/"
 	},
 	"dependencies": {

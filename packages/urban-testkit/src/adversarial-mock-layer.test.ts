@@ -301,7 +301,7 @@ test("isolation: a worker mock and a child-process mock keyed the same name neve
   // They must not intercept each other's dispatch.
   await withEngine(
     [
-      { name: "svc.bpmn", xml: SVC_BPMN.replace(/"work"/g, '"shared"').replace(/id="svc"/, 'id="svc"') },
+      { name: "svc.bpmn", xml: SVC_BPMN.replace(/"work"/g, '"shared"') },
     ],
     async (engine) => {
       engine.mockChildProcess("shared").completeWith({ fromChild: true }); // unrelated registry

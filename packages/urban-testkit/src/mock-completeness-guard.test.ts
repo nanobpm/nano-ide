@@ -80,11 +80,25 @@ function allTestSources(): string {
 // Tiny source extractors (regex/brace based — no TS compiler dependency).
 // ---------------------------------------------------------------------------------------------
 
-/** The substring of `source` from `startMarker` up to (excluding) the first blank line after it. */
+/**
+ * The declaration block from `startMarker` up to (and including) the first *top-level*
+ * `;` — the terminator of a type-alias / union declaration. Semicolons nested inside
+ * `{...}`/`(...)`/`[...]` (e.g. the `;` separating fields in a `{ ...; ... }` object type
+ * literal, or blank lines inserted to visually separate union variants) are skipped, so
+ * the extraction stays complete regardless of interior formatting. Falls back to the
+ * first blank line only if the declaration has no top-level `;`.
+ */
 function blockAfter(source: string, startMarker: string): string {
   const start = source.indexOf(startMarker);
   assert.notEqual(start, -1, `expected to find \`${startMarker}\``);
   const rest = source.slice(start);
+  let depth = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const ch = rest[i];
+    if (ch === "{" || ch === "(" || ch === "[") depth++;
+    else if (ch === "}" || ch === ")" || ch === "]") depth--;
+    else if (ch === ";" && depth === 0) return rest.slice(0, i + 1);
+  }
   const end = rest.indexOf("\n\n");
   return end === -1 ? rest : rest.slice(0, end);
 }
@@ -250,6 +264,27 @@ test("completeness: every engine completion method maps 1:1 to a distinct MockOu
       `${kinds.length} kinds (${kinds.join(", ")}). Adding an engine completion method requires a ` +
       `new MockOutcome variant.`,
   );
+});
+
+test("robustness: blockAfter extracts a full union even with interior blank lines and semicolons", () => {
+  // Guards the defect class that motivated the top-level-`;` terminator: a union whose variants are
+  // `{ ...; ... }` object literals (interior `;`) and are visually separated by blank lines must still
+  // extract completely. A blank-line terminator would truncate at the first variant; a naive "next `;`"
+  // would truncate inside the first object literal. Both would silently drop kinds.
+  const fixture = [
+    "export type MockOutcome =",
+    '  | { readonly kind: "complete"; readonly variables: Record<string, unknown> }',
+    "",
+    '  | { readonly kind: "fail"; readonly retries: number; readonly message: string }',
+    "",
+    '  | { readonly kind: "throwError"; readonly errorCode: string; readonly message: string };',
+    "",
+    "export const unrelated = 1;",
+  ].join("\n");
+  const block = blockAfter(fixture, "export type MockOutcome =");
+  const kinds = uniqueSorted(matchAll(block, /kind:\s*"([^"]+)"/g));
+  assert.deepEqual(kinds, ["complete", "fail", "throwError"]);
+  assert.ok(!block.includes("unrelated"), "extraction stopped at the union's terminating `;`");
 });
 
 test("completeness: every MockOutcome kind is produced by at least one MockWorkerBuilder method", () => {

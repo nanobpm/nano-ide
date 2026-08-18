@@ -302,9 +302,12 @@ export class WasmEngineClient implements EngineClient {
         return [{
           userTaskKey: str(userTaskKey),
           elementId: typeof t.elementId === "string" ? t.elementId : undefined,
-          // The gateway's user-task search does not project task variables (only the REST
-          // variable channel does), so — unlike the old snapshot scrape — none are surfaced
-          // here; `UserTaskSummary.variables` stays absent, matching `SdkEngineClient`.
+          // Surface task variables when the read model provides them as a record, mirroring
+          // `SdkEngineClient.searchUserTasks` (which projects `variables` when the engine includes
+          // them). The gateway's user-task search does not currently project them (only the REST
+          // variable channel does), so in practice this stays `undefined` — but keeping the same
+          // projection avoids an adapter-specific behaviour gap should the read model start to.
+          ...(isRecord(t.variables) ? { variables: t.variables } : {}),
           ...(formKey ? { formKey } : {}),
           ...(externalFormReference ? { externalFormReference } : {}),
         }];

@@ -11,7 +11,7 @@
 // worker runs autonomously exactly as it would against a live engine, but
 // deterministically and with no wall-clock waits.
 
-import type { TestEngine } from "@nanobpm/engine-wasm";
+import type { TestEngine } from "@nanobpm/engine-wasm/readmodel";
 import {
   applyAmbientLineage,
   type EngineClient,
@@ -57,16 +57,6 @@ function isEngineModel(r: { name?: string; contentType?: string }): boolean {
   if (ct.length > 0) return false;
   const name = (r.name ?? "").toLowerCase();
   return name.endsWith(".bpmn") || name.endsWith(".dmn");
-}
-
-/** Whether a deploy resource is a form-js `.form` (JSON) — the WASM engine can't execute
- *  it, but the kit captures its schema so the taskInbox surface's `getForm` resolves under
- *  the test engine exactly as it does against a live one. */
-function isFormResource(r: { name?: string; contentType?: string }): boolean {
-  // A form is identified by its `.form` filename (matching the live engine), NOT by a JSON
-  // content type: unrelated JSON deploy resources (manifests/config) must not be captured
-  // and stored as form schemas.
-  return (r.name ?? "").toLowerCase().endsWith(".form");
 }
 
 /** Return a copy of `source` containing only the requested keys that are
@@ -133,24 +123,31 @@ interface RegisteredWorker {
   readonly fetchVariables?: readonly string[];
 }
 
-let bootPromise: Promise<typeof import("@nanobpm/engine-wasm")> | undefined;
+let bootPromise: Promise<typeof import("@nanobpm/engine-wasm/readmodel")> | undefined;
 
 /** Boot the wasm module once per process, single-flight. The first caller starts
  *  initialization; concurrent callers await the *same* promise, so `initSync`
  *  runs exactly once even when parallel tests each construct an engine (a plain
  *  boolean flag would let two callers race past the guard and double-init).
  *
- *  `@nanobpm/engine-wasm` is imported dynamically so merely importing the testkit
- *  (e.g. the contract runner) does not eagerly load the wasm engine; it is pulled
- *  in only when an engine is actually constructed. Loads the `.wasm` bytes via
- *  `import.meta.resolve` so it works from a published package or a workspace
- *  checkout, on both Node and Deno, with no bundler import-attribute support. */
-function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm")> {
+ *  `@nanobpm/engine-wasm/readmodel` is imported dynamically so merely importing the
+ *  testkit (e.g. the contract runner) does not eagerly load the wasm engine; it is
+ *  pulled in only when an engine is actually constructed. We import the **read-model**
+ *  subpath (not the lean default): it is the lean engine plus the gateway's SQLite
+ *  read model compiled to wasm, so the REST read methods (`getFormByKey`,
+ *  `searchUserTasks`, `searchProcessInstances`, …) are served by the *real* read
+ *  channel instead of a hand-maintained JS twin (epic Magikcraft/nano-bpm#796).
+ *  Loads the `.wasm` bytes via `import.meta.resolve` so it works from a published
+ *  package or a workspace checkout, on both Node and Deno, with no bundler
+ *  import-attribute support. */
+function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm/readmodel")> {
   if (!bootPromise) {
     bootPromise = (async () => {
-      const mod = await import("@nanobpm/engine-wasm");
+      const mod = await import("@nanobpm/engine-wasm/readmodel");
       const url = new URL(
-        import.meta.resolve("@nanobpm/engine-wasm/nanobpmn_engine_bg.wasm"),
+        import.meta.resolve(
+          "@nanobpm/engine-wasm/readmodel/nanobpmn_engine_bg.wasm",
+        ),
       );
       const bytes = typeof Deno !== "undefined"
         ? await Deno.readFile(url)
@@ -176,13 +173,6 @@ function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm")> {
 export class WasmEngineClient implements EngineClient {
   readonly #engine: TestEngine;
   readonly #workers = new Map<string, RegisteredWorker>();
-  /** Deployed form-js schemas captured at deploy time (the WASM engine discards
-   *  `.form` resources), keyed by their assigned form key. `#formKeyById` maps a
-   *  form's authored id to the key of its most recently deployed version, so a
-   *  `getForm({ formId })` resolves to the latest — mirroring the live engine. */
-  readonly #formsByKey = new Map<string, { formId?: string; version: number; schema: Record<string, unknown> }>();
-  readonly #formKeyById = new Map<string, string>();
-  #nextFormKey = 1;
   /** Optional observer notified with a job's type each time a job is dispatched to a
    *  worker handler. Additive, default-absent seam used by the S4 coverage gate to know
    *  which worker/job types were actually exercised; a no-op for every other caller. */
@@ -204,39 +194,18 @@ export class WasmEngineClient implements EngineClient {
     // The runtime's `deployModels` sends every deployable here — BPMN + DMN (`text/xml`),
     // `.form` (`application/json`), and, under ADR 0062 deploy-by-convention, any other file
     // swept from `resources/`. Only executable models can run under the WASM engine: BPMN/DMN
-    // are parsed by the engine; a `.form` has no execution semantics but the taskInbox surface
-    // fetches its schema via `getForm`, so capture it. Every other resource is inert here.
+    // are parsed by the engine. Forms and other generic resources are read back through the
+    // engine's real read model (`getFormByKey`/`getResourceByKey`), not a JS shadow store —
+    // their *write* path lands with Magikcraft/nano-bpm#815; until then a `.form` is accepted
+    // (and counted) but not yet resolvable, exactly as it would be against a gateway that has
+    // not yet indexed it. Every non-executable resource is inert to the BPMN parser here.
     for (const r of resources) {
-      if (isEngineModel(r)) {
-        this.#engine.deploy(r.content);
-        continue;
-      }
-      if (isFormResource(r)) this.#captureForm(r.content);
+      if (isEngineModel(r)) this.#engine.deploy(r.content);
     }
     // Match `SdkEngineClient.deployResources`: the deployment accepts every resource, so the
     // `deployed` count is the total — a form (or any non-executable asset) still counts as
     // deployed even though the WASM engine doesn't execute it.
     return { deployed: resources.length };
-  }
-
-  /** Parse and store a deployed form-js schema. A form is identified by its `id`; a
-   *  redeploy of the same id bumps the version and points the id at the newer key so
-   *  `getForm({ formId })` resolves to the latest. */
-  #captureForm(content: string): void {
-    let schema: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(content);
-      if (!isRecord(parsed)) return;
-      schema = parsed;
-    } catch {
-      return;
-    }
-    const formId = typeof schema.id === "string" && schema.id !== "" ? schema.id : undefined;
-    const prevKey = formId ? this.#formKeyById.get(formId) : undefined;
-    const version = prevKey ? (this.#formsByKey.get(prevKey)?.version ?? 0) + 1 : 1;
-    const formKey = `form-${this.#nextFormKey++}`;
-    this.#formsByKey.set(formKey, { formId, version, schema });
-    if (formId) this.#formKeyById.set(formId, formKey);
   }
 
   async createInstance(input: {
@@ -292,48 +261,49 @@ export class WasmEngineClient implements EngineClient {
     formKey?: string;
     externalFormReference?: string;
   }[]> {
-    return records(this.#snapshot().userTasks)
-      // Match `SdkEngineClient.searchUserTasks`: apply the optional `state` filter rather
-      // than hardcoding open tasks. The engine snapshot spells states in PascalCase
-      // (`Created`/`Completed`/...) while the contract's `UserTaskState` is upper-case
-      // (`CREATED`/...), so compare case-insensitively; with no `state` the engine returns
-      // tasks in every state (the taskInbox surface passes `state: "CREATED"` itself).
-      .filter((t) =>
-        filter?.state === undefined ||
-        str(t.state).toUpperCase() === filter.state
-      )
+    // Delegate to the engine's real REST read channel (`POST /user-tasks/search`) instead of
+    // scraping the primary-state snapshot. The read model honours the `{ state? }` filter
+    // (e.g. `"CREATED"`) itself, so pass it through rather than re-implementing state matching.
+    const body = this.#parseObj(
+      this.#engine.searchUserTasks(
+        JSON.stringify(filter?.state ? { state: filter.state } : {}),
+      ),
+    );
+    return records(body.items)
+      // The read model does not yet honour the non-lifecycle selectors
+      // (`processInstanceKey`/`assignee`/`candidateGroup` — the write/index side is
+      // Magikcraft/nano-bpm#815's follow-up), so apply them client-side here. This mirrors the
+      // *effective* behaviour of the gateway-backed `SdkEngineClient`, which gets them honoured
+      // server-side; the results are identical, only the filtering site differs.
       .filter((t) =>
         filter?.processInstanceKey === undefined ||
-        str(t.instanceKey) === filter.processInstanceKey
+        str(t.processInstanceKey) === filter.processInstanceKey
       )
       .filter((t) => filter?.assignee === undefined || str(t.assignee) === filter.assignee)
       .filter((t) =>
         filter?.candidateGroup === undefined ||
         strings(t.candidateGroups).includes(filter.candidateGroup)
       )
-      .map((t) => {
-        // Surface the task's form linkage. The WASM engine doesn't itself resolve a
-        // `formId="X"` linkage to a form key, so map any authored `formId` on the task to
-        // the key of the latest deployed form of that id (what `getForm` then fetches);
-        // pass through a `formKey`/`externalFormReference` the snapshot already carries.
-        const authoredId = typeof t.formId === "string" ? t.formId : undefined;
-        const formKey =
-          (t.formKey != null && t.formKey !== "" ? str(t.formKey) : undefined) ??
-          (authoredId ? this.#formKeyById.get(authoredId) : undefined);
-        const externalFormReference =
-          typeof t.externalFormReference === "string" && t.externalFormReference !== ""
-            ? t.externalFormReference
-            : undefined;
-        return {
-          userTaskKey: str(t.key),
+      .flatMap((t) => {
+        // The REST read model spells the task's identity as `userTaskKey`; keep the snapshot's
+        // `key` as a defensive fallback. A keyless row cannot be acted on — drop it (parity with
+        // `SdkEngineClient`, which logs and skips such a row).
+        const userTaskKey = t.userTaskKey ?? t.key;
+        if (userTaskKey == null || userTaskKey === "") return [];
+        // The read model already resolves a `<zeebe:formDefinition formId="X" />` linkage to the
+        // latest deployed form's key server-side, so `formKey`/`externalFormReference` arrive
+        // resolved on the row — no client-side id→key map (the deleted `#formKeyById` shadow).
+        const formKey = present(str(t.formKey));
+        const externalFormReference = present(str(t.externalFormReference));
+        return [{
+          userTaskKey: str(userTaskKey),
           elementId: typeof t.elementId === "string" ? t.elementId : undefined,
-          // Match the live SdkEngineClient: surface the task-local variables
-          // attached to the user-task item (undefined when absent), not the
-          // whole instance's variables (see runtime/engine/nanosdk.ts).
-          variables: isRecord(t.variables) ? t.variables : undefined,
+          // The gateway's user-task search does not project task variables (only the REST
+          // variable channel does), so — unlike the old snapshot scrape — none are surfaced
+          // here; `UserTaskSummary.variables` stays absent, matching `SdkEngineClient`.
           ...(formKey ? { formKey } : {}),
           ...(externalFormReference ? { externalFormReference } : {}),
-        };
+        }];
       });
   }
 
@@ -350,30 +320,42 @@ export class WasmEngineClient implements EngineClient {
     return this.searchUserTasks({ ...filter, state: "CREATED" });
   }
 
-  /** Resolve a captured form-js schema by key or by (latest) id. Structurally matches
-   *  urban's `EngineClient.getForm`; returns `null` when no such form was deployed. */
+  /** Fetch a deployed form's form-js schema from the engine's real read model
+   *  (`GET /forms/{formKey}` via `getFormByKey`). Structurally matches urban's
+   *  `EngineClient.getForm`; returns `null` when no such form exists in the read model. */
   async getForm(input: { formKey?: string; formId?: string }): Promise<
     { formKey?: string; formId?: string; version?: number; schema: Record<string, unknown> } | null
   > {
     // Mirror `SdkEngineClient.getForm`'s identifier normalization exactly (a behavioral
-    // drift surface guarded by a test): an empty/whitespace-only identifier is *absent*,
-    // so a blank `formKey` falls through to a valid `formId` instead of short-circuiting
-    // to null. Kept as a local copy (not imported) because the kit depends only on urban's
-    // long-published public API — see the re-declaration note at the top of this file.
-    const present = (v: string | undefined): string | undefined => {
-      const t = v?.trim();
-      return t ? t : undefined;
-    };
-    const formId = present(input.formId);
-    const key = present(input.formKey) ?? (formId ? this.#formKeyById.get(formId) : undefined);
+    // drift surface guarded by a test): an empty/whitespace-only identifier is *absent*, so a
+    // blank `formKey` falls through to a valid `formId`. The engine addresses a form by a single
+    // key; like the REST gateway it accepts either a deploy key or an authored id as that value,
+    // so pass whichever is present straight through to `getFormByKey` (no local id→key map — the
+    // read model owns that resolution now).
+    const key = present(input.formKey) ?? present(input.formId);
     if (key == null) return null;
-    const found = this.#formsByKey.get(key);
-    if (!found) return null;
+    // The engine addresses a form by a numeric deploy key and *throws* on a malformed key (e.g. an
+    // authored id passed through as the fallback). Mirror `SdkEngineClient.getForm`, which treats a
+    // failed fetch as "no such form" and returns null rather than propagating.
+    let body: unknown;
+    try {
+      body = this.#parseValue(this.#engine.getFormByKey(key));
+    } catch {
+      return null;
+    }
+    // `getFormByKey` returns JSON `null` for an unknown key; only an object carries a form.
+    if (!isRecord(body)) return null;
+    // The read model serializes the form-js schema as a JSON string (the REST wire shape);
+    // tolerate an already-parsed object too. A form with no valid schema is treated as absent.
+    const schema = parseFormSchema(body.schema);
+    if (!schema) return null;
+    const formKey = present(str(body.formKey));
+    const formId = present(str(body.formId));
     return {
-      formKey: key,
-      ...(found.formId ? { formId: found.formId } : {}),
-      version: found.version,
-      schema: found.schema,
+      ...(formKey ? { formKey } : {}),
+      ...(formId ? { formId } : {}),
+      ...(typeof body.version === "number" ? { version: body.version } : {}),
+      schema,
     };
   }
 
@@ -392,9 +374,16 @@ export class WasmEngineClient implements EngineClient {
     const wanted = filter?.processInstanceKeys
       ? new Set(filter.processInstanceKeys)
       : undefined;
+    // Delegate to the engine's real REST read channel (`POST /process-instances/search`)
+    // instead of scraping the primary-state snapshot. The read model does not yet honour
+    // filter/sort/page fields server-side (it returns every instance — the write/index side is
+    // Magikcraft/nano-bpm#815's follow-up), so apply the key/state selectors client-side. This
+    // mirrors the *effective* behaviour of the gateway-backed `SdkEngineClient`, which gets them
+    // honoured server-side; only the filtering site differs.
+    const body = this.#parseObj(this.#engine.searchProcessInstances("{}"));
     const out: ProcessInstanceSnapshot[] = [];
-    for (const inst of records(this.#snapshot().instances)) {
-      const key = str(inst.key);
+    for (const inst of records(body.items)) {
+      const key = str(inst.processInstanceKey);
       // Skip keyless items so a missing/null key can't leak in as "" (matches
       // the live SDK adapter, which drops instances with no key).
       if (key === "") continue;
@@ -560,6 +549,13 @@ export class WasmEngineClient implements EngineClient {
     return isRecord(v) ? v : {};
   }
 
+  /** Parse an engine read-method JSON string to its raw value, preserving `null` (a form/
+   *  resource-by-key miss serializes as JSON `null`, which the caller must distinguish from a
+   *  present object — unlike {@link #parseObj}, which coerces a non-object to `{}`). */
+  #parseValue(json: string): unknown {
+    return JSON.parse(json);
+  }
+
   #parseArray(json: string): Record<string, unknown>[] {
     const v: unknown = JSON.parse(json);
     return records(v);
@@ -590,4 +586,28 @@ function strings(v: unknown): string[] {
 
 function str(v: unknown): string {
   return v == null ? "" : String(v);
+}
+
+/** A trimmed identifier, or `undefined` when blank/whitespace-only — the shared presence rule
+ *  the urban form contract (`resolveFormIdentifier`/`pickFormLinkage`) applies, so a blank
+ *  `formKey`/`externalFormReference` is treated as absent rather than a present-but-empty value.
+ *  Re-declared locally (not imported) because the kit depends only on urban's long-published
+ *  public API — see the re-declaration note at the top of this file. */
+function present(v: string | undefined): string | undefined {
+  const t = v?.trim();
+  return t ? t : undefined;
+}
+
+/** Parse a form-js schema from a read-model `FormResult.schema`: the engine serializes it as a
+ *  JSON string (the REST wire shape), but tolerate an already-parsed object too. Returns `null`
+ *  when the value is neither, mirroring urban's `parseFormSchema`. */
+function parseFormSchema(raw: unknown): Record<string, unknown> | null {
+  if (isRecord(raw)) return raw;
+  if (typeof raw !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return isRecord(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }

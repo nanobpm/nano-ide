@@ -101,6 +101,14 @@ function embedKey(text: string): string {
   return `embed\n${JSON.stringify(text)}`;
 }
 
+function assertEmbeddingDimensionMatch(sourceDimension: number, adapterDimension: number): void {
+  if (sourceDimension !== adapterDimension) {
+    throw new Error(
+      `capture source dimension (${sourceDimension}) must match this adapter's dimension (${adapterDimension})`,
+    );
+  }
+}
+
 function canonicalImage(image: ImagePart): { kind: "image"; mediaType: string; data: string } {
   return { kind: image.kind, mediaType: image.mediaType, data: image.data };
 }
@@ -135,15 +143,14 @@ export class RecordReplayEmbeddingAdapter implements EmbeddingModelAdapter {
     this.#captureSource = options.captureSource ?? new FakeEmbeddingModelAdapter(options.dimension);
     this.modelId = options.modelId ?? `record-replay(${this.#captureSource.modelId})`;
     this.dimension = options.dimension ?? this.#captureSource.dimension;
+    if (options.captureSource !== undefined && options.dimension !== undefined) {
+      assertEmbeddingDimensionMatch(options.captureSource.dimension, options.dimension);
+    }
   }
 
   /** Injects the capture source used in record mode (S4 wires a real adapter here). */
   setCaptureSource(source: EmbeddingModelAdapter): void {
-    if (source.dimension !== this.dimension) {
-      throw new Error(
-        `capture source dimension (${source.dimension}) must match this adapter's dimension (${this.dimension})`,
-      );
-    }
+    assertEmbeddingDimensionMatch(source.dimension, this.dimension);
     this.#captureSource = source;
   }
 

@@ -86,6 +86,21 @@ test("record/replay: an INJECTED capture source is used in record mode", async (
   assert.deepEqual(calls, ["capture me"]);
 });
 
+test("record/replay: a constructor with a captureSource whose dimension disagrees with an explicit dimension throws", () => {
+  const stubDim3: EmbeddingModelAdapter = {
+    modelId: "stub-capture",
+    dimension: 3,
+    async embed() {
+      return [1, 2, 3];
+    },
+  };
+  const cassette = new Cassette(null);
+  assert.throws(
+    () => new RecordReplayEmbeddingAdapter({ mode: "record", cassette, captureSource: stubDim3, dimension: 64 }),
+    /dimension \(3\) must match this adapter's dimension \(64\)/,
+  );
+});
+
 test("record/replay: an injected chat capture source is used in record mode", async () => {
   const inputs: ChatInput[] = [];
   const stub: ChatModelAdapter = {

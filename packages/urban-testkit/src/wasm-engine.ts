@@ -625,9 +625,17 @@ export class WasmEngineClient implements EngineClient {
     }
     // A matching mock shadows the real handler: apply its outcome via the shared applier — the
     // exact same engine completion calls the real path below uses — and return without running
-    // (or even needing) the app's handler.
+    // (or even needing) the app's handler. `applyOutcome` runs the same engine calls a real
+    // handler resolves through (notably `JSON.stringify(variables)` for a `complete` outcome),
+    // so it can throw exactly like the real path's completion does; route that throw through the
+    // same error-to-`failJob`/`throwError` handling rather than letting it escape `#runJob` and
+    // abort the whole drain.
     if (mockOutcome !== undefined) {
-      applyOutcome(this.#engine, jobKey, mockOutcome);
+      try {
+        applyOutcome(this.#engine, jobKey, mockOutcome);
+      } catch (err) {
+        this.#failFromError(raw, jobKey, err);
+      }
       return;
     }
     // Fell through the mock (no match / no clause). With no real worker registered for this type
@@ -639,17 +647,26 @@ export class WasmEngineClient implements EngineClient {
       const out = await worker.handler(job);
       this.#engine.completeJob(jobKey, JSON.stringify(out ?? {}));
     } catch (err) {
-      if (isBpmnError(err)) {
-        this.#engine.throwError(jobKey, err.errorCode, err.message ?? err.errorCode);
-        return;
-      }
-      const retries = typeof raw.retries === "number" ? raw.retries : 1;
-      this.#engine.failJob(
-        jobKey,
-        Math.max(0, retries - 1),
-        err instanceof Error ? err.message : String(err),
-      );
+      this.#failFromError(raw, jobKey, err);
     }
+  }
+
+  /** Map a thrown handler/outcome error to the engine's completion surface — the single
+   *  canonical error→completion mapping shared by the real-handler path and the mock-apply path.
+   *  A {@link isBpmnError} throw raises a BPMN error (drives the modelled boundary); any other
+   *  throw fails the job, decrementing its redelivery budget (`retries - 1`, floored at 0, so the
+   *  last attempt raises an incident) exactly as the live SDK adapter does. */
+  #failFromError(raw: Record<string, unknown>, jobKey: string, err: unknown): void {
+    if (isBpmnError(err)) {
+      this.#engine.throwError(jobKey, err.errorCode, err.message ?? err.errorCode);
+      return;
+    }
+    const retries = typeof raw.retries === "number" ? raw.retries : 1;
+    this.#engine.failJob(
+      jobKey,
+      Math.max(0, retries - 1),
+      err instanceof Error ? err.message : String(err),
+    );
   }
 
   #snapshot(): Record<string, unknown> {

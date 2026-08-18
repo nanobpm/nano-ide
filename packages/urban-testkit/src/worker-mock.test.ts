@@ -11,6 +11,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createWasmEngineClient, type WasmEngineClient } from "./wasm-engine.ts";
+import { applyOutcome, type MockOutcome, type OutcomeEngine } from "./worker-mock.ts";
 
 /** A single service task (`work`) between start and end — completes the whole instance. */
 const SVC_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
@@ -305,5 +306,40 @@ test("mock: mockWorker(type) is idempotent — repeated calls return the same bu
     const two = await engine.createInstance({ processDefinitionId: "wait", variables: { n: 2 } });
     assert.equal(instanceVariables(engine, one.processInstanceKey).clause, "one");
     assert.equal(instanceVariables(engine, two.processInstanceKey).clause, "two");
+  });
+});
+
+test("applyOutcome: an unknown outcome kind is rejected (the S5 exhaustiveness seam is real at runtime too)", () => {
+  // The exhaustiveness guard is primarily a COMPILE-time seam (a new engine completion method
+  // ⇒ a new MockOutcome variant ⇒ a non-exhaustive switch ⇒ a type error). This runtime probe
+  // proves the same guard fails loudly rather than silently falling through, so a malformed
+  // outcome that slips past the type system (here fabricated via JSON.parse to dodge the `as`
+  // ban) cannot leave a job silently un-resolved. Before the `never` guard the switch simply
+  // returned, silently dropping the job.
+  const calls: string[] = [];
+  const engine: OutcomeEngine = {
+    completeJob: () => calls.push("complete"),
+    failJob: () => calls.push("fail"),
+    throwError: () => calls.push("throw"),
+  };
+  const bogus: MockOutcome = JSON.parse('{"kind":"__nope__"}');
+  assert.throws(() => applyOutcome(engine, "job-1", bogus), /unhandled mock outcome|__nope__/i);
+  assert.deepEqual(calls, [], "an unknown outcome must resolve through no engine call");
+});
+
+test("mock: a completeWith outcome the engine can't serialize fails the job instead of aborting the drain", async () => {
+  await withEngine({ name: "svc.bpmn", xml: SVC_BPMN }, async (engine) => {
+    // A BigInt is not JSON-serializable, so `applyOutcome`'s `JSON.stringify(variables)` throws —
+    // exactly like the real handler path's `JSON.stringify(out)` would. That throw must be caught
+    // and turned into a failJob/incident (mirroring the real path), NOT escape `#runJob` and abort
+    // the whole drain. Before the fix the drain threw the raw TypeError out of createInstance.
+    engine.mockWorker("work").completeWith({ big: 1n });
+    const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "svc" });
+    const [inst] = await engine.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
+    assert.equal(inst?.state, "ACTIVE", "an unserializable completion must not complete the instance");
+    assert.ok(
+      incidentReasons(engine).some((r) => /bigint/i.test(r)),
+      "the serialization failure surfaced as an incident carrying the error message",
+    );
   });
 });

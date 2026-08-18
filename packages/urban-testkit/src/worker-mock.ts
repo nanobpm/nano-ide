@@ -67,6 +67,16 @@ export function applyOutcome(engine: OutcomeEngine, jobKey: string, outcome: Moc
     case "throwError":
       engine.throwError(jobKey, outcome.errorCode, outcome.message);
       return;
+    default: {
+      // Exhaustiveness guard: `outcome` is `never` here iff every `MockOutcome` variant is
+      // handled above. A new engine completion method (hence a new variant) makes this branch
+      // reachable and fails to compile until it is handled — the derivation seam the S5
+      // completeness guard relies on. The runtime throw is the belt-and-braces backstop so a
+      // malformed outcome that slips past the type system fails loudly instead of silently
+      // dropping the job.
+      const _exhaustive: never = outcome;
+      throw new Error(`unhandled mock outcome: ${JSON.stringify(_exhaustive)}`);
+    }
   }
 }
 

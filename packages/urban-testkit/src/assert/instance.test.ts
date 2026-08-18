@@ -179,6 +179,34 @@ test("hasCompletedElements passes for completed elements and fails otherwise", a
   });
 });
 
+test("hasCompletedElements fails fast when the snapshot holds more than one instance", async () => {
+  await withApp(async (app) => {
+    // Two DISTINCT processes so both instances coexist in the snapshot: one
+    // COMPLETED (its elements land in the aggregate `elementStats`) and one left
+    // ACTIVE. Because completion counts are snapshot-global, the matcher cannot
+    // attribute a completed element to a single instance here — it must refuse
+    // rather than silently borrow another instance's completions.
+    await app.engine.deployResources([
+      { name: "m1.bpmn", content: serviceProcess("m1", "m1.work"), contentType: "application/bpmn+xml" },
+      { name: "m2.bpmn", content: serviceProcess("m2", "m2.work"), contentType: "application/bpmn+xml" },
+    ]);
+    await app.engine.registerWorker("m1.work", () => ({ ok: true }));
+    const { processInstanceKey: doneKey } = await app.engine.createInstance({
+      processDefinitionId: "m1",
+      awaitCompletion: true,
+    });
+    // No worker for m2 → this instance parks ACTIVE, so two instances coexist.
+    await app.engine.createInstance({ processDefinitionId: "m2" });
+
+    // Even asking about an element the resolved instance genuinely completed
+    // ("s") must throw, because the verdict would not be per-instance honest.
+    expectFailure(() => assertThatInstance(app, doneKey).hasCompletedElements("s"), [
+      "more than one instance",
+      "unsound",
+    ]);
+  });
+});
+
 // --- Variable matchers ---
 
 test("hasVariable / hasVariables / hasNoVariable pass and fail as specified", async () => {

@@ -105,8 +105,9 @@ function activeElementIds(rec: Record<string, unknown>): string[] {
 /** The element ids that have completed at least once, read from the snapshot's
  *  top-level `elementStats` (`{ elementId, active, completed, incidents }`). The
  *  engine snapshot exposes completion counts only at this aggregate level — a
- *  per-instance record carries only its live `activeElements` — so tests boot an
- *  isolated app per case, scoping these stats to the instance under assertion. */
+ *  per-instance record carries only its live `activeElements` — so this is only
+ *  sound when the snapshot holds a single instance; `hasCompletedElements` guards
+ *  that precondition, and tests boot an isolated app per case. */
 function completedElementIds(snapshot: Record<string, unknown>): string[] {
   const raw = snapshot.elementStats;
   if (!Array.isArray(raw)) return [];
@@ -249,7 +250,20 @@ export function assertThatInstance(
     hasActiveElements: (...elementIds) => requireActiveElements(elementIds, "hasActiveElements"),
 
     hasCompletedElements: (...elementIds) => {
-      const actual = completedElementIds(app.snapshot());
+      const snapshot = app.snapshot();
+      // `elementStats` is snapshot-global, not per-instance, so a completion
+      // count cannot be attributed to a single instance when several coexist.
+      // Refuse rather than return a verdict borrowed from another instance's
+      // completions (tests scope this by booting an isolated app per case).
+      const instanceCount = readInstances(snapshot).length;
+      if (instanceCount > 1) {
+        failAssertion({
+          message: `Cannot assert completed elements on instance ${formatValue(key)}: the snapshot holds more than one instance (${instanceCount}), and the engine reports element completion counts only at the aggregate (snapshot-global) level — a per-instance verdict would be unsound. Assert completed elements against a snapshot containing a single instance.`,
+          operator: "hasCompletedElements",
+          diff: false,
+        });
+      }
+      const actual = completedElementIds(snapshot);
       const missing = elementIds.filter((id) => !actual.includes(id));
       if (missing.length > 0) {
         failAssertion({

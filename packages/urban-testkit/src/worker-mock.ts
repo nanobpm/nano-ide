@@ -121,6 +121,7 @@ interface MockClause {
 export class MockWorkerBuilder {
   readonly #clauses: MockClause[] = [];
   #pendingPredicate: JobPredicate | undefined;
+  #removed = false;
   readonly #remove: () => void;
 
   /** @param remove deregisters this builder from its owning registry (used by {@link reset}). */
@@ -138,6 +139,7 @@ export class MockWorkerBuilder {
    * outcome) so silently dropping the first guard fails fast instead.
    */
   when(predicate: JobPredicate): this {
+    this.#assertLive();
     if (this.#pendingPredicate !== undefined) {
       throw new Error(
         "MockWorkerBuilder.when(): a predicate is already armed for the next outcome. Add an " +
@@ -208,15 +210,37 @@ export class MockWorkerBuilder {
 
   /**
    * Remove this mock entirely: drop every clause and deregister from the owning
-   * engine so the mocked type resumes running its real handler.
+   * engine so the mocked type resumes running its real handler. Idempotent — a second
+   * call on an already-removed builder is a no-op. After reset the builder is
+   * **tombstoned**: any further mutation ({@link when} or an outcome method) throws,
+   * because a clause added to a deregistered builder never affects dispatch. Create a
+   * fresh mock via `app.mockWorker(type)` instead of re-arming a removed builder.
    */
   reset(): void {
+    if (this.#removed) return;
     this.#clauses.length = 0;
     this.#pendingPredicate = undefined;
+    this.#removed = true;
     this.#remove();
   }
 
+  /**
+   * Guard every mutation: a builder that has been {@link reset} is deregistered and must not
+   * be re-armed. A stale reference silently accumulating clauses that never affect dispatch —
+   * while `hasClauses` misleadingly reads `true` — is exactly the footgun this prevents.
+   */
+  #assertLive(): void {
+    if (this.#removed) {
+      throw new Error(
+        "MockWorkerBuilder has been reset() and is no longer registered. Create a fresh mock via " +
+          "app.mockWorker(type) instead of re-arming a removed builder — clauses added to a removed " +
+          "builder never affect dispatch.",
+      );
+    }
+  }
+
   #add(outcome: MockOutcome): this {
+    this.#assertLive();
     this.#clauses.push({ predicate: this.#pendingPredicate, outcome });
     this.#pendingPredicate = undefined;
     return this;

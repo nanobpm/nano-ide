@@ -402,6 +402,28 @@ test("mock: a second consecutive when(...) with no intervening outcome fails fas
   );
 });
 
+test("mock: a reset() builder is tombstoned — re-arming a removed builder fails fast", () => {
+  const b = new MockWorkerBuilder(() => {}).completeWith({ ok: 1 });
+  assert.equal(b.hasClauses, true, "the builder is armed before reset");
+  b.reset();
+  assert.equal(b.hasClauses, false, "reset drops every clause");
+  // A removed builder must not be silently re-armed: clauses added after reset never affect
+  // dispatch (it is deregistered), so mutating it is a footgun that must fail fast.
+  assert.throws(
+    () => b.completeWith({ ok: 2 }),
+    /reset/i,
+    "adding an outcome to a reset() builder must throw, not silently accumulate a dead clause",
+  );
+  assert.throws(
+    () => b.when(() => true),
+    /reset/i,
+    "arming a predicate on a reset() builder must throw",
+  );
+  assert.equal(b.hasClauses, false, "a rejected mutation leaves the builder inert");
+  // reset() is idempotent — a second call on an already-removed builder is a no-op.
+  assert.doesNotThrow(() => b.reset(), "reset() is idempotent on an already-removed builder");
+});
+
 test("mock: clearWorkerMock clears a still-held builder's state, not just the registry entry", async () => {
   await withEngine({ name: "wait.bpmn", xml: WAIT_BPMN }, async (engine) => {
     const mock = engine.mockWorker("work").completeWith({ handledBy: "mock" });

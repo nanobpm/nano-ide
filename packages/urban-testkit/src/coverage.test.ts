@@ -66,6 +66,23 @@ test("SurfaceCoverage: an undeclared element hit via a mock is reported unexpect
   );
 });
 
+test("SurfaceCoverage: `mocked` is additive — a declared element mock-satisfied at least once stays flagged after a later real hit", () => {
+  const cov = new SurfaceCoverage({ workers: ["order.pack"] });
+  cov.record("workers", "order.pack", true); // first exercised via a mock
+  cov.record("workers", "order.pack"); // later also driven by real code (mocked=false)
+
+  const workers = cov.report().surfaces.find((s) => s.surface === "workers");
+  assert.ok(workers);
+  // `mocked` means "exercised via a mock at least once", NOT "exclusively via mock": a later
+  // real dispatch of the same element does not un-flag it. This pins the documented additive
+  // semantic so it can never silently drift into exclusivity.
+  assert.deepEqual(
+    workers.mocked,
+    ["order.pack"],
+    "a mock-then-real element stays in `mocked` — the set is additive, never subtractive",
+  );
+});
+
 test("SurfaceCoverage.assertFullCoverage throws naming exactly the un-exercised elements", () => {
   const cov = new SurfaceCoverage({
     operations: ["listTasks", "createTask", "deleteTask"],

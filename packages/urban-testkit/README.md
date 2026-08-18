@@ -38,6 +38,33 @@ runEngineClientContract("wasm", () => createWasmEngineClient());
 
 Runs on Node (`node --test`) and Deno; the adapter is runtime-agnostic.
 
+## AI assertions — `@nanobpm/urban-testkit/ai` (issue #297)
+
+A deterministic, CI-safe surface for **AI-judge** and **semantic-similarity**
+assertions, exposed on the `./ai` subpath. It tracks exactly **two adapter seams** —
+`EmbeddingModelAdapter` (text → vector) and `ChatModelAdapter` (prompt + optional image
+→ text). Multimodal (image + prompt) judging is folded into the chat seam via an optional
+image part; there is no separate multimodal seam.
+
+The default backends are **deterministic fakes** (zero network): the same input always
+yields the same vector/verdict, so tests are reproducible in CI. A **record/replay**
+adapter wraps either seam against an on-disk JSON cassette — a missing or edited cassette
+**fails loudly** — and its capture source is pluggable so live backends can be recorded
+without editing the adapter. `seamInventory()` is the derived source of truth over the two
+seams (which backends exist per seam) for the completeness guard.
+
+```ts
+import { assertThatText, seamInventory } from "@nanobpm/urban-testkit/ai";
+
+await assertThatText(output).matchesSemantically("a warm greeting", { threshold: 0.8 });
+await assertThatText(output).satisfiesJudge("is a polite apology");
+```
+
+This slice (**S1**) ships the scaffold — seams, fakes, record/replay, the fluent
+matcher-registration seam, and the derived seam inventory. The `matchesSemantically`
+(S2) and `satisfiesJudge` (S3) matchers and the real opt-in adapters (S4) land in later
+slices.
+
 ## Booting a whole app (S2 + S3)
 
 **`bootTestApp(root, opts?)`** boots a real Urban app in-process against the WASM engine

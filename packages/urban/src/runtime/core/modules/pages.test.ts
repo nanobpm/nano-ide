@@ -1499,7 +1499,16 @@ test("runtime RENDERERS cover exactly the shared PAGE_NODE_TYPES registry", asyn
   );
 });
 
-test("the served runtime module is syntactically valid ES-module JS (node --check)", async () => {
+test("the served runtime module is syntactically valid ES-module JS (node --check)", {
+  // `node --check` is a Node-only spawn: under Deno, process.execPath is the
+  // deno binary, which would *run* the module (hitting browser globals like
+  // `document`) rather than syntax-check it. The Node CI job (build → npm test)
+  // exercises this guard; skip it under Deno rather than mis-spawn.
+  skip:
+    "Deno" in globalThis
+      ? "node --check is Node-specific; covered by the Node test job"
+      : false,
+}, async () => {
   // The browser runtime ships as a ~99KB String.raw blob (RENDERER_JS) that
   // neither tsc nor biome ever look inside, so a stray brace or bad token would
   // otherwise surface only when a browser loads /app/runtime.js. Parse the
@@ -1507,8 +1516,12 @@ test("the served runtime module is syntactically valid ES-module JS (node --chec
   // import.meta + top-level await) so malformed runtime JS fails CI, not the
   // browser. Interim guard toward extracting the runtime to real source (#291).
   const res = await dispatch("GET", "/app/runtime.js");
+  // Guard on the response actually being the JS module, not just non-empty: a
+  // wrong-status / wrong-content-type body must not silently pass node --check.
+  assert.equal(res.status, 200, "runtime module must be served with 200");
+  assert.match(res.headers?.["content-type"] ?? "", /javascript/, "must be served as JavaScript");
   const js = res.body ?? "";
-  assert.ok(js.length > 0, "runtime module must be served");
+  assert.ok(js.length > 0, "runtime module body must be non-empty");
   const dir = mkdtempSync(join(tmpdir(), "urban-rt-"));
   const file = join(dir, "runtime.mjs");
   try {

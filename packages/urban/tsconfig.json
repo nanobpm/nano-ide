@@ -12,5 +12,6 @@
     "allowJs": true,
     "types": ["node"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/runtime/browser"]
 }

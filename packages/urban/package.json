@@ -61,7 +61,9 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json",
 		"prepack": "npm run build",
-		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser.json",
+		"gen:runtime": "node scripts/gen-runtime.mjs",
+		"check:runtime": "node scripts/gen-runtime.mjs --check",
 		"test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
 		"test:deno": "deno test -A --no-check src/"
 	},

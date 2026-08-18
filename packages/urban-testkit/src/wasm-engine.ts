@@ -194,13 +194,14 @@ export class WasmEngineClient implements EngineClient {
     // The runtime's `deployModels` sends every deployable here — BPMN + DMN (`text/xml`),
     // `.form` (`application/json`), and, under ADR 0062 deploy-by-convention, any other file
     // swept from `resources/`. Only executable models can run under the WASM engine: BPMN/DMN
-    // are parsed by the engine. A `.form` is read back through the engine's real read model
-    // (`getFormByKey`), not a JS shadow store; any *other* generic resource has no read surface on
-    // this adapter yet (it is accepted and counted, but not resolvable). The form *write* path
-    // lands with Magikcraft/nano-bpm#815; this adapter does not yet forward `.form` resources to
-    // the engine, so until then a `.form` is accepted (and counted) but not yet resolvable — it
-    // will only start resolving once the adapter forwards it, not automatically. Every
-    // non-executable resource is inert to the BPMN parser here.
+    // are parsed by the engine. This adapter does *not* forward `.form` resources into the engine
+    // (only `isEngineModel` resources are deployed above), so a deployed `.form` is accepted and
+    // counted but is not resolvable here — deploying it populates no read model. The `getForm`
+    // read path delegates to the engine's real read model (`getFormByKey`), not a JS shadow store,
+    // but it can only return a form once the `.form` *write* path (Magikcraft/nano-bpm#815) lands
+    // *and* this adapter is updated to forward `.form` content; that does not happen automatically.
+    // Any *other* generic resource likewise has no read surface here. Every non-executable resource
+    // is inert to the BPMN parser here.
     for (const r of resources) {
       if (isEngineModel(r)) this.#engine.deploy(r.content);
     }
@@ -336,11 +337,12 @@ export class WasmEngineClient implements EngineClient {
   > {
     // Mirror `SdkEngineClient.getForm`'s identifier normalization exactly (a behavioral
     // drift surface guarded by a test): an empty/whitespace-only identifier is *absent*, so a
-    // blank `formKey` falls through to a valid `formId`. The engine addresses a form by a single
-    // deploy key, so pass whichever identifier is present straight through to `getFormByKey` (no
-    // local id→key map — the read model owns that resolution now). A malformed key — e.g. an
-    // authored `formId` handed through as the fallback — makes `getFormByKey` *throw*; like the
-    // REST gateway's 404, that is treated below as "no such form" (null), not propagated.
+    // blank `formKey` falls through to whatever `formId` is present. The engine addresses a form
+    // by a single deploy key, so pass whichever identifier is present straight through to
+    // `getFormByKey` (no local id→key map — the read model owns that resolution now). That
+    // fallback identifier need not be a usable key: a malformed key — e.g. an authored `formId`
+    // handed through as the fallback — makes `getFormByKey` *throw*; like the REST gateway's 404,
+    // that is treated below as "no such form" (null), not propagated.
     const key = present(input.formKey) ?? present(input.formId);
     if (key == null) return null;
     // The engine addresses a form by a numeric deploy key and *throws* on a malformed key (e.g. an

@@ -137,7 +137,7 @@ test("wasm: deployResources accepts forms (not executed) and reports every resou
   }
 });
 
-test("wasm: getForm resolves against the engine's real read model, not a JS shadow store", async () => {
+test("wasm: getForm reads through the engine's read channel (getFormByKey), with no JS shadow store", async () => {
   const engine = await createWasmEngineClient();
   try {
     // The shadow form store is gone: `getForm` now delegates to the read model's

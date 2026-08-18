@@ -148,8 +148,10 @@ export function childProcessIdFromJobType(jobType: string): string {
  * Rewrite every BPMN call activity in `xml` into a synthetic service task whose
  * `zeebe:taskDefinition type` is {@link childProcessJobType}`(calledProcessId)`, preserving the
  * element's `id` (so incoming/outgoing sequence flows and attached boundary events still
- * resolve) and any non-`extensionElements` children (e.g. `multiInstanceLoopCharacteristics`,
- * `incoming`/`outgoing`). Returns the rewritten XML plus the distinct called process ids found.
+ * resolve), every non-`extensionElements` child (e.g. `multiInstanceLoopCharacteristics`,
+ * `incoming`/`outgoing`), and every *other* `extensionElements` child (e.g. `zeebe:ioMapping`,
+ * `zeebe:taskHeaders`) — only the `zeebe:calledElement` is replaced by the synthetic
+ * `taskDefinition`. Returns the rewritten XML plus the distinct called process ids found.
  *
  * The `WasmEngineClient` uses this at deploy time so a call activity becomes a job the drain can
  * resolve (through a child-process mock, or completing it through with no variables when
@@ -158,7 +160,8 @@ export function childProcessIdFromJobType(jobType: string): string {
  *
  * The transform is intentionally conservative and string-based: it matches the `callActivity`
  * element (with or without a namespace prefix, self-closing or not) and rewrites only its tag
- * name and its `extensionElements`, so the surrounding model is preserved byte-for-byte.
+ * name and the `calledElement` inside its `extensionElements`, so the surrounding model is
+ * preserved byte-for-byte.
  */
 export function rewriteCallActivities(xml: string): { xml: string; calledProcessIds: string[] } {
   // Fast path: no call activity → return the input untouched (zero cost for the common case).
@@ -176,34 +179,47 @@ export function rewriteCallActivities(xml: string): { xml: string; calledProcess
       if (processId === undefined) return whole;
       calledProcessIds.add(processId);
       const prefix = prefixRaw ?? "";
-      // Carry the captured BPMN prefix on the injected extensionElements too: in a model that
-      // binds only a `bpmn:` prefix (no default BPMN namespace), an unprefixed <extensionElements>
-      // would land in the wrong namespace and break parsing.
-      const taskDef =
-        `<${prefix}extensionElements><zeebe:taskDefinition type="${childProcessJobType(processId)}"/>` +
-        `</${prefix}extensionElements>`;
-      // Preserve every child EXCEPT the original <extensionElements> (which held calledElement);
-      // reinject a fresh extensionElements carrying the synthetic taskDefinition.
-      const preserved = stripExtensionElements(body ?? "");
-      return `<${prefix}serviceTask${attrs}>${taskDef}${preserved}</${prefix}serviceTask>`;
+      const taskDef = `<zeebe:taskDefinition type="${childProcessJobType(processId)}"/>`;
+      // Remove only the `<zeebe:calledElement…/>` the synthetic taskDefinition replaces, then
+      // inject the taskDefinition — preserving every other child of the call activity, including
+      // any sibling extensionElements content (ioMapping, task headers, other engine extensions).
+      const merged = injectTaskDefinition(stripCalledElement(body ?? ""), prefix, taskDef);
+      return `<${prefix}serviceTask${attrs}>${merged}</${prefix}serviceTask>`;
     },
   );
   return { xml: rewritten, calledProcessIds: [...calledProcessIds] };
 }
 
 /** The `processId` of a `<zeebe:calledElement processId="…"/>` within a call activity body, or
- *  `undefined` when absent/blank. */
+ *  `undefined` when absent/blank. Accepts either quote style — XML attribute values may be single-
+ *  or double-quoted, and a single-quoted `processId` must still key the child-process mock. */
 function extractCalledProcessId(body: string): string | undefined {
-  const m = /<(?:[\w.-]+:)?calledElement\b[^>]*?\bprocessId="([^"]*)"/.exec(body);
-  const id = m?.[1]?.trim();
+  const m = /<(?:[\w.-]+:)?calledElement\b[^>]*?\bprocessId=(["'])([^"']*)\1/.exec(body);
+  const id = m?.[2]?.trim();
   return id ? id : undefined;
 }
 
-/** Remove every `<extensionElements>…</extensionElements>` (and self-closing variant) block from a
- *  call-activity body — that block holds the `zeebe:calledElement` the synthetic taskDefinition
- *  replaces; all other children are preserved. */
-function stripExtensionElements(body: string): string {
+/** Remove the `<zeebe:calledElement …>` element (self-closing or with a body) that the synthetic
+ *  taskDefinition replaces, leaving every other child — including any other `extensionElements`
+ *  content — in place. */
+function stripCalledElement(body: string): string {
   return body
-    .replace(/<(?:[\w.-]+:)?extensionElements\b[^>]*?\/>/g, "")
-    .replace(/<(?:[\w.-]+:)?extensionElements\b[\s\S]*?<\/(?:[\w.-]+:)?extensionElements>/g, "");
+    .replace(/<(?:[\w.-]+:)?calledElement\b[^>]*?\/>/g, "")
+    .replace(/<(?:[\w.-]+:)?calledElement\b[\s\S]*?<\/(?:[\w.-]+:)?calledElement>/g, "");
+}
+
+/** Inject the synthetic `<zeebe:taskDefinition/>` into a call-activity body, preserving existing
+ *  extension content: into the first surviving `<extensionElements>` block (right after its opening
+ *  tag, or by expanding a self-closing one), or — when none remains — a fresh prefixed
+ *  `<extensionElements>` block prepended so it stays first in the element's children. */
+function injectTaskDefinition(body: string, prefix: string, taskDef: string): string {
+  const selfClosing = /<((?:[\w.-]+:)?extensionElements)\b[^>]*?\/>/;
+  if (selfClosing.test(body)) {
+    return body.replace(selfClosing, (_m, name: string) => `<${name}>${taskDef}</${name}>`);
+  }
+  const open = /<(?:[\w.-]+:)?extensionElements\b[^>]*?>/;
+  if (open.test(body)) {
+    return body.replace(open, (m: string) => `${m}${taskDef}`);
+  }
+  return `<${prefix}extensionElements>${taskDef}</${prefix}extensionElements>${body}`;
 }

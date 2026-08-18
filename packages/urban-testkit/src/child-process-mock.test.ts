@@ -351,6 +351,41 @@ test("rewriteCallActivities: handles namespace prefixes containing '.' and '-' (
   assert.ok(!xml.includes("callActivity"));
 });
 
+test("rewriteCallActivities: accepts a single-quoted calledElement processId (XML allows both quote styles)", () => {
+  // XML attribute values may be single-quoted; a single-quoted processId must still key the mock.
+  const singleQuoted = `<definitions><process id="p">
+    <callActivity id="c"><extensionElements><zeebe:calledElement processId='child'/></extensionElements></callActivity>
+  </process></definitions>`;
+  const { xml, calledProcessIds } = rewriteCallActivities(singleQuoted);
+  assert.deepEqual(calledProcessIds, ["child"], "the single-quoted processId is detected");
+  assert.ok(
+    xml.includes('type="__urban-testkit:child-process__:child"'),
+    "and drives the synthetic child-process job type",
+  );
+  assert.ok(!xml.includes("callActivity"), "the call activity was rewritten");
+});
+
+test("rewriteCallActivities: preserves other extensionElements children (ioMapping/taskHeaders) when rewriting", () => {
+  // Only the calledElement is replaced by the synthetic taskDefinition — sibling extensions inside
+  // the same extensionElements block (e.g. ioMapping, taskHeaders) must survive the rewrite.
+  const withExtras = `<bpmn:definitions xmlns:bpmn="x" xmlns:zeebe="z">
+    <bpmn:process id="p">
+      <bpmn:callActivity id="c"><bpmn:extensionElements><zeebe:calledElement processId="child"/><zeebe:ioMapping><zeebe:input source="=x" target="y"/></zeebe:ioMapping><zeebe:taskHeaders><zeebe:header key="k" value="v"/></zeebe:taskHeaders></bpmn:extensionElements></bpmn:callActivity>
+    </bpmn:process>
+  </bpmn:definitions>`;
+  const { xml, calledProcessIds } = rewriteCallActivities(withExtras);
+  assert.deepEqual(calledProcessIds, ["child"]);
+  assert.ok(xml.includes('<bpmn:serviceTask id="c">'), "rewritten to a serviceTask");
+  assert.ok(!xml.includes("calledElement"), "only the calledElement was removed");
+  assert.ok(xml.includes('<zeebe:taskDefinition type="__urban-testkit:child-process__:child"/>'), "taskDefinition injected");
+  assert.ok(xml.includes('<zeebe:ioMapping><zeebe:input source="=x" target="y"/></zeebe:ioMapping>'), "ioMapping preserved");
+  assert.ok(xml.includes('<zeebe:taskHeaders><zeebe:header key="k" value="v"/></zeebe:taskHeaders>'), "taskHeaders preserved");
+  assert.ok(
+    xml.includes("<bpmn:extensionElements><zeebe:taskDefinition"),
+    "the taskDefinition lands first inside the surviving extensionElements block",
+  );
+});
+
 test("MockChildProcessBuilder: resolve() returns undefined until an outcome is set, then the outcome", () => {
   const builder = new MockChildProcessBuilder(() => {});
   assert.equal(builder.hasOutcome, false);

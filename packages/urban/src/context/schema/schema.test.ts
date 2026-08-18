@@ -16,6 +16,7 @@ import {
   AUTHORITIES,
   MEMORY_RECORD_SCHEMA_VERSION,
   type MemoryRecord,
+  type ValidationResult,
 } from "./index.ts";
 
 function base(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -64,6 +65,38 @@ test("rejects a non-object with a clear error", () => {
   if (!result.ok) {
     assert.equal(result.errors[0]?.code, "not-an-object");
   }
+});
+
+test("never throws on hostile inputs: throwing getters and exotic prototypes are rejected, not read", () => {
+  // A throwing getter must not be invoked — it is rejected as not-an-object.
+  const withThrowingGetter = {
+    get id(): string {
+      throw new Error("hostile getter must never be read");
+    },
+  };
+  let hostile: ValidationResult | undefined;
+  assert.doesNotThrow(() => {
+    hostile = validateMemoryRecord(withThrowingGetter);
+  });
+  assert.equal(hostile?.ok, false);
+  if (hostile && !hostile.ok) {
+    assert.equal(hostile.errors[0]?.code, "not-an-object");
+  }
+
+  // A non-plain prototype (class instance) is likewise rejected up front.
+  class Exotic {
+    id = "";
+  }
+  const proto = validateMemoryRecord(new Exotic());
+  assert.equal(proto.ok, false);
+  if (!proto.ok) {
+    assert.equal(proto.errors[0]?.code, "not-an-object");
+  }
+
+  // A null-prototype object with only data properties is still a plain object.
+  const nullProto: Record<string, unknown> = Object.create(null);
+  nullProto.schemaVersion = MEMORY_RECORD_SCHEMA_VERSION;
+  assert.doesNotThrow(() => validateMemoryRecord(nullProto));
 });
 
 test("reports every problem, not just the first", () => {

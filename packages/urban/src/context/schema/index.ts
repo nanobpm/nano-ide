@@ -137,8 +137,28 @@ export type ValidationResult =
 // Small, assertion-free narrowing helpers
 // ---------------------------------------------------------------------------
 
+// A "plain object" is one whose untrusted properties we can read WITHOUT risking
+// a throw: it must carry `Object.prototype` (or a null prototype) and expose only
+// own data properties. Objects with accessor properties (getters/setters) or
+// exotic prototypes are rejected, because reading such a property could throw
+// (e.g. `{ get id() { throw ... } }`) and break `validateMemoryRecord`'s "never
+// throws" contract for hostile inputs. Any reflection error is likewise swallowed
+// as a rejection rather than allowed to propagate.
 function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false;
+  try {
+    const proto = Object.getPrototypeOf(v);
+    if (proto !== Object.prototype && proto !== null) return false;
+    for (const key of Reflect.ownKeys(v)) {
+      const descriptor = Object.getOwnPropertyDescriptor(v, key);
+      if (descriptor === undefined || descriptor.get !== undefined || descriptor.set !== undefined) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isNonEmptyString(v: unknown): v is string {

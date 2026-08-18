@@ -11,6 +11,7 @@
 
 import { readFile, writeFile } from "node:fs/promises";
 import { declareRecordReplayBacking } from "./inventory.ts";
+import { describeText } from "./text.ts";
 import type {
   ChatInput,
   ChatModelAdapter,
@@ -150,11 +151,11 @@ export class RecordReplayEmbeddingAdapter implements EmbeddingModelAdapter {
     const key = embedKey(text);
     if (this.#mode === "replay") {
       if (!this.#cassette.has(key)) {
-        throw new Error(`cassette miss (no recorded embedding for request): ${key}`);
+        throw new Error(`cassette miss (no recorded embedding for request): ${describeText(key)}`);
       }
       const stored = this.#cassette.get(key);
       if (!isNumberArray(stored)) {
-        throw new Error(`cassette entry is corrupt (expected number[]): ${key}`);
+        throw new Error(`cassette entry is corrupt (expected number[]): ${describeText(key)}`);
       }
       return [...stored];
     }
@@ -194,11 +195,11 @@ export class RecordReplayChatModelAdapter implements ChatModelAdapter {
     const key = chatKey(input);
     if (this.#mode === "replay") {
       if (!this.#cassette.has(key)) {
-        throw new Error(`cassette miss (no recorded chat for request): ${key}`);
+        throw new Error(`cassette miss (no recorded chat for request): ${describeText(key)}`);
       }
       const stored = this.#cassette.get(key);
       if (!isChatResult(stored)) {
-        throw new Error(`cassette entry is corrupt (expected { text }): ${key}`);
+        throw new Error(`cassette entry is corrupt (expected { text }): ${describeText(key)}`);
       }
       return { text: stored.text };
     }

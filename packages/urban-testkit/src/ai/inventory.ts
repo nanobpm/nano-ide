@@ -77,6 +77,17 @@ export function registerRealSeamDescriptor(descriptor: RealSeamDescriptor): void
 }
 
 /**
+ * TEST-ONLY: clears the real-seam-descriptor registry so a test that registers a
+ * descriptor cannot leak module-level state into another test (which would make
+ * `hasReal`/`docRef` assertions order-dependent and non-deterministic). Only the
+ * descriptor registry is cleared — the fake/record-replay backings are import-time
+ * facts and must stay declared.
+ */
+export function resetRealSeamDescriptorsForTest(): void {
+  realDescriptors.clear();
+}
+
+/**
  * Returns the derived inventory of every declared seam, sorted by seam id. A new seam
  * appears automatically once any backing is declared for it, so a future seam without
  * all three backings will make S5's completeness guard fail.

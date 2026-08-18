@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { beforeEach, test } from "node:test";
 // Import the barrel so the fake + record/replay backings are declared for both seams.
 import "./index.ts";
-import { registerRealSeamDescriptor, seamInventory } from "./inventory.ts";
+import {
+  registerRealSeamDescriptor,
+  resetRealSeamDescriptorsForTest,
+  seamInventory,
+} from "./inventory.ts";
+
+// The real-seam-descriptor registry is module-level mutable state; reset it before every
+// test so no test's registration leaks into another. Without this, "hasReal is false"
+// would pass only while it runs before the registering test — an order-dependent trap.
+beforeEach(resetRealSeamDescriptorsForTest);
 
 test("seamInventory: enumerates exactly the two seams, fake + record/replay backed", () => {
   const inventory = seamInventory();
@@ -40,4 +49,14 @@ test("registerRealSeamDescriptor: rejects an empty docRef", () => {
     () => registerRealSeamDescriptor({ seam: "ChatModelAdapter", docRef: "   " }),
     /non-empty docRef/,
   );
+});
+
+// Guards the defect class the suppressed advisory flagged: a prior test's registration
+// must not leak into this one. Running AFTER the registering test above, this only passes
+// because `beforeEach` reset the registry — proving the isolation holds regardless of order.
+test("seamInventory: real descriptors do not leak across tests", () => {
+  for (const entry of seamInventory()) {
+    assert.equal(entry.hasReal, false, `${entry.seam} must start with no real backend`);
+    assert.equal(entry.docRef, null);
+  }
 });

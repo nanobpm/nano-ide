@@ -4,6 +4,8 @@
 // This is the single canonical serialize/parse pair so the fake's output and S3's parser
 // never drift (AGENTS.md: derivation over duplication).
 
+import { describeText } from "./text.ts";
+
 /** A structured judge verdict. */
 export interface ChatVerdict {
   readonly pass: boolean;
@@ -26,14 +28,8 @@ function isVerdictShape(value: unknown): value is ChatVerdict {
   );
 }
 
-// Renders arbitrary verdict text for an error message: JSON-quoted (so newlines/control
-// characters can't mangle logs) and length-capped (so a huge blob can't drown the message).
-// The untruncated original stays attached via the error's `cause`.
-function describeText(text: string): string {
-  const maxLength = 200;
-  const quoted = JSON.stringify(text);
-  return quoted.length > maxLength ? `${quoted.slice(0, maxLength)}…` : quoted;
-}
+// Renders arbitrary verdict text for an error message — see the shared `describeText`
+// helper in `./text.ts` (JSON-quoted + length-capped; original attached via `cause`).
 
 /**
  * Parses canonical verdict JSON. Throws loudly on malformed/mismatched text rather than

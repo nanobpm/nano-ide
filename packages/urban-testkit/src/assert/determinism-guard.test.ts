@@ -51,15 +51,27 @@ function stripComments(source: string): string {
     .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 }
 
-/** The implementation files under `src/assert/`: every `.ts` that is not a test
- *  and not a `.d.ts`. These are the files whose determinism the DSL guarantees. */
-async function implementationFiles(): Promise<string[]> {
-  const entries = await readdir(ASSERT_DIR);
-  return entries
-    .filter((name) => name.endsWith(".ts"))
-    .filter((name) => !name.endsWith(".test.ts"))
-    .filter((name) => !name.endsWith(".d.ts"))
-    .sort();
+/** The implementation files under `src/assert/**`: every `.ts` that is not a
+ *  test and not a `.d.ts`. Walks subdirectories recursively so nested helpers
+ *  (e.g. `src/assert/utils/*.ts`) added later stay covered by the guard. Paths
+ *  are returned relative to `ASSERT_DIR` (top-level files keep their bare name). */
+async function implementationFiles(dir: string = ASSERT_DIR, prefix = ""): Promise<string[]> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const rel = prefix ? join(prefix, entry.name) : entry.name;
+    if (entry.isDirectory()) {
+      files.push(...(await implementationFiles(join(dir, entry.name), rel)));
+    } else if (
+      entry.isFile() &&
+      entry.name.endsWith(".ts") &&
+      !entry.name.endsWith(".test.ts") &&
+      !entry.name.endsWith(".d.ts")
+    ) {
+      files.push(rel);
+    }
+  }
+  return files.sort();
 }
 
 test("the assertion DSL implementation scans clean of wall-clock / entropy APIs", async () => {

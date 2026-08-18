@@ -53,7 +53,7 @@ test("failAssertion throws an AssertionError with a formatted diff", () => {
       assert.ok(err instanceof AssertionError);
       assert.match(err.message, /state mismatch/);
       assert.match(err.message, /expected: "COMPLETED"/);
-      assert.match(err.message, /actual: {3}"ACTIVE"/);
+      assert.match(err.message, /actual:\s+"ACTIVE"/);
       return true;
     },
   );

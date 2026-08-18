@@ -126,6 +126,11 @@ export function resolveFromInstances(
     return match.key;
   }
 
+  const kind: string = selectorOrKey.kind;
+  if (kind !== "processId") {
+    throwResolution(`unknown selector kind ${formatValue(kind)}`, instances);
+  }
+
   const matches = instances.filter((i) => i.processId === selectorOrKey.processId);
   if (matches.length === 0) {
     throwResolution(`no instance with processId ${formatValue(selectorOrKey.processId)}`, instances);

@@ -6,6 +6,7 @@ import {
   byKey,
   byProcessId,
   type InstanceRow,
+  type InstanceSelector,
   readInstances,
   resolveFromInstances,
 } from "./selectors.ts";
@@ -77,6 +78,20 @@ test("resolveFromInstances throws on ambiguous processId", () => {
     (err: unknown) => {
       assert.ok(err instanceof AssertionError);
       assert.match(err.message, /2 instances with processId "order"/);
+      return true;
+    },
+  );
+});
+
+test("resolveFromInstances throws a clear error on an unknown selector kind", () => {
+  // A caller crossing a JS / `unknown` boundary can hand us a malformed selector.
+  // JSON.parse yields `any`, so this models that runtime shape without an `as` cast.
+  const bogus: InstanceSelector = JSON.parse('{"kind":"bogus","processId":"order"}');
+  assert.throws(
+    () => resolveFromInstances(rows, bogus),
+    (err: unknown) => {
+      assert.ok(err instanceof AssertionError);
+      assert.match(err.message, /unknown selector kind "bogus"/);
       return true;
     },
   );

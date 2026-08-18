@@ -10,6 +10,7 @@ import {
   configureSimilarity,
   matchesSemantically,
   resetSimilarityDefaults,
+  toSimilarityConfig,
 } from "./index.ts";
 
 /** Derives the fake's cosine score for two texts, so boundary tests never guess. */
@@ -121,4 +122,46 @@ test("reachable through the fluent assertThatText entry", async () => {
     assertThatText("apple").matchesSemantically("zebra"),
     /matchesSemantically failed/,
   );
+});
+
+test("threshold outside [0, 1] or non-finite is rejected as a TypeError", async () => {
+  for (const bad of [-0.1, 1.1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    await assert.rejects(
+      matchesSemantically("alpha beta", "alpha gamma", { threshold: bad }),
+      /threshold must be a finite number in \[0, 1\]/,
+      `expected threshold ${bad} to be rejected`,
+    );
+  }
+});
+
+test("configureSimilarity rejects an out-of-range global threshold", () => {
+  assert.throws(
+    () => configureSimilarity({ threshold: 2 }),
+    /threshold must be a finite number in \[0, 1\]/,
+  );
+});
+
+test("boundary thresholds 0 and 1 are accepted by validation", () => {
+  assert.doesNotThrow(() => configureSimilarity({ threshold: 0 }));
+  assert.doesNotThrow(() => configureSimilarity({ threshold: 1 }));
+  resetSimilarityDefaults();
+});
+
+test("toSimilarityConfig rejects an array (arrays are not plain-object options)", () => {
+  assert.throws(() => toSimilarityConfig([]), /options must be an object/);
+  assert.throws(
+    () => toSimilarityConfig([lowercase]),
+    /options must be an object/,
+  );
+});
+
+test("toSimilarityConfig rejects non-object primitives", () => {
+  assert.throws(() => toSimilarityConfig("nope"), /options must be an object/);
+  assert.throws(() => toSimilarityConfig(42), /options must be an object/);
+});
+
+test("toSimilarityConfig recovers a valid config and validates its threshold at use", () => {
+  assert.deepEqual(toSimilarityConfig(undefined), undefined);
+  const recovered = toSimilarityConfig({ threshold: 0.5 });
+  assert.deepEqual(recovered, { threshold: 0.5 });
 });

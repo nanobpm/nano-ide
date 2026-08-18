@@ -23,6 +23,21 @@ import { cosineSimilarity } from "./cosine.ts";
 /** Default cosine-similarity threshold (epic sketch). */
 const DEFAULT_THRESHOLD = 0.8;
 
+/**
+ * Canonical threshold validator: `SemanticSimilarityConfig.threshold` is documented as a
+ * cosine score in [0, 1], so anything outside that (or `NaN`/`Infinity`) makes the matcher
+ * silently always-pass/always-fail. Enforced here — the single choke point every threshold
+ * (direct call, global default, or registry-recovered) passes through — so no path escapes it.
+ */
+function validateThreshold(threshold: number): number {
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    throw new TypeError(
+      `matchesSemantically threshold must be a finite number in [0, 1], got ${threshold}`,
+    );
+  }
+  return threshold;
+}
+
 /** Fully-resolved config: no optional fields, so the matcher never re-defaults inline. */
 interface ResolvedSimilarityConfig {
   readonly threshold: number;
@@ -49,7 +64,7 @@ function resolve(
     return base;
   }
   return {
-    threshold: config.threshold ?? base.threshold,
+    threshold: validateThreshold(config.threshold ?? base.threshold),
     preprocessors: config.preprocessors ?? base.preprocessors,
     adapter: config.adapter ?? base.adapter,
   };
@@ -98,7 +113,7 @@ export async function matchesSemantically(
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isTextPreprocessors(value: unknown): value is TextPreprocessors {
@@ -117,8 +132,10 @@ function isEmbeddingModelAdapter(value: unknown): value is EmbeddingModelAdapter
 /**
  * Recovers a {@link SemanticSimilarityConfig} from the type-erased registry argument without
  * an `as`-cast (AGENTS.md bans `as T`): validates each field and rebuilds a typed object.
+ * Exported so the untyped-boundary validation (arrays, non-objects, bad thresholds) is
+ * directly testable.
  */
-function toSimilarityConfig(value: unknown): SemanticSimilarityConfig | undefined {
+export function toSimilarityConfig(value: unknown): SemanticSimilarityConfig | undefined {
   if (value === undefined) {
     return undefined;
   }

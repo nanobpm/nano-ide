@@ -333,6 +333,24 @@ test("rewriteCallActivities: leaves a call activity with no calledElement proces
   assert.ok(xml.includes("callActivity"), "the untouched call activity remains (native pass-through)");
 });
 
+test("rewriteCallActivities: handles namespace prefixes containing '.' and '-' (valid NCName chars)", () => {
+  // XML NCName prefixes allow '.' and '-', which `\w` excludes — the rewrite must still fire.
+  const prefixed = `<b-p.n:definitions xmlns:b-p.n="x" xmlns:zeebe="z">
+    <b-p.n:process id="p">
+      <b-p.n:callActivity id="c1"><b-p.n:extensionElements><zeebe:calledElement processId="alpha"/></b-p.n:extensionElements></b-p.n:callActivity>
+    </b-p.n:process>
+  </b-p.n:definitions>`;
+  const { xml, calledProcessIds } = rewriteCallActivities(prefixed);
+  assert.deepEqual(calledProcessIds, ["alpha"], "the '.'/'-' prefixed calledElement is still detected");
+  assert.ok(xml.includes('<b-p.n:serviceTask id="c1">'), "the '.'/'-' prefix is preserved on the rewritten tag");
+  assert.ok(
+    xml.includes("<b-p.n:extensionElements><zeebe:taskDefinition"),
+    "the injected extensionElements carries the '.'/'-' prefix",
+  );
+  assert.ok(!xml.includes("calledElement"), "the original extensionElements block was stripped");
+  assert.ok(!xml.includes("callActivity"));
+});
+
 test("MockChildProcessBuilder: resolve() returns undefined until an outcome is set, then the outcome", () => {
   const builder = new MockChildProcessBuilder(() => {});
   assert.equal(builder.hasOutcome, false);

@@ -167,7 +167,7 @@ export function rewriteCallActivities(xml: string): { xml: string; calledProcess
   const calledProcessIds = new Set<string>();
   // Match an optional namespace prefix (e.g. `bpmn:`), then the whole element — either
   // self-closing (`<callActivity .../>`) or with a body (`<callActivity ...>…</callActivity>`).
-  const element = /<(\w+:)?callActivity\b([^>]*?)(\/>|>([\s\S]*?)<\/(?:\w+:)?callActivity>)/g;
+  const element = /<([\w.-]+:)?callActivity\b([^>]*?)(\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?callActivity>)/g;
   const rewritten = xml.replace(
     element,
     (whole, prefixRaw: string | undefined, attrs: string, tail: string, body: string | undefined) => {
@@ -194,7 +194,7 @@ export function rewriteCallActivities(xml: string): { xml: string; calledProcess
 /** The `processId` of a `<zeebe:calledElement processId="…"/>` within a call activity body, or
  *  `undefined` when absent/blank. */
 function extractCalledProcessId(body: string): string | undefined {
-  const m = /<(?:\w+:)?calledElement\b[^>]*?\bprocessId="([^"]*)"/.exec(body);
+  const m = /<(?:[\w.-]+:)?calledElement\b[^>]*?\bprocessId="([^"]*)"/.exec(body);
   const id = m?.[1]?.trim();
   return id ? id : undefined;
 }
@@ -204,6 +204,6 @@ function extractCalledProcessId(body: string): string | undefined {
  *  replaces; all other children are preserved. */
 function stripExtensionElements(body: string): string {
   return body
-    .replace(/<(\w+:)?extensionElements\b[^>]*?\/>/g, "")
-    .replace(/<(\w+:)?extensionElements\b[\s\S]*?<\/(?:\w+:)?extensionElements>/g, "");
+    .replace(/<(?:[\w.-]+:)?extensionElements\b[^>]*?\/>/g, "")
+    .replace(/<(?:[\w.-]+:)?extensionElements\b[\s\S]*?<\/(?:[\w.-]+:)?extensionElements>/g, "");
 }

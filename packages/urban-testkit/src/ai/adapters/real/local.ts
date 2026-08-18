@@ -112,7 +112,14 @@ export class LocalEmbeddingAdapter implements EmbeddingModelAdapter {
 
   async embed(text: string): Promise<number[]> {
     const output = await this.#pipeline(text, { pooling: "mean", normalize: true });
-    return extractEmbeddingVector(output);
+    const vector = extractEmbeddingVector(output);
+    if (vector.length !== this.dimension) {
+      throw new Error(
+        `local embedding length ${vector.length} does not match advertised dimension ` +
+          `${this.dimension} (model '${this.modelId}'); set embeddingDimension to match`,
+      );
+    }
+    return vector;
   }
 }
 

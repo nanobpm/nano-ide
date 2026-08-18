@@ -21,6 +21,13 @@ import {
   seamInventory,
 } from "../../index.ts";
 import { Cassette } from "../../record-replay.ts";
+import {
+  HostedChatModelAdapter,
+  HostedEmbeddingAdapter,
+  type HostedProviderConfig,
+} from "./hosted.ts";
+import { LocalEmbeddingAdapter } from "./local.ts";
+import { readEnvVar } from "./env.ts";
 
 // Precondition: the whole S4 default-path contract assumes the LIVE opt-in is OFF. If this
 // fails, the environment leaked `URBAN_TESTKIT_AI_REAL` — a real violation, not a flake.
@@ -94,5 +101,76 @@ test("live activation is impossible without opt-in: every construction factory r
     assert.equal(networkTouched, false, "no factory may touch the network without opt-in");
   } finally {
     Reflect.set(globalThis, "fetch", original);
+  }
+});
+
+// --- Robustness guards for the injected real adapters (no opt-in / network needed: the
+// adapter classes take an injected client/pipeline, so they are unit-testable directly). ---
+
+/** Builds a structural fake of the hosted client that returns a fixed embedding + chat content. */
+function fakeHostedClient(embedding: number[], chatContent: string | null) {
+  return {
+    embeddings: {
+      create: async (_body: { model: string; input: string }) => ({ data: [{ embedding }] }),
+    },
+    chat: {
+      completions: {
+        create: async (_body: { model: string; messages: unknown[] }) => ({
+          choices: [{ message: { content: chatContent } }],
+        }),
+      },
+    },
+  };
+}
+
+test("HostedEmbeddingAdapter.embed rejects a vector whose length != advertised dimension", async () => {
+  const config: HostedProviderConfig = { embeddingDimension: 3 };
+  const adapter = new HostedEmbeddingAdapter(fakeHostedClient([0.1, 0.2], null), config);
+  await assert.rejects(adapter.embed("hi"), /does not match advertised dimension 3/);
+});
+
+test("HostedEmbeddingAdapter.embed returns a vector whose length matches the dimension", async () => {
+  const config: HostedProviderConfig = { embeddingDimension: 3 };
+  const adapter = new HostedEmbeddingAdapter(fakeHostedClient([0.1, 0.2, 0.3], null), config);
+  assert.deepEqual(await adapter.embed("hi"), [0.1, 0.2, 0.3]);
+});
+
+test("HostedChatModelAdapter.chat fails loudly when the provider returns no content", async () => {
+  const adapter = new HostedChatModelAdapter(fakeHostedClient([], null));
+  await assert.rejects(adapter.chat({ prompt: "judge this" }), /no message content/);
+});
+
+test("HostedChatModelAdapter.chat returns the provider's text when present", async () => {
+  const adapter = new HostedChatModelAdapter(fakeHostedClient([], "PASS"));
+  assert.deepEqual(await adapter.chat({ prompt: "judge this" }), { text: "PASS" });
+});
+
+test("LocalEmbeddingAdapter.embed rejects a pipeline vector whose length != advertised dimension", async () => {
+  const pipeline = async (_input: unknown, _options?: Record<string, unknown>) => ({
+    data: new Float32Array([0.1, 0.2]),
+  });
+  const adapter = new LocalEmbeddingAdapter(pipeline, { embeddingDimension: 3 });
+  await assert.rejects(adapter.embed("hi"), /does not match advertised dimension 3/);
+});
+
+test("readEnvVar treats a Deno --allow-env denial as unset (safe by default, never throws)", () => {
+  const key = "URBAN_TESTKIT_AI_REAL_ENV_PERMISSION_PROBE";
+  const original = Reflect.get(globalThis, "Deno");
+  Reflect.set(globalThis, "Deno", {
+    env: {
+      get() {
+        throw new Error("Requires env access to \"" + key + "\", run again with the --allow-env flag");
+      },
+    },
+  });
+  try {
+    assert.doesNotThrow(() => readEnvVar(key));
+    assert.equal(readEnvVar(key), undefined);
+  } finally {
+    if (original === undefined) {
+      Reflect.deleteProperty(globalThis, "Deno");
+    } else {
+      Reflect.set(globalThis, "Deno", original);
+    }
   }
 });

@@ -154,7 +154,14 @@ export class HostedEmbeddingAdapter implements EmbeddingModelAdapter {
     if (first === undefined) {
       throw new Error("hosted embedding response contained no data");
     }
-    return [...first.embedding];
+    const vector = [...first.embedding];
+    if (vector.length !== this.dimension) {
+      throw new Error(
+        `hosted embedding length ${vector.length} does not match advertised dimension ` +
+          `${this.dimension} (model '${this.modelId}'); set embeddingDimension to match`,
+      );
+    }
+    return vector;
   }
 }
 
@@ -174,7 +181,13 @@ export class HostedChatModelAdapter implements ChatModelAdapter {
       messages: buildMessages(input),
     });
     const first = response.choices[0];
-    return { text: first?.message.content ?? "" };
+    const content = first?.message.content;
+    if (content === undefined || content === null) {
+      throw new Error(
+        `hosted chat response contained no message content (model '${this.modelId}')`,
+      );
+    }
+    return { text: content };
   }
 }
 

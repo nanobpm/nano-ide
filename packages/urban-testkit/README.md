@@ -88,12 +88,18 @@ performs network/model I/O, and is gated behind an explicit opt-in — set
 the default CI path can never reach a live model.
 
 ```ts
-import { createRealAdapters, createRecordingChatModelAdapter } from "@nanobpm/urban-testkit/ai";
+import {
+  Cassette,
+  createRealAdapters,
+  createRecordingChatModelAdapter,
+} from "@nanobpm/urban-testkit/ai";
 
 // Throws unless URBAN_TESTKIT_AI_REAL is set (default CI is network-free):
 const { embedding, chat } = await createRealAdapters({ provider: "hosted" });
 
-// Regenerate a cassette from a live backend, injected as the record/replay capture source:
+// Regenerate a cassette from a live backend, injected as the record/replay capture source.
+// Start a fresh cassette (or `await Cassette.load(path)` to append to an existing one):
+const cassette = new Cassette("packages/urban-testkit/src/ai/__cassettes__/judge.json");
 const recorder = await createRecordingChatModelAdapter({ cassette, real: { provider: "local" } });
 ```
 

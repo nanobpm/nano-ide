@@ -39,9 +39,15 @@ export function readEnvVar(name: string): string | undefined {
     if (typeof env === "object" && env !== null) {
       const getter = Reflect.get(env, "get");
       if (typeof getter === "function") {
-        const value = Reflect.apply(getter, env, [name]);
-        if (typeof value === "string") {
-          return value;
+        // Deno's `env.get` throws when the process lacks `--allow-env`; treat that denial
+        // as "unset" so the "safe by default" contract holds instead of surfacing a throw.
+        try {
+          const value = Reflect.apply(getter, env, [name]);
+          if (typeof value === "string") {
+            return value;
+          }
+        } catch {
+          return undefined;
         }
       }
     }

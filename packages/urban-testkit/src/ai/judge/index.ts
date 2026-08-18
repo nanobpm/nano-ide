@@ -12,23 +12,14 @@
 // options object, served deterministically by the fake (which accepts the image shape).
 
 import { registerTextMatcher } from "../assertion.ts";
-import type { JudgeConfig } from "../config.ts";
+import type { JudgeConfig, JudgeOptions } from "../config.ts";
 import { FakeChatModelAdapter } from "../fakes.ts";
 import type { ChatInput, ChatModelAdapter, ImagePart } from "../seams.ts";
+import { describeText } from "../text.ts";
 import { parseVerdict } from "../verdict.ts";
 
 /** Builds the judge prompt from the criteria and the actual text. */
 export type JudgePromptTemplate = (criteria: string, actual: string) => string;
-
-/**
- * Per-call judge options. Extends the shared {@link JudgeConfig} with an OPTIONAL image
- * part so the multimodal (vision) judge rides the SAME chat seam — this is opt-in
- * per-call input, not a new adapter or seam.
- */
-export interface JudgeOptions extends JudgeConfig {
-  /** Optional image part — present only for multimodal (vision) judging. */
-  readonly image?: ImagePart;
-}
 
 /**
  * The default judge prompt. Emits `CRITERIA:` and `ACTUAL:` sections and asks for a JSON
@@ -89,9 +80,10 @@ export async function satisfiesJudge(
     return;
   }
   throw new Error(
-    `satisfiesJudge failed — criteria: ${JSON.stringify(criteria)}; judge rationale: ${
-      verdict.rationale
-    }`,
+    `satisfiesJudge failed — criteria: ${describeText(criteria)}; judge rationale: ${describeText(
+      verdict.rationale,
+    )}`,
+    { cause: { criteria, rationale: verdict.rationale } },
   );
 }
 

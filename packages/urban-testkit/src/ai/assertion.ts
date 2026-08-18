@@ -5,12 +5,12 @@
 // their own files via `registerTextMatcher` — neither edits this file nor the other's.
 // Calling a matcher that no one has registered throws a clear "not installed" error.
 
-import type { JudgeConfig, SemanticSimilarityConfig } from "./config.ts";
+import type { JudgeOptions, SemanticSimilarityConfig } from "./config.ts";
 
 /** The fluent assertion surface. Both methods are installed via the registry. */
 export interface TextAssertion {
   matchesSemantically(expected: string, options?: SemanticSimilarityConfig): Promise<void>;
-  satisfiesJudge(criteria: string, options?: JudgeConfig): Promise<void>;
+  satisfiesJudge(criteria: string, options?: JudgeOptions): Promise<void>;
 }
 
 /**

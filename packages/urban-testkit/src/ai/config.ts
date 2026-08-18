@@ -3,7 +3,7 @@
 // These types are consumed by S2 (semantic-similarity) and S3 (LLM-judge); they live
 // here so neither sibling redefines a synonym.
 
-import type { ChatModelAdapter, EmbeddingModelAdapter } from "./seams.ts";
+import type { ChatModelAdapter, EmbeddingModelAdapter, ImagePart } from "./seams.ts";
 
 /** A single composable string transform applied before comparison/judging. */
 export type TextPreprocessor = (input: string) => string;
@@ -27,4 +27,15 @@ export interface JudgeConfig {
   readonly adapter?: ChatModelAdapter;
   /** Builds the judge prompt from the criteria and the actual text. */
   readonly promptTemplate?: (criteria: string, actual: string) => string;
+}
+
+/**
+ * Per-call judge options. Extends {@link JudgeConfig} with an OPTIONAL image part so the
+ * multimodal (vision) judge rides the SAME chat seam — this is opt-in per-call input, not
+ * a new adapter or seam. Lives here (not in the matcher module) so the fluent
+ * `TextAssertion.satisfiesJudge` surface and the matcher share one source of truth.
+ */
+export interface JudgeOptions extends JudgeConfig {
+  /** Optional image part — present only for multimodal (vision) judging. */
+  readonly image?: ImagePart;
 }

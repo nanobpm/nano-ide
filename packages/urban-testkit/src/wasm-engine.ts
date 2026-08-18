@@ -26,7 +26,6 @@ import { applyOutcome, MockWorkerBuilder } from "./worker-mock.ts";
 import {
   childProcessIdFromJobType,
   childProcessJobType,
-  isChildProcessJobType,
   MockChildProcessBuilder,
   rewriteCallActivities,
 } from "./child-process-mock.ts";
@@ -531,8 +530,12 @@ export class WasmEngineClient implements EngineClient {
    * activity; a mock on an id with no such call activity simply never fires. Call `.reset()` on
    * the builder (or {@link clearChildProcessMock}) to restore the native pass-through.
    *
-   * Idempotent per id: repeated calls return the SAME builder. Purely opt-in — no child-process
-   * bookkeeping happens on any dispatch until this is first called for an id.
+   * Idempotent per id: repeated calls return the SAME builder. Only the **mock registry** is
+   * opt-in here — registering an outcome is what makes a call activity resolve to something other
+   * than the native pass-through. The deploy-time rewrite and drain-time dispatch of call-activity
+   * jobs are NOT gated on this call: {@link deployResources} rewrites every call activity and
+   * {@link drain} activates those synthetic jobs (completing them through with no variables) even
+   * with zero mocks registered.
    */
   mockChildProcess(processId: string): MockChildProcessBuilder {
     let builder = this.#childProcessMocks.get(processId);
@@ -626,8 +629,11 @@ export class WasmEngineClient implements EngineClient {
       for (const jobType of this.#dispatchableJobTypes()) {
         // A synthetic child-process job type has no registered worker and is resolved on its own
         // dedicated path (call-activity outcome / native pass-through), never as a worker.
-        const isChildProcess = isChildProcessJobType(jobType);
+        // Classify by membership in the minted set (not a prefix test) AND the absence of a real
+        // worker, so a real worker whose type happened to share the synthetic prefix is never
+        // hijacked onto the child-process path.
         const realWorker = this.#workers.get(jobType);
+        const isChildProcess = realWorker === undefined && this.#childProcessJobTypes.has(jobType);
         // A mock-only or child-process type has no registered worker; use a synthetic activation
         // descriptor so its jobs can be pulled. Its handler is never invoked.
         const worker = realWorker ?? mockOnlyWorker(jobType);

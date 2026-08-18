@@ -318,6 +318,11 @@ test("rewriteCallActivities: handles a namespace prefix and multiple/distinct ca
   assert.deepEqual(calledProcessIds.sort(), ["alpha", "beta"]);
   assert.ok(xml.includes('<bpmn:serviceTask id="c1">'), "prefix preserved on the rewritten tag");
   assert.ok(xml.includes('<bpmn:serviceTask id="c2">'));
+  assert.ok(
+    xml.includes("<bpmn:extensionElements><zeebe:taskDefinition"),
+    "the injected extensionElements also carries the bpmn: prefix (correct namespace)",
+  );
+  assert.ok(!xml.includes("<extensionElements>"), "no unprefixed extensionElements leaked in");
   assert.ok(!xml.includes("callActivity"));
 });
 

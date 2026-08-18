@@ -176,9 +176,12 @@ export function rewriteCallActivities(xml: string): { xml: string; calledProcess
       if (processId === undefined) return whole;
       calledProcessIds.add(processId);
       const prefix = prefixRaw ?? "";
+      // Carry the captured BPMN prefix on the injected extensionElements too: in a model that
+      // binds only a `bpmn:` prefix (no default BPMN namespace), an unprefixed <extensionElements>
+      // would land in the wrong namespace and break parsing.
       const taskDef =
-        `<extensionElements><zeebe:taskDefinition type="${childProcessJobType(processId)}"/>` +
-        `</extensionElements>`;
+        `<${prefix}extensionElements><zeebe:taskDefinition type="${childProcessJobType(processId)}"/>` +
+        `</${prefix}extensionElements>`;
       // Preserve every child EXCEPT the original <extensionElements> (which held calledElement);
       // reinject a fresh extensionElements carrying the synthetic taskDefinition.
       const preserved = stripExtensionElements(body ?? "");

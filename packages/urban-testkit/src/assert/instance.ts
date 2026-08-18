@@ -40,10 +40,10 @@ export interface InstanceAssert {
   isTerminated(): InstanceAssert;
   /** The element `elementId` currently has an active token in this instance. */
   hasActiveElement(elementId: string): InstanceAssert;
-  /** Every one of `elementIds` currently has an active token in this instance. */
-  hasActiveElements(...elementIds: string[]): InstanceAssert;
-  /** Every one of `elementIds` has completed at least once. */
-  hasCompletedElements(...elementIds: string[]): InstanceAssert;
+  /** Every one of the given element ids currently has an active token in this instance. */
+  hasActiveElements(firstElementId: string, ...moreElementIds: string[]): InstanceAssert;
+  /** Every one of the given element ids has completed at least once. */
+  hasCompletedElements(firstElementId: string, ...moreElementIds: string[]): InstanceAssert;
   /** The variable `name` is present and deep-equals `value`. */
   hasVariable(name: string, value: unknown): InstanceAssert;
   /** Every key/value in `subset` is present and deep-equal (extra vars ignored). */
@@ -248,9 +248,10 @@ export function assertThatInstance(
     isTerminated: () => assertState("TERMINATED", "isTerminated"),
 
     hasActiveElement: (elementId) => requireActiveElements([elementId], "hasActiveElement"),
-    hasActiveElements: (...elementIds) => requireActiveElements(elementIds, "hasActiveElements"),
+    hasActiveElements: (first, ...rest) => requireActiveElements([first, ...rest], "hasActiveElements"),
 
-    hasCompletedElements: (...elementIds) => {
+    hasCompletedElements: (first, ...rest) => {
+      const elementIds = [first, ...rest];
       const snapshot = app.snapshot();
       const instances = readInstances(snapshot);
       // `elementStats` is snapshot-global, not per-instance, so a completion
@@ -348,8 +349,11 @@ export function assertThatInstance(
         const wanted = selector === undefined
           ? "an incident"
           : `an incident matching ${formatValue(selector)}`;
+        const actualClause = incidents.length === 0
+          ? "it has no incidents"
+          : `its incidents are ${describeIncidents(incidents)}`;
         failAssertion({
-          message: `Expected instance ${formatValue(key)} to have ${wanted}, but its incidents are ${describeIncidents(incidents)}.`,
+          message: `Expected instance ${formatValue(key)} to have ${wanted}, but ${actualClause}.`,
           operator: "hasIncident",
           diff: false,
         });

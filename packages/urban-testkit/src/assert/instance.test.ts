@@ -296,7 +296,7 @@ test("hasIncident / hasNoIncident pass and fail, and hasIncident narrows by sele
       .hasIncident({ elementId: "work" })
       .hasIncident({ errorMessage: "kaboom" })
       .hasIncident({ elementId: "work", errorMessage: "kaboom" });
-    expectFailure(() => assertThatInstance(app, okKey).hasIncident(), ["no incidents"]);
+    expectFailure(() => assertThatInstance(app, okKey).hasIncident(), ["to have an incident", "it has no incidents"]);
     // A selector that matches no incident on an instance that HAS one still fails, naming the actual incident.
     expectFailure(() => assertThatInstance(app, incKey).hasIncident({ elementId: "s" }), ["kaboom", "work"]);
 

@@ -1244,10 +1244,9 @@ function dataUrl(source, tbl, filters, order) {
 // (#..######), fenced + inline code, bold (**/__), italic (*/_), links
 // [text](url) (http/https/mailto only — every other scheme degrades to its plain
 // label), unordered (-,*,+) and ordered (1. / 1)) lists, blockquotes (>),
-// thematic breaks (---), and blank-line-separated paragraphs. The backtick used
-// for code spans/fences is built from a char code so this source stays inside the
-// String.raw template literal (which is itself delimited by a backtick).
-const MD_BACKTICK = String.fromCharCode(96);
+// thematic breaks (---), and blank-line-separated paragraphs. MD_BACKTICK is the
+// backtick that delimits code spans/fences.
+const MD_BACKTICK = "`";
 /** @param {any} c */
 function mdIsWordChar(c) { return typeof c === "string" && /[0-9A-Za-z]/.test(c); }
 // Only http(s)/mailto hrefs become anchors; anything else (javascript:, data:,

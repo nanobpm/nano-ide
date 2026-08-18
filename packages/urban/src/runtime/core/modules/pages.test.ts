@@ -1001,9 +1001,8 @@ test("the prose renderer ships a safe, dependency-free markdown → DOM converte
   // Underscore emphasis is word-boundary guarded so snake_case identifiers survive.
   assert.match(js, /function mdIsWordChar\(c\)/);
   assert.match(js, /!mdIsWordChar\(s\[i - 1\]\)/);
-  // The code backtick is built from a char code so this source stays inside the
-  // String.raw template literal.
-  assert.match(js, /const MD_BACKTICK = String\.fromCharCode\(96\)/);
+  // The markdown code backtick is a literal in the standalone runtime source.
+  assert.match(js, /const MD_BACKTICK = "`"/);
 });
 
 test("the shell styles the prose/markdown list at a comfortable reading measure (#274)", async () => {

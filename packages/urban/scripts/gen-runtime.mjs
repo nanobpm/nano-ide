@@ -44,8 +44,8 @@ function fail(msg) {
 // flows here and CI's --check catches a forgotten regeneration.
 function mobileBreakpoint() {
   const pages = readFileSync(PAGES, "utf8");
-  const m = pages.match(/const\s+MOBILE_MAX_WIDTH\s*=\s*"([^"]+)"/);
-  if (!m) fail(`could not find 'const MOBILE_MAX_WIDTH = "…"' in ${PAGES}`);
+  const m = pages.match(/const\s+MOBILE_MAX_WIDTH\s*=\s*["']([^"']+)["']/);
+  if (!m) fail(`could not find 'const MOBILE_MAX_WIDTH = "…"' (single- or double-quoted) in ${PAGES}`);
   return m[1];
 }
 

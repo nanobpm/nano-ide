@@ -30,7 +30,12 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./source": "./src/index.ts"
+    "./source": "./src/index.ts",
+    "./ai": {
+      "types": "./dist/ai/index.d.ts",
+      "default": "./dist/ai/index.js"
+    },
+    "./source/ai": "./src/ai/index.ts"
   },
   "files": [
     "dist",

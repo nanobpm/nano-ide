@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.57.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.56.0...@nanobpm/urban-0.57.0) (2026-08-18)
+
+
+### Features
+
+* **urban:** scaffold @nanobpm/urban context-layer skeleton (exports, scripts, subdir seams, barrels) ([#306](https://github.com/nanobpm/nano-ide/issues/306)) ([3025ace](https://github.com/nanobpm/nano-ide/commit/3025acedf39eeee6411f5c000b2d02c3a10becd9))
+
 ## [0.56.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.55.0...@nanobpm/urban-0.56.0) (2026-08-18)
 
 

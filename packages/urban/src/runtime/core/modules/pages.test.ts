@@ -1513,7 +1513,11 @@ function nodeCheck(source: string): { ok: boolean; stderr: string } {
   const file = join(dir, "runtime.mjs");
   try {
     writeFileSync(file, source, "utf8");
-    execFileSync(process.execPath, ["--check", file], { stdio: "pipe" });
+    // Spawn the real `node` binary explicitly. `process.execPath` points at the host
+    // runtime — which under `deno test` is the `deno` binary, whose `--check` runs the
+    // module instead of syntax-only parsing (blowing up on `document`). This guard is
+    // specifically `node --check`, so it must invoke `node` under every test runner.
+    execFileSync("node", ["--check", file], { stdio: "pipe" });
     return { ok: true, stderr: "" };
   } catch (err) {
     const stderr = hasStderr(err) ? String(err.stderr ?? "") : String(err);

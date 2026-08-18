@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.56.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.55.0...@nanobpm/urban-0.56.0) (2026-08-18)
+
+
+### Features
+
+* **urban:** extract browser runtime from String.raw blob into type-checked source ([#298](https://github.com/nanobpm/nano-ide/issues/298)) ([6800871](https://github.com/nanobpm/nano-ide/commit/6800871fb1fc4a2ff7cc3ac01a7d106d255a2e61))
+
 ## [0.55.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban@0.54.0...@nanobpm/urban-0.55.0) (2026-08-17)
 
 

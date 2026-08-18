@@ -61,6 +61,24 @@ test("local file paths canonicalise by absolute path", () => {
   assert.equal(absolute.key, fileUrl.key);
 });
 
+test("file:// host component and percent-encoding canonicalise to one identity", () => {
+  const abs = resolvePath("sub/repo");
+  const plain = resolveContextIdentity({ repo: `file://${abs}`, ref: "main" });
+  // `file://localhost/…` (explicit localhost host) is equivalent to `file:///…`.
+  const localhost = resolveContextIdentity({ repo: `file://localhost${abs}`, ref: "main" });
+  assert.equal(plain.key, localhost.key);
+});
+
+test("percent-encoded file:// path canonicalises to the decoded path identity", () => {
+  const dir = resolvePath("with space/repo");
+  const decoded = resolveContextIdentity({ repo: `file://${dir}`, ref: "main" });
+  const encoded = resolveContextIdentity({
+    repo: `file://${dir.replace(/ /g, "%20")}`,
+    ref: "main",
+  });
+  assert.equal(decoded.key, encoded.key);
+});
+
 test("slug is filesystem-safe and identity-stable", () => {
   const a = resolveContextIdentity({ repo: "owner/name", ref: "feature/x" });
   const b = resolveContextIdentity({ repo: "owner/name", ref: "feature/x" });

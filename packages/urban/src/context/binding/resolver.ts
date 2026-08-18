@@ -10,7 +10,7 @@
 //     Nano instances naming the same context share one working copy on disk.
 
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve as resolvePath } from "node:path";
 import { type ContextBinding, parseContextBinding } from "./descriptor.ts";
 import { resolveContextIdentity } from "./identity.ts";
 import { GitSubstrateBackend } from "./git-backend.ts";
@@ -83,7 +83,11 @@ export class ContextResolver {
   readonly #inflight = new Map<string, { promise: Promise<ResolvedContextHandle>; settled: boolean }>();
 
   constructor(options: ContextResolverOptions = {}) {
-    this.#cacheRoot = options.cacheRoot ?? defaultContextCacheRoot();
+    // Normalise to an absolute path so a relative `cacheRoot` (or a relative
+    // `URBAN_CONTEXT_CACHE_DIR`) still yields an absolute `localPath`, honouring
+    // `SubstrateResolveOptions.localPath` ("Absolute path…") and keeping the
+    // on-disk location deterministic across processes whose CWD differs.
+    this.#cacheRoot = resolvePath(options.cacheRoot ?? defaultContextCacheRoot());
     this.#backend = options.backend ?? new GitSubstrateBackend();
   }
 

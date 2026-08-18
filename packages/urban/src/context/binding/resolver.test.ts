@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 import { ContextResolver, defaultContextCacheRoot } from "./resolver.ts";
 import type {
@@ -57,6 +57,16 @@ test("localPath is derived deterministically from the identity slug", async () =
   const handle = await resolver.resolve({ repo: "owner/name", ref: "main" });
   const identity = resolveContextIdentity({ repo: "owner/name", ref: "main" });
   assert.equal(handle.localPath, join("/root", identity.slug));
+});
+
+test("a relative cacheRoot is normalised to an absolute localPath", async () => {
+  const backend = new RecordingBackend();
+  const resolver = new ContextResolver({ cacheRoot: "relative/cache", backend });
+  const handle = await resolver.resolve({ repo: "owner/name", ref: "main" });
+  assert.equal(isAbsolute(resolver.cacheRoot), true);
+  assert.equal(isAbsolute(handle.localPath), true);
+  const identity = resolveContextIdentity({ repo: "owner/name", ref: "main" });
+  assert.equal(handle.localPath, join(resolvePath("relative/cache"), identity.slug));
 });
 
 test("defaultContextCacheRoot honours URBAN_CONTEXT_CACHE_DIR then XDG", () => {

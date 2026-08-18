@@ -11,6 +11,7 @@
 
 import { createHash } from "node:crypto";
 import { isAbsolute, resolve as resolvePath } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { ContextBinding } from "./descriptor.ts";
 
 /**
@@ -54,6 +55,19 @@ function stripGitSuffix(value: string): string {
 }
 
 /**
+ * Resolve a `file://` URL to an absolute filesystem path, honouring the host
+ * component and percent-encoding. Falls back to naive `file://` stripping for a
+ * malformed URL so identity stays stable rather than throwing.
+ */
+function fileUrlToAbsPath(raw: string): string {
+  try {
+    return resolvePath(fileURLToPath(raw));
+  } catch {
+    return resolvePath(raw.slice("file://".length));
+  }
+}
+
+/**
  * Classify a binding `repo` field into a concrete clone URL plus a normalised
  * canonical form for identity. Public git is NOT hard-coded: local/`file://`
  * paths and arbitrary git hosts are first-class, leaving a seam for a future
@@ -64,11 +78,16 @@ function classifyRepo(repo: string): ClassifiedRepo {
 
   // Local filesystem path or file:// URL — used for tests and self-hosted
   // substrates. Canonicalised by absolute path so two spellings of one path
-  // share identity.
-  if (raw.startsWith("file://") || raw.startsWith(".") || isAbsolute(raw)) {
-    const fsPath = raw.startsWith("file://") ? raw.slice("file://".length) : raw;
-    const abs = resolvePath(fsPath);
-    return { url: raw.startsWith("file://") ? raw : abs, canonical: `file:${abs}` };
+  // share identity. `file://` URLs are parsed via `fileURLToPath` so the host
+  // component (e.g. `file://localhost/…`) and percent-encoding are handled and
+  // equivalent spellings map to one identity.
+  if (raw.startsWith("file://")) {
+    const abs = fileUrlToAbsPath(raw);
+    return { url: raw, canonical: `file:${abs}` };
+  }
+  if (raw.startsWith(".") || isAbsolute(raw)) {
+    const abs = resolvePath(raw);
+    return { url: abs, canonical: `file:${abs}` };
   }
 
   // owner/name shorthand ⇒ GitHub HTTPS clone URL.

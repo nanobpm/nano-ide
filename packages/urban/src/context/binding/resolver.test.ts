@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, dirname, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
@@ -175,6 +175,27 @@ test("git backend fails clearly when localPath exists but is a non-directory (fi
     const localPath = join(cacheRoot, identity.slug);
     await mkdir(dirname(localPath), { recursive: true });
     await writeFile(localPath, "i am a file, not a clone\n");
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(resolver.resolve(binding), /not a git working copy/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend fails clearly when localPath is a dangling symlink", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-symlink-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // Squat the target path with a symlink to a non-existent target. `stat()`
+    // follows the link and reports "not found", so a stat-based guard would let
+    // `git clone` fail opaquely; the backend uses `lstat` to detect the link
+    // itself and report any pre-existing non-git entry clearly.
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(dirname(localPath), { recursive: true });
+    await symlink(join(root, "does-not-exist"), localPath);
 
     const resolver = new ContextResolver({ cacheRoot });
     await assert.rejects(resolver.resolve(binding), /not a git working copy/);

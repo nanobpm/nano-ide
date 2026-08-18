@@ -3,7 +3,7 @@
 // is S3); this only materialises a working copy pinned to the requested ref.
 
 import { execFile } from "node:child_process";
-import { mkdir, stat } from "node:fs/promises";
+import { lstat, mkdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { ContextIdentity } from "./identity.ts";
@@ -39,10 +39,15 @@ const defaultGitRunner: GitRunner = async (args, cwd) => {
   }
 };
 
-/** True iff `path` exists as any filesystem entry (file, directory, or symlink). */
+/**
+ * True iff `path` exists as any filesystem entry. Uses `lstat` (not `stat`) so
+ * the entry itself is inspected without following symlinks — a symlink counts as
+ * a pre-existing entry even when its target is missing (a dangling symlink),
+ * which `git clone` would otherwise fail on with an opaque error.
+ */
 async function pathExists(path: string): Promise<boolean> {
   try {
-    await stat(path);
+    await lstat(path);
     return true;
   } catch {
     return false;

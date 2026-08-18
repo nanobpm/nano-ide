@@ -120,6 +120,23 @@ test("distinguishes wrong-type from drifted vocabulary on controlled fields", ()
   }
 });
 
+test("distinguishes empty-string from wrong-type on optional non-empty-string fields", () => {
+  for (const field of ["scopeRef", "supersedes"]) {
+    const empty = validateMemoryRecord(base({ [field]: "" }));
+    assert.equal(empty.ok, false);
+    if (!empty.ok) {
+      const err = empty.errors.find((e) => e.path === field);
+      assert.equal(err?.code, "empty-string", `${field}: an empty string is a valid type and must report empty-string, not wrong-type`);
+    }
+    const wrongType = validateMemoryRecord(base({ [field]: 42 }));
+    assert.equal(wrongType.ok, false);
+    if (!wrongType.ok) {
+      const err = wrongType.errors.find((e) => e.path === field);
+      assert.equal(err?.code, "wrong-type", `${field}: a non-string must report wrong-type`);
+    }
+  }
+});
+
 test("rejects non-ISO timestamps but accepts offset zones", () => {
   assert.equal(validateMemoryRecord(base({ createdAt: "yesterday" })).ok, false);
   assert.equal(validateMemoryRecord(base({ createdAt: "2026-01-01" })).ok, false);

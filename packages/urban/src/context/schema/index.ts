@@ -159,6 +159,17 @@ function vocabularyCode(value: unknown): "missing-field" | "wrong-type" | "inval
   return "invalid-vocabulary";
 }
 
+// Single source of truth for how a non-empty-string field fails: absent is
+// `missing-field`, an empty string is `empty-string` (a valid type callers can
+// surface distinctly in UX), and any other non-string is `wrong-type`. Shared by
+// required (`id`, `statement`) and optional (`scopeRef`, `supersedes`) fields;
+// optional callers guard `undefined` before calling so it never surfaces.
+function nonEmptyStringCode(value: unknown): "missing-field" | "empty-string" | "wrong-type" {
+  if (value === undefined) return "missing-field";
+  if (value === "") return "empty-string";
+  return "wrong-type";
+}
+
 function isIsoTimestamp(v: unknown): v is string {
   if (typeof v !== "string" || v.length === 0) return false;
   // Require a real, round-trippable ISO-8601 instant (date + time + zone).
@@ -294,7 +305,7 @@ export function validateMemoryRecord(input: unknown): ValidationResult {
   if (!idOk) {
     errors.push({
       path: "id",
-      code: idVal === undefined ? "missing-field" : idVal === "" ? "empty-string" : "wrong-type",
+      code: nonEmptyStringCode(idVal),
       message: "id must be a non-empty string.",
     });
   }
@@ -302,7 +313,7 @@ export function validateMemoryRecord(input: unknown): ValidationResult {
   if (!statementOk) {
     errors.push({
       path: "statement",
-      code: statementVal === undefined ? "missing-field" : statementVal === "" ? "empty-string" : "wrong-type",
+      code: nonEmptyStringCode(statementVal),
       message: "statement must be a non-empty string.",
     });
   }
@@ -338,7 +349,7 @@ export function validateMemoryRecord(input: unknown): ValidationResult {
   const evidenceVal: unknown = input.evidence;
   const supersedesVal: unknown = input.supersedes;
   if (scopeRefVal !== undefined && !isNonEmptyString(scopeRefVal)) {
-    errors.push({ path: "scopeRef", code: "wrong-type", message: "scopeRef, if present, must be a non-empty string." });
+    errors.push({ path: "scopeRef", code: nonEmptyStringCode(scopeRefVal), message: "scopeRef, if present, must be a non-empty string." });
   }
   if (subjectVal !== undefined && typeof subjectVal !== "string") {
     errors.push({ path: "subject", code: "wrong-type", message: "subject, if present, must be a string." });
@@ -347,7 +358,7 @@ export function validateMemoryRecord(input: unknown): ValidationResult {
     errors.push({ path: "evidence", code: "wrong-type", message: "evidence, if present, must be an array of strings." });
   }
   if (supersedesVal !== undefined && !isNonEmptyString(supersedesVal)) {
-    errors.push({ path: "supersedes", code: "wrong-type", message: "supersedes, if present, must be a non-empty string." });
+    errors.push({ path: "supersedes", code: nonEmptyStringCode(supersedesVal), message: "supersedes, if present, must be a non-empty string." });
   }
 
   // Cross-field invariants can only run once the vocabulary fields are sound.

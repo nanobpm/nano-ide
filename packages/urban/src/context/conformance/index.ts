@@ -249,7 +249,15 @@ export function runConformance(
   cases: readonly ConformanceCase[] = corpus,
 ): ConformanceReport {
   const results: ConformanceCaseResult[] = cases.map((c) => {
-    const actual: ConformanceExpectation = validate(c.input).ok ? "accept" : "reject";
+    // A validator that throws (even accidentally) must not crash the run: treat
+    // a throw as a rejection so the runner stays pure and the doc above holds.
+    let ok: boolean;
+    try {
+      ok = validate(c.input).ok;
+    } catch {
+      ok = false;
+    }
+    const actual: ConformanceExpectation = ok ? "accept" : "reject";
     return { case: c, expected: c.expect, actual, passed: actual === c.expect };
   });
   const failures = results.filter((r) => !r.passed);

@@ -15,6 +15,8 @@ import {
   fromResultValidator,
   validFixtures,
   invalidFixtures,
+  type ConformanceValidator,
+  type ConformanceReport,
 } from "./index.ts";
 
 const validator = fromResultValidator(validateMemoryRecord);
@@ -36,6 +38,25 @@ test("producer validator satisfies the full conformance corpus", () => {
 
 test("assertConformance does not throw for the producer validator", () => {
   assert.doesNotThrow(() => assertConformance(validator));
+});
+
+test("runConformance treats a throwing validator as a rejection instead of crashing", () => {
+  const throwing: ConformanceValidator = () => {
+    throw new Error("boom");
+  };
+  // The runner must stay pure: no throw escapes, and every case is scored `reject`.
+  let report: ConformanceReport | undefined;
+  assert.doesNotThrow(() => {
+    report = runConformance(throwing);
+  });
+  assert.ok(report);
+  if (report) {
+    assert.equal(report.total, corpus.length);
+    // Every case scores `reject`; only the corpus's reject-cases can pass.
+    const rejectCount = corpus.filter((c) => c.expect === "reject").length;
+    assert.equal(report.passed, rejectCount);
+    assert.equal(report.results.every((r) => r.actual === "reject"), true);
+  }
 });
 
 // Per-case granularity: one sub-test per fixture so a regression names the exact case.

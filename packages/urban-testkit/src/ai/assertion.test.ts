@@ -43,9 +43,13 @@ test("default registry: the S1 similarity placeholder is installed and throws un
   );
 });
 
-test("default registry: the S1 judge placeholder is installed and throws until S3 lands", async () => {
+test("default registry: the S3 judge matcher is installed and dispatches", async () => {
+  // S3 has landed — satisfiesJudge now judges against the deterministic fake: a met
+  // criterion passes and an unmet one fails with the judge's rationale (not the old
+  // placeholder "not yet implemented" error).
+  await assertThatText("the cat sat on the mat").satisfiesJudge("cat");
   await assert.rejects(
-    assertThatText("a").satisfiesJudge("criteria"),
-    /not yet implemented \(slice S3\)/,
+    assertThatText("the cat sat on the mat").satisfiesJudge("elephant"),
+    /elephant/,
   );
 });

@@ -49,6 +49,23 @@ test("SurfaceCoverage: a hit on an undeclared element is reported unexpected, no
   assert.equal(workers.complete, true, "unexpected hits do NOT make a surface incomplete");
 });
 
+test("SurfaceCoverage: an undeclared element hit via a mock is reported unexpected, never mocked", () => {
+  const cov = new SurfaceCoverage({ workers: ["order.pack"] });
+  cov.record("workers", "order.pack", true);
+  // A mock-only job type the manifest never declared: it is an unexpected hit, and `mocked`
+  // is documented as "Declared elements … a subset of exercised", so it must NOT appear there.
+  cov.record("workers", "internal.sweep", true);
+
+  const workers = cov.report().surfaces.find((s) => s.surface === "workers");
+  assert.ok(workers);
+  assert.deepEqual(workers.unexpected, ["internal.sweep"], "the undeclared mock hit is unexpected");
+  assert.deepEqual(
+    workers.mocked,
+    ["order.pack"],
+    "mocked lists only declared elements — an undeclared mock hit never inflates it",
+  );
+});
+
 test("SurfaceCoverage.assertFullCoverage throws naming exactly the un-exercised elements", () => {
   const cov = new SurfaceCoverage({
     operations: ["listTasks", "createTask", "deleteTask"],

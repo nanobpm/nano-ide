@@ -603,7 +603,8 @@ export class WasmEngineClient implements EngineClient {
         ? allVariables
         : pick(allVariables, worker.fetchVariables),
     };
-    // Resolve any registered mock for this type against the full job BEFORE notifying the
+    // Resolve any registered mock for this type against the constructed `EngineJob` (whose
+    // `variables` already reflect any `fetchVariables` filtering applied above) BEFORE notifying the
     // coverage observer, so the observer learns whether this dispatch is mock-satisfied. A
     // mock whose `when(...)` clauses don't match yields `undefined` here and falls through to
     // the real handler below, exactly like an un-mocked type. Mock resolution is a pure lookup

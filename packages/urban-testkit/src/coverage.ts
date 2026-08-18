@@ -64,6 +64,15 @@ function difference(a: ReadonlySet<string>, b: ReadonlySet<string>): string[] {
   return out.sort();
 }
 
+/** Element ids present in both `a` and `b`, sorted. */
+function intersection(a: ReadonlySet<string>, b: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  for (const id of a) {
+    if (b.has(id)) out.push(id);
+  }
+  return out.sort();
+}
+
 /**
  * Tracks declared-vs-exercised coverage across an app's surfaces. Construct with an
  * initial set of declared surfaces (or add them later with {@link declareSurface}),
@@ -141,9 +150,11 @@ export class SurfaceCoverage {
       exercised: sorted(exercised),
       missing,
       unexpected: difference(exercised, declared),
-      // Report only mock-satisfied elements that were actually exercised (they always are, by
-      // construction), sorted — an honest, visible signal that coverage came via a mock.
-      mocked: sorted(mocked),
+      // Report only mock-satisfied elements that are actually declared on this surface (mocked ids
+      // are exercised by construction, so this is mocked ∩ declared ∩ exercised) — an honest,
+      // visible signal that a *declared* element's coverage came via a mock. An undeclared mock hit
+      // stays purely `unexpected`, never inflating `mocked` past the documented "declared" contract.
+      mocked: intersection(mocked, declared),
       complete: missing.length === 0,
     };
   }

@@ -36,10 +36,12 @@ test("registry: satisfiesJudge forwards [criteria, options] to its handler", asy
   assert.deepEqual(captured, [["must be polite", undefined]]);
 });
 
-test("default registry: the S1 similarity placeholder is installed and throws until S2 lands", async () => {
+test("default registry: the S2 similarity matcher is installed and now runs (fails on low similarity)", async () => {
+  // S2 has landed: the placeholder is replaced by the real cosine-similarity matcher, so
+  // dissimilar texts fail with the matcher's assertion message rather than "not implemented".
   await assert.rejects(
     assertThatText("a").matchesSemantically("b"),
-    /not yet implemented \(slice S2\)/,
+    /matchesSemantically failed/,
   );
 });
 

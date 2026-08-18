@@ -123,6 +123,7 @@ test("assertThatUserTask.isCompleted: passes for a completed task, fails for an 
 
     // Complete it.
     const open = await app.engine.searchUserTasks({ processInstanceKey: key, state: "CREATED" });
+    assert.equal(open.length, 1, "expected exactly one open CREATED task to complete");
     await app.engine.completeUserTask(open[0].userTaskKey);
 
     // GREEN: now COMPLETED.

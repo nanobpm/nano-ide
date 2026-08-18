@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
 import type { EngineClient, HttpRequest, HttpResponse } from "../host.ts";
 import { makeRouter } from "../router.ts";
 import { createPagesRoutes, type PagesDataSource, type PagesDeps } from "./pages.ts";
@@ -1470,4 +1471,26 @@ test("shell CSS carries the .pc-pipe* track chrome reusing --nano-* tokens", asy
   assert.match(html, /\.pc-pipe-active\.pc-pipe-ok \{[^}]*border-color:var\(--nano-ok\)/);
   assert.match(html, /\.pc-pipe-skip \{[^}]*border-style:dashed/);
   assert.match(html, /\.pc-pipe-upcoming \{[^}]*var\(--nano-text-faint\)/);
+});
+
+test("runtime RENDERERS cover exactly the shared PAGE_NODE_TYPES registry", async () => {
+  // The browser renderer's RENDERERS table (the runtime source of truth for which
+  // page-node types can be drawn) lives inside the served runtime module. It must
+  // stay in lockstep with @nanobpm/nano-app-schema's PAGE_NODE_TYPES — the same
+  // registry the Console's Page Composer is compile-time locked to. If the two
+  // drift, a page the Composer accepts renders as a blank <div> in the App (or
+  // vice-versa); this guard turns that silent gap into a loud CI failure.
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  const m = js.match(/const\s+RENDERERS\s*=\s*\{([^}]*)\}/);
+  assert.ok(m, "runtime module must define a RENDERERS map");
+  const runtimeTypes = m[1]
+    .split(",")
+    .map((entry) => entry.split(":")[0].trim())
+    .filter((k) => k.length > 0);
+  assert.deepEqual(
+    [...runtimeTypes].sort(),
+    [...PAGE_NODE_TYPES].sort(),
+    "runtime RENDERERS keys must equal the shared PAGE_NODE_TYPES registry",
+  );
 });

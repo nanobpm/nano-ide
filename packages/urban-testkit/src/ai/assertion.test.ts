@@ -28,7 +28,7 @@ test("registry: after registering a handler, the fluent method dispatches to it"
 
 test("registry: satisfiesJudge forwards [criteria, options] to its handler", async () => {
   const registry = createTextMatcherRegistry();
-  const captured: readonly unknown[][] = [];
+  const captured: (readonly unknown[])[] = [];
   registry.register("satisfiesJudge", async (_actual, args) => {
     captured.push(args);
   });

@@ -16,6 +16,7 @@ import type {
   ChatModelAdapter,
   ChatResult,
   EmbeddingModelAdapter,
+  ImagePart,
 } from "./seams.ts";
 import { FakeChatModelAdapter, FakeEmbeddingModelAdapter } from "./fakes.ts";
 
@@ -35,7 +36,8 @@ function isCassetteData(value: unknown): value is { entries: Record<string, unkn
     value !== null &&
     "entries" in value &&
     typeof value.entries === "object" &&
-    value.entries !== null
+    value.entries !== null &&
+    !Array.isArray(value.entries)
   );
 }
 
@@ -98,8 +100,16 @@ function embedKey(text: string): string {
   return `embed\n${JSON.stringify(text)}`;
 }
 
+function canonicalImage(image: ImagePart): { kind: "image"; mediaType: string; data: string } {
+  return { kind: image.kind, mediaType: image.mediaType, data: image.data };
+}
+
 function chatKey(input: ChatInput): string {
-  return `chat\n${JSON.stringify({ prompt: input.prompt, system: input.system ?? null, image: input.image ?? null })}`;
+  return `chat\n${JSON.stringify({
+    prompt: input.prompt,
+    system: input.system ?? null,
+    image: input.image ? canonicalImage(input.image) : null,
+  })}`;
 }
 
 interface RecordReplayEmbeddingOptions {
@@ -128,6 +138,11 @@ export class RecordReplayEmbeddingAdapter implements EmbeddingModelAdapter {
 
   /** Injects the capture source used in record mode (S4 wires a real adapter here). */
   setCaptureSource(source: EmbeddingModelAdapter): void {
+    if (source.dimension !== this.dimension) {
+      throw new Error(
+        `capture source dimension (${source.dimension}) must match this adapter's dimension (${this.dimension})`,
+      );
+    }
     this.#captureSource = source;
   }
 
@@ -144,8 +159,8 @@ export class RecordReplayEmbeddingAdapter implements EmbeddingModelAdapter {
       return [...stored];
     }
     const response = await this.#captureSource.embed(text);
-    this.#cassette.set(key, response);
-    return response;
+    this.#cassette.set(key, [...response]);
+    return [...response];
   }
 }
 
@@ -188,8 +203,8 @@ export class RecordReplayChatModelAdapter implements ChatModelAdapter {
       return { text: stored.text };
     }
     const response = await this.#captureSource.chat(input);
-    this.#cassette.set(key, response);
-    return response;
+    this.#cassette.set(key, { text: response.text });
+    return { text: response.text };
   }
 }
 

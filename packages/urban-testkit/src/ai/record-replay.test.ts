@@ -3,6 +3,7 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { FakeEmbeddingModelAdapter } from "./fakes.ts";
 import {
   Cassette,
@@ -11,7 +12,7 @@ import {
 } from "./record-replay.ts";
 import type { ChatInput, ChatModelAdapter, ChatResult, EmbeddingModelAdapter } from "./seams.ts";
 
-const FIXTURE = join(import.meta.dirname, "__cassettes__", "sample.json");
+const FIXTURE = join(fileURLToPath(new URL(".", import.meta.url)), "__cassettes__", "sample.json");
 
 async function tempCassettePath(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "urban-testkit-cassette-"));
@@ -77,7 +78,7 @@ test("record/replay: an INJECTED capture source is used in record mode", async (
     },
   };
   const cassette = new Cassette(null);
-  const recorder = new RecordReplayEmbeddingAdapter({ mode: "record", cassette });
+  const recorder = new RecordReplayEmbeddingAdapter({ mode: "record", cassette, dimension: 3 });
   recorder.setCaptureSource(stub);
 
   const recorded = await recorder.embed("capture me");

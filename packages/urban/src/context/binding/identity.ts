@@ -108,7 +108,11 @@ function classifyRepo(repo: string): ClassifiedRepo {
   if (SCHEME_URL.test(raw)) {
     try {
       const parsed = new URL(raw);
-      const host = parsed.host.toLowerCase();
+      // `hostname` (not `host`) excludes any `user:pass@` userinfo and the port,
+      // so credential-bearing or explicit-default-port spellings of one repo
+      // (e.g. `ssh://git@github.com/o/n`, `https://github.com:443/o/n`,
+      // `https://github.com/o/n`) all canonicalise to one identity.
+      const host = parsed.hostname.toLowerCase();
       const path = stripGitSuffix(parsed.pathname).replace(/^\/+/, "").toLowerCase();
       return { url: raw, canonical: `${host}/${path}` };
     } catch {

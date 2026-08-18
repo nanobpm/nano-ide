@@ -1,11 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, dirname, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 import { ContextResolver, defaultContextCacheRoot } from "./resolver.ts";
+import { GitSubstrateBackend } from "./git-backend.ts";
+import type { GitRunner } from "./git-backend.ts";
 import type {
   ResolvedContextHandle,
   SubstrateBackend,
@@ -199,6 +201,54 @@ test("git backend fails clearly when localPath is a dangling symlink", async () 
 
     const resolver = new ContextResolver({ cacheRoot });
     await assert.rejects(resolver.resolve(binding), /not a git working copy/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend surfaces a non-ENOENT lstat error (unreadable path) instead of treating it as missing", async () => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    return; // root bypasses permission bits, so EACCES can't be provoked
+  }
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-eacces-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // Make the substrate dir unsearchable so `lstat(localPath/.git)` fails with
+    // EACCES (not ENOENT). An existing-but-unreadable path must NOT be reported
+    // as "missing" (which would proceed to clone) — it must surface the error.
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    await chmod(localPath, 0o000);
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(resolver.resolve(binding), /not accessible/);
+  } finally {
+    await chmod(join(root, "cache", resolveContextIdentity({ repo: join(root, "origin"), ref: "main" }).slug), 0o755).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend passes --end-of-options to rev-parse so an option-like ref can't be a git flag", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-refguard-"));
+  try {
+    const calls: string[][] = [];
+    const runner: GitRunner = async (args) => {
+      calls.push([...args]);
+      return ""; // rev-parse "succeeds" ⇒ ref is treated as a remote branch
+    };
+    const backend = new GitSubstrateBackend(runner);
+    const identity = resolveContextIdentity({ repo: join(root, "origin"), ref: "main" });
+    const localPath = join(root, "cache", identity.slug);
+    await backend.materialise(identity, { localPath, refresh: true });
+
+    const revParse = calls.find((a) => a[0] === "rev-parse");
+    assert.ok(revParse, "rev-parse was invoked during pinning");
+    assert.ok(
+      revParse.includes("--end-of-options"),
+      "rev-parse stops option parsing before the manifest-controlled ref",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -44,14 +44,28 @@ const defaultGitRunner: GitRunner = async (args, cwd) => {
  * the entry itself is inspected without following symlinks — a symlink counts as
  * a pre-existing entry even when its target is missing (a dangling symlink),
  * which `git clone` would otherwise fail on with an opaque error.
+ *
+ * Only a genuine "not there" (`ENOENT`/`ENOTDIR`) counts as absent; any other
+ * error (e.g. `EACCES`/`EPERM` on an existing-but-unreadable entry) is
+ * re-thrown rather than silently reported as "missing", so an unreadable path
+ * is never mistaken for a clean slate to clone into.
  */
 async function pathExists(path: string): Promise<boolean> {
   try {
     await lstat(path);
     return true;
-  } catch {
-    return false;
+  } catch (cause) {
+    if (isNodeErrno(cause, "ENOENT") || isNodeErrno(cause, "ENOTDIR")) {
+      return false;
+    }
+    throw new SubstrateResolveError(`substrate path is not accessible: ${path}`, { cause });
   }
+}
+
+function isNodeErrno(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error && "code" in error && error.code === code
+  );
 }
 
 /**
@@ -115,7 +129,13 @@ export class GitSubstrateBackend implements SubstrateBackend {
 
   async #hasRef(cwd: string, ref: string): Promise<boolean> {
     try {
-      await this.#git(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], cwd);
+      // `--end-of-options` stops an option-style `ref` (manifest-controlled)
+      // from being parsed as a git flag — the same injection guard used by the
+      // `clone`/`checkout` paths.
+      await this.#git(
+        ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`],
+        cwd,
+      );
       return true;
     } catch {
       return false;

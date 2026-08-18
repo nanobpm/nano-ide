@@ -47,6 +47,28 @@ test("scp-like and https URLs for the same repo share identity", () => {
   assert.equal(scp.key, https.key);
 });
 
+test("ssh://, scp-like and https URLs for one repo all share identity", () => {
+  const ssh = resolveContextIdentity({ repo: "ssh://git@github.com/owner/name.git", ref: "v2" });
+  const scp = resolveContextIdentity({ repo: "git@github.com:owner/name.git", ref: "v2" });
+  const https = resolveContextIdentity({ repo: "https://github.com/owner/name", ref: "v2" });
+  assert.equal(ssh.key, scp.key);
+  assert.equal(ssh.key, https.key);
+});
+
+test("embedded credentials and explicit default port do not affect identity", () => {
+  const plain = resolveContextIdentity({ repo: "https://github.com/owner/name.git", ref: "main" });
+  const creds = resolveContextIdentity({
+    repo: "https://user:token@github.com/owner/name.git",
+    ref: "main",
+  });
+  const port = resolveContextIdentity({
+    repo: "https://github.com:443/owner/name.git",
+    ref: "main",
+  });
+  assert.equal(creds.key, plain.key);
+  assert.equal(port.key, plain.key);
+});
+
 test("local file paths canonicalise by absolute path", () => {
   const relative = resolveContextIdentity({ repo: "./sub/../sub/repo", ref: "main" });
   const absolute = resolveContextIdentity({

@@ -11,6 +11,8 @@ import { serializeVerdict } from "../verdict.ts";
 // Import the barrel so the S3 matcher registers on the default registry.
 import "../index.ts";
 import { configureJudge, defaultJudgePrompt, narrowJudgeOptions, satisfiesJudge } from "./index.ts";
+import type { JudgePromptTemplate } from "./index.ts";
+import type { JudgeConfig } from "../config.ts";
 
 /** Records the last chat input and returns a canned verdict — deterministic, no network. */
 class SpyChatAdapter implements ChatModelAdapter {
@@ -140,4 +142,15 @@ test("JudgeOptions is exported from the /ai barrel for explicit consumer typing"
   // Re-exported type must be usable to annotate satisfiesJudge's options at a call site.
   const options: JudgeOptions = { adapter: new FakeChatModelAdapter() };
   await satisfiesJudge("the cat sat on the mat", "cat", options);
+});
+
+test("JudgePromptTemplate stays derived from JudgeConfig.promptTemplate (no drift surface)", () => {
+  // Compile-time guard: JudgePromptTemplate must equal NonNullable<JudgeConfig["promptTemplate"]>
+  // in BOTH directions, so the alias cannot drift from the source-of-truth config type. If the
+  // config signature changes, one of these assignments fails to compile.
+  const fromConfig: NonNullable<JudgeConfig["promptTemplate"]> = defaultJudgePrompt;
+  const asAlias: JudgePromptTemplate = fromConfig;
+  const backToConfig: NonNullable<JudgeConfig["promptTemplate"]> = asAlias;
+  // Exercise at runtime so the values are genuinely used.
+  assert.equal(typeof backToConfig("cat", "the cat"), "string");
 });

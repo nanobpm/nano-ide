@@ -18,8 +18,12 @@ import type { ChatInput, ChatModelAdapter, ImagePart } from "../seams.ts";
 import { describeText } from "../text.ts";
 import { parseVerdict } from "../verdict.ts";
 
-/** Builds the judge prompt from the criteria and the actual text. */
-export type JudgePromptTemplate = (criteria: string, actual: string) => string;
+/**
+ * Builds the judge prompt from the criteria and the actual text. Derived from
+ * {@link JudgeConfig.promptTemplate} — the source-of-truth type shared with the fluent
+ * surface — so the two signatures cannot drift apart.
+ */
+export type JudgePromptTemplate = NonNullable<JudgeConfig["promptTemplate"]>;
 
 /**
  * The default judge prompt. Emits `CRITERIA:` and `ACTUAL:` sections and asks for a JSON

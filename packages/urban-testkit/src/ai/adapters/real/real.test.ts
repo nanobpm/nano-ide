@@ -160,6 +160,16 @@ test("LocalEmbeddingAdapter.embed rejects a pipeline vector whose length != adve
   await assert.rejects(adapter.embed("hi"), /does not match advertised dimension 3/);
 });
 
+test("LocalEmbeddingAdapter.embed rejects a pipeline vector with a non-finite value", async () => {
+  // A non-numeric iterable (or values that coerce to NaN/Infinity) must fail loudly rather
+  // than silently producing an invalid vector; use a plain array so Number(...) yields NaN.
+  const pipeline = async (_input: unknown, _options?: Record<string, unknown>) => ({
+    data: [0.1, "oops", 0.3],
+  });
+  const adapter = new LocalEmbeddingAdapter(pipeline, { embeddingDimension: 3 });
+  await assert.rejects(adapter.embed("hi"), /non-finite value/);
+});
+
 test("readEnvVar treats a Deno --allow-env denial as unset (safe by default, never throws)", () => {
   const key = "URBAN_TESTKIT_AI_REAL_ENV_PERMISSION_PROBE";
   const original = Reflect.get(globalThis, "Deno");

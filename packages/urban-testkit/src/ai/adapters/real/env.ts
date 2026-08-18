@@ -86,5 +86,16 @@ export function assertRealAiEnabled(): void {
  */
 export async function importOptionalDependency(specifier: string): Promise<unknown> {
   const load = (moduleSpecifier: string): Promise<unknown> => import(moduleSpecifier);
-  return load(specifier);
+  try {
+    return await load(specifier);
+  } catch (cause) {
+    // The dep is intentionally absent on the default lane; surface an actionable message
+    // (which optional dependency, and that it must be installed) while preserving the raw
+    // module-resolution error as the cause instead of leaking it uncontextualized.
+    throw new Error(
+      `optional dependency '${specifier}' could not be loaded; install it to activate ` +
+        `this real AI adapter (it is omitted from the default install)`,
+      { cause },
+    );
+  }
 }

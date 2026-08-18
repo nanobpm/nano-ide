@@ -81,7 +81,15 @@ function extractEmbeddingVector(output: unknown): number[] {
   if (typeof output === "object" && output !== null) {
     const data = Reflect.get(output, "data");
     if (isNumberIterable(data)) {
-      return Array.from(data, (value) => Number(value));
+      return Array.from(data, (value) => {
+        const coerced = Number(value);
+        if (!Number.isFinite(coerced)) {
+          throw new Error(
+            "unexpected feature-extraction output (non-finite value in numeric `data`)",
+          );
+        }
+        return coerced;
+      });
     }
   }
   throw new Error("unexpected feature-extraction output (missing numeric `data`)");

@@ -101,6 +101,31 @@ test("record/replay: a constructor with a captureSource whose dimension disagree
   );
 });
 
+test("record/replay: an EDITED (wrong-length) entry throws rather than replaying a dimension-violating vector", async () => {
+  const path = await tempCassettePath();
+  const source = JSON.parse(await readFile(FIXTURE, "utf8"));
+  source.entries['embed\n"hello world"'] = [1, 2, 3];
+  await writeFile(path, JSON.stringify(source), "utf8");
+
+  const cassette = await Cassette.load(path);
+  const embed = new RecordReplayEmbeddingAdapter({ mode: "replay", cassette });
+  await assert.rejects(embed.embed("hello world"), /replayed cassette vector length \(3\)/);
+});
+
+test("record/replay: a capture source that returns a wrong-length vector throws in record mode", async () => {
+  const stub: EmbeddingModelAdapter = {
+    modelId: "misbehaving-capture",
+    dimension: 3,
+    async embed() {
+      return [1, 2];
+    },
+  };
+  const cassette = new Cassette(null);
+  const recorder = new RecordReplayEmbeddingAdapter({ mode: "record", cassette, dimension: 3 });
+  recorder.setCaptureSource(stub);
+  await assert.rejects(recorder.embed("capture me"), /capture source vector length \(2\)/);
+});
+
 test("record/replay: an injected chat capture source is used in record mode", async () => {
   const inputs: ChatInput[] = [];
   const stub: ChatModelAdapter = {

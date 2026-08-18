@@ -109,6 +109,14 @@ function assertEmbeddingDimensionMatch(sourceDimension: number, adapterDimension
   }
 }
 
+function assertEmbeddingVectorLength(vector: number[], dimension: number, source: string): void {
+  if (vector.length !== dimension) {
+    throw new Error(
+      `${source} vector length (${vector.length}) must match this adapter's dimension (${dimension})`,
+    );
+  }
+}
+
 function canonicalImage(image: ImagePart): { kind: "image"; mediaType: string; data: string } {
   return { kind: image.kind, mediaType: image.mediaType, data: image.data };
 }
@@ -164,9 +172,11 @@ export class RecordReplayEmbeddingAdapter implements EmbeddingModelAdapter {
       if (!isNumberArray(stored)) {
         throw new Error(`cassette entry is corrupt (expected number[]): ${describeText(key)}`);
       }
+      assertEmbeddingVectorLength(stored, this.dimension, "replayed cassette");
       return [...stored];
     }
     const response = await this.#captureSource.embed(text);
+    assertEmbeddingVectorLength(response, this.dimension, "capture source");
     this.#cassette.set(key, [...response]);
     return [...response];
   }

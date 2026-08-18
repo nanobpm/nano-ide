@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { runEngineClientContract } from "./contract.ts";
 import {
   createWasmEngineClient,
+  presentKey,
+  presentString,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
 import { BpmnError, readLineage } from "@nanobpm/urban/runtime";
@@ -19,6 +21,36 @@ test("wasm: Terminating projects as TERMINATED (REST parity)", () => {
   assert.equal(wasmStateToProcessInstanceState("Completed"), "COMPLETED");
   assert.equal(wasmStateToProcessInstanceState("bogus"), undefined);
   assert.equal(wasmStateToProcessInstanceState(42), undefined);
+});
+
+// Guards the form-identifier coercion defect class (matches urban's shared form contract): a
+// read-model row's `formKey`/`externalFormReference`/`formId` must be presence-checked by *type*,
+// so a non-string value (e.g. a nested object) is treated as absent rather than coerced by
+// `String(...)` into a truthy `"[object Object]"` identifier that would leak onto the result.
+test("wasm: presentKey accepts only string/number, never coercing other types", () => {
+  assert.equal(presentKey("k1"), "k1");
+  assert.equal(presentKey("  k2  "), "k2", "trims like the shared presence rule");
+  assert.equal(presentKey(2251799813685250), "2251799813685250", "numeric key stringified");
+  assert.equal(presentKey("   "), undefined, "whitespace-only is absent");
+  assert.equal(presentKey(""), undefined);
+  assert.equal(presentKey(undefined), undefined);
+  assert.equal(presentKey(null), undefined);
+  assert.equal(presentKey({}), undefined, "an object never coerces to \"[object Object]\"");
+  assert.equal(presentKey({ nested: 1 }), undefined);
+  assert.equal(presentKey([1, 2]), undefined, "an array never coerces to a truthy id");
+  assert.equal(presentKey(true), undefined);
+});
+
+test("wasm: presentString accepts only strings, never coercing other types", () => {
+  assert.equal(presentString("ref-1"), "ref-1");
+  assert.equal(presentString("  ref-2  "), "ref-2", "trims like the shared presence rule");
+  assert.equal(presentString("   "), undefined, "whitespace-only is absent");
+  assert.equal(presentString(""), undefined);
+  assert.equal(presentString(undefined), undefined);
+  assert.equal(presentString(null), undefined);
+  assert.equal(presentString(42), undefined, "a number is absent (string-only identifier)");
+  assert.equal(presentString({}), undefined, "an object never coerces to \"[object Object]\"");
+  assert.equal(presentString([1]), undefined);
 });
 
 test("wasm: a BpmnError from a worker is routed as a BPMN error, not a failure", async () => {
@@ -66,7 +98,7 @@ test("wasm: a BpmnError from a worker is routed as a BPMN error, not a failure",
   }
 });
 
-test("wasm: deployResources captures forms (not executed) but reports every resource as deployed", async () => {
+test("wasm: deployResources accepts forms (not executed) and reports every resource as deployed", async () => {
   const engine = await createWasmEngineClient();
   try {
     const model = `<?xml version="1.0" encoding="UTF-8"?>
@@ -80,8 +112,9 @@ test("wasm: deployResources captures forms (not executed) but reports every reso
 </definitions>`;
     // The runtime's deployModels sends processes AND forms here. A `.form` is JSON, not a process:
     // it must not be fed to the BPMN parser (which would throw "no <process> element found"). It is
-    // captured for `getForm` instead of executed — but, matching SdkEngineClient, it still counts as
-    // deployed, so the reported count is the total number of resources accepted, not just the BPMN.
+    // read back through the engine's real read model, not a JS shadow store — but, matching
+    // SdkEngineClient, it still counts as deployed, so the reported count is the total number of
+    // resources accepted, not just the BPMN.
     const { deployed } = await engine.deployResources([
       { name: "withform.bpmn", content: model, contentType: "text/xml" },
       {
@@ -104,66 +137,69 @@ test("wasm: deployResources captures forms (not executed) but reports every reso
   }
 });
 
-test("wasm: getForm resolves a deployed .form by id (latest) and by key", async () => {
+test("wasm: getForm reads through the engine's read channel (getFormByKey), with no JS shadow store", async () => {
   const engine = await createWasmEngineClient();
   try {
-    const v1 = { id: "greeting", type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "who" }] };
-    const v2 = { id: "greeting", type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "who" }, { type: "number", key: "times" }] };
+    // The shadow form store is gone: `getForm` now delegates to the read model's
+    // `getFormByKey` (`GET /forms/{formKey}`). A form the read model has not indexed resolves to
+    // null — there is no JS twin left to satisfy the lookup off-channel. (The read model's form
+    // *write* path lands with Magikcraft/nano-bpm#815; this asserts the read delegation itself.)
     await engine.deployResources([
-      { name: "greeting.form", content: JSON.stringify(v1), contentType: "application/json" },
+      { name: "greeting.form", content: JSON.stringify({ id: "greeting", type: "default" }), contentType: "application/json" },
     ]);
-    const byId1 = await engine.getForm({ formId: "greeting" });
-    assert.deepEqual(byId1?.schema, v1, "resolves the deployed form by id");
-    assert.equal(byId1?.version, 1);
-    const key1 = byId1?.formKey;
-    assert.ok(key1, "assigns a form key");
+    assert.equal(await engine.getForm({ formId: "greeting" }), null, "no shadow store answers off-channel");
+    assert.equal(await engine.getForm({ formKey: "2251799813685250" }), null, "an unknown form key resolves to null via the read channel");
 
-    // Redeploy a newer version of the same id → getForm({formId}) tracks the latest.
-    await engine.deployResources([
-      { name: "greeting.form", content: JSON.stringify(v2), contentType: "application/json" },
-    ]);
-    const byId2 = await engine.getForm({ formId: "greeting" });
-    assert.deepEqual(byId2?.schema, v2, "formId resolves to the latest deployed version");
-    assert.equal(byId2?.version, 2);
-
-    // The older version is still fetchable by its original key.
-    const byKey = await engine.getForm({ formKey: key1 });
-    assert.deepEqual(byKey?.schema, v1, "the prior version is still addressable by key");
-
-    // Drift guard: identifier normalization must match SdkEngineClient — an empty or
-    // whitespace-only `formKey` is treated as absent, so it falls through to `formId`
-    // (latest) rather than short-circuiting to a spurious null.
-    const byBlankKey = await engine.getForm({ formKey: "", formId: "greeting" });
-    assert.deepEqual(byBlankKey?.schema, v2, "empty formKey falls through to formId (latest)");
-    const byWsKey = await engine.getForm({ formKey: "   ", formId: "greeting" });
-    assert.deepEqual(byWsKey?.schema, v2, "whitespace-only formKey falls through to formId (latest)");
-
-    // A padded identifier is trimmed before lookup, so it still resolves against the
-    // space-free deployed key/id (not a spurious null).
-    const byPaddedId = await engine.getForm({ formId: "  greeting  " });
-    assert.deepEqual(byPaddedId?.schema, v2, "a padded formId is trimmed and resolves");
-
-    // Unknown identifiers resolve to null (the surface's no-form fallback).
-    assert.equal(await engine.getForm({ formId: "nope" }), null);
-    assert.equal(await engine.getForm({}), null);
+    // Drift guard: identifier normalization must still match SdkEngineClient — an empty or
+    // whitespace-only `formKey` is treated as absent and falls through to `formId` (rather than
+    // short-circuiting), and both missing identifiers resolve to null without hitting the engine.
+    assert.equal(await engine.getForm({ formKey: "   ", formId: "greeting" }), null, "blank formKey falls through to formId");
+    assert.equal(await engine.getForm({}), null, "no identifier resolves to null");
   } finally {
     await engine.close();
   }
 });
 
-test("wasm: a non-.form JSON deploy resource is not captured as a form", async () => {
+test("wasm: user-task and process-instance reads come from the read channel (no shadow write)", async () => {
   const engine = await createWasmEngineClient();
   try {
-    // A JSON asset that merely has an `id` (like a manifest/config) must NOT be misread as a
-    // form: form detection keys on the `.form` filename, not on a JSON content type.
+    // A process that parks on a single native user task, carrying an instance variable.
+    const model = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="human" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f1" sourceRef="s" targetRef="review"/>
+    <userTask id="review"><extensionElements><zeebe:userTask/></extensionElements></userTask>
+    <sequenceFlow id="f2" sourceRef="review" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+</definitions>`;
     await engine.deployResources([
-      {
-        name: "manifest.json",
-        content: JSON.stringify({ id: "greeting", components: [{ type: "textfield", key: "who" }] }),
-        contentType: "application/json",
-      },
+      { name: "human.bpmn", content: model, contentType: "text/xml" },
     ]);
-    assert.equal(await engine.getForm({ formId: "greeting" }), null, "non-.form JSON is not resolvable as a form");
+    const { processInstanceKey } = await engine.createInstance({
+      processDefinitionId: "human",
+      variables: { who: "world" },
+    });
+
+    // The task is visible through the REST read channel (`POST /user-tasks/search`) — no shadow
+    // store was written; the adapter no longer scrapes the primary-state snapshot for this.
+    const open = await engine.searchUserTasks({ processInstanceKey, state: "CREATED" });
+    assert.equal(open.length, 1, "the open task is served by the read model");
+    assert.equal(open[0].elementId, "review");
+
+    // The instance is visible through the REST read channel (`POST /process-instances/search`).
+    const [inst] = await engine.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
+    assert.equal(inst?.state, "ACTIVE", "the active instance is served by the read model");
+
+    // Completing the task advances the read model: the instance completes and the task leaves the
+    // open set — the read channel reflects the mutation with no shadow bookkeeping.
+    await engine.completeUserTask(open[0].userTaskKey);
+    assert.equal((await engine.openUserTasks({ processInstanceKey })).length, 0, "the completed task leaves the open set");
+    const [after] = await engine.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
+    assert.equal(after?.state, "COMPLETED", "the read model reflects completion");
   } finally {
     await engine.close();
   }

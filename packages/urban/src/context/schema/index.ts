@@ -192,8 +192,11 @@ export interface InvariantContext {
  */
 export function checkInvariants(ctx: InvariantContext): readonly ValidationError[] {
   const errors: ValidationError[] = [];
+  // Cross-field invariants are whole-record violations (they constrain the
+  // mode/provenance/authority triple jointly), so report them at the empty
+  // (whole-record) path rather than mis-pointing consumers at `authority`.
   const push = (message: string) =>
-    errors.push({ path: "authority", code: "invariant-violation", message });
+    errors.push({ path: "", code: "invariant-violation", message });
 
   if (ctx.provenance === "agent-retro" && ctx.authority === "authoritative") {
     push(
@@ -245,11 +248,17 @@ export function validateMemoryRecord(input: unknown): ValidationResult {
   }
 
   // Version first — a wrong version means the rest of the shape is unreliable.
+  // Distinguish an absent version (missing-field, like every other required
+  // field) from a present-but-wrong one (unsupported-schema-version) so the
+  // structured error is honest and consistent.
   if (input.schemaVersion !== MEMORY_RECORD_SCHEMA_VERSION) {
+    const versionMissing = input.schemaVersion === undefined;
     errors.push({
       path: "schemaVersion",
-      code: "unsupported-schema-version",
-      message: `unsupported schemaVersion; expected ${MEMORY_RECORD_SCHEMA_VERSION}.`,
+      code: versionMissing ? "missing-field" : "unsupported-schema-version",
+      message: versionMissing
+        ? "schemaVersion is required."
+        : `unsupported schemaVersion; expected ${MEMORY_RECORD_SCHEMA_VERSION}.`,
     });
   }
 

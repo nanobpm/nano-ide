@@ -20,7 +20,7 @@ import {
 
 function base(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: MEMORY_RECORD_SCHEMA_VERSION,
     id: "rec-1",
     scope: "repo",
     mode: "empirical",

@@ -1482,9 +1482,9 @@ test("runtime RENDERERS cover exactly the shared PAGE_NODE_TYPES registry", asyn
   // vice-versa); this guard turns that silent gap into a loud CI failure.
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
-  const m = js.match(/const RENDERERS = \{([^}]*)\}/);
+  const m = js.match(/const\s+RENDERERS\s*=\s*\{([^}]*)\}/);
   assert.ok(m, "runtime module must define a RENDERERS map");
-  const runtimeTypes = m![1]
+  const runtimeTypes = m[1]
     .split(",")
     .map((entry) => entry.split(":")[0].trim())
     .filter((k) => k.length > 0);

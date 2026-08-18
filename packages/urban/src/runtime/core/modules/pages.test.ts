@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
 import type { EngineClient, HttpRequest, HttpResponse } from "../host.ts";
 import { makeRouter } from "../router.ts";
@@ -1493,4 +1497,26 @@ test("runtime RENDERERS cover exactly the shared PAGE_NODE_TYPES registry", asyn
     [...PAGE_NODE_TYPES].sort(),
     "runtime RENDERERS keys must equal the shared PAGE_NODE_TYPES registry",
   );
+});
+
+test("the served runtime module is syntactically valid ES-module JS (node --check)", async () => {
+  // The browser runtime ships as a ~99KB String.raw blob (RENDERER_JS) that
+  // neither tsc nor biome ever look inside, so a stray brace or bad token would
+  // otherwise surface only when a browser loads /app/runtime.js. Parse the
+  // actual served module with `node --check` (full ES-module syntax, incl.
+  // import.meta + top-level await) so malformed runtime JS fails CI, not the
+  // browser. Interim guard toward extracting the runtime to real source (#291).
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  assert.ok(js.length > 0, "runtime module must be served");
+  const dir = mkdtempSync(join(tmpdir(), "urban-rt-"));
+  const file = join(dir, "runtime.mjs");
+  try {
+    writeFileSync(file, js);
+    // Throws (non-zero exit) on a syntax error, failing the test with node's
+    // own parse diagnostic pointing at the offending line.
+    execFileSync(process.execPath, ["--check", file], { stdio: "pipe" });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

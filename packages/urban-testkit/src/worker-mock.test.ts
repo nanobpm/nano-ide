@@ -10,8 +10,14 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import type { EngineJob } from "@nanobpm/urban/runtime";
 import { createWasmEngineClient, type WasmEngineClient } from "./wasm-engine.ts";
-import { applyOutcome, type MockOutcome, type OutcomeEngine } from "./worker-mock.ts";
+import {
+  applyOutcome,
+  MockWorkerBuilder,
+  type MockOutcome,
+  type OutcomeEngine,
+} from "./worker-mock.ts";
 
 /** A single service task (`work`) between start and end — completes the whole instance. */
 const SVC_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
@@ -342,4 +348,36 @@ test("mock: a completeWith outcome the engine can't serialize fails the job inst
       "the serialization failure surfaced as an incident carrying the error message",
     );
   });
+});
+
+test("mock+coverage: a mock-only type whose clauses don't match is NOT recorded as exercised (no fabricated coverage)", async () => {
+  await withEngine({ name: "wait.bpmn", xml: WAIT_BPMN }, async (engine) => {
+    // A mock-only type (`work` has a mock but no registered real worker) whose sole clause never
+    // matches: `resolve()` returns undefined, so NOTHING runs for the dispatched job — it is left
+    // locked. The coverage observer must therefore NOT be told the type was exercised; otherwise a
+    // job that no mock and no handler serviced would fabricate coverage and hide a genuine gap.
+    const seen: { jobType: string; mocked: boolean }[] = [];
+    engine.observeJobs((jobType, mocked) => seen.push({ jobType, mocked }));
+    engine.mockWorker("work").when(() => false).completeWith({ never: true });
+    await engine.createInstance({ processDefinitionId: "wait" });
+    assert.deepEqual(
+      seen,
+      [],
+      "an unsatisfied mock-only dispatch (no matching clause, no real handler) must not count as exercised",
+    );
+  });
+});
+
+test("mock: failWith clamps retries to a finite, non-negative integer (negative, NaN and fractional inputs)", () => {
+  const job: EngineJob = { jobKey: "k", jobType: "work", variables: {} };
+  const retriesFor = (retries: number): number => {
+    const outcome = new MockWorkerBuilder(() => {}).failWith({ retries }).resolve(job);
+    assert.ok(outcome !== undefined && outcome.kind === "fail", "failWith yields a fail outcome");
+    return outcome.retries;
+  };
+  assert.equal(retriesFor(-3), 0, "a negative retry count clamps to 0");
+  assert.equal(retriesFor(Number.NaN), 0, "NaN clamps to 0");
+  assert.equal(retriesFor(Number.POSITIVE_INFINITY), 0, "a non-finite retry count clamps to 0");
+  assert.equal(retriesFor(2.7), 2, "a fractional retry count truncates to an integer");
+  assert.equal(retriesFor(4), 4, "a valid non-negative integer is preserved");
 });

@@ -610,13 +610,19 @@ export class WasmEngineClient implements EngineClient {
     // over the in-memory registry — it introduces no timers/real-time, so `drain()` still
     // reaches a fixpoint deterministically.
     const mockOutcome = this.#workerMocks.get(jobType)?.resolve(job);
+    // Will this dispatch actually be serviced? Only when a mock clause matched (`mockOutcome`) OR a
+    // real handler exists to run it. A mock-only type whose clauses don't match is left locked with
+    // nothing run (see below), so it is NOT serviced — and must not be recorded as exercised, or a
+    // job no mock and no handler touched would fabricate coverage and hide a genuine gap.
+    const willBeServiced = mockOutcome !== undefined || hasRealWorker;
     // Notify the coverage observer (if any) that a job of this type was dispatched — before the
     // handler runs (or the mock applies), so an exercised-but-failing worker, and a mocked type
     // whose real handler never runs, both still count as exercised. The `mocked` flag lets the
-    // gate record the type as covered yet flag it as mock-satisfied. Isolated in its own
-    // try/catch: this is a non-invasive test seam, so a throwing observer must never abort the
-    // drain nor alter job/engine semantics (it would otherwise propagate out of #runJob).
-    if (this.#onJob !== undefined) {
+    // gate record the type as covered yet flag it as mock-satisfied. Gated on `willBeServiced` so
+    // an unserviceable dispatch never fabricates coverage. Isolated in its own try/catch: this is a
+    // non-invasive test seam, so a throwing observer must never abort the drain nor alter
+    // job/engine semantics (it would otherwise propagate out of #runJob).
+    if (this.#onJob !== undefined && willBeServiced) {
       try {
         this.#onJob(jobType, mockOutcome !== undefined);
       } catch {

@@ -83,6 +83,18 @@ export function applyOutcome(engine: OutcomeEngine, jobKey: string, outcome: Moc
 /** A pure, synchronous predicate over an {@link EngineJob} used by {@link MockWorkerBuilder.when}. */
 export type JobPredicate = (job: EngineJob) => boolean;
 
+/**
+ * Clamp a caller-supplied `failWith` retry count to a finite, non-negative integer — the only
+ * shape the engine's `failJob(jobKey, retries, …)` is defined for. `retries` is typed `number`, so
+ * a test can pass a negative value, a fraction, `NaN`, or `Infinity`; each of those would give the
+ * engine an ill-defined redelivery budget. `undefined` (the default) and any non-finite input map
+ * to `0` (fail immediately → incident); a valid value is floored to a non-negative integer.
+ */
+function clampRetries(retries: number | undefined): number {
+  if (retries === undefined || !Number.isFinite(retries)) return 0;
+  return Math.max(0, Math.trunc(retries));
+}
+
 /** One conditional clause: an outcome, guarded by an optional predicate (absent ⇒ unconditional). */
 interface MockClause {
   readonly predicate: JobPredicate | undefined;
@@ -141,7 +153,7 @@ export class MockWorkerBuilder {
   failWith(opts?: { retries?: number; message?: string }): this {
     return this.#add({
       kind: "fail",
-      retries: opts?.retries ?? 0,
+      retries: clampRetries(opts?.retries),
       message: opts?.message ?? "urban-testkit mock: failWith",
     });
   }

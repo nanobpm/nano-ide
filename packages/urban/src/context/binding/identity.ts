@@ -126,13 +126,23 @@ function toSlug(canonical: string, ref: string, hash: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 48);
-  return `${readable || "context"}-${hash.slice(0, 12)}`;
+  // Suffix with the FULL identity key (sha256 hex), not a truncated prefix: the
+  // on-disk location is derived from the slug, so a truncated suffix would make
+  // two distinct keys collide onto one `localPath` (breaking "distinct names
+  // stay private") far sooner than the key itself collides. Deriving the suffix
+  // from the whole key keeps on-disk uniqueness exactly as strong as the
+  // in-process sharing key — a single source of truth, distinct keys ⇒ distinct
+  // slugs.
+  return `${readable || "context"}-${hash}`;
 }
 
 /**
  * Compute the canonical {@link ContextIdentity} for a binding. Deterministic and
  * pure: equal `(repo, ref)` names (after normalisation) always produce an equal
- * `key` and `slug`, and distinct names never collide.
+ * `key` and `slug`. Distinct names are collision-resistant, not collision-proof:
+ * both `key` and `slug` are sha256-derived, so two distinct names collide only on
+ * a full sha256 collision (the `slug` embeds the whole `key`, so it is exactly as
+ * strong as the `key`).
  */
 export function resolveContextIdentity(binding: ContextBinding): ContextIdentity {
   const { url, canonical } = classifyRepo(binding.repo);

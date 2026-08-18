@@ -85,3 +85,16 @@ test("slug is filesystem-safe and identity-stable", () => {
   assert.equal(a.slug, b.slug);
   assert.match(a.slug, /^[a-z0-9-]+$/);
 });
+
+test("slug suffix is the full identity key ⇒ distinct keys never share a localPath", () => {
+  // The on-disk working copy is `join(cacheRoot, slug)`, so the slug's uniqueness
+  // must be exactly as strong as the identity key — a truncated hash suffix would
+  // let two distinct keys collide onto one directory. Guard that the slug embeds
+  // the whole sha256 key (64 hex chars), not a truncated prefix.
+  const identity = resolveContextIdentity({ repo: "owner/name", ref: "main" });
+  assert.match(identity.key, /^[0-9a-f]{64}$/);
+  assert.ok(
+    identity.slug.endsWith(`-${identity.key}`),
+    "slug must be suffixed with the full identity key",
+  );
+});

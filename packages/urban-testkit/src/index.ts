@@ -38,6 +38,13 @@ export {
   type OutcomeEngine,
 } from "./worker-mock.ts";
 export {
+  childProcessJobType,
+  childProcessIdFromJobType,
+  isChildProcessJobType,
+  MockChildProcessBuilder,
+  rewriteCallActivities,
+} from "./child-process-mock.ts";
+export {
   type ApiCallOptions,
   type ApiDriver,
   type ApiOperation,

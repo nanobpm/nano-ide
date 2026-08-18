@@ -23,6 +23,13 @@ import {
   type WorkerSubscription,
 } from "@nanobpm/urban/runtime";
 import { applyOutcome, MockWorkerBuilder } from "./worker-mock.ts";
+import {
+  childProcessIdFromJobType,
+  childProcessJobType,
+  isChildProcessJobType,
+  MockChildProcessBuilder,
+  rewriteCallActivities,
+} from "./child-process-mock.ts";
 
 // These three are structurally re-declared here (rather than imported from
 // `@nanobpm/urban/runtime`) on purpose: they let the kit depend only on urban's
@@ -194,6 +201,17 @@ export class WasmEngineClient implements EngineClient {
    *  runs real code. Empty and untouched unless a test calls {@link mockWorker}, so mocking
    *  is strictly opt-in and zero-cost when unused. */
   readonly #workerMocks = new Map<string, MockWorkerBuilder>();
+  /** Child-process (call-activity) mocks keyed by *called process id* (epic #296, S3). A call
+   *  activity to a mocked process id is resolved by its {@link MockChildProcessBuilder} — completed
+   *  (merging its variables into the parent) or failed — instead of the engine's native pass-through.
+   *  Empty and untouched unless a test calls {@link mockChildProcess}, so it is strictly opt-in. */
+  readonly #childProcessMocks = new Map<string, MockChildProcessBuilder>();
+  /** The synthetic call-activity job types minted by {@link deployResources}'s rewrite (one per
+   *  distinct called process id seen across deployed models). These are always dispatched by
+   *  {@link drain} — resolved through a child-process mock when one exists, else completed through
+   *  with no variables to reproduce the engine's native call-activity pass-through. Populated only
+   *  for models that actually contain a call activity. */
+  readonly #childProcessJobTypes = new Set<string>();
   /** Optional observer notified with a job's type each time a job is dispatched to a
    *  worker handler. Additive, default-absent seam used by the S4 coverage gate to know
    *  which worker/job types were actually exercised; a no-op for every other caller. The
@@ -226,7 +244,7 @@ export class WasmEngineClient implements EngineClient {
     // Any *other* generic resource likewise has no read surface here. Every non-executable resource
     // is inert to the BPMN parser here.
     for (const r of resources) {
-      if (isEngineModel(r)) this.#engine.deploy(r.content);
+      if (isEngineModel(r)) this.#engine.deploy(this.#rewriteForChildProcessMocks(r.content));
     }
     // Match `SdkEngineClient.deployResources`: the deployment accepts every resource, so the
     // `deployed` count is the total — a form (or any non-executable asset) still counts as
@@ -458,6 +476,8 @@ export class WasmEngineClient implements EngineClient {
   async close(): Promise<void> {
     this.#workers.clear();
     this.#workerMocks.clear();
+    this.#childProcessMocks.clear();
+    this.#childProcessJobTypes.clear();
     this.#engine.free();
   }
 
@@ -495,6 +515,55 @@ export class WasmEngineClient implements EngineClient {
    */
   clearWorkerMock(taskType: string): void {
     this.#workerMocks.get(taskType)?.reset();
+  }
+
+  /**
+   * Register (or fetch the existing) child-process (call-activity) mock for `processId`
+   * (epic #296, S3). A call activity whose `zeebe:calledElement processId` matches is resolved
+   * by the returned {@link MockChildProcessBuilder} — `completeWith(vars)` merges `vars` into the
+   * parent before it continues past the call activity; `failWith(...)` raises an incident on the
+   * call-activity element — **instead of** the engine's native pass-through, while un-mocked call
+   * activities keep their native behaviour. Reuses the shared {@link MockOutcome}/`applyOutcome`.
+   *
+   * The seam is a deploy-time rewrite: {@link deployResources} turns each call activity into a
+   * synthetic job keyed by its called process id, which {@link drain} resolves through this
+   * builder. So this must be called for a process id whose parent model was deployed as a call
+   * activity; a mock on an id with no such call activity simply never fires. Call `.reset()` on
+   * the builder (or {@link clearChildProcessMock}) to restore the native pass-through.
+   *
+   * Idempotent per id: repeated calls return the SAME builder. Purely opt-in — no child-process
+   * bookkeeping happens on any dispatch until this is first called for an id.
+   */
+  mockChildProcess(processId: string): MockChildProcessBuilder {
+    let builder = this.#childProcessMocks.get(processId);
+    if (builder === undefined) {
+      builder = new MockChildProcessBuilder(() => {
+        this.#childProcessMocks.delete(processId);
+      });
+      this.#childProcessMocks.set(processId, builder);
+    }
+    return builder;
+  }
+
+  /**
+   * Remove any child-process mock for `processId`, restoring the engine's native call-activity
+   * pass-through. No-op if unmocked. Delegates to the builder's
+   * {@link MockChildProcessBuilder.reset} so a test still holding the reference sees its outcome
+   * cleared too — not just the registry entry dropped.
+   */
+  clearChildProcessMock(processId: string): void {
+    this.#childProcessMocks.get(processId)?.reset();
+  }
+
+  /** Rewrite a model's call activities into synthetic child-process jobs (see
+   *  {@link rewriteCallActivities}) and remember their job types so {@link drain} dispatches them.
+   *  A model with no call activity is returned untouched, so non-call-activity apps pay nothing. */
+  #rewriteForChildProcessMocks(xml: string): string {
+    const { xml: rewritten, calledProcessIds } = rewriteCallActivities(xml);
+    for (const processId of calledProcessIds) {
+      this.#childProcessJobTypes.add(childProcessJobType(processId));
+    }
+    return rewritten;
   }
 
   /** Advance the virtual clock by `ms`, firing due timers, then drain workers so
@@ -545,15 +614,22 @@ export class WasmEngineClient implements EngineClient {
    * registered (e.g. an unimplemented external integration). Its jobs are activated and
    * resolved by the mock; a job the mock's clauses don't match is left locked (no real
    * handler exists to run it), which keeps the drain a fixpoint rather than spinning.
+   *
+   * Synthetic **child-process** job types (minted by {@link deployResources} for a rewritten
+   * call activity, epic #296 S3) are also drained: each such job is resolved through its
+   * {@link mockChildProcess} outcome, or — when the called process is unmocked — completed
+   * through with no variables, reproducing the engine's native call-activity pass-through.
    */
   async drain(): Promise<void> {
     for (let i = 0; i < MAX_DRAIN_ITERATIONS; i++) {
       let activatedAny = false;
       for (const jobType of this.#dispatchableJobTypes()) {
+        // A synthetic child-process job type has no registered worker and is resolved on its own
+        // dedicated path (call-activity outcome / native pass-through), never as a worker.
+        const isChildProcess = isChildProcessJobType(jobType);
         const realWorker = this.#workers.get(jobType);
-        // A mock-only type has no registered worker; use a synthetic activation descriptor so its
-        // jobs can be pulled and handed to the mock. Its handler is never invoked (the mock either
-        // resolves the job or, on no match, we leave it — see #runJob).
+        // A mock-only or child-process type has no registered worker; use a synthetic activation
+        // descriptor so its jobs can be pulled. Its handler is never invoked.
         const worker = realWorker ?? mockOnlyWorker(jobType);
         const jobs = this.#parseArray(
           this.#engine.activateJobs(
@@ -565,7 +641,11 @@ export class WasmEngineClient implements EngineClient {
         );
         for (const raw of jobs) {
           activatedAny = true;
-          await this.#runJob(worker, realWorker !== undefined, raw);
+          if (isChildProcess) {
+            this.#runChildProcessJob(jobType, raw);
+          } else {
+            await this.#runJob(worker, realWorker !== undefined, raw);
+          }
         }
       }
       if (!activatedAny) return;
@@ -575,14 +655,45 @@ export class WasmEngineClient implements EngineClient {
     );
   }
 
-  /** The job types to activate on a drain pass: every registered worker, plus every mock-only
-   *  type that actually carries at least one clause (an empty/reset mock induces no dispatch). */
+  /** The job types to activate on a drain pass: every registered worker, every mock-only type
+   *  that actually carries at least one clause (an empty/reset mock induces no dispatch), plus
+   *  every synthetic child-process type (always dispatched — resolved via a mock or completed
+   *  through to mirror the native call-activity pass-through). */
   #dispatchableJobTypes(): string[] {
     const types: string[] = [...this.#workers.keys()];
     for (const [jobType, mock] of this.#workerMocks) {
       if (!this.#workers.has(jobType) && mock.hasClauses) types.push(jobType);
     }
+    for (const jobType of this.#childProcessJobTypes) {
+      if (!this.#workers.has(jobType)) types.push(jobType);
+    }
     return types;
+  }
+
+  /**
+   * Resolve one synthetic call-activity job (epic #296, S3). If a {@link mockChildProcess} mock
+   * is registered for the encoded called process id, apply its outcome via the shared
+   * `applyOutcome` — completing the parent with the mocked variables merged, or failing/erroring
+   * it — exactly like a real completion path (synchronous, no wall-clock, so the drain still
+   * quiesces). With no mock, complete the job with no variables, reproducing the engine's native
+   * call-activity pass-through. A throw from applying the outcome (e.g. a non-serializable
+   * `completeWith` value) is routed through the same error→completion mapping as a real handler,
+   * so it never escapes and aborts the whole drain.
+   */
+  #runChildProcessJob(jobType: string, raw: Record<string, unknown>): void {
+    const jobKey = str(raw.key);
+    if (jobKey === "") return;
+    const processId = childProcessIdFromJobType(jobType);
+    const outcome = this.#childProcessMocks.get(processId)?.resolve();
+    try {
+      if (outcome === undefined) {
+        this.#engine.completeJob(jobKey, "{}");
+      } else {
+        applyOutcome(this.#engine, jobKey, outcome);
+      }
+    } catch (err) {
+      this.#failFromError(raw, jobKey, err);
+    }
   }
 
   async #runJob(

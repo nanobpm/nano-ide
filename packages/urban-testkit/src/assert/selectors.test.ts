@@ -96,3 +96,19 @@ test("resolveFromInstances throws a clear error on an unknown selector kind", ()
     },
   );
 });
+
+test("resolveFromInstances rejects a byProcessId selector with a non-string processId", () => {
+  // A malformed `{ kind: "processId", processId: undefined }` must fail loudly
+  // rather than match an instance whose own processId is undefined. JSON has no
+  // `undefined`, so drop the key entirely to model the runtime `undefined` shape.
+  const undefinedProcessId: InstanceSelector = JSON.parse('{"kind":"processId"}');
+  const withUndefinedRow: InstanceRow[] = [{ key: "pi-x", state: "ACTIVE", processId: undefined }];
+  assert.throws(
+    () => resolveFromInstances(withUndefinedRow, undefinedProcessId),
+    (err: unknown) => {
+      assert.ok(err instanceof AssertionError);
+      assert.match(err.message, /byProcessId requires a string processId/);
+      return true;
+    },
+  );
+});

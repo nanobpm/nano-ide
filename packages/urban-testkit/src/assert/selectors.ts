@@ -131,13 +131,22 @@ export function resolveFromInstances(
     throwResolution(`unknown selector kind ${formatValue(kind)}`, instances);
   }
 
-  const matches = instances.filter((i) => i.processId === selectorOrKey.processId);
+  // Read the discriminant's payload through an `unknown` boundary: a malformed
+  // selector crossing a JS / `unknown` boundary can carry `processId: undefined`,
+  // which would otherwise match an instance whose own `processId` is `undefined`
+  // (`undefined === undefined`) and silently resolve an invalid selector to a
+  // real instance. Require a concrete string and fail loudly otherwise.
+  const wantedProcessId: unknown = selectorOrKey.processId;
+  if (typeof wantedProcessId !== "string") {
+    throwResolution(`byProcessId requires a string processId, got ${formatValue(wantedProcessId)}`, instances);
+  }
+  const matches = instances.filter((i) => i.processId === wantedProcessId);
   if (matches.length === 0) {
-    throwResolution(`no instance with processId ${formatValue(selectorOrKey.processId)}`, instances);
+    throwResolution(`no instance with processId ${formatValue(wantedProcessId)}`, instances);
   }
   if (matches.length > 1) {
     throwResolution(
-      `${matches.length} instances with processId ${formatValue(selectorOrKey.processId)} — ambiguous; select byKey(...)`,
+      `${matches.length} instances with processId ${formatValue(wantedProcessId)} — ambiguous; select byKey(...)`,
       instances,
     );
   }

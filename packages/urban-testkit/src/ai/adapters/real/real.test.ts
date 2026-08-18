@@ -77,10 +77,11 @@ test("live activation is impossible without opt-in: every construction factory r
   // Block the network so a stray real activation would fail loudly rather than pass.
   const original = Reflect.get(globalThis, "fetch");
   let networkTouched = false;
-  Reflect.set(globalThis, "fetch", () => {
+  const stubInstalled = Reflect.set(globalThis, "fetch", () => {
     networkTouched = true;
     throw new Error("network access is blocked in this test");
   });
+  assert.equal(stubInstalled, true, "fetch stub must install so stray network access stays detectable");
   try {
     const cassette = new Cassette(null);
     const attempts = [
@@ -100,7 +101,13 @@ test("live activation is impossible without opt-in: every construction factory r
     }
     assert.equal(networkTouched, false, "no factory may touch the network without opt-in");
   } finally {
-    Reflect.set(globalThis, "fetch", original);
+    // Restore the exact prior shape: if fetch was originally absent, delete the stub
+    // rather than leaving a `fetch` property defined as undefined.
+    if (original === undefined) {
+      Reflect.deleteProperty(globalThis, "fetch");
+    } else {
+      Reflect.set(globalThis, "fetch", original);
+    }
   }
 });
 
@@ -171,6 +178,31 @@ test("readEnvVar treats a Deno --allow-env denial as unset (safe by default, nev
       Reflect.deleteProperty(globalThis, "Deno");
     } else {
       Reflect.set(globalThis, "Deno", original);
+    }
+  }
+});
+
+test("createRealAdapters throws on an unknown provider before any import/network (opt-in set)", async () => {
+  // A JS caller (or a TS caller with `any`) can pass a typo like "loacl"; the factory must
+  // reject it explicitly rather than silently routing to the hosted backend. Build the
+  // runtime-invalid options via JSON.parse so no `as` cast is needed.
+  const badOptions = JSON.parse('{ "provider": "loacl" }');
+  const proc = Reflect.get(globalThis, "process");
+  const env = typeof proc === "object" && proc !== null ? Reflect.get(proc, "env") : undefined;
+  const hadEnv = typeof env === "object" && env !== null;
+  const previous = hadEnv ? Reflect.get(env, REAL_AI_OPT_IN_ENV) : undefined;
+  if (hadEnv) {
+    Reflect.set(env, REAL_AI_OPT_IN_ENV, "1");
+  }
+  try {
+    await assert.rejects(createRealAdapters(badOptions), /unknown provider/);
+  } finally {
+    if (hadEnv) {
+      if (previous === undefined) {
+        Reflect.deleteProperty(env, REAL_AI_OPT_IN_ENV);
+      } else {
+        Reflect.set(env, REAL_AI_OPT_IN_ENV, previous);
+      }
     }
   }
 });

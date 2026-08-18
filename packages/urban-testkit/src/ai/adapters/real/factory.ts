@@ -34,10 +34,18 @@ export interface RealAdapterPair {
  */
 export async function createRealAdapters(options: RealAdapterOptions = {}): Promise<RealAdapterPair> {
   assertRealAiEnabled();
-  if ((options.provider ?? "hosted") === "local") {
+  const provider = options.provider ?? "hosted";
+  if (provider === "local") {
     return createLocalModelAdapters(options.local);
   }
-  return createHostedProviderAdapters(options.hosted);
+  if (provider === "hosted") {
+    return createHostedProviderAdapters(options.hosted);
+  }
+  // Fail loudly on an unknown provider (e.g. a JS caller passing a typo like "loacl")
+  // instead of silently routing to the hosted backend and triggering network usage.
+  throw new Error(
+    `createRealAdapters: unknown provider ${JSON.stringify(provider)} — expected "hosted" or "local"`,
+  );
 }
 
 /** LIVE-activates a real embedding adapter (opt-in gated). */

@@ -197,8 +197,9 @@ export class WasmEngineClient implements EngineClient {
     // are parsed by the engine. A `.form` is read back through the engine's real read model
     // (`getFormByKey`), not a JS shadow store; any *other* generic resource has no read surface on
     // this adapter yet (it is accepted and counted, but not resolvable). The form *write* path
-    // lands with Magikcraft/nano-bpm#815; until then a `.form` is accepted (and counted) but not
-    // yet resolvable, exactly as it would be against a gateway that has not yet indexed it. Every
+    // lands with Magikcraft/nano-bpm#815; this adapter does not yet forward `.form` resources to
+    // the engine, so until then a `.form` is accepted (and counted) but not yet resolvable — it
+    // will only start resolving once the adapter forwards it, not automatically. Every
     // non-executable resource is inert to the BPMN parser here.
     for (const r of resources) {
       if (isEngineModel(r)) this.#engine.deploy(r.content);
@@ -560,8 +561,8 @@ export class WasmEngineClient implements EngineClient {
     return isRecord(v) ? v : {};
   }
 
-  /** Parse an engine read-method JSON string to its raw value, preserving `null` (a form/
-   *  resource-by-key miss serializes as JSON `null`, which the caller must distinguish from a
+  /** Parse an engine read-method JSON string to its raw value, preserving `null` (a form-by-key
+   *  miss serializes as JSON `null`, which the caller must distinguish from a
    *  present object — unlike {@link #parseObj}, which coerces a non-object to `{}`). */
   #parseValue(json: string): unknown {
     return JSON.parse(json);

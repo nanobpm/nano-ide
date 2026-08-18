@@ -12,7 +12,7 @@
 // so any party can point it at their own validator and get a structured report.
 // The `.conformance.ts` sibling wires it into `node:test` for `test:conformance`.
 
-import { SCOPE_LADDER } from "../schema/index.ts";
+import { MEMORY_RECORD_SCHEMA_VERSION, SCOPE_LADDER } from "../schema/index.ts";
 
 // ---------------------------------------------------------------------------
 // Public shapes
@@ -101,7 +101,7 @@ const INVALID_TRIPLES: readonly (Triple & { readonly why: string })[] = [
 
 function baseRecord(scope: string, triple: Triple): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: MEMORY_RECORD_SCHEMA_VERSION,
     id: `rec-${scope}-${triple.provenance}-${triple.mode}-${triple.authority}`,
     scope,
     mode: triple.mode,
@@ -155,61 +155,61 @@ const STRUCTURAL_CASES: readonly ConformanceCase[] = [
   {
     name: "reject missing id",
     expect: "reject",
-    input: { schemaVersion: 1, scope: "repo", mode: "empirical", provenance: "human", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, scope: "repo", mode: "empirical", provenance: "human", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
     note: "id is required",
   },
   {
     name: "reject empty statement",
     expect: "reject",
-    input: { schemaVersion: 1, id: "x", scope: "repo", mode: "empirical", provenance: "human", authority: "authoritative", statement: "", createdAt: "2026-01-01T00:00:00.000Z" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: "x", scope: "repo", mode: "empirical", provenance: "human", authority: "authoritative", statement: "", createdAt: "2026-01-01T00:00:00.000Z" },
     note: "statement must be non-empty",
   },
   {
     name: "reject drifted scope vocabulary",
     expect: "reject",
-    input: { schemaVersion: 1, id: "x", scope: "galaxy", mode: "empirical", provenance: "human", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: "x", scope: "galaxy", mode: "empirical", provenance: "human", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
     note: "scope must be in the ladder vocabulary",
   },
   {
     name: "reject drifted mode vocabulary",
     expect: "reject",
-    input: { schemaVersion: 1, id: "x", scope: "repo", mode: "prescriptive", provenance: "human", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: "x", scope: "repo", mode: "prescriptive", provenance: "human", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
     note: "mode must be normative|empirical",
   },
   {
     name: "reject drifted provenance vocabulary",
     expect: "reject",
-    input: { schemaVersion: 1, id: "x", scope: "repo", mode: "empirical", provenance: "robot", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: "x", scope: "repo", mode: "empirical", provenance: "robot", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
     note: "provenance must be in the vocabulary",
   },
   {
     name: "reject drifted authority vocabulary",
     expect: "reject",
-    input: { schemaVersion: 1, id: "x", scope: "repo", mode: "empirical", provenance: "human", authority: "supreme", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: "x", scope: "repo", mode: "empirical", provenance: "human", authority: "supreme", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
     note: "authority must be hypothesis|authoritative",
   },
   {
     name: "reject non-ISO timestamp",
     expect: "reject",
-    input: { schemaVersion: 1, id: "x", scope: "repo", mode: "empirical", provenance: "human", authority: "authoritative", statement: "s", createdAt: "yesterday" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: "x", scope: "repo", mode: "empirical", provenance: "human", authority: "authoritative", statement: "s", createdAt: "yesterday" },
     note: "createdAt must be ISO-8601",
   },
   {
     name: "reject wrong-typed id",
     expect: "reject",
-    input: { schemaVersion: 1, id: 123, scope: "repo", mode: "empirical", provenance: "human", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: 123, scope: "repo", mode: "empirical", provenance: "human", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z" },
     note: "id must be a string",
   },
   {
     name: "reject wrong-typed evidence",
     expect: "reject",
-    input: { schemaVersion: 1, id: "x", scope: "repo", mode: "empirical", provenance: "measured", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z", evidence: "not-an-array" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: "x", scope: "repo", mode: "empirical", provenance: "measured", authority: "authoritative", statement: "s", createdAt: "2026-01-01T00:00:00.000Z", evidence: "not-an-array" },
     note: "evidence, if present, must be a string array",
   },
   {
     name: "accept well-formed measured record with evidence + optionals",
     expect: "accept",
-    input: { schemaVersion: 1, id: "x", scope: "instance", scopeRef: "elem-7", subject: "latency", mode: "empirical", provenance: "measured", authority: "authoritative", statement: "p99 improved", createdAt: "2026-01-01T00:00:00.000Z", evidence: ["run-1", "run-2"], supersedes: "rec-old" },
+    input: { schemaVersion: MEMORY_RECORD_SCHEMA_VERSION, id: "x", scope: "instance", scopeRef: "elem-7", subject: "latency", mode: "empirical", provenance: "measured", authority: "authoritative", statement: "p99 improved", createdAt: "2026-01-01T00:00:00.000Z", evidence: ["run-1", "run-2"], supersedes: "rec-old" },
     note: "optional fields accepted when well-typed",
   },
 ];

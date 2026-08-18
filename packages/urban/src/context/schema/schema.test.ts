@@ -78,6 +78,24 @@ test("reports every problem, not just the first", () => {
   }
 });
 
+test("distinguishes missing, wrong-typed, and unsupported schemaVersion", () => {
+  const missing = validateMemoryRecord(base({ schemaVersion: undefined }));
+  assert.equal(missing.ok, false);
+  if (!missing.ok) {
+    assert.equal(missing.errors.find((e) => e.path === "schemaVersion")?.code, "missing-field");
+  }
+  const wrongType = validateMemoryRecord(base({ schemaVersion: "1" }));
+  assert.equal(wrongType.ok, false);
+  if (!wrongType.ok) {
+    assert.equal(wrongType.errors.find((e) => e.path === "schemaVersion")?.code, "wrong-type");
+  }
+  const unsupported = validateMemoryRecord(base({ schemaVersion: 9 }));
+  assert.equal(unsupported.ok, false);
+  if (!unsupported.ok) {
+    assert.equal(unsupported.errors.find((e) => e.path === "schemaVersion")?.code, "unsupported-schema-version");
+  }
+});
+
 test("rejects drifted vocabulary on each controlled field", () => {
   assert.equal(validateMemoryRecord(base({ scope: "galaxy" })).ok, false);
   assert.equal(validateMemoryRecord(base({ mode: "prescriptive" })).ok, false);

@@ -259,16 +259,22 @@ export function validateMemoryRecord(input: unknown): ValidationResult {
 
   // Version first — a wrong version means the rest of the shape is unreliable.
   // Distinguish an absent version (missing-field, like every other required
-  // field) from a present-but-wrong one (unsupported-schema-version) so the
-  // structured error is honest and consistent.
+  // field), a wrong-typed version (wrong-type, e.g. a string), and a
+  // present-but-unsupported numeric version (unsupported-schema-version) so the
+  // structured error is honest and consistent with the other required fields.
   if (input.schemaVersion !== MEMORY_RECORD_SCHEMA_VERSION) {
-    const versionMissing = input.schemaVersion === undefined;
+    const version = input.schemaVersion;
+    const versionCode: "missing-field" | "wrong-type" | "unsupported-schema-version" =
+      version === undefined ? "missing-field" : typeof version !== "number" ? "wrong-type" : "unsupported-schema-version";
     errors.push({
       path: "schemaVersion",
-      code: versionMissing ? "missing-field" : "unsupported-schema-version",
-      message: versionMissing
-        ? "schemaVersion is required."
-        : `unsupported schemaVersion; expected ${MEMORY_RECORD_SCHEMA_VERSION}.`,
+      code: versionCode,
+      message:
+        versionCode === "missing-field"
+          ? "schemaVersion is required."
+          : versionCode === "wrong-type"
+            ? "schemaVersion must be a number."
+            : `unsupported schemaVersion; expected ${MEMORY_RECORD_SCHEMA_VERSION}.`,
     });
   }
 

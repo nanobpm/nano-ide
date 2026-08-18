@@ -7,7 +7,7 @@ import type { ChatInput, ChatModelAdapter, ChatResult, ImagePart } from "../seam
 import { serializeVerdict } from "../verdict.ts";
 // Import the barrel so the S3 matcher registers on the default registry.
 import "../index.ts";
-import { configureJudge, defaultJudgePrompt, satisfiesJudge } from "./index.ts";
+import { configureJudge, defaultJudgePrompt, narrowJudgeOptions, satisfiesJudge } from "./index.ts";
 
 /** Records the last chat input and returns a canned verdict — deterministic, no network. */
 class SpyChatAdapter implements ChatModelAdapter {
@@ -108,4 +108,27 @@ test("defaultJudgePrompt: emits CRITERIA and ACTUAL sections", () => {
   const prompt = defaultJudgePrompt("be concise", "a very long rambling answer");
   assert.match(prompt, /CRITERIA:\nbe concise/);
   assert.match(prompt, /ACTUAL:\na very long rambling answer/);
+});
+
+test("narrowJudgeOptions: undefined/null yield no options", () => {
+  assert.equal(narrowJudgeOptions(undefined), undefined);
+  assert.equal(narrowJudgeOptions(null), undefined);
+});
+
+test("narrowJudgeOptions: rejects non-object and array options loudly", () => {
+  // A primitive is not an options bag.
+  assert.throws(() => narrowJudgeOptions("nope"), TypeError);
+  // Arrays are `typeof "object"` but must NOT slip through as an empty options bag —
+  // otherwise caller mistakes like `satisfiesJudge(criteria, [])` silently collapse
+  // every field to `undefined` instead of surfacing the error.
+  assert.throws(() => narrowJudgeOptions([]), TypeError);
+  assert.throws(() => narrowJudgeOptions([{ adapter: new FakeChatModelAdapter() }]), TypeError);
+});
+
+test("narrowJudgeOptions: keeps recognised fields and drops unknown ones", () => {
+  const adapter = new FakeChatModelAdapter();
+  const narrowed = narrowJudgeOptions({ adapter, bogus: 1 });
+  assert.equal(narrowed?.adapter, adapter);
+  assert.equal(narrowed?.promptTemplate, undefined);
+  assert.equal(narrowed?.image, undefined);
 });

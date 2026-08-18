@@ -118,13 +118,15 @@ function isPromptTemplate(value: unknown): value is JudgePromptTemplate {
 /**
  * Narrows the untyped fluent-dispatch options argument into a {@link JudgeOptions},
  * reading only the recognised, validated fields (no `as` casts). Unknown/mis-typed
- * fields are dropped; a non-object (other than `undefined`/`null`) is rejected loudly.
+ * fields are dropped; a non-object — or an array, which is a `typeof "object"` but
+ * never a valid options bag — is rejected loudly so caller mistakes surface instead
+ * of silently collapsing every field to `undefined`.
  */
-function narrowJudgeOptions(value: unknown): JudgeOptions | undefined {
+export function narrowJudgeOptions(value: unknown): JudgeOptions | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof value !== "object") {
+  if (typeof value !== "object" || Array.isArray(value)) {
     throw new TypeError("satisfiesJudge options must be an object");
   }
   const adapter =

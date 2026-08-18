@@ -3,7 +3,7 @@
 // This is the SCAFFOLD-OWNED top barrel. It re-exports the public surface of
 // each slice subdirectory so consumers can `import { … } from
 // "@nanobpm/urban/context"`. Every slice owns exactly ONE subdirectory and
-// replaces only its own `index.ts`; NObody but the scaffold task edits this
+// replaces only its own `index.ts`; nobody but the scaffold task edits this
 // file or packages/urban/package.json. See ./README.md for the seam contract.
 //
 // While the scaffold is empty every subdir barrel is `export {};`, so this

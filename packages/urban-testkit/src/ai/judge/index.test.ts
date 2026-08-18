@@ -3,6 +3,9 @@ import { test } from "node:test";
 
 import { assertThatText } from "../assertion.ts";
 import { FakeChatModelAdapter } from "../fakes.ts";
+// Guard the public `/ai` barrel export of JudgeOptions (Copilot advisory config.ts:41):
+// consumers must be able to reference the options type of satisfiesJudge explicitly.
+import type { JudgeOptions } from "../index.ts";
 import type { ChatInput, ChatModelAdapter, ChatResult, ImagePart } from "../seams.ts";
 import { serializeVerdict } from "../verdict.ts";
 // Import the barrel so the S3 matcher registers on the default registry.
@@ -131,4 +134,10 @@ test("narrowJudgeOptions: keeps recognised fields and drops unknown ones", () =>
   assert.equal(narrowed?.adapter, adapter);
   assert.equal(narrowed?.promptTemplate, undefined);
   assert.equal(narrowed?.image, undefined);
+});
+
+test("JudgeOptions is exported from the /ai barrel for explicit consumer typing", async () => {
+  // Re-exported type must be usable to annotate satisfiesJudge's options at a call site.
+  const options: JudgeOptions = { adapter: new FakeChatModelAdapter() };
+  await satisfiesJudge("the cat sat on the mat", "cat", options);
 });

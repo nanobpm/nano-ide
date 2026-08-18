@@ -20,6 +20,7 @@ export type {
 } from "./seams.ts";
 export type {
   JudgeConfig,
+  JudgeOptions,
   SemanticSimilarityConfig,
   TextPreprocessor,
   TextPreprocessors,

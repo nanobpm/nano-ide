@@ -207,6 +207,40 @@ test("hasCompletedElements fails fast when the snapshot holds more than one inst
   });
 });
 
+test("hasCompletedElements refuses when the resolved instance has vanished from the snapshot", async () => {
+  await withApp(async (app) => {
+    // A single COMPLETED instance: its elements land in the aggregate
+    // `elementStats`, and it is the snapshot's sole instance, so a normal
+    // `hasCompletedElements` verdict would be sound.
+    await app.engine.deployResources([
+      { name: "vn.bpmn", content: serviceProcess("vn", "vn.work"), contentType: "application/bpmn+xml" },
+    ]);
+    await app.engine.registerWorker("vn.work", () => ({ ok: true }));
+    const { processInstanceKey } = await app.engine.createInstance({
+      processDefinitionId: "vn",
+      awaitCompletion: true,
+    });
+
+    // Resolve the assertion against the real (correct) snapshot, THEN simulate the
+    // target instance vanishing while a lone UNRELATED instance remains — the exact
+    // shape the `instanceCount > 1` guard does NOT cover (count is 1, but it is the
+    // wrong instance). Reading snapshot-global `elementStats` here would borrow the
+    // vanished instance's completions and return an unsound verdict; the matcher must
+    // instead refuse because the resolved instance is no longer present.
+    const real = app.snapshot();
+    const doctored: Record<string, unknown> = {
+      ...real,
+      instances: [{ key: "OTHER", state: "Active", processId: "vn" }],
+    };
+    let vanished = false;
+    const doctoredApp: TestApp = { ...app, snapshot: () => (vanished ? doctored : real) };
+
+    const subject = assertThatInstance(doctoredApp, processInstanceKey);
+    vanished = true;
+    expectFailure(() => subject.hasCompletedElements("s"), [processInstanceKey, "no longer present"]);
+  });
+});
+
 // --- Variable matchers ---
 
 test("hasVariable / hasVariables / hasNoVariable pass and fail as specified", async () => {

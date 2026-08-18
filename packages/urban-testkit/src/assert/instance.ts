@@ -106,8 +106,9 @@ function activeElementIds(rec: Record<string, unknown>): string[] {
  *  top-level `elementStats` (`{ elementId, active, completed, incidents }`). The
  *  engine snapshot exposes completion counts only at this aggregate level — a
  *  per-instance record carries only its live `activeElements` — so this is only
- *  sound when the snapshot holds a single instance; `hasCompletedElements` guards
- *  that precondition, and tests boot an isolated app per case. */
+ *  sound when the snapshot holds a single instance that is the resolved one;
+ *  `hasCompletedElements` guards that precondition (presence + single-instance),
+ *  and tests boot an isolated app per case. */
 function completedElementIds(snapshot: Record<string, unknown>): string[] {
   const raw = snapshot.elementStats;
   if (!Array.isArray(raw)) return [];
@@ -251,11 +252,24 @@ export function assertThatInstance(
 
     hasCompletedElements: (...elementIds) => {
       const snapshot = app.snapshot();
+      const instances = readInstances(snapshot);
       // `elementStats` is snapshot-global, not per-instance, so a completion
-      // count cannot be attributed to a single instance when several coexist.
-      // Refuse rather than return a verdict borrowed from another instance's
-      // completions (tests scope this by booting an isolated app per case).
-      const instanceCount = readInstances(snapshot).length;
+      // count is only attributable to THIS instance when it is the snapshot's
+      // sole instance. Two ways that precondition can break:
+      //   1. the resolved instance is no longer present (it vanished, or the lone
+      //      surviving instance is a different key) — every sibling matcher guards
+      //      this via `instanceRecord`, so mirror it here rather than borrow a
+      //      verdict from the wrong (or a gone) instance; and
+      //   2. several instances coexist — the aggregate cannot be split per key.
+      // Refuse in both cases (tests scope the happy path to an isolated app).
+      if (!instances.some((row) => row.key === key)) {
+        failAssertion({
+          message: `Cannot assert completed elements on instance ${formatValue(key)}: it is no longer present in the snapshot — a per-instance verdict would be read from the wrong instance's (snapshot-global) completions. Actual instances: ${formatValue(instances.map((row) => row.key))}.`,
+          operator: "hasCompletedElements",
+          diff: false,
+        });
+      }
+      const instanceCount = instances.length;
       if (instanceCount > 1) {
         failAssertion({
           message: `Cannot assert completed elements on instance ${formatValue(key)}: the snapshot holds more than one instance (${instanceCount}), and the engine reports element completion counts only at the aggregate (snapshot-global) level — a per-instance verdict would be unsound. Assert completed elements against a snapshot containing a single instance.`,

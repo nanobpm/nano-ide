@@ -4,7 +4,6 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
 import type { EngineClient, HttpRequest, HttpResponse } from "../host.ts";
 import { makeRouter } from "../router.ts";
 import { createPagesRoutes, type PagesDataSource, type PagesDeps } from "./pages.ts";
@@ -505,7 +504,7 @@ test("renderer binds a route param: parseRoute splits page/param, filters + text
   assert.match(js, /const slash = raw\.indexOf\("\/"\)/);
   assert.match(js, /const paramRaw = slash >= 0 \? raw\.slice\(slash \+ 1\) : ""/);
   assert.match(js, /param = paramRaw \? decodeURIComponent\(paramRaw\) : ""/);
-  assert.match(js, /let PARAM = parseRoute\(\)\.param/);
+  assert.match(js, /PARAM = parseRoute\(\)\.param/);
   // renderPage refreshes PARAM from the current route on every (re)render.
   assert.match(js, /const route = parseRoute\(\);\s*CURRENT = route\.page;\s*PARAM = route\.param;/s);
   // A datasource filter with { eqParam: true } binds its value to the live PARAM,
@@ -589,7 +588,7 @@ test("renderer exposes an embed-gated host-navigation bridge", async () => {
   // data can't smuggle a path. The same-origin gate reads parent.location.origin
   // in a try/catch (a cross-origin parent throws under the same-origin policy).
   assert.match(js, /window\.parent\.location\.origin === window\.location\.origin/);
-  assert.match(js, /const NANO_EMBEDDED =/);
+  assert.match(js, /NANO_EMBEDDED = computeEmbedded\(\)/);
   assert.match(js, /function hostNavigate\(target, params\)/);
   assert.match(js, /if \(!NANO_EMBEDDED\) return false;/);
   assert.match(
@@ -597,7 +596,7 @@ test("renderer exposes an embed-gated host-navigation bridge", async () => {
     /window\.parent\.postMessage\(\s*\{\s*type:\s*"nano-navigate",\s*target:\s*target,\s*params:\s*params\s*\}\s*,\s*window\.location\.origin\s*\)/,
   );
   // The theme bridge reuses the same embed flag (no second window.parent probe).
-  assert.match(js, /if \(NANO_EMBEDDED\) \{/);
+  assert.match(js, /function installThemeBridge\(\)\s*\{\s*if \(!NANO_EMBEDDED\) return;/);
 });
 
 test("the renderer honours numeric actionForm fields", async () => {
@@ -695,7 +694,7 @@ test("renderer makes collapsible nodes persist their state across sessions", asy
   assert.match(js, /localStorage\.setItem\(key, val \? "1" : "0"\)/);
   assert.match(js, /catch \(e\) \{\s*return dflt;/);
   // And the wrapper is actually applied at the dispatch layer.
-  assert.match(js, /makeCollapsible\(n, \(RENDERERS\[n\.type\]/);
+  assert.match(js, /makeCollapsible\(n, \(\/\*\* @type \{Record<string, Renderer>\} \*\/ \(RENDERERS\)\[n\.type\]/);
   // Non-card renderer output (e.g. text -> <p>) is nested whole inside a fresh
   // <section class="pc-card"> rather than having a <button>/<div> injected into
   // it — so the feature is valid markup across every node type, not just cards.
@@ -1002,9 +1001,8 @@ test("the prose renderer ships a safe, dependency-free markdown → DOM converte
   // Underscore emphasis is word-boundary guarded so snake_case identifiers survive.
   assert.match(js, /function mdIsWordChar\(c\)/);
   assert.match(js, /!mdIsWordChar\(s\[i - 1\]\)/);
-  // The code backtick is built from a char code so this source stays inside the
-  // String.raw template literal.
-  assert.match(js, /const MD_BACKTICK = String\.fromCharCode\(96\)/);
+  // The markdown code backtick is a literal in the standalone runtime source.
+  assert.match(js, /const MD_BACKTICK = "`"/);
 });
 
 test("the shell styles the prose/markdown list at a comfortable reading measure (#274)", async () => {
@@ -1477,27 +1475,10 @@ test("shell CSS carries the .pc-pipe* track chrome reusing --nano-* tokens", asy
   assert.match(html, /\.pc-pipe-upcoming \{[^}]*var\(--nano-text-faint\)/);
 });
 
-test("runtime RENDERERS cover exactly the shared PAGE_NODE_TYPES registry", async () => {
-  // The browser renderer's RENDERERS table (the runtime source of truth for which
-  // page-node types can be drawn) lives inside the served runtime module. It must
-  // stay in lockstep with @nanobpm/nano-app-schema's PAGE_NODE_TYPES — the same
-  // registry the Console's Page Composer is compile-time locked to. If the two
-  // drift, a page the Composer accepts renders as a blank <div> in the App (or
-  // vice-versa); this guard turns that silent gap into a loud CI failure.
-  const res = await dispatch("GET", "/app/runtime.js");
-  const js = res.body ?? "";
-  const m = js.match(/const\s+RENDERERS\s*=\s*\{([^}]*)\}/);
-  assert.ok(m, "runtime module must define a RENDERERS map");
-  const runtimeTypes = m[1]
-    .split(",")
-    .map((entry) => entry.split(":")[0].trim())
-    .filter((k) => k.length > 0);
-  assert.deepEqual(
-    [...runtimeTypes].sort(),
-    [...PAGE_NODE_TYPES].sort(),
-    "runtime RENDERERS keys must equal the shared PAGE_NODE_TYPES registry",
-  );
-});
+// NOTE (#291): the RENDERERS ↔ PAGE_NODE_TYPES drift guard no longer string-scrapes
+// the served module. RENDERERS is now compile-time locked (`satisfies
+// Record<PageNodeType, Renderer>`) in the real source, and verified at runtime by a
+// direct-import test in ../../browser/runtime.browser.test.ts — no regex needed.
 
 function hasStderr(err: unknown): err is { stderr: unknown } {
   return typeof err === "object" && err !== null && "stderr" in err;

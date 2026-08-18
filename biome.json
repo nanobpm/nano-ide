@@ -3,6 +3,7 @@
 	"files": {
 		"includes": [
 			"packages/*/src/**/*.ts",
+			"packages/urban/src/runtime/browser/**/*.js",
 			"packages/connector-slack/*.ts",
 			"packages/trigger-mqtt/*.ts",
 			"!**/node_modules/**",

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.58.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.57.0...@nanobpm/urban-0.58.0) (2026-08-18)
+
+
+### Features
+
+* **urban:** add S2 memory-record schema, provenance/mode model, and conformance corpus ([#311](https://github.com/nanobpm/nano-ide/issues/311)) ([11d90c1](https://github.com/nanobpm/nano-ide/commit/11d90c15a6cf2a42093a7236f32a9baa67f134ec))
+
 ## [0.57.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.56.0...@nanobpm/urban-0.57.0) (2026-08-18)
 
 

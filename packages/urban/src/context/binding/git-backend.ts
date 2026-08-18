@@ -39,20 +39,7 @@ const defaultGitRunner: GitRunner = async (args, cwd) => {
   }
 };
 
-async function isDir(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * True iff `path` exists (as any filesystem entry). Used to detect a git working
- * copy by its `.git` marker, which is a *directory* for a normal clone but a
- * *file* (pointing at the real gitdir) for a worktree or submodule — so a plain
- * directory check would wrongly treat a valid worktree as un-cloned.
- */
+/** True iff `path` exists as any filesystem entry (file, directory, or symlink). */
 async function pathExists(path: string): Promise<boolean> {
   try {
     await stat(path);
@@ -83,9 +70,10 @@ export class GitSubstrateBackend implements SubstrateBackend {
     const alreadyCloned = await pathExists(join(localPath, ".git"));
 
     if (!alreadyCloned) {
-      // A pre-existing, non-git directory at `localPath` would make `git clone`
-      // fail with an opaque wrapped error — detect it and report clearly.
-      if (await isDir(localPath)) {
+      // A pre-existing entry at `localPath` that is not a git working copy — a
+      // non-git directory, or a file/symlink — would make `git clone` fail with
+      // an opaque wrapped error. Detect any such entry and report it clearly.
+      if (await pathExists(localPath)) {
         throw new SubstrateResolveError(
           `substrate path already exists but is not a git working copy: ${localPath}`,
         );

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { isAbsolute, join, resolve as resolvePath } from "node:path";
+import { isAbsolute, join, dirname, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 import { ContextResolver, defaultContextCacheRoot } from "./resolver.ts";
 import type {
@@ -155,6 +155,26 @@ test("git backend fails clearly when localPath exists but is not a git working c
     const localPath = join(cacheRoot, identity.slug);
     await mkdir(localPath, { recursive: true });
     await writeFile(join(localPath, "stray.txt"), "not a clone\n");
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(resolver.resolve(binding), /not a git working copy/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend fails clearly when localPath exists but is a non-directory (file)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-file-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // Squat the target path with a plain file (not a directory, no `.git`).
+    // `git clone` into it would fail with an opaque wrapped error; the backend
+    // must detect any pre-existing non-git entry and report it clearly.
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(dirname(localPath), { recursive: true });
+    await writeFile(localPath, "i am a file, not a clone\n");
 
     const resolver = new ContextResolver({ cacheRoot });
     await assert.rejects(resolver.resolve(binding), /not a git working copy/);

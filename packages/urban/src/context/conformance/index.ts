@@ -35,9 +35,10 @@ export interface ConformanceCase {
 
 /**
  * The minimal validator contract the corpus tests. A conformant validator maps
- * an untrusted value to an accept/reject decision via `{ ok }`. Both
- * `validateMemoryRecord` (result form) and `isMemoryRecord` (boolean) can be
- * adapted to this shape — see {@link fromResultValidator}.
+ * an untrusted value to an accept/reject decision via `{ ok }`.
+ * `validateMemoryRecord` (result form) adapts to this shape via
+ * {@link fromResultValidator}; the boolean `isMemoryRecord` conforms by wrapping
+ * its result — `(input) => ({ ok: isMemoryRecord(input) })`.
  */
 export type ConformanceValidator = (input: unknown) => { readonly ok: boolean };
 

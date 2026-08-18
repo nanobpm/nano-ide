@@ -85,6 +85,23 @@ test("rejects drifted vocabulary on each controlled field", () => {
   assert.equal(validateMemoryRecord(base({ authority: "supreme" })).ok, false);
 });
 
+test("distinguishes wrong-type from drifted vocabulary on controlled fields", () => {
+  for (const field of ["scope", "mode", "provenance", "authority"]) {
+    const wrongType = validateMemoryRecord(base({ [field]: 42 }));
+    assert.equal(wrongType.ok, false);
+    if (!wrongType.ok) {
+      const err = wrongType.errors.find((e) => e.path === field);
+      assert.equal(err?.code, "wrong-type", `${field}: a non-string must report wrong-type, not invalid-vocabulary`);
+    }
+    const drifted = validateMemoryRecord(base({ [field]: "not-in-ladder" }));
+    assert.equal(drifted.ok, false);
+    if (!drifted.ok) {
+      const err = drifted.errors.find((e) => e.path === field);
+      assert.equal(err?.code, "invalid-vocabulary", `${field}: a drifted string must report invalid-vocabulary`);
+    }
+  }
+});
+
 test("rejects non-ISO timestamps but accepts offset zones", () => {
   assert.equal(validateMemoryRecord(base({ createdAt: "yesterday" })).ok, false);
   assert.equal(validateMemoryRecord(base({ createdAt: "2026-01-01" })).ok, false);

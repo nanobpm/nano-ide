@@ -149,6 +149,16 @@ function includes<T extends string>(vocabulary: readonly T[], v: unknown): v is 
   return typeof v === "string" && vocabulary.some((entry) => entry === v);
 }
 
+// Single source of truth for how a controlled-vocabulary field fails: absent is
+// `missing-field`, a non-string is `wrong-type` (so callers can tell a bad type
+// apart from a drifted value), and a string outside the ladder is
+// `invalid-vocabulary`. Shared by scope/mode/provenance/authority.
+function vocabularyCode(value: unknown): "missing-field" | "wrong-type" | "invalid-vocabulary" {
+  if (value === undefined) return "missing-field";
+  if (typeof value !== "string") return "wrong-type";
+  return "invalid-vocabulary";
+}
+
 function isIsoTimestamp(v: unknown): v is string {
   if (typeof v !== "string" || v.length === 0) return false;
   // Require a real, round-trippable ISO-8601 instant (date + time + zone).
@@ -301,19 +311,19 @@ export function validateMemoryRecord(input: unknown): ValidationResult {
 
   const scopeOk = includes(SCOPE_LADDER, scopeVal);
   if (!scopeOk) {
-    errors.push({ path: "scope", code: scopeVal === undefined ? "missing-field" : "invalid-vocabulary", message: `scope must be one of: ${SCOPE_LADDER.join(", ")}.` });
+    errors.push({ path: "scope", code: vocabularyCode(scopeVal), message: `scope must be one of: ${SCOPE_LADDER.join(", ")}.` });
   }
   const modeOk = includes(MEMORY_MODES, modeVal);
   if (!modeOk) {
-    errors.push({ path: "mode", code: modeVal === undefined ? "missing-field" : "invalid-vocabulary", message: `mode must be one of: ${MEMORY_MODES.join(", ")}.` });
+    errors.push({ path: "mode", code: vocabularyCode(modeVal), message: `mode must be one of: ${MEMORY_MODES.join(", ")}.` });
   }
   const provenanceOk = includes(PROVENANCES, provenanceVal);
   if (!provenanceOk) {
-    errors.push({ path: "provenance", code: provenanceVal === undefined ? "missing-field" : "invalid-vocabulary", message: `provenance must be one of: ${PROVENANCES.join(", ")}.` });
+    errors.push({ path: "provenance", code: vocabularyCode(provenanceVal), message: `provenance must be one of: ${PROVENANCES.join(", ")}.` });
   }
   const authorityOk = includes(AUTHORITIES, authorityVal);
   if (!authorityOk) {
-    errors.push({ path: "authority", code: authorityVal === undefined ? "missing-field" : "invalid-vocabulary", message: `authority must be one of: ${AUTHORITIES.join(", ")}.` });
+    errors.push({ path: "authority", code: vocabularyCode(authorityVal), message: `authority must be one of: ${AUTHORITIES.join(", ")}.` });
   }
 
   // Optional fields: reject wrong types, ignore when absent.

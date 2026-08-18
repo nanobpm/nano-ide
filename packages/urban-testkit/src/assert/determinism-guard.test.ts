@@ -22,11 +22,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-/** The directory holding the DSL implementation + this guard. Resolved from the
- *  module URL so it works identically under `node --test` and `deno test`. */
-const ASSERT_DIR = import.meta.dirname;
+/** The directory holding the DSL implementation + this guard. Derived from the
+ *  module URL via `fileURLToPath`/`dirname` (widely-supported ESM primitives)
+ *  rather than the Node-specific `import.meta.dirname`, so it works identically
+ *  under `node --test` and `deno test`. */
+const ASSERT_DIR = dirname(fileURLToPath(import.meta.url));
 
 /** The forbidden non-deterministic APIs, as they appear in code. Each is matched
  *  literally against comment-stripped source. */

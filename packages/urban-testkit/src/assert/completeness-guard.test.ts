@@ -134,8 +134,9 @@ async function makeFixture(): Promise<string> {
 
 async function withActiveApp(body: (app: TestApp) => Promise<void>): Promise<void> {
   const dir = await makeFixture();
-  const app = await bootTestApp(dir);
+  let app: TestApp | undefined;
   try {
+    app = await bootTestApp(dir);
     await app.engine.deployResources([
       { name: "park.bpmn", content: PARK_BPMN, contentType: "application/bpmn+xml" },
     ]);
@@ -143,7 +144,7 @@ async function withActiveApp(body: (app: TestApp) => Promise<void>): Promise<voi
     await app.engine.createInstance({ processDefinitionId: "park" });
     await body(app);
   } finally {
-    await app.stop();
+    if (app) await app.stop();
     await rm(dir, { recursive: true, force: true });
   }
 }

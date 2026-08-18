@@ -102,82 +102,85 @@ function withSnapshot(app: TestApp, snapshot: Record<string, unknown>): TestApp 
 
 test("instance.ts — every matcher's failure message is pinned", async () => {
   const dir = await makeFixture("CREATE TABLE marker (id INTEGER PRIMARY KEY);");
-  const app = await bootTestApp(dir);
   try {
-    const active: Record<string, unknown> = {
-      instances: [
-        {
-          key: "PI-1",
-          state: "Active",
-          processId: "order",
-          variables: { who: "world", count: 3 },
-          activeElements: [{ elementId: "work" }],
-        },
-      ],
-      elementStats: [{ elementId: "work", active: 1, completed: 0 }],
-    };
-    const completed: Record<string, unknown> = {
-      instances: [{ key: "PI-1", state: "Completed", processId: "order", variables: {} }],
-    };
-    const completedEl: Record<string, unknown> = {
-      instances: [{ key: "PI-1", state: "Completed", processId: "order", variables: {} }],
-      elementStats: [{ elementId: "work", active: 0, completed: 1 }],
-    };
-    const withIncident: Record<string, unknown> = {
-      instances: [{ key: "PI-1", state: "Active", processId: "order", variables: {} }],
-      incidents: [
-        { instanceKey: "PI-1", elementId: "work", kind: "JOB_NO_RETRIES", reason: "kaboom", key: "INC-1" },
-      ],
-    };
+    const app = await bootTestApp(dir);
+    try {
+      const active: Record<string, unknown> = {
+        instances: [
+          {
+            key: "PI-1",
+            state: "Active",
+            processId: "order",
+            variables: { who: "world", count: 3 },
+            activeElements: [{ elementId: "work" }],
+          },
+        ],
+        elementStats: [{ elementId: "work", active: 1, completed: 0 }],
+      };
+      const completed: Record<string, unknown> = {
+        instances: [{ key: "PI-1", state: "Completed", processId: "order", variables: {} }],
+      };
+      const completedEl: Record<string, unknown> = {
+        instances: [{ key: "PI-1", state: "Completed", processId: "order", variables: {} }],
+        elementStats: [{ elementId: "work", active: 0, completed: 1 }],
+      };
+      const withIncident: Record<string, unknown> = {
+        instances: [{ key: "PI-1", state: "Active", processId: "order", variables: {} }],
+        incidents: [
+          { instanceKey: "PI-1", elementId: "work", kind: "JOB_NO_RETRIES", reason: "kaboom", key: "INC-1" },
+        ],
+      };
 
-    const at = (snapshot: Record<string, unknown>) => assertThatInstance(withSnapshot(app, snapshot), "PI-1");
+      const at = (snapshot: Record<string, unknown>) => assertThatInstance(withSnapshot(app, snapshot), "PI-1");
 
-    assert.equal(
-      messageOf(() => at(completed).isActive()),
-      'Expected instance "PI-1" to be ACTIVE, but it is COMPLETED.\n  expected: "ACTIVE"\n  actual:   "COMPLETED"',
-    );
-    assert.equal(
-      messageOf(() => at(active).hasCompleted()),
-      'Expected instance "PI-1" to be COMPLETED, but it is ACTIVE.\n  expected: "COMPLETED"\n  actual:   "ACTIVE"',
-    );
-    assert.equal(
-      messageOf(() => at(active).isTerminated()),
-      'Expected instance "PI-1" to be TERMINATED, but it is ACTIVE.\n  expected: "TERMINATED"\n  actual:   "ACTIVE"',
-    );
-    assert.equal(
-      messageOf(() => at(active).hasActiveElement("ghost")),
-      'Expected instance "PI-1" to have active element(s) ["ghost"], but its active elements are ["work"].\n  expected: ["ghost"]\n  actual:   ["work"]',
-    );
-    assert.equal(
-      messageOf(() => at(active).hasActiveElements("work", "ghost")),
-      'Expected instance "PI-1" to have active element(s) ["ghost"], but its active elements are ["work"].\n  expected: ["work", "ghost"]\n  actual:   ["work"]',
-    );
-    assert.equal(
-      messageOf(() => at(completedEl).hasCompletedElements("ghost")),
-      'Expected instance "PI-1" to have completed element(s) ["ghost"], but its completed elements are ["work"].\n  expected: ["ghost"]\n  actual:   ["work"]',
-    );
-    assert.equal(
-      messageOf(() => at(active).hasVariable("who", "mars")),
-      'Variable "who" on instance "PI-1" does not equal the expected value.\n  expected: "mars"\n  actual:   "world"',
-    );
-    assert.equal(
-      messageOf(() => at(active).hasVariables({ count: 99 })),
-      'Instance "PI-1" variables do not contain the expected subset.\n  expected: {"count": 99}\n  actual:   {"count": 3, "who": "world"}',
-    );
-    assert.equal(
-      messageOf(() => at(active).hasNoVariable("who")),
-      'Expected instance "PI-1" to have NO variable "who", but it is present with value "world".',
-    );
-    assert.equal(
-      messageOf(() => at(withIncident).hasIncident({ elementId: "s" })),
-      'Expected instance "PI-1" to have an incident matching {"elementId": "s"}, but its incidents are [{ elementId: "work", kind: "JOB_NO_RETRIES", reason: "kaboom" }].',
-    );
-    assert.equal(
-      messageOf(() => at(withIncident).hasNoIncident()),
-      'Expected instance "PI-1" to have no incidents, but found [{ elementId: "work", kind: "JOB_NO_RETRIES", reason: "kaboom" }].',
-    );
+      assert.equal(
+        messageOf(() => at(completed).isActive()),
+        'Expected instance "PI-1" to be ACTIVE, but it is COMPLETED.\n  expected: "ACTIVE"\n  actual:   "COMPLETED"',
+      );
+      assert.equal(
+        messageOf(() => at(active).hasCompleted()),
+        'Expected instance "PI-1" to be COMPLETED, but it is ACTIVE.\n  expected: "COMPLETED"\n  actual:   "ACTIVE"',
+      );
+      assert.equal(
+        messageOf(() => at(active).isTerminated()),
+        'Expected instance "PI-1" to be TERMINATED, but it is ACTIVE.\n  expected: "TERMINATED"\n  actual:   "ACTIVE"',
+      );
+      assert.equal(
+        messageOf(() => at(active).hasActiveElement("ghost")),
+        'Expected instance "PI-1" to have active element(s) ["ghost"], but its active elements are ["work"].\n  expected: ["ghost"]\n  actual:   ["work"]',
+      );
+      assert.equal(
+        messageOf(() => at(active).hasActiveElements("work", "ghost")),
+        'Expected instance "PI-1" to have active element(s) ["ghost"], but its active elements are ["work"].\n  expected: ["work", "ghost"]\n  actual:   ["work"]',
+      );
+      assert.equal(
+        messageOf(() => at(completedEl).hasCompletedElements("ghost")),
+        'Expected instance "PI-1" to have completed element(s) ["ghost"], but its completed elements are ["work"].\n  expected: ["ghost"]\n  actual:   ["work"]',
+      );
+      assert.equal(
+        messageOf(() => at(active).hasVariable("who", "mars")),
+        'Variable "who" on instance "PI-1" does not equal the expected value.\n  expected: "mars"\n  actual:   "world"',
+      );
+      assert.equal(
+        messageOf(() => at(active).hasVariables({ count: 99 })),
+        'Instance "PI-1" variables do not contain the expected subset.\n  expected: {"count": 99}\n  actual:   {"count": 3, "who": "world"}',
+      );
+      assert.equal(
+        messageOf(() => at(active).hasNoVariable("who")),
+        'Expected instance "PI-1" to have NO variable "who", but it is present with value "world".',
+      );
+      assert.equal(
+        messageOf(() => at(withIncident).hasIncident({ elementId: "s" })),
+        'Expected instance "PI-1" to have an incident matching {"elementId": "s"}, but its incidents are [{ elementId: "work", kind: "JOB_NO_RETRIES", reason: "kaboom" }].',
+      );
+      assert.equal(
+        messageOf(() => at(withIncident).hasNoIncident()),
+        'Expected instance "PI-1" to have no incidents, but found [{ elementId: "work", kind: "JOB_NO_RETRIES", reason: "kaboom" }].',
+      );
+    } finally {
+      await app.stop();
+    }
   } finally {
-    await app.stop();
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -186,32 +189,35 @@ test("instance.ts — every matcher's failure message is pinned", async () => {
 
 test("db.ts — every matcher's failure message is pinned", async () => {
   const dir = await makeFixture("CREATE TABLE orders (id INTEGER PRIMARY KEY, item TEXT, status TEXT);");
-  const app = await bootTestApp(dir);
   try {
-    const orders = app.db.table<{ id: number; item: string; status: string }>("orders");
-    await orders.insert({ id: 1, item: "widget", status: "packed" });
-    await orders.insert({ id: 2, item: "gadget", status: "active" });
+    const app = await bootTestApp(dir);
+    try {
+      const orders = app.db.table<{ id: number; item: string; status: string }>("orders");
+      await orders.insert({ id: 1, item: "widget", status: "packed" });
+      await orders.insert({ id: 2, item: "gadget", status: "active" });
 
-    assert.equal(
-      await messageOfAsync(() => assertThatDb(app).table("orders").hasRow({ item: "widget", status: "active" })),
-      'assertThatDb().table("orders").hasRow: no row matches the expected subset (2 row(s) in the table)\n' +
-        '  expected: {"item": "widget", "status": "active"}\n' +
-        '  actual:   [{"id": 1, "item": "widget", "status": "packed"}, {"id": 2, "item": "gadget", "status": "active"}]',
-    );
-    assert.equal(
-      await messageOfAsync(() => assertThatDb(app).table("orders").rowCount(5)),
-      'assertThatDb().table("orders").rowCount: expected 5 row(s) but found 2\n' +
-        '  rows: [{"id": 1, "item": "widget", "status": "packed"}, {"id": 2, "item": "gadget", "status": "active"}]\n' +
-        "  expected: 5\n  actual:   2",
-    );
-    assert.equal(
-      await messageOfAsync(() => assertThatDb(app).table("orders").isEmpty()),
-      'assertThatDb().table("orders").isEmpty: expected no rows but found 2\n' +
-        '  rows: [{"id": 1, "item": "widget", "status": "packed"}, {"id": 2, "item": "gadget", "status": "active"}]\n' +
-        "  expected: 0\n  actual:   2",
-    );
+      assert.equal(
+        await messageOfAsync(() => assertThatDb(app).table("orders").hasRow({ item: "widget", status: "active" })),
+        'assertThatDb().table("orders").hasRow: no row matches the expected subset (2 row(s) in the table)\n' +
+          '  expected: {"item": "widget", "status": "active"}\n' +
+          '  actual:   [{"id": 1, "item": "widget", "status": "packed"}, {"id": 2, "item": "gadget", "status": "active"}]',
+      );
+      assert.equal(
+        await messageOfAsync(() => assertThatDb(app).table("orders").rowCount(5)),
+        'assertThatDb().table("orders").rowCount: expected 5 row(s) but found 2\n' +
+          '  rows: [{"id": 1, "item": "widget", "status": "packed"}, {"id": 2, "item": "gadget", "status": "active"}]\n' +
+          "  expected: 5\n  actual:   2",
+      );
+      assert.equal(
+        await messageOfAsync(() => assertThatDb(app).table("orders").isEmpty()),
+        'assertThatDb().table("orders").isEmpty: expected no rows but found 2\n' +
+          '  rows: [{"id": 1, "item": "widget", "status": "packed"}, {"id": 2, "item": "gadget", "status": "active"}]\n' +
+          "  expected: 0\n  actual:   2",
+      );
+    } finally {
+      await app.stop();
+    }
   } finally {
-    await app.stop();
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -268,45 +274,48 @@ function normaliseKeys(message: string, pik: string, utk: string): string {
 
 test("user-task.ts — every matcher's failure message is pinned", async () => {
   const dir = await makeFixture("CREATE TABLE marker (id INTEGER PRIMARY KEY);");
-  const app = await bootTestApp(dir);
   try {
-    const { processInstanceKey: pik } = await app.engine.createInstance({ processDefinitionId: "review" });
-    const open = await app.engine.searchUserTasks({ processInstanceKey: pik, state: "CREATED" });
-    assert.equal(open.length, 1, "fixture must park exactly one CREATED user task");
-    const utk = open[0].userTaskKey;
-    const sel = { instance: pik, elementId: "approve" };
-    const norm = (message: string) => normaliseKeys(message, pik, utk);
+    const app = await bootTestApp(dir);
+    try {
+      const { processInstanceKey: pik } = await app.engine.createInstance({ processDefinitionId: "review" });
+      const open = await app.engine.searchUserTasks({ processInstanceKey: pik, state: "CREATED" });
+      assert.equal(open.length, 1, "fixture must park exactly one CREATED user task");
+      const utk = open[0].userTaskKey;
+      const sel = { instance: pik, elementId: "approve" };
+      const norm = (message: string) => normaliseKeys(message, pik, utk);
 
-    // While the task is open (CREATED): isCompleted / hasAssignee / hasCandidateGroup fail.
-    assert.equal(
-      norm(await messageOfAsync(() => assertThatUserTask(app, sel).isCompleted())),
-      'Expected a user task matching instance "<PIK>" / elementId "approve" to be COMPLETED, but none is. ' +
-        'matching user tasks: [{ userTaskKey: "<UTK>", elementId: "approve", state: CREATED }].',
-    );
-    assert.equal(
-      norm(await messageOfAsync(() => assertThatUserTask(app, sel).hasAssignee("bob"))),
-      'Expected a user task matching instance "<PIK>" / elementId "approve" assigned to "bob", but no ' +
-        "matching task carries that assignee (the read model surfaces assignee only through its filter, so " +
-        "the actual assignee value is not projected on the row). " +
-        'matching user tasks: [{ userTaskKey: "<UTK>", elementId: "approve", state: CREATED }].',
-    );
-    assert.equal(
-      norm(await messageOfAsync(() => assertThatUserTask(app, sel).hasCandidateGroup("nope"))),
-      'Expected a user task matching instance "<PIK>" / elementId "approve" offering candidate group "nope", ' +
-        "but no matching task offers it (the read model surfaces candidate groups only through its filter, so " +
-        "the actual groups are not projected on the row). " +
-        'matching user tasks: [{ userTaskKey: "<UTK>", elementId: "approve", state: CREATED }].',
-    );
+      // While the task is open (CREATED): isCompleted / hasAssignee / hasCandidateGroup fail.
+      assert.equal(
+        norm(await messageOfAsync(() => assertThatUserTask(app, sel).isCompleted())),
+        'Expected a user task matching instance "<PIK>" / elementId "approve" to be COMPLETED, but none is. ' +
+          'matching user tasks: [{ userTaskKey: "<UTK>", elementId: "approve", state: CREATED }].',
+      );
+      assert.equal(
+        norm(await messageOfAsync(() => assertThatUserTask(app, sel).hasAssignee("bob"))),
+        'Expected a user task matching instance "<PIK>" / elementId "approve" assigned to "bob", but no ' +
+          "matching task carries that assignee (the read model surfaces assignee only through its filter, so " +
+          "the actual assignee value is not projected on the row). " +
+          'matching user tasks: [{ userTaskKey: "<UTK>", elementId: "approve", state: CREATED }].',
+      );
+      assert.equal(
+        norm(await messageOfAsync(() => assertThatUserTask(app, sel).hasCandidateGroup("nope"))),
+        'Expected a user task matching instance "<PIK>" / elementId "approve" offering candidate group "nope", ' +
+          "but no matching task offers it (the read model surfaces candidate groups only through its filter, so " +
+          "the actual groups are not projected on the row). " +
+          'matching user tasks: [{ userTaskKey: "<UTK>", elementId: "approve", state: CREATED }].',
+      );
 
-    // Complete the task, then isCreated fails naming the now-COMPLETED task.
-    await app.engine.completeUserTask(utk);
-    assert.equal(
-      norm(await messageOfAsync(() => assertThatUserTask(app, sel).isCreated())),
-      'Expected a user task matching instance "<PIK>" / elementId "approve" to be CREATED (open), but none ' +
-        'is open. matching user tasks: [{ userTaskKey: "<UTK>", elementId: "approve", state: COMPLETED }].',
-    );
+      // Complete the task, then isCreated fails naming the now-COMPLETED task.
+      await app.engine.completeUserTask(utk);
+      assert.equal(
+        norm(await messageOfAsync(() => assertThatUserTask(app, sel).isCreated())),
+        'Expected a user task matching instance "<PIK>" / elementId "approve" to be CREATED (open), but none ' +
+          'is open. matching user tasks: [{ userTaskKey: "<UTK>", elementId: "approve", state: COMPLETED }].',
+      );
+    } finally {
+      await app.stop();
+    }
   } finally {
-    await app.stop();
     await rm(dir, { recursive: true, force: true });
   }
 });

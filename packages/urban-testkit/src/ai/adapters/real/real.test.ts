@@ -26,7 +26,7 @@ import {
   HostedEmbeddingAdapter,
   type HostedProviderConfig,
 } from "./hosted.ts";
-import { LocalEmbeddingAdapter } from "./local.ts";
+import { LocalChatModelAdapter, LocalEmbeddingAdapter } from "./local.ts";
 import { readEnvVar } from "./env.ts";
 
 // Precondition: the whole S4 default-path contract assumes the LIVE opt-in is OFF. If this
@@ -168,6 +168,56 @@ test("LocalEmbeddingAdapter.embed rejects a pipeline vector with a non-finite va
   });
   const adapter = new LocalEmbeddingAdapter(pipeline, { embeddingDimension: 3 });
   await assert.rejects(adapter.embed("hi"), /non-finite value/);
+});
+
+test("LocalChatModelAdapter.chat forwards ChatInput.system as a prompt preamble (parity with hosted)", async () => {
+  // Regression guard (suppressed advisory local.ts:161): the text2text pipeline has no
+  // system-message channel, so an absent fold would silently drop the caller's `system`
+  // instruction and diverge from the hosted adapter. Assert it is prepended to the prompt.
+  const seen: string[] = [];
+  const textPipeline = async (input: unknown, _options?: Record<string, unknown>) => {
+    seen.push(String(input));
+    return { generated_text: "PASS" };
+  };
+  const failVision = async () => {
+    throw new Error("vision pipeline must not be called on a text-only chat");
+  };
+  const adapter = new LocalChatModelAdapter(textPipeline, failVision);
+  const result = await adapter.chat({ prompt: "judge this", system: "be terse" });
+  assert.deepEqual(result, { text: "PASS" });
+  assert.deepEqual(seen, ["be terse\n\njudge this"]);
+});
+
+test("LocalChatModelAdapter.chat passes the bare prompt when no system preamble is given", async () => {
+  const seen: string[] = [];
+  const textPipeline = async (input: unknown, _options?: Record<string, unknown>) => {
+    seen.push(String(input));
+    return { generated_text: "PASS" };
+  };
+  const failVision = async () => {
+    throw new Error("vision pipeline must not be called on a text-only chat");
+  };
+  const adapter = new LocalChatModelAdapter(textPipeline, failVision);
+  await adapter.chat({ prompt: "judge this" });
+  assert.deepEqual(seen, ["judge this"]);
+});
+
+test("LocalChatModelAdapter.chat folds the system preamble ahead of the vision-composed prompt", async () => {
+  const seen: string[] = [];
+  const textPipeline = async (input: unknown, _options?: Record<string, unknown>) => {
+    seen.push(String(input));
+    return { generated_text: "PASS" };
+  };
+  const visionPipeline = async (_input: unknown, _options?: Record<string, unknown>) => ({
+    generated_text: "a cat",
+  });
+  const adapter = new LocalChatModelAdapter(textPipeline, visionPipeline);
+  await adapter.chat({
+    prompt: "describe",
+    system: "be terse",
+    image: { kind: "image", mediaType: "image/png", data: "AAAA" },
+  });
+  assert.deepEqual(seen, ["be terse\n\ndescribe\n\nIMAGE: a cat"]);
 });
 
 test("readEnvVar treats a Deno --allow-env denial as unset (safe by default, never throws)", () => {

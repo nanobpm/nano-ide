@@ -106,6 +106,17 @@ function extractGeneratedText(output: unknown): string {
   throw new Error("unexpected generation output (missing `generated_text`)");
 }
 
+/**
+ * Fold the optional {@link ChatInput.system} preamble into the flat prompt string. The
+ * text2text pipeline has no message-role channel (unlike the hosted adapter's `system`
+ * message), so an absent fold would silently drop the caller's system instruction and make
+ * the local and hosted backends diverge for the same `ChatInput`. Prepending it keeps the
+ * two backends behaviourally aligned.
+ */
+function withSystemPreamble(system: string | undefined, prompt: string): string {
+  return system === undefined ? prompt : `${system}\n\n${prompt}`;
+}
+
 /** Real embedding adapter over an on-device feature-extraction pipeline. */
 export class LocalEmbeddingAdapter implements EmbeddingModelAdapter {
   readonly modelId: string;
@@ -153,10 +164,12 @@ export class LocalChatModelAdapter implements ChatModelAdapter {
         `data:${input.image.mediaType};base64,${input.image.data}`,
       );
       const captionText = extractGeneratedText(caption);
-      const output = await this.#textPipeline(`${input.prompt}\n\nIMAGE: ${captionText}`);
+      const output = await this.#textPipeline(
+        withSystemPreamble(input.system, `${input.prompt}\n\nIMAGE: ${captionText}`),
+      );
       return { text: extractGeneratedText(output) };
     }
-    const output = await this.#textPipeline(input.prompt);
+    const output = await this.#textPipeline(withSystemPreamble(input.system, input.prompt));
     return { text: extractGeneratedText(output) };
   }
 }

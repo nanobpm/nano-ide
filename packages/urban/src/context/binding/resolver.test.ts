@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -70,7 +70,88 @@ test("defaultContextCacheRoot honours URBAN_CONTEXT_CACHE_DIR then XDG", () => {
   );
 });
 
+/** A backend whose `materialise` blocks until released — lets tests observe how
+ * many materialisations run concurrently for one identity. */
+class GatedBackend implements SubstrateBackend {
+  calls = 0;
+  concurrent = 0;
+  maxConcurrent = 0;
+  #release!: () => void;
+  readonly gate = new Promise<void>((resolve) => {
+    this.#release = resolve;
+  });
+  release(): void {
+    this.#release();
+  }
+  async materialise(
+    identity: ContextIdentity,
+    options: SubstrateResolveOptions,
+  ): Promise<ResolvedContextHandle> {
+    this.calls += 1;
+    this.concurrent += 1;
+    this.maxConcurrent = Math.max(this.maxConcurrent, this.concurrent);
+    await this.gate;
+    this.concurrent -= 1;
+    return {
+      identity,
+      localPath: options.localPath,
+      repo: identity.repo,
+      ref: identity.ref,
+    };
+  }
+}
+
+test("concurrent resolves coalesce onto one in-flight materialisation, even with refresh:true", async () => {
+  const backend = new GatedBackend();
+  const resolver = new ContextResolver({ cacheRoot: "/tmp/urban-cache", backend });
+  const binding = { repo: "owner/name", ref: "main" };
+  // Fire a default resolve and a refresh:true resolve while the first is still
+  // in flight — they must share the single materialisation, never double-clone.
+  const p1 = resolver.resolve(binding);
+  const p2 = resolver.resolve(binding, { refresh: true });
+  backend.release();
+  const [a, b] = await Promise.all([p1, p2]);
+  assert.equal(backend.calls, 1, "materialise ran exactly once");
+  assert.equal(backend.maxConcurrent, 1, "never two materialisations in flight");
+  assert.equal(a, b, "both resolves share the same handle");
+});
+
+test("refresh:true after a settled resolution re-materialises", async () => {
+  const backend = new RecordingBackend();
+  const resolver = new ContextResolver({ cacheRoot: "/tmp/urban-cache", backend });
+  const binding = { repo: "owner/name", ref: "main" };
+  await resolver.resolve(binding);
+  await resolver.resolve(binding, { refresh: true });
+  assert.equal(backend.calls.length, 2, "explicit refresh forces a fresh materialise");
+});
+
 // --- Real git resolution (no network: a local temp repo is the substrate) ---
+
+test("git backend fails clearly when localPath exists but is not a git working copy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-nongit-"));
+  try {
+    const origin = join(root, "origin");
+    const cacheRoot = join(root, "cache");
+    await execFileAsync("git", ["init", "-b", "main", origin]);
+    await git(origin, "config", "user.email", "t@example.com");
+    await git(origin, "config", "user.name", "Test");
+    await writeFile(join(origin, "a.txt"), "x\n");
+    await git(origin, "add", "a.txt");
+    await git(origin, "commit", "-m", "c1");
+
+    const binding = { repo: origin, ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // Squat the target path with a non-git directory.
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    await writeFile(join(localPath, "stray.txt"), "not a clone\n");
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(resolver.resolve(binding), /not a git working copy/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd });

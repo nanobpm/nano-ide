@@ -68,8 +68,17 @@ export class GitSubstrateBackend implements SubstrateBackend {
     const alreadyCloned = await isDir(join(localPath, ".git"));
 
     if (!alreadyCloned) {
+      // A pre-existing, non-git directory at `localPath` would make `git clone`
+      // fail with an opaque wrapped error — detect it and report clearly.
+      if (await isDir(localPath)) {
+        throw new SubstrateResolveError(
+          `substrate path already exists but is not a git working copy: ${localPath}`,
+        );
+      }
       await mkdir(dirname(localPath), { recursive: true });
-      await this.#git(["clone", identity.repo, localPath]);
+      // `--` separates options from operands so a `repo` starting with `-`
+      // (untrusted manifest input) can't be parsed as a git option.
+      await this.#git(["clone", "--", identity.repo, localPath]);
       await this.#pin(localPath, identity.ref);
     } else if (refresh) {
       await this.#git(["fetch", "--tags", "--prune", "--force", "origin"], localPath);
@@ -89,7 +98,10 @@ export class GitSubstrateBackend implements SubstrateBackend {
     if (remoteBranch) {
       await this.#git(["checkout", "--force", "-B", ref, `origin/${ref}`], cwd);
     } else {
-      await this.#git(["checkout", "--force", ref], cwd);
+      // `--detach` pins to the exact commit rather than attaching to any local
+      // branch that happens to share `ref`'s name; `--end-of-options` stops an
+      // option-style `ref` from being parsed as a git flag.
+      await this.#git(["checkout", "--force", "--detach", "--end-of-options", ref], cwd);
     }
   }
 

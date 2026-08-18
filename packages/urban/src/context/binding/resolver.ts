@@ -35,8 +35,16 @@ export interface ContextResolverOptions {
 /** Per-resolution overrides. */
 export interface ResolveOptions {
   /**
-   * When `false`, reuse an existing on-disk working copy without fetching.
-   * Defaults to `true` (clone on first use, refresh thereafter).
+   * Controls whether a re-resolution re-fetches the substrate. Note the
+   * {@link ContextResolver} memoises per identity: once an identity has resolved,
+   * repeat resolves return the cached handle and do **not** re-fetch unless you
+   * explicitly pass `refresh: true`, which forces a fresh materialisation (a
+   * fetch + re-pin on the backend). While a materialisation is still in flight,
+   * concurrent resolves — including `refresh: true` — coalesce onto it rather
+   * than starting a second one. The backend's own default (fetch on an existing
+   * clone) therefore only applies the first time an identity is materialised or
+   * when `refresh: true` is passed. Defaults to `undefined` (reuse the memoised
+   * handle).
    */
   readonly refresh?: boolean;
 }
@@ -49,9 +57,19 @@ export interface ResolveOptions {
 export function defaultContextCacheRoot(env: NodeJS.ProcessEnv = process.env): string {
   if (env.URBAN_CONTEXT_CACHE_DIR) return env.URBAN_CONTEXT_CACHE_DIR;
   if (env.XDG_CACHE_HOME) return join(env.XDG_CACHE_HOME, "urban", "context");
-  const home = homedir();
+  const home = safeHomedir();
   if (home) return join(home, ".cache", "urban", "context");
   return join(tmpdir(), "urban", "context");
+}
+
+/** `os.homedir()`, but tolerant: returns `undefined` if the home dir can't be
+ * determined (Node can throw here) so callers fall back to the temp dir. */
+function safeHomedir(): string | undefined {
+  try {
+    return homedir() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -62,7 +80,7 @@ export function defaultContextCacheRoot(env: NodeJS.ProcessEnv = process.env): s
 export class ContextResolver {
   readonly #cacheRoot: string;
   readonly #backend: SubstrateBackend;
-  readonly #inflight = new Map<string, Promise<ResolvedContextHandle>>();
+  readonly #inflight = new Map<string, { promise: Promise<ResolvedContextHandle>; settled: boolean }>();
 
   constructor(options: ContextResolverOptions = {}) {
     this.#cacheRoot = options.cacheRoot ?? defaultContextCacheRoot();
@@ -88,18 +106,38 @@ export class ContextResolver {
     const localPath = join(this.#cacheRoot, identity.slug);
 
     // Shared-on-same-name: concurrent or repeated resolves of one identity share
-    // a single in-flight materialisation and its resulting handle.
+    // a single materialisation. Coalesce onto an in-flight one regardless of
+    // `refresh` — it is already producing a fresh working copy, so starting a
+    // second `materialise()` would double-clone into the same `localPath` and
+    // break the single-in-flight guarantee. Only re-materialise once the prior
+    // resolution has settled AND the caller explicitly asked to `refresh`.
     const existing = this.#inflight.get(identity.key);
-    if (existing && options.refresh !== true) return existing;
+    if (existing && (!existing.settled || options.refresh !== true)) {
+      return existing.promise;
+    }
 
-    const pending = this.#backend
-      .materialise(identity, { localPath, refresh: options.refresh })
-      .catch((error) => {
-        this.#inflight.delete(identity.key);
-        throw error;
-      });
-    this.#inflight.set(identity.key, pending);
-    return pending;
+    const record: { promise: Promise<ResolvedContextHandle>; settled: boolean } = {
+      promise: this.#backend
+        .materialise(identity, { localPath, refresh: options.refresh })
+        .catch((error) => {
+          if (this.#inflight.get(identity.key) === record) {
+            this.#inflight.delete(identity.key);
+          }
+          throw error;
+        }),
+      settled: false,
+    };
+    this.#inflight.set(identity.key, record);
+    record.promise.then(
+      () => {
+        record.settled = true;
+      },
+      () => {
+        // Rejection is surfaced to the caller via the returned promise; the map
+        // entry is already removed in the catch above.
+      },
+    );
+    return record.promise;
   }
 }
 

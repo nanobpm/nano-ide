@@ -381,3 +381,36 @@ test("mock: failWith clamps retries to a finite, non-negative integer (negative,
   assert.equal(retriesFor(2.7), 2, "a fractional retry count truncates to an integer");
   assert.equal(retriesFor(4), 4, "a valid non-negative integer is preserved");
 });
+
+test("mock: a second consecutive when(...) with no intervening outcome fails fast", () => {
+  const armed = new MockWorkerBuilder(() => {});
+  assert.throws(
+    () => armed.when(() => true).when(() => false),
+    /when\(\)/i,
+    "overwriting an already-armed predicate silently is a footgun — the second when() must throw",
+  );
+  // A when() consumed by an outcome re-arms cleanly for the next clause.
+  const chained = new MockWorkerBuilder(() => {});
+  assert.doesNotThrow(
+    () =>
+      chained
+        .when(() => true)
+        .completeWith({ ok: 1 })
+        .when(() => false)
+        .completeWith({ ok: 2 }),
+    "when()->outcome->when()->outcome is the supported chaining shape",
+  );
+});
+
+test("mock: clearWorkerMock clears a still-held builder's state, not just the registry entry", async () => {
+  await withEngine({ name: "wait.bpmn", xml: WAIT_BPMN }, async (engine) => {
+    const mock = engine.mockWorker("work").completeWith({ handledBy: "mock" });
+    assert.equal(mock.hasClauses, true, "the builder is armed while mocked");
+    engine.clearWorkerMock("work");
+    assert.equal(
+      mock.hasClauses,
+      false,
+      "clearWorkerMock must also clear a caller-held builder's clauses (equivalent to reset())",
+    );
+  });
+});

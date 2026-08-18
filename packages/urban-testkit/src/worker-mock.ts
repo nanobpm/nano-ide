@@ -133,9 +133,18 @@ export class MockWorkerBuilder {
    * pure and synchronous over the {@link EngineJob} (its `jobType`, `variables`,
    * `elementId`, keys) — they are evaluated on every matching dispatch under the
    * virtual clock, so a side-effecting or async predicate would break determinism.
-   * Evaluated in registration order, first match wins (see class docs).
+   * Evaluated in registration order, first match wins (see class docs). Throws if a
+   * predicate is already armed (two consecutive `when(...)` calls with no intervening
+   * outcome) so silently dropping the first guard fails fast instead.
    */
   when(predicate: JobPredicate): this {
+    if (this.#pendingPredicate !== undefined) {
+      throw new Error(
+        "MockWorkerBuilder.when(): a predicate is already armed for the next outcome. Add an " +
+          "outcome (completeWith / failWith / throwBpmnError / raiseIncident) before calling when() " +
+          "again — chaining two when(...) calls would silently drop the first predicate.",
+      );
+    }
     this.#pendingPredicate = predicate;
     return this;
   }

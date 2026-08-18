@@ -487,9 +487,14 @@ export class WasmEngineClient implements EngineClient {
     return builder;
   }
 
-  /** Remove any job-worker mock for `taskType`, restoring its real handler. No-op if unmocked. */
+  /**
+   * Remove any job-worker mock for `taskType`, restoring its real handler. No-op if
+   * unmocked. Delegates to the builder's {@link MockWorkerBuilder.reset} so a test that
+   * still holds the builder reference sees its clauses and pending predicate cleared too
+   * — not just the registry entry dropped.
+   */
   clearWorkerMock(taskType: string): void {
-    this.#workerMocks.delete(taskType);
+    this.#workerMocks.get(taskType)?.reset();
   }
 
   /** Advance the virtual clock by `ms`, firing due timers, then drain workers so

@@ -22,6 +22,26 @@ test("formatValue handles primitives, arrays, null/undefined, and cycles", () =>
   assert.equal(formatValue(cyclic), '{"self": [Circular]}');
 });
 
+test("formatValue renders exotic objects deterministically, not as bare records", () => {
+  // A `Date` must not render as `{}` and must be timezone/locale-independent.
+  assert.equal(formatValue(new Date("2020-01-02T03:04:05.678Z")), "2020-01-02T03:04:05.678Z");
+  assert.equal(formatValue(new Date(Number.NaN)), "Invalid Date");
+  // An `Error` must keep its name and message rather than collapsing to `{}`.
+  assert.equal(formatValue(new TypeError("boom")), "[TypeError: boom]");
+});
+
+test("deepEqual/deepSubset do not treat distinct exotic objects as equal records", () => {
+  // Two different instants have zero enumerable own keys; a plain-object predicate
+  // would wrongly report them equal. They must compare by identity here.
+  const a = new Date("2020-01-01T00:00:00.000Z");
+  const b = new Date("2021-01-01T00:00:00.000Z");
+  assert.ok(!deepEqual(a, b));
+  assert.ok(deepEqual(a, a));
+  assert.ok(!deepEqual(new Error("x"), new Error("y")));
+  assert.ok(!deepSubset({ at: a }, { at: b }));
+  assert.ok(deepSubset({ at: a }, { at: a }));
+});
+
 test("renderDiff names expected then actual", () => {
   assert.equal(renderDiff(1, 2), "  expected: 2\n  actual:   1");
 });

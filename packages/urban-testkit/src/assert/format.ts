@@ -10,9 +10,16 @@
 
 import { AssertionError } from "node:assert";
 
-/** Narrow an untyped JSON value to a plain object (not `null`, not an array). */
+/** Narrow an untyped JSON value to a *plain* object — one whose prototype is
+ *  `Object.prototype` or `null`. Exotic objects (`Date`, `Error`, `Map`, `Set`,
+ *  class instances, …) are deliberately excluded: treating them as bare records
+ *  would make `formatValue` render them as `{}` and make `deepEqual`/`deepSubset`
+ *  report two distinct instances (e.g. different `Date`s) as equal because both
+ *  expose zero enumerable own keys. */
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 /** Render a value as a stable, human-readable string. Object keys are sorted so
@@ -56,6 +63,16 @@ function stringify(value: unknown, seen: Set<object>): string {
       .join(", ");
     seen.delete(value);
     return `{${body}}`;
+  }
+  // Non-plain objects (`Date`, `Error`, …) would otherwise fall to `String(value)`,
+  // which is locale/timezone-dependent for `Date` and drops the message for `Error`.
+  // Render the common ones deterministically so a failure message stays a pure
+  // function of its inputs.
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? "Invalid Date" : value.toISOString();
+  }
+  if (value instanceof Error) {
+    return `[${value.name}: ${value.message}]`;
   }
   return String(value);
 }

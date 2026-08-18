@@ -1,5 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
 import type { EngineClient, HttpRequest, HttpResponse } from "../host.ts";
 import { makeRouter } from "../router.ts";
@@ -1493,4 +1497,62 @@ test("runtime RENDERERS cover exactly the shared PAGE_NODE_TYPES registry", asyn
     [...PAGE_NODE_TYPES].sort(),
     "runtime RENDERERS keys must equal the shared PAGE_NODE_TYPES registry",
   );
+});
+
+function hasStderr(err: unknown): err is { stderr: unknown } {
+  return typeof err === "object" && err !== null && "stderr" in err;
+}
+
+// Run `node --check` on a source string by writing it to a temp `.mjs` module and
+// invoking a child `node` process. Returns the check outcome: `ok` on exit 0, or the
+// captured stderr diagnostic when node rejects the module's syntax. This is the whole
+// CI guard — a stray brace / bad token in the served runtime becomes a failing test
+// here instead of a blank page in a browser that loads `/app/runtime.js`.
+function nodeCheck(source: string): { ok: boolean; stderr: string } {
+  const dir = mkdtempSync(join(tmpdir(), "urban-runtime-check-"));
+  const file = join(dir, "runtime.mjs");
+  try {
+    writeFileSync(file, source, "utf8");
+    // Spawn the real `node` binary explicitly. `process.execPath` points at the host
+    // runtime — which under `deno test` is the `deno` binary, whose `--check` runs the
+    // module instead of syntax-only parsing (blowing up on `document`). This guard is
+    // specifically `node --check`, so it must invoke `node` under every test runner.
+    execFileSync("node", ["--check", file], { stdio: "pipe" });
+    return { ok: true, stderr: "" };
+  } catch (err) {
+    const stderr = hasStderr(err) ? String(err.stderr ?? "") : String(err);
+    return { ok: false, stderr };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("the served runtime module passes `node --check` (no syntax errors)", async () => {
+  // The browser runtime is authored as a ~99 KB `String.raw` blob (RENDERER_JS) that
+  // is never type-checked, linted, or otherwise parsed at build time — a stray brace or
+  // bad token surfaces only when a browser loads `/app/runtime.js` and the module fails
+  // to evaluate, silently breaking every page action. This guard serves the module
+  // exactly as production does and runs `node --check` on it, so a syntax error fails CI
+  // instead of the browser. Interim step toward #291 (the full architectural fix).
+  const res = await dispatch("GET", "/app/runtime.js");
+  const source = res.body ?? "";
+  assert.ok(source.length > 0, "the runtime module must be served with a body");
+  const result = nodeCheck(source);
+  assert.ok(
+    result.ok,
+    `served runtime module has a syntax error (node --check):\n${result.stderr}`,
+  );
+});
+
+test("the syntax guard is red/green: an injected syntax error fails `node --check`", async () => {
+  // Prove the guard actually bites — a guard that can't fail is worthless. We take the
+  // real served module and splice in a deliberate syntax error (an unterminated function
+  // declaration), then assert `node --check` rejects it. This pins the guard against a
+  // future refactor that accidentally makes nodeCheck always pass (e.g. swallowing the
+  // child's non-zero exit), which would let a broken RENDERER_JS sail through CI.
+  const res = await dispatch("GET", "/app/runtime.js");
+  const broken = `${res.body ?? ""}\nfunction pcInjectedSyntaxError( {\n`;
+  const result = nodeCheck(broken);
+  assert.equal(result.ok, false, "an injected syntax error must fail `node --check`");
+  assert.match(result.stderr, /SyntaxError/);
 });

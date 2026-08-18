@@ -78,6 +78,7 @@ export function assertThatResponse<T>(res: ApiResponse<T>): ResponseAssert<T> {
  *  actual headers deterministically. */
 function headerEntries(headers: Headers): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const [key, value] of headers) out[key] = value;
+  const entries = [...headers].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  for (const [key, value] of entries) out[key] = value;
   return out;
 }

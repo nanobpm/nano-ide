@@ -26,6 +26,15 @@ function isVerdictShape(value: unknown): value is ChatVerdict {
   );
 }
 
+// Renders arbitrary verdict text for an error message: JSON-quoted (so newlines/control
+// characters can't mangle logs) and length-capped (so a huge blob can't drown the message).
+// The untruncated original stays attached via the error's `cause`.
+function describeText(text: string): string {
+  const maxLength = 200;
+  const quoted = JSON.stringify(text);
+  return quoted.length > maxLength ? `${quoted.slice(0, maxLength)}…` : quoted;
+}
+
 /**
  * Parses canonical verdict JSON. Throws loudly on malformed/mismatched text rather than
  * silently defaulting — a corrupted verdict must never be read as a pass.
@@ -35,10 +44,12 @@ export function parseVerdict(text: string): ChatVerdict {
   try {
     decoded = JSON.parse(text);
   } catch (cause) {
-    throw new Error(`chat verdict is not valid JSON: ${text}`, { cause });
+    throw new Error(`chat verdict is not valid JSON: ${describeText(text)}`, { cause });
   }
   if (!isVerdictShape(decoded)) {
-    throw new Error(`chat verdict is missing the { pass, rationale } shape: ${text}`);
+    throw new Error(`chat verdict is missing the { pass, rationale } shape: ${describeText(text)}`, {
+      cause: text,
+    });
   }
   return { pass: decoded.pass, rationale: decoded.rationale };
 }

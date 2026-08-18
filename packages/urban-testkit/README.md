@@ -56,6 +56,10 @@ seams (which backends exist per seam) for the completeness guard.
 ```ts
 import { assertThatText, seamInventory } from "@nanobpm/urban-testkit/ai";
 
+// Available today (S1): the derived seam inventory (the completeness guard's source of truth).
+seamInventory();
+
+// Future (S2/S3) — these matchers currently throw "not yet implemented":
 await assertThatText(output).matchesSemantically("a warm greeting", { threshold: 0.8 });
 await assertThatText(output).satisfiesJudge("is a polite apology");
 ```

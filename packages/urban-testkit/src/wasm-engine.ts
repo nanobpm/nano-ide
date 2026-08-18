@@ -22,6 +22,7 @@ import {
   type UserTaskFilter,
   type WorkerSubscription,
 } from "@nanobpm/urban/runtime";
+import { applyOutcome, MockWorkerBuilder } from "./worker-mock.ts";
 
 // These three are structurally re-declared here (rather than imported from
 // `@nanobpm/urban/runtime`) on purpose: they let the kit depend only on urban's
@@ -123,6 +124,20 @@ interface RegisteredWorker {
   readonly fetchVariables?: readonly string[];
 }
 
+/** A synthetic activation descriptor for a mock-only type (a mocked `taskType` with no real
+ *  `registerWorker`). It only supplies the `activateJobs` parameters so a mock-only type's jobs
+ *  can be pulled; its `handler` is never called (the mock either resolves the job or, on no
+ *  clause match, `#runJob` leaves it because `hasRealWorker` is false). */
+function mockOnlyWorker(jobType: string): RegisteredWorker {
+  return {
+    handler: () => {
+      throw new Error(`mock-only worker for "${jobType}" has no handler — this should be unreachable`);
+    },
+    workerName: `urban-testkit:mock:${jobType}`,
+    maxParallelJobs: DEFAULT_MAX_JOBS,
+  };
+}
+
 let bootPromise: Promise<typeof import("@nanobpm/engine-wasm/readmodel")> | undefined;
 
 /** Boot the wasm module once per process, single-flight. The first caller starts
@@ -173,10 +188,18 @@ function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm/readmodel
 export class WasmEngineClient implements EngineClient {
   readonly #engine: TestEngine;
   readonly #workers = new Map<string, RegisteredWorker>();
+  /** Job-worker mocks keyed by jobType (epic #296, S1). A mocked type is resolved by its
+   *  {@link MockWorkerBuilder} at dispatch (see {@link mockWorker}) instead of running the
+   *  real handler; an un-mocked type — or a mock whose clauses don't match a given job —
+   *  runs real code. Empty and untouched unless a test calls {@link mockWorker}, so mocking
+   *  is strictly opt-in and zero-cost when unused. */
+  readonly #workerMocks = new Map<string, MockWorkerBuilder>();
   /** Optional observer notified with a job's type each time a job is dispatched to a
    *  worker handler. Additive, default-absent seam used by the S4 coverage gate to know
-   *  which worker/job types were actually exercised; a no-op for every other caller. */
-  #onJob: ((jobType: string) => void) | undefined;
+   *  which worker/job types were actually exercised; a no-op for every other caller. The
+   *  second argument reports whether the dispatch was satisfied by a mock (epic #296, S4),
+   *  so a mocked-but-exercised type is recorded as covered AND flagged as mocked. */
+  #onJob: ((jobType: string, mocked: boolean) => void) | undefined;
 
   private constructor(engine: TestEngine) {
     this.#engine = engine;
@@ -434,10 +457,45 @@ export class WasmEngineClient implements EngineClient {
 
   async close(): Promise<void> {
     this.#workers.clear();
+    this.#workerMocks.clear();
     this.#engine.free();
   }
 
   // --- Extras beyond EngineClient (used by the settle loop + assertions) ---
+
+  /**
+   * Register (or fetch the existing) job-worker mock for `taskType` (epic #296, S1).
+   * A mocked type is resolved by its {@link MockWorkerBuilder} at the dispatch seam
+   * ({@link drain} → `#runJob`) — completed / failed / errored by the mock's matching
+   * clause **instead of** the app's real handler — while un-mocked types, and jobs a
+   * mock's `when(...)` clauses don't match, still run real code. The builder shadows
+   * the real handler for the app's lifetime; call `.reset()` on it (or
+   * {@link clearWorkerMock}) to remove the mock and restore real behaviour.
+   *
+   * Idempotent per type: repeated calls return the SAME builder, so conditional
+   * clauses accumulate in registration order across calls. Purely opt-in — no mock
+   * bookkeeping happens on any dispatch until this is first called for a type.
+   */
+  mockWorker(taskType: string): MockWorkerBuilder {
+    let builder = this.#workerMocks.get(taskType);
+    if (builder === undefined) {
+      builder = new MockWorkerBuilder(() => {
+        this.#workerMocks.delete(taskType);
+      });
+      this.#workerMocks.set(taskType, builder);
+    }
+    return builder;
+  }
+
+  /**
+   * Remove any job-worker mock for `taskType`, restoring its real handler. No-op if
+   * unmocked. Delegates to the builder's {@link MockWorkerBuilder.reset} so a test that
+   * still holds the builder reference sees its clauses and pending predicate cleared too
+   * — not just the registry entry dropped.
+   */
+  clearWorkerMock(taskType: string): void {
+    this.#workerMocks.get(taskType)?.reset();
+  }
 
   /** Advance the virtual clock by `ms`, firing due timers, then drain workers so
    *  any jobs the timers created are served. */
@@ -454,12 +512,16 @@ export class WasmEngineClient implements EngineClient {
   /**
    * Register an observer notified with the `jobType` each time a job is dispatched to a
    * worker handler (before the handler runs, so a failing handler still counts as
-   * "exercised"). Returns an unsubscribe. A single observer is held — a later call
-   * replaces the earlier one — which is all the coverage gate needs; pass `undefined`
-   * (or call the returned unsubscribe) to clear it. The observer is a passive spectator:
-   * a throw from it is swallowed and never affects job completion, the drain, or incidents.
+   * "exercised"). The second argument reports whether that dispatch was satisfied by a
+   * job-worker mock (epic #296, S4) — the coverage gate records the type as exercised
+   * either way, and additionally flags it as mocked so a mocked worker stays an honest,
+   * visible entry rather than a silently-hidden gap. Returns an unsubscribe. A single
+   * observer is held — a later call replaces the earlier one — which is all the coverage
+   * gate needs; pass `undefined` (or call the returned unsubscribe) to clear it. The
+   * observer is a passive spectator: a throw from it is swallowed and never affects job
+   * completion, the drain, or incidents.
    */
-  observeJobs(onJob: ((jobType: string) => void) | undefined): () => void {
+  observeJobs(onJob: ((jobType: string, mocked: boolean) => void) | undefined): () => void {
     this.#onJob = onJob;
     return () => {
       if (this.#onJob === onJob) this.#onJob = undefined;
@@ -472,16 +534,27 @@ export class WasmEngineClient implements EngineClient {
   }
 
   /**
-   * Serve every registered worker's activatable jobs to quiescence: repeatedly
-   * activate + run + acknowledge until a full pass activates nothing. A handler
-   * that returns a value completes the job with it; a {@link isBpmnError} throw
-   * raises a BPMN error; any other throw fails the job (decrementing retries,
-   * raising an incident at zero) — parity with the live adapter.
+   * Serve every registered worker's — and every mock-only type's — activatable jobs to
+   * quiescence: repeatedly activate + run + acknowledge until a full pass activates
+   * nothing. A handler that returns a value completes the job with it; a
+   * {@link isBpmnError} throw raises a BPMN error; any other throw fails the job
+   * (decrementing retries, raising an incident at zero) — parity with the live adapter.
+   *
+   * A **mock-only** type (one with a {@link mockWorker} mock but no real
+   * `registerWorker`) is also drained, so a test can mock a worker the app never
+   * registered (e.g. an unimplemented external integration). Its jobs are activated and
+   * resolved by the mock; a job the mock's clauses don't match is left locked (no real
+   * handler exists to run it), which keeps the drain a fixpoint rather than spinning.
    */
   async drain(): Promise<void> {
     for (let i = 0; i < MAX_DRAIN_ITERATIONS; i++) {
       let activatedAny = false;
-      for (const [jobType, worker] of this.#workers) {
+      for (const jobType of this.#dispatchableJobTypes()) {
+        const realWorker = this.#workers.get(jobType);
+        // A mock-only type has no registered worker; use a synthetic activation descriptor so its
+        // jobs can be pulled and handed to the mock. Its handler is never invoked (the mock either
+        // resolves the job or, on no match, we leave it — see #runJob).
+        const worker = realWorker ?? mockOnlyWorker(jobType);
         const jobs = this.#parseArray(
           this.#engine.activateJobs(
             jobType,
@@ -492,7 +565,7 @@ export class WasmEngineClient implements EngineClient {
         );
         for (const raw of jobs) {
           activatedAny = true;
-          await this.#runJob(worker, raw);
+          await this.#runJob(worker, realWorker !== undefined, raw);
         }
       }
       if (!activatedAny) return;
@@ -502,24 +575,27 @@ export class WasmEngineClient implements EngineClient {
     );
   }
 
-  async #runJob(worker: RegisteredWorker, raw: Record<string, unknown>): Promise<void> {
+  /** The job types to activate on a drain pass: every registered worker, plus every mock-only
+   *  type that actually carries at least one clause (an empty/reset mock induces no dispatch). */
+  #dispatchableJobTypes(): string[] {
+    const types: string[] = [...this.#workers.keys()];
+    for (const [jobType, mock] of this.#workerMocks) {
+      if (!this.#workers.has(jobType) && mock.hasClauses) types.push(jobType);
+    }
+    return types;
+  }
+
+  async #runJob(
+    worker: RegisteredWorker,
+    hasRealWorker: boolean,
+    raw: Record<string, unknown>,
+  ): Promise<void> {
     const jobKey = str(raw.key);
     // A keyless job cannot be completed/failed/errored; skip it rather than
     // issue an invalid completeJob("") (mirrors the live SDK adapter, which
     // logs and leaves such a job for redelivery).
     if (jobKey === "") return;
     const jobType = str(raw.type);
-    // Notify the coverage observer (if any) that a job of this type was dispatched — before
-    // running the handler, so an exercised-but-failing worker still counts. Isolated in its own
-    // try/catch: this is a non-invasive test seam, so a throwing observer must never abort the
-    // drain nor alter job/engine semantics (it would otherwise propagate out of #runJob).
-    if (this.#onJob !== undefined) {
-      try {
-        this.#onJob(jobType);
-      } catch {
-        // Swallow: an observer is a passive spectator of dispatch, never a participant.
-      }
-    }
     const allVariables = isRecord(raw.variables) ? raw.variables : {};
     const job: EngineJob = {
       jobKey,
@@ -532,21 +608,77 @@ export class WasmEngineClient implements EngineClient {
         ? allVariables
         : pick(allVariables, worker.fetchVariables),
     };
+    // Resolve any registered mock for this type against the constructed `EngineJob` (whose
+    // `variables` already reflect any `fetchVariables` filtering applied above) BEFORE notifying the
+    // coverage observer, so the observer learns whether this dispatch is mock-satisfied. A
+    // mock whose `when(...)` clauses don't match yields `undefined` here and falls through to
+    // the real handler below, exactly like an un-mocked type. Mock resolution is a pure lookup
+    // over the in-memory registry — it introduces no timers/real-time, so `drain()` still
+    // reaches a fixpoint deterministically.
+    const mockOutcome = this.#workerMocks.get(jobType)?.resolve(job);
+    // Will this dispatch actually be serviced? Only when a mock clause matched (`mockOutcome`) OR a
+    // real handler exists to run it. A mock-only type whose clauses don't match is left locked with
+    // nothing run (see below), so it is NOT serviced — and must not be recorded as exercised, or a
+    // job no mock and no handler touched would fabricate coverage and hide a genuine gap.
+    const willBeServiced = mockOutcome !== undefined || hasRealWorker;
+    // Notify the coverage observer (if any) that a job of this type was dispatched — before the
+    // handler runs (or the mock applies), so an exercised-but-failing worker, and a mocked type
+    // whose real handler never runs, both still count as exercised. The `mocked` flag lets the
+    // gate record the type as covered yet flag it as mock-satisfied. Gated on `willBeServiced` so
+    // an unserviceable dispatch never fabricates coverage. Isolated in its own try/catch: this is a
+    // non-invasive test seam, so a throwing observer must never abort the drain nor alter
+    // job/engine semantics (it would otherwise propagate out of #runJob).
+    if (this.#onJob !== undefined && willBeServiced) {
+      try {
+        this.#onJob(jobType, mockOutcome !== undefined);
+      } catch {
+        // Swallow: an observer is a passive spectator of dispatch, never a participant.
+      }
+    }
+    // A matching mock shadows the real handler: apply its outcome via the shared applier — the
+    // exact same engine completion calls the real path below uses — and return without running
+    // (or even needing) the app's handler. `applyOutcome` runs the same engine calls a real
+    // handler resolves through (notably `JSON.stringify(variables)` for a `complete` outcome),
+    // so it can throw exactly like the real path's completion does; route that throw through the
+    // same error-to-`failJob`/`throwError` handling rather than letting it escape `#runJob` and
+    // abort the whole drain.
+    if (mockOutcome !== undefined) {
+      try {
+        applyOutcome(this.#engine, jobKey, mockOutcome);
+      } catch (err) {
+        this.#failFromError(raw, jobKey, err);
+      }
+      return;
+    }
+    // Fell through the mock (no match / no clause). With no real worker registered for this type
+    // there is nothing to run — the job was activated by a mock-only type. Leave it (locked for
+    // this virtual instant) rather than fabricate a completion; the drain still quiesces because a
+    // locked job won't re-activate. With a real worker, run it exactly as an un-mocked type.
+    if (!hasRealWorker) return;
     try {
       const out = await worker.handler(job);
       this.#engine.completeJob(jobKey, JSON.stringify(out ?? {}));
     } catch (err) {
-      if (isBpmnError(err)) {
-        this.#engine.throwError(jobKey, err.errorCode, err.message ?? err.errorCode);
-        return;
-      }
-      const retries = typeof raw.retries === "number" ? raw.retries : 1;
-      this.#engine.failJob(
-        jobKey,
-        Math.max(0, retries - 1),
-        err instanceof Error ? err.message : String(err),
-      );
+      this.#failFromError(raw, jobKey, err);
     }
+  }
+
+  /** Map a thrown handler/outcome error to the engine's completion surface — the single
+   *  canonical error→completion mapping shared by the real-handler path and the mock-apply path.
+   *  A {@link isBpmnError} throw raises a BPMN error (drives the modelled boundary); any other
+   *  throw fails the job, decrementing its redelivery budget (`retries - 1`, floored at 0, so the
+   *  last attempt raises an incident) exactly as the live SDK adapter does. */
+  #failFromError(raw: Record<string, unknown>, jobKey: string, err: unknown): void {
+    if (isBpmnError(err)) {
+      this.#engine.throwError(jobKey, err.errorCode, err.message ?? err.errorCode);
+      return;
+    }
+    const retries = typeof raw.retries === "number" ? raw.retries : 1;
+    this.#engine.failJob(
+      jobKey,
+      Math.max(0, retries - 1),
+      err instanceof Error ? err.message : String(err),
+    );
   }
 
   #snapshot(): Record<string, unknown> {

@@ -31,6 +31,13 @@ export {
   type SurfaceReport,
 } from "./coverage.ts";
 export {
+  applyOutcome,
+  type JobPredicate,
+  type MockOutcome,
+  MockWorkerBuilder,
+  type OutcomeEngine,
+} from "./worker-mock.ts";
+export {
   type ApiCallOptions,
   type ApiDriver,
   type ApiOperation,

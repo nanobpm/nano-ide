@@ -122,3 +122,15 @@ plain `bootTestApp(root)` carries zero overhead.
 The core (`SurfaceCoverage`) is surface-agnostic and free of any runtime import, so later
 slices can add surfaces (webhook triggers, BPMN elements, SQLite tables) by declaring their
 ids and recording hits — no change to the gate itself (issue #157).
+
+## Fluent assertions — `assertThat*` (under construction, issue #295)
+
+A fluent, intent-revealing assertion DSL for Urban e2e tests is being built out
+across several slices. The public surface is wired through the package barrel:
+`assertThatInstance`, `assertThatUserTask`, `assertThatDb`, and
+`assertThatResponse`, plus the `byKey` / `byProcessId` instance selectors. The
+shared selector resolver (`src/assert/selectors.ts`) and failure-message helpers
+(`src/assert/format.ts`) are complete; the individual matcher bodies land in
+follow-up slices, so the `assertThat*` entry points currently throw
+`not implemented`. All matchers read synchronously from `snapshot()` / the read
+models and are fully deterministic (no wall-clock, no polling).

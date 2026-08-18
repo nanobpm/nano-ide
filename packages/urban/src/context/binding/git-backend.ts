@@ -48,6 +48,21 @@ async function isDir(path: string): Promise<boolean> {
 }
 
 /**
+ * True iff `path` exists (as any filesystem entry). Used to detect a git working
+ * copy by its `.git` marker, which is a *directory* for a normal clone but a
+ * *file* (pointing at the real gitdir) for a worktree or submodule — so a plain
+ * directory check would wrongly treat a valid worktree as un-cloned.
+ */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The default, git-only substrate backend. Clones the substrate on first use
  * and, on subsequent resolutions, fetches and re-pins the working copy to the
  * requested ref (branch tip, tag, or SHA) without clobbering unrelated state.
@@ -65,7 +80,7 @@ export class GitSubstrateBackend implements SubstrateBackend {
   ): Promise<ResolvedContextHandle> {
     const { localPath } = options;
     const refresh = options.refresh ?? true;
-    const alreadyCloned = await isDir(join(localPath, ".git"));
+    const alreadyCloned = await pathExists(join(localPath, ".git"));
 
     if (!alreadyCloned) {
       // A pre-existing, non-git directory at `localPath` would make `git clone`

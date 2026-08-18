@@ -22,6 +22,12 @@ test("parseContextBinding rejects non-objects with a clear message", () => {
   assert.throws(() => parseContextBinding(undefined), ContextBindingError);
 });
 
+test("parseContextBinding rejects arrays as not-an-object (typeof [] === 'object')", () => {
+  assert.throws(() => parseContextBinding([]), /must be an object/);
+  assert.throws(() => parseContextBinding(["owner/name", "main"]), /must be an object/);
+  assert.equal(isContextBinding([]), false);
+});
+
 test("parseContextBinding rejects a missing or empty repo", () => {
   assert.throws(() => parseContextBinding({ ref: "main" }), /"repo" is required/);
   assert.throws(() => parseContextBinding({ repo: "   ", ref: "main" }), /"repo" is required/);

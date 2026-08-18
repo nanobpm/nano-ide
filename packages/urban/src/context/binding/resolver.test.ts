@@ -207,6 +207,29 @@ test("git backend clones on first use and re-pins on refresh; cross-instance sha
   }
 });
 
+test("git backend treats a `.git` file (worktree/submodule marker) as already cloned", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-worktree-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // A worktree/submodule marks its working copy with a `.git` *file* pointing
+    // at the real gitdir, not a `.git` *directory*. The backend must recognise
+    // it as a valid clone rather than treating it as an un-cloned/non-git path.
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    await writeFile(join(localPath, ".git"), "gitdir: /somewhere/else/.git/worktrees/x\n");
+
+    const resolver = new ContextResolver({ cacheRoot });
+    // refresh:false so no git runs; the point is it must NOT throw "not a git
+    // working copy" — the `.git` file already proves it is a working copy.
+    const handle = await resolver.resolve(binding, { refresh: false });
+    assert.equal(handle.localPath, localPath);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("git backend pins to a tag (detached), not just branches", async () => {
   const root = await mkdtemp(join(tmpdir(), "urban-ctx-tag-"));
   try {

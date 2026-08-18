@@ -4,7 +4,7 @@
 // clock, drives a small BPMN with a native user task carrying an assignee and candidate
 // groups, and proves EVERY matcher both PASSES on its positive case and FAILS (throwing an
 // intent-revealing AssertionError) on its negative case. Deterministic: no wall-clock, no
-// polling — every read is a synchronous read-model query.
+// polling — every read is a direct (awaited) read-model query.
 
 import assert from "node:assert/strict";
 import { AssertionError } from "node:assert";
@@ -68,6 +68,24 @@ async function startReview(app: TestApp): Promise<string> {
   return processInstanceKey;
 }
 
+/** Boot a fresh fixture app, run `body`, and always tear down the app + temp dir — even if
+ *  `bootTestApp` itself throws, so the fixture directory never leaks. The app is booted inside
+ *  the outer `try` and stopped only once it exists, keeping teardown resilient to a partially
+ *  initialized boot. */
+async function withReviewApp(body: (app: TestApp) => Promise<void>): Promise<void> {
+  const dir = await makeFixture();
+  try {
+    const app = await bootTestApp(dir);
+    try {
+      await body(app);
+    } finally {
+      await app.stop();
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
 /** Assert `fn` throws a `node:assert` AssertionError whose message contains each `needle`. */
 async function rejectsWith(fn: () => Promise<unknown>, ...needles: string[]): Promise<void> {
   await assert.rejects(fn, (err: unknown) => {
@@ -83,9 +101,7 @@ async function rejectsWith(fn: () => Promise<unknown>, ...needles: string[]): Pr
 }
 
 test("assertThatUserTask.isCreated: passes for an open task, fails for a completed one", async () => {
-  const dir = await makeFixture();
-  const app = await bootTestApp(dir);
-  try {
+  await withReviewApp(async (app) => {
     const key = await startReview(app);
 
     // GREEN: the task is open (CREATED).
@@ -102,16 +118,11 @@ test("assertThatUserTask.isCreated: passes for an open task, fails for a complet
       "to be CREATED",
       "state: COMPLETED",
     );
-  } finally {
-    await app.stop();
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test("assertThatUserTask.isCompleted: passes for a completed task, fails for an open one", async () => {
-  const dir = await makeFixture();
-  const app = await bootTestApp(dir);
-  try {
+  await withReviewApp(async (app) => {
     const key = await startReview(app);
 
     // RED: the task is still open — not COMPLETED.
@@ -128,16 +139,11 @@ test("assertThatUserTask.isCompleted: passes for a completed task, fails for an 
 
     // GREEN: now COMPLETED.
     await assertThatUserTask(app, { instance: key, elementId: "approve" }).isCompleted();
-  } finally {
-    await app.stop();
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test("assertThatUserTask.hasAssignee: passes for the real assignee, fails otherwise", async () => {
-  const dir = await makeFixture();
-  const app = await bootTestApp(dir);
-  try {
+  await withReviewApp(async (app) => {
     const key = await startReview(app);
 
     // GREEN: the task is assigned to alice.
@@ -149,16 +155,11 @@ test("assertThatUserTask.hasAssignee: passes for the real assignee, fails otherw
       '"bob"',
       "elementId: \"approve\"",
     );
-  } finally {
-    await app.stop();
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test("assertThatUserTask.hasCandidateGroup: passes for an offered group, fails otherwise", async () => {
-  const dir = await makeFixture();
-  const app = await bootTestApp(dir);
-  try {
+  await withReviewApp(async (app) => {
     const key = await startReview(app);
 
     // GREEN: both declared candidate groups match.
@@ -176,16 +177,11 @@ test("assertThatUserTask.hasCandidateGroup: passes for an offered group, fails o
       '"nope"',
       "candidate group",
     );
-  } finally {
-    await app.stop();
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test("assertThatUserTask: selectors (byKey / byProcessId / elementId) and chaining", async () => {
-  const dir = await makeFixture();
-  const app = await bootTestApp(dir);
-  try {
+  await withReviewApp(async (app) => {
     const key = await startReview(app);
 
     // byKey selector resolves the same task as the bare key.
@@ -201,16 +197,11 @@ test("assertThatUserTask: selectors (byKey / byProcessId / elementId) and chaini
     // Chaining: await each async matcher in turn on the same fluent object.
     const a = assertThatUserTask(app, { instance: key, elementId: "approve" });
     await (await (await a.isCreated()).hasAssignee("alice")).hasCandidateGroup("reviewers");
-  } finally {
-    await app.stop();
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 });
 
 test("assertThatUserTask: an unresolvable selector fails clearly", async () => {
-  const dir = await makeFixture();
-  const app = await bootTestApp(dir);
-  try {
+  await withReviewApp(async (app) => {
     await startReview(app);
 
     // No task for element `ghost` → isCreated fails naming the selector.
@@ -225,8 +216,5 @@ test("assertThatUserTask: an unresolvable selector fails clearly", async () => {
       () => assertThatUserTask(app, { instance: "does-not-exist" }).isCreated(),
       "Could not resolve a process instance",
     );
-  } finally {
-    await app.stop();
-    await rm(dir, { recursive: true, force: true });
-  }
+  });
 });

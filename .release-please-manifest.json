@@ -25,6 +25,6 @@
   "packages/trigger-mqtt": "1.1.1",
   "packages/urban": "0.69.0",
   "packages/urban-agent-client": "0.1.2",
-  "packages/urban-testkit": "0.10.3",
+  "packages/urban-testkit": "0.11.0",
   "packages/workflow": "0.12.0"
 }

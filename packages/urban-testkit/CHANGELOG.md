@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.10.3...@nanobpm/urban-testkit-0.11.0) (2026-08-19)
+
+
+### Features
+
+* **urban-testkit:** adopt engine-wasm 0.7.0 and derive read-model DTOs from readmodel-types ([#383](https://github.com/nanobpm/nano-ide/issues/383)) ([2534245](https://github.com/nanobpm/nano-ide/commit/25342459c3b942a7cc7dfee85e21fd2da257d1fb))
+
 ## [0.10.3](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.10.2...@nanobpm/urban-testkit-0.10.3) (2026-08-19)
 
 

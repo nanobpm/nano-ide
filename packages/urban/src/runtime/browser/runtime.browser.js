@@ -2107,12 +2107,23 @@ function wireNavBadge(link, baseLabel, badge) {
   const pill = el("span", { class: "pc-badge pc-nav-badge pc-badge-" + tone, "aria-hidden": "true" });
   pill.hidden = true;
   link.append(pill);
-  const url = dataUrl(source, badge.table, Array.isArray(badge.filter) ? badge.filter : [], null);
-  const countUrl = url + (url.indexOf("?") >= 0 ? "&" : "?") + "count=1";
-  const refresh = () =>
+  const filter = Array.isArray(badge.filter) ? badge.filter : [];
+  const paramScoped = filter.some(/** @param {any} f */(f) => f && f.eqParam);
+  const refresh = () => {
+    // A param-scoped badge ("count for the selected entity") with no route param
+    // present would otherwise build the URL with dataUrl baking in an empty PARAM
+    // and query field="", surfacing a wrong count. Match the dataGrid/list pollers:
+    // degrade to 0 (hidden when hideWhenZero) without a request instead.
+    if (paramScoped && PARAM === "") {
+      applyNavBadge(link, pill, baseLabel, hideWhenZero, 0);
+      return;
+    }
+    const url = dataUrl(source, badge.table, filter, null);
+    const countUrl = url + (url.indexOf("?") >= 0 ? "&" : "?") + "count=1";
     getJSON(countUrl)
       .then(/** @param {any} res */(res) => applyNavBadge(link, pill, baseLabel, hideWhenZero, res && res.count))
       .catch(() => applyNavBadge(link, pill, baseLabel, hideWhenZero, NaN));
+  };
   refresh();
   const ms = Number(badge.refreshMs);
   if (Number.isFinite(ms) && ms > 0) {

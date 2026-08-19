@@ -307,3 +307,34 @@ test("#338: wireNavBadge registers its poll interval with the per-page teardown 
   teardown();
   assert.deepEqual(cleared, started, "teardown() must clear the interval wireNavBadge started");
 });
+
+test("#338: a param-scoped nav badge with no route param degrades to 0 without querying field=\"\"", (t) => {
+  // Defect-class guard mirroring the dataGrid/list pollers: a badge whose filter is
+  // param-scoped ({ eqParam: true }) but with an empty route PARAM must NOT build a
+  // where=field: query (which the server reads as field equals empty string and can
+  // surface a wrong count). It must short-circuit to a 0/hidden badge with no fetch.
+  const restore = installFakeDom();
+  t.after(restore);
+  const doc: { createElement: (tag: string) => FakeElement } = Reflect.get(globalThis, "document");
+
+  let fetchCalls = 0;
+  const priorFetch = Reflect.getOwnPropertyDescriptor(globalThis, "fetch");
+  Reflect.set(globalThis, "fetch", () => {
+    fetchCalls++;
+    return Promise.reject(new Error("should not fetch"));
+  });
+  t.after(() => {
+    if (priorFetch) Reflect.defineProperty(globalThis, "fetch", priorFetch);
+    else Reflect.deleteProperty(globalThis, "fetch");
+  });
+
+  // PARAM defaults to "" (no renderPage has run), so a param-scoped badge is the
+  // empty-selection case the guard must short-circuit.
+  const link: any = doc.createElement("a");
+  wireNavBadge(link, "Tasks", { source: "app", table: "tasks", filter: [{ field: "owner", eqParam: true }] });
+
+  assert.equal(fetchCalls, 0, "param-scoped badge with empty PARAM must not issue a count query");
+  const pill: any = link.children[link.children.length - 1];
+  assert.equal(pill.textContent, "0", "badge degrades to 0 rather than an empty-string-filtered count");
+  assert.equal(pill.hidden, false, "0 is shown (hideWhenZero is off) rather than a stale count");
+});

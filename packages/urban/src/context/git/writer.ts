@@ -383,16 +383,30 @@ export class ContextWriter {
   }
 
   /**
-   * `true` iff the proposal has been ratified (its commit is an ancestor of the
-   * base branch). A never-ratified proposal reads back as `false`, so an unmerged
-   * prior can never masquerade as a ratified one.
+   * `true` iff the proposal has been ratified (its proposal branch has been merged
+   * onto the base branch). A never-ratified proposal reads back as `false`, so an
+   * unmerged prior can never masquerade as a ratified one.
    */
   isRatified(proposal: ProposalResult): Promise<boolean> {
     return this.#serialise(async () => {
+      // Derive the ancestry check from TRUSTED data only — NEVER the caller-controlled
+      // `proposal.commit`. `ProposalResult` is a plain object, so a consumer can set
+      // `commit` to any commit already reachable from base (e.g. base's own HEAD) and
+      // read back a forged `true`, even though the proposal branch was never merged.
+      // First bound the branch to the proposal namespace and require it to exist, so a
+      // caller cannot point us at an arbitrary already-merged local branch (mirrors
+      // ratify's DEFENCE 1). A branch that fails either check is, by definition, not a
+      // ratified proposal.
+      if (
+        !proposal.branch.startsWith(PROPOSAL_BRANCH_PREFIX) ||
+        !(await this.#substrate.branchExists(proposal.branch))
+      ) {
+        return false;
+      }
       // Bind the ancestry check to the writer's OWN resolved base, never the
       // caller-supplied `proposal.baseBranch`. That field is a plain-object handle
-      // a consumer can mutate to any ref where `proposal.commit` happens to be an
-      // ancestor, which would report an UNratified hypothesis as ratified. Reject a
+      // a consumer can mutate to any ref where the proposal branch tip happens to be
+      // an ancestor, which would report an UNratified hypothesis as ratified. Reject a
       // retargeted proposal outright (same trust boundary as ratify's DEFENCE 2).
       const base = await this.#resolveBaseBranch();
       if (proposal.baseBranch !== base) {
@@ -401,7 +415,10 @@ export class ContextWriter {
             `but this writer is bound to ${base}.`,
         );
       }
-      return this.#substrate.isMerged(proposal.commit, base);
+      // Check ancestry against the proposal BRANCH TIP (re-resolved by git), never the
+      // untrusted `proposal.commit` hash: a proposal is ratified iff its branch has
+      // been merged onto the resolved base.
+      return this.#substrate.isMerged(proposal.branch, base);
     });
   }
 

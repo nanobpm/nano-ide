@@ -597,6 +597,48 @@ test("isRatified REFUSES a proposal whose baseBranch was retargeted off the writ
   assert.equal(await writer.isRatified(proposal), false);
 });
 
+test("isRatified IGNORES a forged proposal.commit and checks the real branch tip", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-forge", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // ATTACK: the proposal branch is genuinely UNmerged, but a consumer forges the
+  // plain-object handle's `commit` to point at base's own HEAD — a commit that IS an
+  // ancestor of `main`. A `commit`-trusting ancestry check would report this unmerged
+  // hypothesis as ratified. The check must instead derive from the real branch tip.
+  const baseHead = await git(dir, "rev-parse", "main");
+  assert.equal(
+    await writer.isRatified({ ...proposal, commit: baseHead }),
+    false,
+    "a forged commit must not make an unmerged proposal read as ratified",
+  );
+
+  // A genuine ratification flips the honest answer to true — proving the branch-tip
+  // check is not merely rejecting everything.
+  await writer.ratify(proposal);
+  assert.equal(await writer.isRatified(proposal), true);
+});
+
+test("isRatified reads false for a branch outside the proposal namespace or absent", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-ns", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // A branch that is fully merged into main but lives OUTSIDE the proposal namespace
+  // must never read as a ratified proposal, even though its tip is an ancestor of base.
+  await git(dir, "branch", "rogue-merged", "main");
+  assert.equal(await writer.isRatified({ ...proposal, branch: "rogue-merged" }), false);
+
+  // A non-existent branch is, by definition, not a ratified proposal.
+  assert.equal(await writer.isRatified({ ...proposal, branch: "context/proposal/ghost" }), false);
+});
+
 test("appendRecord restores the working tree to base after a mid-operation failure", async () => {
   const substrate = new FailingSubstrate("stageAndCommit");
   const writer = new ContextWriter({ localPath: "/virtual", ref: "main" }, { substrate });

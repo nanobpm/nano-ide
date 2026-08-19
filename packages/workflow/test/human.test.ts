@@ -177,6 +177,8 @@ test("parity: w.human reproduces the three approval-gate userTasks of the vendor
   );
   const golden = userTaskDefs(nwf("plan-fanout"));
   const actual = userTaskDefs(derived);
-  // Every approval-gate user task in the golden is reproduced by w.human.
-  for (const def of golden) assert.ok(actual.includes(def), `missing userTask surface: ${def}`);
+  // w.human reproduces exactly the approval-gate user tasks — no missing, extra,
+  // or duplicate surfaces. Both arrays are normalized + sorted, so full equality
+  // is a stricter regression guard than a subset check.
+  assert.deepEqual(actual, golden);
 });

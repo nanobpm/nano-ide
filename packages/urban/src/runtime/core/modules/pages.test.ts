@@ -1561,7 +1561,26 @@ test("pipeline builds a locus link via the shared pageHashHref route builder, on
   assert.match(js, /const href = pageHashHref\(col\.link\.page, row\[col\.link\.keyField\]\)/);
   // The locus link uses it and the shared .pc-link class; blank key → "" → plain.
   assert.match(js, /pageHashHref\(locus\.link\.page, locusKey\)/);
-  assert.match(js, /el\("a", \{ class: "pc-link pc-pipe-label", href: locusHref \}, label\)/);
+  assert.match(js, /el\("a", \{ class: "pc-link pc-pipe-label", href \}, label\)/);
+});
+
+test("pipeline locus supports a processExplorer link routing to the console explorer via the shared explorerAnchor", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A pipeline column whose locus declares `link:{ kind:"processExplorer" }` links
+  // the locus stage to the console explorer for the row's process instance — via
+  // the SAME single-source explorerAnchor builder the grid link cell uses, so the
+  // href and the embedded-in-place / standalone-new-tab navigation can't drift.
+  assert.match(js, /function explorerAnchor\(label, key, cls\)/);
+  assert.match(js, /"\/console\/explorer\?instance="\s*\+\s*encodeURIComponent\(keyStr\)/);
+  assert.match(js, /hostNavigate\("processExplorer",\s*\{\s*instance:\s*keyStr\s*\}\)/);
+  // The pipeline locus branches to it on the processExplorer kind, reusing the
+  // .pc-pipe-label class; the grid link cell routes through the same builder.
+  assert.match(js, /locus\.link\.kind === "processExplorer"/);
+  assert.match(js, /return explorerAnchor\(label, locusKey, "pc-link pc-pipe-label"\)/);
+  assert.match(js, /explorerAnchor\(text, row\[col\.link\.keyField\], "pc-link"\)/);
+  // Unknown kind / blank key → no link → the stage stays plain (graceful).
+  assert.match(js, /if \(!locus \|\| !locus\.link \|\| locusKey === ""\) return null/);
 });
 
 test("pipeline exposes step semantics to assistive tech (role/list + aria-current)", async () => {

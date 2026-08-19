@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.71.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.70.0...@nanobpm/urban-0.71.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** build-time no-PII gate + layout-aware classification + erasure/immutability docs ([#386](https://github.com/nanobpm/nano-ide/issues/386)) ([1bde841](https://github.com/nanobpm/nano-ide/commit/1bde8417e68c50ffa1548a2403705fb0c73209cd))
+
 ## [0.70.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.69.1...@nanobpm/urban-0.70.0) (2026-08-19)
 
 

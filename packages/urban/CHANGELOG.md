@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.65.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.64.0...@nanobpm/urban-0.65.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** bindable `context` resource + binding descriptor ([#309](https://github.com/nanobpm/nano-ide/issues/309)) ([c833a02](https://github.com/nanobpm/nano-ide/commit/c833a02cde3bc7f5302070f83d23ec3f8d941991))
+
 ## [0.64.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.63.1...@nanobpm/urban-0.64.0) (2026-08-19)
 
 

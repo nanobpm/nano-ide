@@ -87,7 +87,14 @@ function safeHomedir(): string | undefined {
 export class ContextResolver {
   readonly #cacheRoot: string;
   readonly #backend: SubstrateBackend;
-  readonly #inflight = new Map<string, { promise: Promise<ResolvedContextHandle>; settled: boolean }>();
+  // Per-identity resolution record. Despite serving the single-flight guarantee,
+  // this map is NOT purged once a resolution settles: the settled record is
+  // retained as the long-lived memoisation cache backing shared-on-same-name, so
+  // repeat resolves return the identical handle. Entries are removed only on
+  // rejection (so a failed materialise can be retried); a fulfilled entry lives
+  // for the resolver's lifetime. Do not add "drop settled entries" cleanup here
+  // without also giving up memoisation.
+  readonly #resolutions = new Map<string, { promise: Promise<ResolvedContextHandle>; settled: boolean }>();
 
   constructor(options: ContextResolverOptions = {}) {
     // Normalise to an absolute path so a relative `cacheRoot` (or a relative
@@ -125,7 +132,7 @@ export class ContextResolver {
     // second `materialise()` would double-clone into the same `localPath` and
     // break the single-in-flight guarantee. Only re-materialise once the prior
     // resolution has settled AND the caller explicitly asked to `refresh`.
-    const existing = this.#inflight.get(identity.key);
+    const existing = this.#resolutions.get(identity.key);
     if (existing && (!existing.settled || options.refresh !== true)) {
       return existing.promise;
     }
@@ -134,14 +141,14 @@ export class ContextResolver {
       promise: this.#backend
         .materialise(identity, { localPath, refresh: options.refresh })
         .catch((error) => {
-          if (this.#inflight.get(identity.key) === record) {
-            this.#inflight.delete(identity.key);
+          if (this.#resolutions.get(identity.key) === record) {
+            this.#resolutions.delete(identity.key);
           }
           throw error;
         }),
       settled: false,
     };
-    this.#inflight.set(identity.key, record);
+    this.#resolutions.set(identity.key, record);
     record.promise.then(
       () => {
         record.settled = true;

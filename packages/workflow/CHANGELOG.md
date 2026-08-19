@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.11.0...@nanobpm/workflow-0.12.0) (2026-08-19)
+
+
+### Features
+
+* **workflow:** w.human user-task builder (S3, epic [#314](https://github.com/nanobpm/nano-ide/issues/314)) ([#354](https://github.com/nanobpm/nano-ide/issues/354)) ([07fcbcc](https://github.com/nanobpm/nano-ide/commit/07fcbccf1bc28d3cfba6a1b0df768a56f6992606))
+
 ## [0.11.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.10.0...@nanobpm/workflow-0.11.0) (2026-08-19)
 
 

@@ -40,3 +40,24 @@ export {
   type DriverRouteRequest,
   parseOpenApi,
 } from "./openapi-driver.ts";
+
+// Fluent assertion DSL (`assertThat*`) — issue #295. The barrel is wired here
+// once; each matcher lives in its own `./assert/*.ts` file so the parallel
+// matcher slices never collide on this file.
+export {
+  assertThatInstance,
+  type IncidentSelector,
+  type InstanceAssert,
+} from "./assert/instance.ts";
+export {
+  assertThatUserTask,
+  type UserTaskAssert,
+  type UserTaskSelector,
+} from "./assert/user-task.ts";
+export { assertThatDb, type DbAssert, type TableAssert } from "./assert/db.ts";
+export { assertThatResponse, type ResponseAssert } from "./assert/response.ts";
+export {
+  byKey,
+  byProcessId,
+  type InstanceSelector,
+} from "./assert/selectors.ts";

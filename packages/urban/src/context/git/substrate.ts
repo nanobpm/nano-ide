@@ -12,7 +12,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
-import { hardenedGitArgs, type GitRunner } from "../binding/index.ts";
+import { hardenedGitArgs, redactUrlUserinfo, type GitRunner } from "../binding/index.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,9 +23,6 @@ export class SubstrateWriteError extends Error {
     this.name = "SubstrateWriteError";
   }
 }
-
-/** Redact URL userinfo (`user:pass@host` → `***@host`) from a git argv token. */
-const redactUrlUserinfo = (arg: string): string => arg.replace(/(\/\/)[^/@\s]+@/g, "$1***@");
 
 const defaultWriteGitRunner: GitRunner = async (args, cwd) => {
   const hardened = hardenedGitArgs(args);
@@ -74,10 +71,13 @@ export interface WriteSubstrate {
   /** Check out an existing branch/ref. */
   checkout(ref: string): Promise<void>;
   /**
-   * Force `ref` back into the working tree and discard any uncommitted changes and
-   * untracked files UNDER `pathspec`, returning the tree to a pristine state at
-   * `ref`. Lets a caller recover the shared working copy after a failed write
-   * without disturbing untracked files outside `pathspec`.
+   * Recover the shared working copy to a pristine checkout of `ref`: force-checks
+   * out `ref` — moving HEAD and discarding ALL tracked modifications across the
+   * whole working copy, not only those under `pathspec` — then removes untracked
+   * files/dirs UNDER `pathspec`, leaving untracked files OUTSIDE `pathspec`
+   * untouched. The broad tracked-file reset is intended: the substrate working
+   * copy is a single-writer, serialised recovery seam, so callers must not keep
+   * unrelated tracked edits in it across a write that might fail.
    */
   restoreClean(ref: string, pathspec: string): Promise<void>;
   /** Stage all changes and commit them as `author`; returns the new commit sha. */
@@ -165,11 +165,13 @@ export class GitWriteSubstrate implements WriteSubstrate {
   }
 
   async restoreClean(ref: string, pathspec: string): Promise<void> {
-    // `checkout --force` discards modifications to TRACKED files and switches to
-    // `ref`; `clean -fd` then removes leftover UNTRACKED files/dirs. Scoping the
-    // clean to `pathspec` (the record layout root) keeps it from touching untracked
-    // files elsewhere in the working copy. `--` ends option parsing before the
-    // pathspec so a path that looks like a flag is never misread as one.
+    // `checkout --force <ref>` moves HEAD to `ref` and discards modifications to ALL
+    // tracked files across the working copy (not just under `pathspec`) — the full
+    // reset a post-failure recovery of this single-writer working copy wants. `clean
+    // -fd` then removes leftover UNTRACKED files/dirs, scoped to `pathspec` (the
+    // record layout root) so it never touches untracked files elsewhere. `--` ends
+    // option parsing before the pathspec so a path that looks like a flag is never
+    // misread as one.
     await this.#git(["checkout", "--force", "--end-of-options", ref], this.rootPath);
     await this.#git(["clean", "-fd", "--", pathspec], this.rootPath);
   }

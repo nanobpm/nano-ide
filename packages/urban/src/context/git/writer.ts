@@ -73,6 +73,11 @@ export const PROPOSAL_BRANCH_PREFIX = "context/proposal/" as const;
 
 /** The minimal resolved-handle shape the writer consumes (from S1). */
 export interface ResolvedSubstrateHandle {
+  /**
+   * Absolute path to the local substrate working copy. MUST be absolute —
+   * `GitWriteSubstrate` rejects a relative root. S1's `ResolvedContextHandle`
+   * guarantees this, but the requirement is not obvious from this type alone.
+   */
   readonly localPath: string;
   readonly ref: string;
 }

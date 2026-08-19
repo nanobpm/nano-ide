@@ -16,6 +16,7 @@ import {
   assertDerivationParity,
   deploySmoke,
   parseXml,
+  isFlowBuilder,
 } from "../dist/test-support/index.js";
 import { Gateway, resolveServerBin } from "./server.ts";
 
@@ -66,6 +67,33 @@ test("parseXml: rejects malformed documents instead of silently accepting them",
   assert.equal(el.name, "a");
   assert.equal(el.children.length, 1);
   assert.equal(el.children[0].name, "b");
+});
+
+test("isFlowBuilder: fails fast when a core built-in method is missing (tree-shaken registration)", () => {
+  // Every built-in method present + all-functions → a valid builder.
+  const complete = {
+    startOn: () => {},
+    run: () => {},
+    task: () => {},
+    signal: () => {},
+    timer: () => {},
+    switch: () => {},
+    branch: () => {},
+    loop: () => {},
+    parallel: () => {},
+    forEach: () => {},
+    break: () => {},
+    continue: () => {},
+  };
+  assert.equal(isFlowBuilder(complete), true);
+
+  // A builder missing a core method (e.g. `run` never registered because its
+  // node-kind module was tree-shaken) previously passed the guard — every own
+  // property was still a function — and only blew up later as an opaque
+  // `w.run is not a function`. It must now be rejected at assembly time.
+  const { run: _dropped, ...missingRun } = complete;
+  void _dropped;
+  assert.equal(isFlowBuilder(missingRun), false);
 });
 
 test("normalize: sees through element-id renaming (canonicalizes ids + sequence-flow ids)", () => {

@@ -375,12 +375,48 @@ function makeBuilder<C extends object>(
   return methods;
 }
 
-/** A dynamically-assembled builder satisfies `FlowBuilder<C>` once every
- *  registered kind has installed its method and `startOn` is present. The check
- *  is a runtime type guard (not an `as` cast): each own-property must be a
- *  function, and `startOn` — the one non-registry method — must be present. */
-function isFlowBuilder<C extends object = object>(x: object): x is FlowBuilder<C> {
-  if (typeof Reflect.get(x, "startOn") !== "function") return false;
+/** The built-in authoring surface every assembled `FlowBuilder` must expose:
+ *  `startOn` (installed centrally by {@link startOnMethod}) plus every core
+ *  method a built-in node-kind module under `src/nodes/` contributes. Listed
+ *  once here as the single source of truth for the guard below, and pinned to
+ *  the `FlowBuilder` interface at compile time by the `satisfies` (each name
+ *  must be a real method) and the exhaustiveness check that follows (every
+ *  interface method must be listed) — so the runtime guard cannot drift behind
+ *  the interface. */
+const BUILTIN_BUILDER_METHODS = [
+  "startOn",
+  "run",
+  "task",
+  "signal",
+  "timer",
+  "switch",
+  "branch",
+  "loop",
+  "parallel",
+  "forEach",
+  "break",
+  "continue",
+] as const satisfies readonly (keyof FlowBuilder)[];
+
+// Compile-time completeness: if a method is added to `FlowBuilder` but not
+// listed above, `UnlistedBuilderMethod` stops being `never` and this assignment
+// fails to type-check — forcing the list (and thus the runtime guard) to stay in
+// lockstep with the interface rather than silently drifting behind it.
+type UnlistedBuilderMethod = Exclude<keyof FlowBuilder, (typeof BUILTIN_BUILDER_METHODS)[number]>;
+const _builtinBuilderMethodsAreComplete: UnlistedBuilderMethod extends never ? true : UnlistedBuilderMethod = true;
+void _builtinBuilderMethodsAreComplete;
+
+/** A dynamically-assembled builder satisfies `FlowBuilder<C>` once every core
+ *  built-in method is installed. The check is a runtime type guard (not an `as`
+ *  cast): each own-property must be a function, AND every built-in method in
+ *  {@link BUILTIN_BUILDER_METHODS} must be present — so a missing or
+ *  tree-shaken node-kind registration fails fast here at builder assembly (a
+ *  clear "missing registered methods" error) instead of surfacing later as an
+ *  opaque `w.run is not a function` at authoring time. */
+export function isFlowBuilder<C extends object = object>(x: object): x is FlowBuilder<C> {
+  for (const method of BUILTIN_BUILDER_METHODS) {
+    if (typeof Reflect.get(x, method) !== "function") return false;
+  }
   return Object.getOwnPropertyNames(x).every((k) => typeof Reflect.get(x, k) === "function");
 }
 

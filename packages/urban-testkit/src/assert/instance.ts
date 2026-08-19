@@ -207,7 +207,7 @@ export function assertThatInstance(
       failAssertion({
         message: `Expected instance ${formatValue(key)} to have active element(s) ${formatValue(missing)}, but its active elements are ${formatValue(actual)}.`,
         actual,
-        expected: elementIds,
+        expected: missing,
         operator,
       });
     }
@@ -256,7 +256,7 @@ export function assertThatInstance(
         failAssertion({
           message: `Expected instance ${formatValue(key)} to have completed element(s) ${formatValue(missing)}, but its completed elements are ${formatValue(actual)}.`,
           actual,
-          expected: elementIds,
+          expected: missing,
           operator: "hasCompletedElements",
         });
       }

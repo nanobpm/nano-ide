@@ -151,7 +151,7 @@ test("instance.ts — every matcher's failure message is pinned", async () => {
       );
       assert.equal(
         messageOf(() => at(active).hasActiveElements("work", "ghost")),
-        'Expected instance "PI-1" to have active element(s) ["ghost"], but its active elements are ["work"].\n  expected: ["work", "ghost"]\n  actual:   ["work"]',
+        'Expected instance "PI-1" to have active element(s) ["ghost"], but its active elements are ["work"].\n  expected: ["ghost"]\n  actual:   ["work"]',
       );
       assert.equal(
         messageOf(() => at(completedEl).hasCompletedElements("ghost")),

@@ -179,6 +179,50 @@ test("hasCompletedElements passes for completed elements and fails otherwise", a
   });
 });
 
+test("element-set failures set the diff `expected` to the MISSING ids, not the full requested set", async () => {
+  // Guards a headline/diff coherence defect class: the failure headline names the
+  // MISSING element ids, so the structured `expected` diff value must be that same
+  // `missing` set — not the full requested `elementIds` (which would leave the diff
+  // internally inconsistent with the headline when some requested ids are present).
+  const captureExpected = (fn: () => unknown): unknown => {
+    try {
+      fn();
+    } catch (err) {
+      assert.ok(err instanceof AssertionError, "matcher should throw an AssertionError on the negative case");
+      return err.expected;
+    }
+    assert.fail("matcher should have thrown");
+  };
+
+  await withApp(async (app) => {
+    await app.engine.deployResources([
+      { name: "elx.bpmn", content: serviceProcess("elx", "elx.work"), contentType: "application/bpmn+xml" },
+    ]);
+    // Active: `work` is live, `ghost` is missing → expected diff is exactly ["ghost"].
+    const { processInstanceKey: activeKey } = await app.engine.createInstance({ processDefinitionId: "elx" });
+    assert.deepEqual(
+      captureExpected(() => assertThatInstance(app, activeKey).hasActiveElements("work", "ghost")),
+      ["ghost"],
+    );
+  });
+
+  await withApp(async (app) => {
+    await app.engine.deployResources([
+      { name: "cex.bpmn", content: serviceProcess("cex", "cex.work"), contentType: "application/bpmn+xml" },
+    ]);
+    await app.engine.registerWorker("cex.work", () => ({ ok: true }));
+    const { processInstanceKey: doneKey } = await app.engine.createInstance({
+      processDefinitionId: "cex",
+      awaitCompletion: true,
+    });
+    // Completed: `s` completed, `ghost` is missing → expected diff is exactly ["ghost"].
+    assert.deepEqual(
+      captureExpected(() => assertThatInstance(app, doneKey).hasCompletedElements("s", "ghost")),
+      ["ghost"],
+    );
+  });
+});
+
 test("hasCompletedElements fails fast when the snapshot holds more than one instance", async () => {
   await withApp(async (app) => {
     // Two DISTINCT processes so both instances coexist in the snapshot: one

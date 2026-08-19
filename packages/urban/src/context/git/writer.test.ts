@@ -1,0 +1,218 @@
+// Slice S3 (git/governance) — integration tests for the write + governance
+// layer. Every test drives a LOCAL temporary git repository as the substrate;
+// nothing touches the network.
+
+import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { access, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { after, test } from "node:test";
+import { promisify } from "node:util";
+import { PiiGuardError } from "../pii/index.ts";
+import type { MemoryRecord } from "../schema/index.ts";
+import { LAYOUT_ROOT } from "./layout.ts";
+import { ContextWriter, GovernanceError } from "./writer.ts";
+
+const execFileAsync = promisify(execFile);
+const TEMP_ROOTS: string[] = [];
+
+after(async () => {
+  await Promise.all(TEMP_ROOTS.map((dir) => rm(dir, { recursive: true, force: true })));
+});
+
+async function git(cwd: string, ...args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync("git", args, { cwd });
+  return stdout.trim();
+}
+
+/** Create a temp git repo with an initial commit on `main` as the substrate. */
+async function makeSubstrate(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "s3-substrate-"));
+  TEMP_ROOTS.push(dir);
+  await git(dir, "init");
+  await writeFile(join(dir, "README.md"), "# context substrate\n", "utf8");
+  await git(dir, "add", "-A");
+  await git(
+    dir,
+    "-c",
+    "user.name=seed",
+    "-c",
+    "user.email=seed@nanobpm.local",
+    "commit",
+    "--no-gpg-sign",
+    "-m",
+    "seed",
+  );
+  // Normalise the default branch name to `main` regardless of git's default.
+  await git(dir, "branch", "-M", "main");
+  return dir;
+}
+
+function record(overrides: Partial<MemoryRecord>): MemoryRecord {
+  const base: MemoryRecord = {
+    schemaVersion: 1,
+    id: "rec-1",
+    scope: "epic",
+    scopeRef: "issue-303",
+    mode: "empirical",
+    provenance: "measured",
+    authority: "authoritative",
+    statement: "the measured throughput was 42 rps",
+    createdAt: "2026-01-01T00:00:00Z",
+  };
+  return { ...base, ...overrides };
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("appendRecord persists a measured fact on the base branch", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const result = await writer.appendRecord(record({ id: "measured-1" }));
+
+  assert.equal(result.branch, "main");
+  assert.equal(result.ratified, true);
+  assert.equal(result.path, `${LAYOUT_ROOT}/epic/issue-303/measured-1.json`);
+
+  // The record file is on the base branch working tree...
+  const onDisk = join(dir, result.path);
+  assert.ok(await exists(onDisk), "record file should exist on main");
+  const parsed = JSON.parse(await readFile(onDisk, "utf8"));
+  assert.equal(parsed.id, "measured-1");
+  assert.equal(parsed.provenance, "measured");
+
+  // ...and the merge landed a real commit.
+  const head = await git(dir, "rev-parse", "HEAD");
+  assert.equal(head, result.mergeCommit);
+});
+
+test("appendRecord REJECTS an agent-retro record (must go through governance)", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  await assert.rejects(
+    () =>
+      writer.appendRecord(
+        record({
+          id: "retro-1",
+          provenance: "agent-retro",
+          authority: "hypothesis",
+        }),
+      ),
+    GovernanceError,
+  );
+
+  // Nothing was committed — the guard fired before any git write.
+  assert.ok(!(await exists(join(dir, `${LAYOUT_ROOT}/epic/issue-303/retro-1.json`))));
+});
+
+test("proposePrior writes an UNMERGED bot proposal; ratify merges it", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-2", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  assert.equal(proposal.ratified, false);
+  assert.equal(proposal.baseBranch, "main");
+  assert.ok(proposal.branch.startsWith("context/proposal/"));
+
+  // The proposal is NOT on main yet — it is an unratified hypothesis.
+  assert.equal(await writer.isRatified(proposal), false);
+  assert.ok(
+    !(await exists(join(dir, proposal.path))),
+    "unratified proposal must not appear on the base branch",
+  );
+  // ...but it IS committed on the proposal branch (work is preserved).
+  const onBranch = await git(dir, "show", `${proposal.branch}:${proposal.path}`);
+  assert.ok(onBranch.includes("retro-2"));
+
+  // Ratify == merge the bot PR.
+  const ratified = await writer.ratify(proposal);
+  assert.equal(ratified.baseBranch, "main");
+  assert.equal(await writer.isRatified(proposal), true);
+  assert.ok(await exists(join(dir, proposal.path)), "ratified record must be on main");
+
+  // The record's authority is still a hypothesis — ratification accepts it onto
+  // the line, it never forges it into an authoritative fact.
+  const parsed = JSON.parse(await readFile(join(dir, proposal.path), "utf8"));
+  assert.equal(parsed.provenance, "agent-retro");
+  assert.equal(parsed.authority, "hypothesis");
+});
+
+test("DEFAULT write path rejects a PII-carrying record (guard active by construction)", async () => {
+  const dir = await makeSubstrate();
+  // NO special guard wiring — the mandatory S6 guard must be active by default.
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const pii = record({
+    id: "pii-1",
+    provenance: "human",
+    mode: "normative",
+    authority: "hypothesis",
+    statement: "escalate to the on-call at jane.doe@example.com immediately",
+  });
+
+  await assert.rejects(() => writer.appendRecord(pii), PiiGuardError);
+
+  // The mandatory PII guard is present in the default registry...
+  assert.ok(writer.guards.length >= 1);
+  // ...and no commit was made — PII is rejected BEFORE any write.
+  assert.ok(!(await exists(join(dir, `${LAYOUT_ROOT}/epic/issue-303/pii-1.json`))));
+
+  // The proposal path is guarded identically.
+  await assert.rejects(
+    () =>
+      writer.proposePrior(
+        record({
+          id: "pii-2",
+          provenance: "agent-retro",
+          authority: "hypothesis",
+          statement: "reach the owner on 415-555-0132 about the retro",
+        }),
+      ),
+    PiiGuardError,
+  );
+});
+
+test("clean content still passes the default guard", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+  const result = await writer.appendRecord(
+    record({ id: "clean-1", statement: "the retry budget is three attempts" }),
+  );
+  assert.ok(await exists(join(dir, result.path)));
+});
+
+test("concurrent proposals use separate branches without clobbering", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const [p1, p2] = await Promise.all([
+    writer.proposePrior(
+      record({ id: "conc-a", provenance: "agent-retro", authority: "hypothesis" }),
+    ),
+    writer.proposePrior(
+      record({ id: "conc-b", provenance: "agent-retro", authority: "hypothesis" }),
+    ),
+  ]);
+
+  assert.notEqual(p1.branch, p2.branch);
+
+  await writer.ratify(p1);
+  await writer.ratify(p2);
+
+  // Both records survived the concurrent writes + merges.
+  assert.ok(await exists(join(dir, p1.path)));
+  assert.ok(await exists(join(dir, p2.path)));
+});

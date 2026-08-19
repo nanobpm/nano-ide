@@ -6,6 +6,7 @@
 // picked up automatically by re-running the generator (a prebuild step) — no
 // hand-edit here.
 
+import "./boundary.js";
 import "./branch.js";
 import "./break.js";
 import "./continue.js";

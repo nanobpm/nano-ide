@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:nano="https://nanobpm.io/schema/shapes/1.0" id="z_Definitions_boundary-demo" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="z_boundary-demo" name="boundary-demo" isExecutable="true">
+    <bpmn:startEvent id="z_Start"><bpmn:outgoing>z_f_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:serviceTask id="z_prepare" name="prepare">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="boundary-demo:prepare" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>z_f_0</bpmn:incoming>
+      <bpmn:outgoing>z_f_1</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="z_await-decision" name="await-decision">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="boundary-demo:await-decision" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>z_f_1</bpmn:incoming>
+      <bpmn:outgoing>z_f_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:boundaryEvent id="z_Be_0" name="SLA elapsed" attachedToRef="z_await-decision">
+      <bpmn:outgoing>z_f_3</bpmn:outgoing>
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration xsi:type="bpmn:tFormalExpression">=escalationSlaTimeout</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:boundaryEvent>
+    <bpmn:serviceTask id="z_record-timeout" name="record-timeout">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="boundary-demo:record-timeout" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>z_f_3</bpmn:incoming>
+      <bpmn:outgoing>z_f_4</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="z_record-result" name="record-result">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="boundary-demo:record-result" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>z_f_2</bpmn:incoming>
+      <bpmn:incoming>z_f_4</bpmn:incoming>
+      <bpmn:outgoing>z_f_5</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:endEvent id="z_End"><bpmn:incoming>z_f_5</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="z_f_0" sourceRef="z_Start" targetRef="z_prepare" />
+    <bpmn:sequenceFlow id="z_f_1" sourceRef="z_prepare" targetRef="z_await-decision" />
+    <bpmn:sequenceFlow id="z_f_2" sourceRef="z_await-decision" targetRef="z_record-result" />
+    <bpmn:sequenceFlow id="z_f_3" sourceRef="z_Be_0" targetRef="z_record-timeout" />
+    <bpmn:sequenceFlow id="z_f_4" sourceRef="z_record-timeout" targetRef="z_record-result" />
+    <bpmn:sequenceFlow id="z_f_5" sourceRef="z_record-result" targetRef="z_End" />
+  </bpmn:process>
+</bpmn:definitions>

@@ -62,6 +62,13 @@ human-in-the-loop path), composed with control-flow combinators:
   (a message- or timer-event-definition), the arm bodies rejoining downstream by an
   implicit XOR merge. This is the shape a convergence loop uses to bound a
   human-in-the-loop wait with a timeout.
+- `w.run(...).boundary({ timer, onTimeout, interrupting?, name? })` — attach an
+  SLA (an interrupting timer boundary event) to the PRECEDING activity: when
+  `timer` elapses the activity is cancelled and the token routes to the
+  `onTimeout` escalation body, which then converges with the activity's normal
+  continuation. `timer` is an ISO-8601 duration (`PT24H`) or a FEEL
+  `=`-expression (`=escalationSlaTimeout`). `interrupting` defaults to `true`
+  (pass `false` for a non-interrupting boundary that leaves the activity running).
 
 ```ts
 import { defineFlow, WorkflowClient, Worker } from "@nanobpm/workflow";

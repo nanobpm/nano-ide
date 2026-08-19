@@ -933,6 +933,7 @@ class Compiler {
     return (
       `<?xml version="1.0" encoding="UTF-8"?>\n` +
       `<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" ` +
+      `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ` +
       `xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" ` +
       `xmlns:nano="https://nanobpm.io/schema/shapes/1.0" ` +
       `id="Definitions_${escapeXml(this.flow.id)}" targetNamespace="http://bpmn.io/schema/bpmn">\n` +

@@ -56,18 +56,18 @@ seams (which backends exist per seam) for the completeness guard.
 ```ts
 import { assertThatText, seamInventory } from "@nanobpm/urban-testkit/ai";
 
-// Available today (S1): the derived seam inventory (the completeness guard's source of truth).
+// The derived seam inventory (the completeness guard's source of truth).
 seamInventory();
 
-// Future (S2/S3) — these matchers currently throw "not yet implemented":
+// Semantic-similarity and LLM-judge matchers — available and deterministic by default
+// (backed by the deterministic fakes, zero network):
 await assertThatText(output).matchesSemantically("a warm greeting", { threshold: 0.8 });
 await assertThatText(output).satisfiesJudge("is a polite apology");
 ```
 
-This slice (**S1**) ships the scaffold — seams, fakes, record/replay, the fluent
-matcher-registration seam, and the derived seam inventory. The `matchesSemantically`
-(S2) and `satisfiesJudge` (S3) matchers and the real opt-in adapters (S4) land in later
-slices.
+This surface ships the full stack — seams, deterministic fakes, record/replay, the fluent
+matcher-registration seam, the derived seam inventory, the `matchesSemantically` and
+`satisfiesJudge` matchers, and the opt-in real adapters described below.
 
 ### Real AI adapters
 

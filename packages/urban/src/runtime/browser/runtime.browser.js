@@ -321,6 +321,36 @@ function interpTemplate(tpl, row) {
       })
     : tpl;
 }
+
+// Format a single-field cell value per a column's opt-in `col.format` (issue
+// #327). This runs in the browser, so it is the ONLY place that can render a
+// stored UTC ISO timestamp in the VIEWER'S local timezone — the server never
+// knows the viewer's zone, so a server-formatted string would always be wrong
+// for someone. Currently the sole format is "datetime": a parseable ISO/date
+// value → "11:42am Aug 19" (h:mm + lowercase am/pm, then short-month day), both
+// parts in local time. Defensive by construction: an empty value, an unparseable
+// date, or any unknown format returns the raw text verbatim — a mis-set format
+// never blanks a cell or throws, matching how an unrecognised link.kind degrades
+// to plain text. Display-only: the untransformed rawText still drives the badge
+// gate/tooltip and any sort/groupBy (those key off the real field).
+/** @param {any} format
+ * @param {string} raw
+ * @returns {string} */
+function fmtCellValue(format, raw) {
+  if (format !== "datetime" || raw === "") return raw;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  // Present in a stable en-US format ("11:42am Aug 19") regardless of the
+  // viewer's locale ordering (e.g. en-GB would emit "19 Aug"), while the ABSENCE
+  // of a `timeZone` option keeps both parts in the viewer's LOCAL zone. hour12
+  // forces am/pm; the replace lowercases "AM"/"a.m."/… to "am"/"pm" and drops the
+  // separating space so the output is exactly "11:42am".
+  const time = d
+    .toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+    .replace(/\s*([AaPp])\.?\s*[Mm]\.?$/, (_m, p) => p.toLowerCase() + "m");
+  const date = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return time + " " + date;
+}
 /** @param {any} node */
 function renderText(node) {
   const v = node.props.variant;
@@ -641,9 +671,15 @@ function gridCell(col, row, role) {
   // field-derived defaults. Kept separate from the (possibly templated) display
   // text so a template never re-lights or blanks a badge.
   const rawText = row[col.field] == null ? "" : String(row[col.field]);
+  // Per-column display format (issue #327): an opt-in `col.format` transforms the
+  // single-field value for display only (e.g. "datetime" → the viewer's local
+  // time). rawText above stays untransformed so the badge gate/tooltip and any
+  // sort/groupBy still key off the real field. A col.template composes its own
+  // {{field}} tokens and therefore wins over the formatted field text below.
+  const fieldText = col.format ? fmtCellValue(col.format, rawText) : rawText;
   // Visible text: a col.template (interpolated from the row) wins over the
-  // raw field value, else the field value is shown verbatim.
-  const text = typeof col.template === "string" ? interpTemplate(col.template, row) : rawText;
+  // formatted/raw field value, else the field value is shown verbatim.
+  const text = typeof col.template === "string" ? interpTemplate(col.template, row) : fieldText;
   // 1. badge — a compact status indicator. When the row's field value is
   //    non-empty (truthy after trimming) render a small circular badge (e.g. a
   //    red "1" dot flagging an incident) whose tooltip is the full field text;
@@ -2176,4 +2212,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, fmtCellValue, gridCell };

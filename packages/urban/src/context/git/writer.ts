@@ -77,7 +77,9 @@ export interface ContextWriterOptions {
   readonly guards?: readonly PiiGuard[];
   /**
    * The base branch records land on / are proposed against. Defaults to the
-   * substrate's currently checked-out branch at write time.
+   * resolved substrate handle's `ref` (the S1-resolved branch), falling back to
+   * the substrate's currently checked-out branch only when the handle carries no
+   * ref.
    */
   readonly baseBranch?: string;
   /** Author for direct appends. Defaults to {@link DEFAULT_WRITE_AUTHOR}. */
@@ -149,7 +151,7 @@ export class ContextWriter {
     this.#substrate = options.substrate ?? new GitWriteSubstrate(handle.localPath);
     // The registry ALWAYS contains the mandatory PII guard; `guards` can only add.
     this.#guards = new PreCommitGuardRegistry(options.guards ?? []);
-    this.#baseBranchOverride = options.baseBranch;
+    this.#baseBranchOverride = options.baseBranch ?? (handle.ref || undefined);
     this.#author = options.author ?? DEFAULT_WRITE_AUTHOR;
     this.#botAuthor = options.botAuthor ?? DEFAULT_BOT_AUTHOR;
   }

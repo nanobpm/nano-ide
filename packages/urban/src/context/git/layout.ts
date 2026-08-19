@@ -28,29 +28,35 @@ export const RECORD_FILE_EXTENSION = ".json" as const;
 
 /**
  * The bucket directory used for records that carry no `scopeRef` (e.g. a
- * `corpus`-scoped record). A leading `_` cannot collide with a sanitised
- * `scopeRef` segment (those never begin with `_` unless the raw value did, in
- * which case the hash fallback below applies).
+ * `corpus`-scoped record). `sanitizeSegment` never returns exactly `"_"` — an
+ * input that would sanitise to `"_"` is treated as reserved and gets a `_<hash>`
+ * form instead — so a sanitised `scopeRef` can never collide with this bucket.
  */
 export const UNSCOPED_BUCKET = "_" as const;
 
 /**
  * Reduce an untrusted string to a single filesystem-safe path segment.
  *
- * The result contains only `[A-Za-z0-9._-]`, never a path separator, and is
- * never `""`, `.`, or `..` — so it can never traverse out of its parent
- * directory. When sanitisation is LOSSY (the cleaned form differs from the
- * input, or collapses to a reserved value) a short hash of the ORIGINAL value is
- * appended, so two distinct raw values can never silently collide onto one
- * segment while a clean value is preserved verbatim.
+ * The result contains only `[A-Za-z0-9._-]`, never a path separator, never a
+ * `..` sequence, and is never `""`, `.`, `..`, or exactly `"_"` — so it can
+ * never traverse out of its parent directory nor collide with
+ * {@link UNSCOPED_BUCKET}. When sanitisation is LOSSY (the cleaned form differs
+ * from the input, or collapses to a reserved value) a short hash of the ORIGINAL
+ * value is appended, so two distinct raw values can never silently collide onto
+ * one segment while a clean value is preserved verbatim.
  */
 export function sanitizeSegment(value: string): string {
   const cleaned = value
     .trim()
     .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/\.{2,}/g, ".")
     .replace(/^[-.]+|[-.]+$/g, "")
     .slice(0, 100);
-  const reserved = cleaned === "" || cleaned === "." || cleaned === "..";
+  const reserved =
+    cleaned === "" ||
+    cleaned === "." ||
+    cleaned === ".." ||
+    cleaned === UNSCOPED_BUCKET;
   if (reserved) {
     return `_${shortHash(value)}`;
   }

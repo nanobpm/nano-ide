@@ -95,6 +95,20 @@ test("appendRecord persists a measured fact on the base branch", async () => {
   assert.equal(head, result.mergeCommit);
 });
 
+test("baseBranch defaults to the resolved handle's ref, not the checked-out branch", async () => {
+  const dir = await makeSubstrate();
+  // Diverge the working copy onto another branch...
+  await git(dir, "checkout", "-b", "scratch");
+  // ...but the handle was resolved (by S1) against `main`.
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const result = await writer.appendRecord(record({ id: "on-main" }));
+
+  // The record lands on the S1-resolved ref (main), never the checked-out branch.
+  assert.equal(result.branch, "main");
+  assert.equal(await git(dir, "rev-parse", "main"), result.mergeCommit);
+});
+
 test("appendRecord REJECTS an agent-retro record (must go through governance)", async () => {
   const dir = await makeSubstrate();
   const writer = new ContextWriter({ localPath: dir, ref: "main" });
@@ -111,7 +125,9 @@ test("appendRecord REJECTS an agent-retro record (must go through governance)", 
     GovernanceError,
   );
 
-  // Nothing was committed — the guard fired before any git write.
+  // Nothing was committed — governance rejected the agent-retro record via
+  // GovernanceError (in #assertDirectlyAppendable, ahead of the PII guard),
+  // before any git write.
   assert.ok(!(await exists(join(dir, `${LAYOUT_ROOT}/epic/issue-303/retro-1.json`))));
 });
 

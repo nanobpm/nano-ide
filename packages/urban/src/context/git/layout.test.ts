@@ -77,3 +77,36 @@ test("isRecordPath selects record files under the layout root", () => {
   assert.equal(isRecordPath("other/epic/x/r.json"), false);
   assert.equal(isRecordPath("records/../secrets/r.json"), false);
 });
+
+test("sanitizeSegment eliminates internal '..' sequences", () => {
+  // An internal `..` (e.g. "a..b") must not survive: `isRecordPath` rejects any
+  // path containing "..", so a record whose id/scopeRef carried one would be
+  // invisible to retrieval/CI. It is disambiguated with a hash, never dropped.
+  const seg = sanitizeSegment("a..b");
+  assert.ok(!seg.includes(".."));
+  assert.notEqual(seg, sanitizeSegment("a.b"));
+});
+
+test("a sanitised scopeRef can never collide with UNSCOPED_BUCKET", () => {
+  // A raw scopeRef of exactly "_" must NOT map onto the shared unscoped bucket,
+  // otherwise a scoped record and an unscoped record share a directory.
+  const seg = sanitizeSegment(UNSCOPED_BUCKET);
+  assert.notEqual(seg, UNSCOPED_BUCKET);
+  assert.notEqual(
+    recordDir("epic", UNSCOPED_BUCKET),
+    recordDir("epic"),
+  );
+});
+
+test("every recordRelativePath output is a valid isRecordPath (no writer/scan drift)", () => {
+  // The writer's output and the retrieval/CI scanner must agree by construction:
+  // any path recordRelativePath emits must be selected by isRecordPath, for even
+  // adversarial ids/scopeRefs.
+  const adversarial = ["a..b", "..", ".", "_", "../../escape", "", "  ", "a/b\\c"];
+  for (const scopeRef of adversarial) {
+    for (const id of adversarial) {
+      const path = recordRelativePath(record({ scope: "epic", scopeRef, id }));
+      assert.equal(isRecordPath(path), true, `not a record path: ${path}`);
+    }
+  }
+});

@@ -1,13 +1,28 @@
 // Tests for the scaffolder: token substitution and the full/headless presets.
 
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scaffold, slugify } from "./scaffold.ts";
 import { main } from "./cli.ts";
 import { parse as parseYaml } from "yaml";
+
+// Single source of truth for scratch dirs: every test allocates its temp dir
+// through this helper, and the module-level `after` hook removes all of them so
+// no scaffold output (node_modules, generated artifacts) leaks into the OS temp
+// dir across runs. Cleaning up here — rather than a per-test try/finally — keeps
+// the guarantee in one place and applies it uniformly to every test.
+const tempDirs: string[] = [];
+async function makeTempDir(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
+after(async () => {
+  await Promise.all(tempDirs.map((dir) => rm(dir, { recursive: true, force: true })));
+});
 
 async function exists(p: string): Promise<boolean> {
   try {
@@ -38,7 +53,7 @@ test("slugify normalizes names", () => {
 });
 
 test("full preset scaffolds an opt-in ui block with the app name as its label", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-ui-"));
+  const dir = await makeTempDir("urban-ui-");
   await scaffold({ name: "Hello Urban", dir, preset: "full" });
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
   assert.deepEqual(manifest.ui, {
@@ -50,7 +65,7 @@ test("full preset scaffolds an opt-in ui block with the app name as its label", 
 });
 
 test("code-first style also scaffolds the ui block", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-ui-code-"));
+  const dir = await makeTempDir("urban-ui-code-");
   await scaffold({ name: "Coder", dir, style: "code" });
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
   assert.deepEqual(manifest.ui, {
@@ -62,7 +77,7 @@ test("code-first style also scaffolds the ui block", async () => {
 });
 
 test("headless preset keeps the control-only ui block (enabled:false)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-ui-headless-"));
+  const dir = await makeTempDir("urban-ui-headless-");
   await scaffold({ name: "Batch Job", dir, preset: "headless" });
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
   assert.deepEqual(manifest.ui, {
@@ -85,7 +100,7 @@ test("scaffolded apps default network.bind to \"all\" (0.0.0.0) so a worker flee
     { name: "Headless App", preset: "headless" as const },
     { name: "Code First", style: "code" as const },
   ]) {
-    const dir = await mkdtemp(join(tmpdir(), "urban-bind-"));
+    const dir = await makeTempDir("urban-bind-");
     await scaffold({ dir, ...opts });
     const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
     assert.deepEqual(manifest.network, { bind: "all" }, `${opts.name}: network.bind should default to "all"`);
@@ -93,7 +108,7 @@ test("scaffolded apps default network.bind to \"all\" (0.0.0.0) so a worker flee
 });
 
 test("full preset scaffolds a runnable app with substituted tokens", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-full-"));
+  const dir = await makeTempDir("urban-full-");
   const res = await scaffold({ name: "Hello Urban", dir, preset: "full" });
   assert.equal(res.id, "hello-urban");
   assert.ok(res.files.includes("nano.app.json"));
@@ -114,7 +129,7 @@ test("full preset scaffolds a runnable app with substituted tokens", async () =>
 });
 
 test("full preset scaffolds the end-to-end showcase: API + operations + pages", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-showcase-"));
+  const dir = await makeTempDir("urban-showcase-");
   const res = await scaffold({ name: "Hello Urban", dir, preset: "full" });
 
   // OpenAPI-first API surface: spec + one delegate per operationId.
@@ -175,7 +190,7 @@ test("scaffolds valid YAML even for names with YAML-special characters", async (
     "- leading dash",
     "@handle {x}",
   ]) {
-    const dir = await mkdtemp(join(tmpdir(), "urban-yaml-hostile-"));
+    const dir = await makeTempDir("urban-yaml-hostile-");
     await scaffold({ name, dir, preset: "full" });
     const spec = parseYaml(await readFile(join(dir, "openapi.yaml"), "utf8"));
     assert.equal(spec.info.title, `${name} API`, `title round-trips for ${JSON.stringify(name)}`);
@@ -189,7 +204,7 @@ test("scaffolds valid YAML even for names with YAML-special characters", async (
 });
 
 test("headless preset drops surfaces, triggers and forms (workers only)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-headless-"));
+  const dir = await makeTempDir("urban-headless-");
   const res = await scaffold({ name: "Batch Job", dir, preset: "headless" });
 
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
@@ -210,7 +225,7 @@ test("headless preset drops surfaces, triggers and forms (workers only)", async 
 });
 
 test("names with quotes/backslashes/control chars stay valid JSON in the manifest", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-scaffold-"));
+  const dir = await makeTempDir("urban-scaffold-");
   const tricky = 'Ac "me"\\Co\tInc';
   await scaffold({ name: tricky, dir, preset: "full" });
   const manifest = JSON.parse(await readFile(join(dir, "nano.app.json"), "utf8"));
@@ -218,7 +233,7 @@ test("names with quotes/backslashes/control chars stay valid JSON in the manifes
 });
 
 test("Node is the default host: no deno.json, README drops the Deno block", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-node-"));
+  const dir = await makeTempDir("urban-node-");
   const res = await scaffold({ name: "Node App", dir });
   assert.ok(!res.files.includes("deno.json"), "no deno.json in the file list");
   assert.ok(!(await exists(join(dir, "deno.json"))), "no deno.json on disk");
@@ -228,7 +243,7 @@ test("Node is the default host: no deno.json, README drops the Deno block", asyn
 });
 
 test("scaffolded package.json exposes gen and gen:check scripts", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-gen-"));
+  const dir = await makeTempDir("urban-gen-");
   await scaffold({ name: "Gen App", dir });
   const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
   assert.equal(pkg.scripts.gen, "urban gen");
@@ -238,7 +253,7 @@ test("scaffolded package.json exposes gen and gen:check scripts", async () => {
 
 test("Node is the default typecheck: tsc + tsconfig.json + TS toolchain devDeps", async () => {
   for (const style of ["model", "code"] as const) {
-    const dir = await mkdtemp(join(tmpdir(), `urban-tsc-${style}-`));
+    const dir = await makeTempDir(`urban-tsc-${style}-`);
     const res = await scaffold({ name: "TS App", dir, style });
 
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
@@ -265,7 +280,7 @@ test("Node is the default typecheck: tsc + tsconfig.json + TS toolchain devDeps"
     assert.ok(!/if:deno/.test(ci), `${style}: CI conditional markers are resolved`);
   }
   // Model-first tsc includes generated files, so CI derives them before typechecking.
-  const modelDir = await mkdtemp(join(tmpdir(), "urban-tsc-model-ci-"));
+  const modelDir = await makeTempDir("urban-tsc-model-ci-");
   await scaffold({ name: "TS Model", dir: modelDir });
   const modelCi = await readFile(join(modelDir, ".github/workflows/ci.yml"), "utf8");
   assert.match(modelCi, /run: npm run gen\n\s+- run: npm run typecheck/, "gen precedes typecheck");
@@ -276,7 +291,7 @@ test("--deno reverts typecheck to deno check and drops the Node TS toolchain", a
     ["model", 'deno check main.ts "nano-generated/controller.ts" "workers/**/*.ts" "operations/**/*.ts"'],
     ["code", 'deno check main.ts "workflows/**/*.ts" "scripts/**/*.ts"'],
   ] as const) {
-    const dir = await mkdtemp(join(tmpdir(), `urban-deno-tsc-${style}-`));
+    const dir = await makeTempDir(`urban-deno-tsc-${style}-`);
     const res = await scaffold({ name: "Deno TS App", dir, style, deno: true });
 
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
@@ -300,7 +315,7 @@ test("--deno reverts typecheck to deno check and drops the Node TS toolchain", a
 
 test("scaffold wires @nanobpm/urban-testkit as a devDependency with a runnable starter test", async () => {
   for (const style of ["model", "code"] as const) {
-    const dir = await mkdtemp(join(tmpdir(), `urban-testkit-${style}-`));
+    const dir = await makeTempDir(`urban-testkit-${style}-`);
     const res = await scaffold({ name: "Kit App", dir, style });
 
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
@@ -360,13 +375,13 @@ test("scaffold wires @nanobpm/urban-testkit as a devDependency with a runnable s
 });
 
 test("the model template's e2e exercises the HTTP response DSL, the code-first one drives the flow", async () => {
-  const modelDir = await mkdtemp(join(tmpdir(), "urban-e2e-model-"));
+  const modelDir = await makeTempDir("urban-e2e-model-");
   await scaffold({ name: "Kit App", dir: modelDir, style: "model" });
   const modelE2e = await readFile(join(modelDir, "tests/app.e2e.test.ts"), "utf8");
   // The model template exposes an OpenAPI `api` binding, so its e2e asserts over HTTP responses.
   assert.match(modelE2e, /assertThatResponse/, "model e2e asserts over the HTTP response");
 
-  const codeDir = await mkdtemp(join(tmpdir(), "urban-e2e-code-"));
+  const codeDir = await makeTempDir("urban-e2e-code-");
   await scaffold({ name: "Kit App", dir: codeDir, style: "code" });
   const codeE2e = await readFile(join(codeDir, "tests/app.e2e.test.ts"), "utf8");
   // The code-first template has no `api` binding, so it drives the process via createInstance.
@@ -380,7 +395,7 @@ test("no stale testkit/urban pins remain in either scaffolded template", async (
     ["code", false],
     ["code", true],
   ] as const) {
-    const dir = await mkdtemp(join(tmpdir(), `urban-pins-${style}-`));
+    const dir = await makeTempDir(`urban-pins-${style}-`);
     await scaffold({ name: "Pin App", dir, style, deno });
     for (const file of ["package.json", ...(deno ? ["deno.json"] : [])]) {
       const raw = await readFile(join(dir, file), "utf8");
@@ -397,7 +412,7 @@ test("no stale testkit/urban pins remain in either scaffolded template", async (
 });
 
 test("--deno maps @nanobpm/urban-testkit and adds a test task", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-deno-kit-"));
+  const dir = await makeTempDir("urban-deno-kit-");
   await scaffold({ name: "Deno Kit App", dir, deno: true });
   const denoCfg = JSON.parse(await readFile(join(dir, "deno.json"), "utf8"));
   assert.match(
@@ -409,7 +424,7 @@ test("--deno maps @nanobpm/urban-testkit and adds a test task", async () => {
 });
 
 test("--deno keeps deno.json and the Deno block, with markers removed", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-deno-"));
+  const dir = await makeTempDir("urban-deno-");
   const res = await scaffold({ name: "Deno App", dir, deno: true });
   assert.ok(res.files.includes("deno.json"), "deno.json in the file list");
   assert.ok(await exists(join(dir, "deno.json")), "deno.json on disk");
@@ -422,7 +437,7 @@ test("--deno keeps deno.json and the Deno block, with markers removed", async ()
 });
 
 test("CLI tolerates a `--` end-of-options delimiter (npm create injects it)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-delim-"));
+  const dir = await makeTempDir("urban-delim-");
   // e.g. `npm create urban-app -- "Delim App" --dir <dir> --deno`
   const code = await main(["Delim App", "--dir", dir, "--", "--deno"]);
   assert.equal(code, 0, "does not error on `--`");
@@ -430,7 +445,7 @@ test("CLI tolerates a `--` end-of-options delimiter (npm create injects it)", as
 });
 
 test("code-first style scaffolds a defineFlow app (no processes/, custom main.ts)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-code-"));
+  const dir = await makeTempDir("urban-code-");
   const res = await scaffold({ name: "Code App", dir, style: "code" });
   assert.equal(res.id, "code-app");
   await assertScaffoldedQualityGateFiles(dir, res.files);
@@ -466,7 +481,7 @@ test("code-first style scaffolds a defineFlow app (no processes/, custom main.ts
 });
 
 test("--code-first flag selects the code-first template", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-cf-flag-"));
+  const dir = await makeTempDir("urban-cf-flag-");
   const code = await main(["CF App", "--dir", dir, "--code-first"]);
   assert.equal(code, 0);
   assert.ok(await exists(join(dir, "workflows/greet.ts")), "code-first workflow scaffolded");
@@ -474,7 +489,7 @@ test("--code-first flag selects the code-first template", async () => {
 });
 
 test("--style code is equivalent, and --style rejects unknown values", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-style-"));
+  const dir = await makeTempDir("urban-style-");
   const code = await main(["Styled App", "--dir", dir, "--style", "code"]);
   assert.equal(code, 0);
   assert.ok(await exists(join(dir, "workflows/greet.ts")), "--style code scaffolds code-first");
@@ -486,7 +501,7 @@ test("--style code is equivalent, and --style rejects unknown values", async () 
 });
 
 test("--code-first --deno keeps deno.json with node-run start/dev/greet tasks", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-cf-deno-"));
+  const dir = await makeTempDir("urban-cf-deno-");
   const res = await scaffold({ name: "CF Deno", dir, style: "code", deno: true });
   assert.ok(res.files.includes("deno.json"), "deno.json emitted");
   const denoCfg = JSON.parse(await readFile(join(dir, "deno.json"), "utf8"));

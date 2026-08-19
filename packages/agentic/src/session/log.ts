@@ -59,8 +59,11 @@ export interface SessionLog {
    * {@link AppendedSessionEvent}. Fenced. `offset` must be `<= nextOffset`: at
    * `nextOffset` it extends the log; below it (a resume writing back into the log
    * after `restore`) it first drops the now-superseded uncommitted tail
-   * `[offset, nextOffset)` and then writes — an idempotent re-key that keeps the
-   * authoritative log gap-free. An `offset > nextOffset` is a gap and throws.
+   * `[offset, nextOffset)` — **and every checkpoint pinned above `offset`**, which
+   * would otherwise dangle past the rewritten head and mis-seed a later `restore`
+   * (a gap `RangeError` on the next `emit`) — and then writes: an idempotent
+   * re-key that keeps the authoritative log gap-free. An `offset > nextOffset` is
+   * a gap and throws.
    */
   append(
     key: ActivationKey,
@@ -185,12 +188,23 @@ export class InMemorySessionLog implements SessionLog {
       throw new RangeError(`session log gap: append at offset ${offset} but next offset is ${arr.length}`);
     }
     if (offset < arr.length) {
-      // Resuming: drop the now-superseded uncommitted tail before re-keying.
+      // Resuming: drop the now-superseded uncommitted tail before re-keying, and
+      // prune any checkpoint pinned above the resume boundary — it now points
+      // past the rewritten head and would mis-seed a later restore.
       arr.length = offset;
+      this.#pruneCheckpointsAbove(key, offset);
     }
     const appended: AppendedSessionEvent = { ...event, offset, incarnation };
     arr.push(appended);
     return appended;
+  }
+
+  /** Drop checkpoints whose offset sits above `offset` (past a rewritten head). */
+  #pruneCheckpointsAbove(key: ActivationKey, offset: number): void {
+    const arr = this.#checkpointsFor(key);
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (arr[i].offset > offset) arr.splice(i, 1);
+    }
   }
 
   putCheckpoint(key: ActivationKey, incarnation: number, checkpoint: SessionCheckpoint): SessionCheckpoint {
@@ -358,6 +372,13 @@ export class SqliteSessionLog implements SessionLog {
         // Resuming: drop the now-superseded uncommitted tail before re-keying.
         this.#db.run(
           `DELETE FROM ${SESSION_EVENT_TABLE} WHERE process_instance_key = ? AND element_id = ? AND event_offset >= ?`,
+          [key.processInstanceKey, key.elementId, offset],
+        );
+        // Prune checkpoints pinned above the resume boundary: they now point
+        // past the rewritten head and would mis-seed a later restore (a gap
+        // RangeError on the next emit).
+        this.#db.run(
+          `DELETE FROM ${SESSION_CHECKPOINT_TABLE} WHERE process_instance_key = ? AND element_id = ? AND checkpoint_offset > ?`,
           [key.processInstanceKey, key.elementId, offset],
         );
       }

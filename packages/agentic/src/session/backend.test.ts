@@ -103,6 +103,33 @@ for (const h of HARNESSES) {
     assert.equal(backend.restore(cp0.id).events.length, 1);
   });
 
+  test(`[${h.name}] resuming from an earlier checkpoint prunes now-dangling later checkpoints`, (t) => {
+    const log = h.makeLog(t);
+    const backend = new SessionBackend(log, KEY, 1, { newCheckpointId: seqIds("cp") });
+    backend.emit(msg("e0", null, "a"));
+    const cp0 = backend.checkpoint("sha0", LEDGER); // offset 1
+    backend.emit(msg("e1", "e0", "b"));
+    backend.emit(msg("e2", "e1", "c"));
+    const cpLate = backend.checkpoint("sha-late", LEDGER); // offset 3
+
+    // Rewind to the earlier checkpoint and rewrite the tail from there. This
+    // truncates events [1, 3), so cpLate (offset 3) now points past the head.
+    backend.restore(cp0.id);
+    backend.emit(msg("e1b", "e0", "b2")); // offset 1
+
+    // The now-dangling later checkpoint must be pruned, and the surviving
+    // earlier checkpoint (whose offset is still backed by real events) kept.
+    assert.equal(log.getCheckpoint(KEY, cpLate.id), undefined, "dangling later checkpoint is pruned");
+    assert.deepEqual(log.latestCheckpoint(KEY), cp0, "latest is the surviving earlier checkpoint");
+    assert.ok(log.nextOffset(KEY) <= cpLate.offset, "head did not advance past the rewritten tail");
+
+    // A subsequent restore() must not reposition the cursor past the head, so
+    // the next emit continues gap-free instead of throwing a gap RangeError.
+    const seed = backend.restore();
+    assert.equal(seed.nextOffset, cp0.offset, "restore resumes at the surviving checkpoint, not a dangling one");
+    assert.doesNotThrow(() => backend.emit(msg("e-next", "e0", "n")), "resume after prune does not gap");
+  });
+
   test(`[${h.name}] restore(unknown id) falls back to the latest checkpoint`, (t) => {
     const log = h.makeLog(t);
     const backend = new SessionBackend(log, KEY, 1, { newCheckpointId: seqIds("cp") });

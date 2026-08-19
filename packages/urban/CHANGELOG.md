@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.63.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.62.0...@nanobpm/urban-0.63.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** let dataGrid child-grid rows host a detail.form (inline answer/resume) ([#336](https://github.com/nanobpm/nano-ide/issues/336)) ([1abd913](https://github.com/nanobpm/nano-ide/commit/1abd913833c6ffdc779e2fea8490904a6d6a79bf))
+
 ## [0.62.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.61.0...@nanobpm/urban-0.62.0) (2026-08-19)
 
 

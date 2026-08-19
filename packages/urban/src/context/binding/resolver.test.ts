@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, dirname, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 import { ContextResolver, defaultContextCacheRoot } from "./resolver.ts";
-import { GitSubstrateBackend, redactUrlUserinfo } from "./git-backend.ts";
+import { GitSubstrateBackend, hardenedGitArgs, redactUrlUserinfo } from "./git-backend.ts";
 import type { GitRunner } from "./git-backend.ts";
 import type {
   ResolvedContextHandle,
@@ -399,6 +399,97 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", args, { cwd });
   return stdout.trim();
 }
+
+async function pathThere(path: string): Promise<boolean> {
+  try {
+    await readFile(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("hardenedGitArgs prepends core.hooksPath=/dev/null before the subcommand to disable hooks", () => {
+  const hardened = hardenedGitArgs(["fetch", "--tags", "origin"]);
+  // The `-c name=value` pair must precede the subcommand or git ignores it.
+  assert.deepEqual(hardened.slice(0, 3), ["-c", "core.hooksPath=/dev/null", "fetch"]);
+  assert.deepEqual(hardened, ["-c", "core.hooksPath=/dev/null", "fetch", "--tags", "origin"]);
+  // Pure/non-mutating: the original argv is untouched.
+  const original = ["checkout", "--force", "main"];
+  hardenedGitArgs(original);
+  assert.deepEqual(original, ["checkout", "--force", "main"]);
+});
+
+test("git backend does NOT execute a planted .git/hooks script when refreshing a poisoned cache entry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-hooks-"));
+  try {
+    const origin = join(root, "origin");
+    const cacheRoot = join(root, "cache");
+    await execFileAsync("git", ["init", "-b", "main", origin]);
+    await git(origin, "config", "user.email", "t@example.com");
+    await git(origin, "config", "user.name", "Test");
+    await writeFile(join(origin, "note.md"), "v1\n");
+    await git(origin, "add", "note.md");
+    await git(origin, "commit", "-m", "v1");
+
+    const binding = { repo: origin, ref: "main" };
+    const resolver = new ContextResolver({ cacheRoot });
+    const handle = await resolver.resolve(binding);
+
+    // Poison the cached working copy the way a cache-tampering attacker would:
+    // plant an executable hook that fires on the next fetch/checkout. If hooks
+    // were live, refreshing would run it and drop the sentinel file.
+    const sentinel = join(root, "pwned");
+    const hookDir = join(handle.localPath, ".git", "hooks");
+    await mkdir(hookDir, { recursive: true });
+    for (const name of ["post-checkout", "post-merge", "reference-transaction"]) {
+      const hook = join(hookDir, name);
+      await writeFile(hook, `#!/bin/sh\ntouch "${sentinel}"\n`);
+      await chmod(hook, 0o755);
+    }
+
+    // Advance origin and refresh — this runs fetch + checkout against the cache.
+    await writeFile(join(origin, "note.md"), "v2\n");
+    await git(origin, "commit", "-am", "v2");
+    await resolver.resolve(binding, { refresh: true });
+
+    assert.equal(
+      await pathThere(sentinel),
+      false,
+      "hooks under the cached .git must NOT execute during resolution",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend surfaces an unreadable .git marker file as a SubstrateResolveError, not a raw Node error", async () => {
+  if (typeof process.getuid === "function" && process.getuid() === 0) {
+    return; // root bypasses permission bits, so EACCES can't be provoked
+  }
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-gitmarker-"));
+  const identity = resolveContextIdentity({ repo: join(root, "origin"), ref: "main" });
+  const gitFile = join(root, "cache", identity.slug, ".git");
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    // A `.git` *file* (worktree/submodule marker, not a directory) that exists
+    // but is unreadable must surface a wrapped SubstrateResolveError rather than
+    // leaking a raw EACCES from readFile.
+    await writeFile(gitFile, "gitdir: /somewhere\n");
+    await chmod(gitFile, 0o000);
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(resolver.resolve(binding, { refresh: false }), /marker is not readable/);
+  } finally {
+    await chmod(gitFile, 0o644).catch(() => {});
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
 
 test("git backend clones on first use and re-pins on refresh; cross-instance sharing", async () => {
   const root = await mkdtemp(join(tmpdir(), "urban-ctx-"));

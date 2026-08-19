@@ -37,15 +37,37 @@ export class SubstrateResolveError extends Error {
 export const redactUrlUserinfo = (arg: string): string =>
   arg.replace(/(\/\/)[^/@\s]+@/g, "$1***@");
 
+/**
+ * `git` runs against a working copy that lives in a shared, potentially
+ * tampered-with cache. Commands like `fetch` and especially `checkout` execute
+ * local hooks (e.g. `post-checkout`, `post-merge`) from the working copy's
+ * `.git/hooks` if they exist — so a planted hook in a poisoned cache entry is a
+ * code-execution vector. Pinning `core.hooksPath` to a path that cannot contain
+ * an executable hook (`/dev/null` is not a directory, so `<hooksPath>/<hook>`
+ * never resolves) disables hooks entirely for every automated invocation, so
+ * resolution can never execute a script from the cached substrate. Single
+ * source of truth for the flag: prepended by {@link hardenedGitArgs} to every
+ * argv the default runner spawns. `-c <name>=<value>` must precede the
+ * subcommand, so it is prepended (not appended).
+ */
+export const GIT_SAFETY_CONFIG: readonly string[] = ["-c", "core.hooksPath=/dev/null"];
+
+/** Prepend the hook-disabling safety config to a git argv (single source of truth). */
+export const hardenedGitArgs = (args: readonly string[]): string[] => [
+  ...GIT_SAFETY_CONFIG,
+  ...args,
+];
+
 const defaultGitRunner: GitRunner = async (args, cwd) => {
+  const hardened = hardenedGitArgs(args);
   try {
-    const { stdout } = await execFileAsync("git", [...args], {
+    const { stdout } = await execFileAsync("git", hardened, {
       cwd,
       maxBuffer: 64 * 1024 * 1024,
     });
     return stdout;
   } catch (cause) {
-    const label = `git ${args.map(redactUrlUserinfo).join(" ")}`;
+    const label = `git ${hardened.map(redactUrlUserinfo).join(" ")}`;
     throw new SubstrateResolveError(`substrate git command failed: ${label}`, { cause });
   }
 };
@@ -141,7 +163,16 @@ async function gitFileTargetWithinRoot(
   localPath: string,
   cacheRoot: string,
 ): Promise<boolean> {
-  const content = await readFile(gitFile, "utf8");
+  // Read the marker file through the same error-wrapping discipline as the rest
+  // of this module's access guards: a filesystem failure (e.g. EACCES/EPERM on
+  // an unreadable marker, or a race that removes it) surfaces as a
+  // SubstrateResolveError rather than leaking a raw Node error to the caller.
+  let content: string;
+  try {
+    content = await readFile(gitFile, "utf8");
+  } catch (cause) {
+    throw new SubstrateResolveError(`substrate .git marker is not readable: ${gitFile}`, { cause });
+  }
   const match = content.match(/^gitdir:[ \t]*(.+?)[ \t]*$/m);
   if (match === null) {
     return false;

@@ -55,23 +55,23 @@ export {
   parseOpenApi,
 } from "./openapi-driver.ts";
 
-// Fluent assertion DSL (`assertThat*`) — issue #295. The barrel is wired here
-// once; each matcher lives in its own `./assert/*.ts` file so the parallel
-// matcher slices never collide on this file.
-export {
-  assertThatInstance,
-  type IncidentSelector,
-  type InstanceAssert,
-} from "./assert/instance.ts";
-export {
-  assertThatUserTask,
-  type UserTaskAssert,
-  type UserTaskSelector,
-} from "./assert/user-task.ts";
-export { assertThatDb, type DbAssert, type TableAssert } from "./assert/db.ts";
-export { assertThatResponse, type ResponseAssert } from "./assert/response.ts";
+// Fluent assertion DSL (`assertThat*`) — issue #295. Tier A (the engine-facing
+// matchers, selectors, and their types) was lifted into `@nanobpm/engine-testkit`
+// (issue Magikcraft/nano-bpm#894, S2) so it is reusable beyond Urban apps.
+// urban-testkit re-exports that surface and keeps only the thin `TestApp`-adapting
+// wrappers (`assertThatInstance` / `assertThatUserTask`, which forward the app's
+// WASM engine to the port-based matchers) plus Tier B (`assertThatDb` /
+// `assertThatResponse`, genuinely Urban — SQLite + the OpenAPI route driver).
 export {
   byKey,
   byProcessId,
+  type IncidentSelector,
+  type InstanceAssert,
   type InstanceSelector,
-} from "./assert/selectors.ts";
+  type UserTaskAssert,
+  type UserTaskSelector,
+} from "@nanobpm/engine-testkit";
+export { assertThatInstance } from "./assert/instance.ts";
+export { assertThatUserTask } from "./assert/user-task.ts";
+export { assertThatDb, type DbAssert, type TableAssert } from "./assert/db.ts";
+export { assertThatResponse, type ResponseAssert } from "./assert/response.ts";

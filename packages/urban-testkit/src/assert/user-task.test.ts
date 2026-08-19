@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { assertThatUserTask } from "./user-task.ts";
-import { byKey, byProcessId } from "./selectors.ts";
+import { byKey, byProcessId } from "@nanobpm/engine-testkit";
 import { bootTestApp, type TestApp } from "../boot-app.ts";
 
 // A process that parks on a single native user task assigned to `alice` and offered to the

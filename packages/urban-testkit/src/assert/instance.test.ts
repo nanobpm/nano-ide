@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootTestApp, type TestApp } from "../boot-app.ts";
 import { assertThatInstance } from "./instance.ts";
-import { byKey, byProcessId } from "./selectors.ts";
+import { byKey, byProcessId } from "@nanobpm/engine-testkit";
 
 // A single-service-task process. Deployed per-test through the engine so each
 // case owns an isolated snapshot (the completed-element stats are aggregate).

@@ -77,9 +77,12 @@ async function implementationFiles(dir: string = ASSERT_DIR, prefix = ""): Promi
 test("the assertion DSL implementation scans clean of wall-clock / entropy APIs", async () => {
   const files = await implementationFiles();
   // Sanity: the scan must actually cover the shipped DSL, or a clean result is
-  // meaningless. The DSL is selectors + format + the four matcher files.
-  assert.ok(files.length >= 6, `expected to scan the DSL implementation files, found ${files.join(", ")}`);
-  for (const expected of ["selectors.ts", "format.ts", "instance.ts", "user-task.ts", "db.ts", "response.ts"]) {
+  // meaningless. After the Tier-A matchers were lifted into
+  // `@nanobpm/engine-testkit` (issue Magikcraft/nano-bpm#894, S2), the DSL
+  // implementation left in this package is the two thin `TestApp`-adapting
+  // wrappers + the engine-read-model adapter + the Urban-only Tier-B matchers.
+  assert.ok(files.length >= 5, `expected to scan the DSL implementation files, found ${files.join(", ")}`);
+  for (const expected of ["engine-read-model.ts", "instance.ts", "user-task.ts", "db.ts", "response.ts"]) {
     assert.ok(files.includes(expected), `determinism guard must scan ${expected}`);
   }
 

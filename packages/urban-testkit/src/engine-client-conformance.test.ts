@@ -30,6 +30,12 @@ test("WasmEngineClient implements the full EngineClient method surface", async (
         "deriving from an existing method where possible so the two cannot drift.",
     );
   } finally {
-    await engine.close();
+    // Guard cleanup: `close` may itself be one of the missing methods this test
+    // exists to detect. Calling it unconditionally would throw
+    // `TypeError: engine.close is not a function` and mask the actionable
+    // assertion above that lists exactly which methods are missing.
+    if (typeof engine.close === "function") {
+      await engine.close();
+    }
   }
 });

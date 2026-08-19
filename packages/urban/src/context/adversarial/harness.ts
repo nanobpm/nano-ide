@@ -11,13 +11,20 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { hardenedGitArgs } from "../binding/git-backend.ts";
 import type { MemoryRecord } from "../schema/index.ts";
 
 const execFileAsync = promisify(execFile);
 
-/** Run a git command in `cwd`, returning trimmed stdout. */
+/**
+ * Run a git command in `cwd`, returning trimmed stdout. Every invocation is
+ * routed through {@link hardenedGitArgs} (the repo's single source of truth for
+ * `core.hooksPath=/dev/null`), so `init`/`commit`/`checkout` can never execute a
+ * hook from global templates or local config — keeping the harness deterministic
+ * and closing the CI code-execution vector.
+ */
 export async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, { cwd });
+  const { stdout } = await execFileAsync("git", hardenedGitArgs(args), { cwd });
   return stdout.trim();
 }
 

@@ -28,7 +28,9 @@ test("retrieval is correct on a COLD cache — the first query falls back to git
   await writer.appendRecord(rec({ id: "cold-1", scope: "epic", scopeRef: "issue-303" }));
   await writer.appendRecord(rec({ id: "cold-2", scope: "repo", scopeRef: "nano-ide", statement: "s2" }));
 
-  // Brand-new retriever: cache is empty/cold. Query WITHOUT warming.
+  // Brand-new retriever: the derived cache is cold. This FIRST query has no
+  // warmed snapshot to read, so it falls back to git — and, as a side effect,
+  // populates the snapshot. We assert the cold-path result is complete.
   const retriever = new ContextRetriever({ localPath: dir, ref: "main" });
   const cold = await retriever.query({});
   assert.equal(cold.length, 2, "a cold cache must still return every record via git");

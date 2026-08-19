@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 import { ContextWriter } from "../git/index.ts";
-import { PiiGuardError, classifyPii, preCommitPiiGuard } from "../pii/index.ts";
+import { PiiGuardError, type PiiGuard, classifyPii, preCommitPiiGuard } from "../pii/index.ts";
 import { ContextRetriever } from "../retrieval/index.ts";
 import { cleanup, makeSubstrate, rec } from "./harness.ts";
 
@@ -21,8 +21,12 @@ test("the DEFAULT write path (no wiring) rejects a PII-carrying record", async (
   // Plain default construction — the caller does NOT opt into any guard.
   const writer = new ContextWriter({ localPath: dir, ref: "main" });
 
-  // The mandatory PII guard is present by construction.
-  assert.ok(writer.guards.length >= 1, "at least the mandatory PII guard must be registered");
+  // The mandatory PII guard is present — and FIRST — by construction.
+  assert.equal(
+    writer.guards[0],
+    preCommitPiiGuard,
+    "the mandatory PII guard must be registered first",
+  );
 
   await assert.rejects(
     () => writer.appendRecord(rec({ id: "pii-plain", statement: "reach me at alice@example.com" })),
@@ -87,12 +91,27 @@ test("clean content passes the guard and lands", async () => {
 
 test("an extra caller guard can only make enforcement STRICTER, never bypass PII", async () => {
   const dir = await makeSubstrate(TEMP_ROOTS);
-  // Supplying additional guards must not displace the mandatory PII guard.
+  // A DISTINCT, always-throwing caller guard. If a caller-supplied guard could
+  // displace the mandatory PII guard — or run before it — a PII write would
+  // surface THIS sentinel error instead of PiiGuardError.
+  const alwaysThrows: PiiGuard = {
+    name: "always-throws",
+    inspect: () => ({ clean: true, findings: [] }),
+    assert: () => {
+      throw new Error("extra caller guard ran");
+    },
+  };
   const writer = new ContextWriter(
     { localPath: dir, ref: "main" },
-    { guards: [preCommitPiiGuard] },
+    { guards: [alwaysThrows] },
   );
-  assert.ok(writer.guards.length >= 1);
+  // The mandatory guard is still FIRST; the caller guard is only appended.
+  assert.equal(writer.guards[0], preCommitPiiGuard, "mandatory PII guard must run first");
+  assert.equal(writer.guards.includes(alwaysThrows), true, "caller guard is added, not dropped");
+
+  // A PII write is rejected by the mandatory guard (which runs first) — with
+  // PiiGuardError, NOT the sentinel — proving the caller guard neither displaced
+  // nor pre-empted mandatory enforcement.
   await assert.rejects(
     () => writer.appendRecord(rec({ id: "pii-extra", statement: "email me: eve@example.org" })),
     PiiGuardError,

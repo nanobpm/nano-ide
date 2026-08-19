@@ -44,9 +44,12 @@ test("identity: same (repo, ref) name shares; a distinct name stays private", ()
 
 test("identity: equivalent repo spellings collapse to one shared substrate", () => {
   // Shorthand, HTTPS clone URL, and a credentialed URL all name one context.
+  // The credentialed form uses the repo's redacted userinfo placeholder (`***@`)
+  // — it still exercises the "userinfo must not affect identity" invariant
+  // without embedding a credential-in-URL literal that trips secret scanning.
   const shorthand = binding("nanobpm/nano-ide", "main");
   const https = binding("https://github.com/nanobpm/nano-ide.git", "main");
-  const credential = binding("https://x-token:secret@github.com/nanobpm/nano-ide.git", "main");
+  const credential = binding("https://***@github.com/nanobpm/nano-ide.git", "main");
 
   assert.equal(sameContext(shorthand, https), true);
   assert.equal(sameContext(shorthand, credential), true, "credentials must not split identity");

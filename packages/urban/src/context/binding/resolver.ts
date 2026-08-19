@@ -1,0 +1,176 @@
+// Slice S1 (binding) — the resolver: bind → validate → identity → resolved
+// handle, with private-per-app / shared-on-same-name semantics enforced two
+// ways:
+//
+//  1. In-process: a ContextResolver memoises by identity key, so two resolves of
+//     the same name return the SAME handle (and never double-clone), while
+//     distinct names get distinct handles.
+//  2. Across processes/instances: the on-disk location is derived
+//     deterministically from the identity slug under a shared cache root, so two
+//     Nano instances naming the same context share one working copy on disk.
+//     Known first-use limitation (deferred past slice S1): the single-flight in
+//     (1) is in-process only, so concurrent *first* resolves of the same context
+//     across instances can race materialisation (clone/pin). Sharing is reliable
+//     once the substrate exists; a follow-up slice adds an inter-process lock to
+//     make concurrent first-use safe too — see GitSubstrateBackend.materialise.
+
+import { homedir, tmpdir } from "node:os";
+import { join, resolve as resolvePath } from "node:path";
+import { parseContextBinding } from "./descriptor.ts";
+import { resolveContextIdentity } from "./identity.ts";
+import { GitSubstrateBackend } from "./git-backend.ts";
+import type { ResolvedContextHandle, SubstrateBackend } from "./backend.ts";
+
+/** Options for a {@link ContextResolver}. */
+export interface ContextResolverOptions {
+  /**
+   * Root directory under which per-context working copies are cloned. Two
+   * resolvers sharing a `cacheRoot` share substrates on disk. Defaults to
+   * {@link defaultContextCacheRoot}.
+   */
+  readonly cacheRoot?: string;
+  /**
+   * The substrate backend. Defaults to a git backend ({@link GitSubstrateBackend}).
+   * Injecting a different backend is the seam for a future PII/mutable or
+   * self-hosted substrate.
+   */
+  readonly backend?: SubstrateBackend;
+}
+
+/** Per-resolution overrides. */
+export interface ResolveOptions {
+  /**
+   * Controls whether a re-resolution re-fetches the substrate. Note the
+   * {@link ContextResolver} memoises per identity: once an identity has resolved,
+   * repeat resolves return the cached handle and do **not** re-fetch unless you
+   * explicitly pass `refresh: true`, which forces a fresh materialisation (a
+   * fetch + re-pin on the backend). While a materialisation is still in flight,
+   * concurrent resolves — including `refresh: true` — coalesce onto it rather
+   * than starting a second one. The backend's own default (fetch on an existing
+   * clone) therefore only applies the first time an identity is materialised or
+   * when `refresh: true` is passed. Defaults to `undefined` (reuse the memoised
+   * handle).
+   */
+  readonly refresh?: boolean;
+}
+
+/**
+ * The default cache root for context working copies. Honours
+ * `URBAN_CONTEXT_CACHE_DIR`, then `XDG_CACHE_HOME`, then `~/.cache`, falling
+ * back to the OS temp dir when no home directory is available.
+ */
+export function defaultContextCacheRoot(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  if (env.URBAN_CONTEXT_CACHE_DIR) return env.URBAN_CONTEXT_CACHE_DIR;
+  if (env.XDG_CACHE_HOME) return join(env.XDG_CACHE_HOME, "urban", "context");
+  const home = safeHomedir();
+  if (home) return join(home, ".cache", "urban", "context");
+  return join(tmpdir(), "urban", "context");
+}
+
+/** `os.homedir()`, but tolerant: returns `undefined` if the home dir can't be
+ * determined (Node can throw here) so callers fall back to the temp dir. */
+function safeHomedir(): string | undefined {
+  try {
+    return homedir() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Resolves context bindings to concrete local working copies. A single resolver
+ * instance enforces shared-on-same-name in-process by memoising per identity
+ * key; distinct names stay private.
+ */
+export class ContextResolver {
+  readonly #cacheRoot: string;
+  readonly #backend: SubstrateBackend;
+  // Per-identity resolution record. Despite serving the single-flight guarantee,
+  // this map is NOT purged once a resolution settles: the settled record is
+  // retained as the long-lived memoisation cache backing shared-on-same-name, so
+  // repeat resolves return the identical handle. Entries are removed only on
+  // rejection (so a failed materialise can be retried); a fulfilled entry lives
+  // for the resolver's lifetime. Do not add "drop settled entries" cleanup here
+  // without also giving up memoisation.
+  readonly #resolutions = new Map<string, { promise: Promise<ResolvedContextHandle>; settled: boolean }>();
+
+  constructor(options: ContextResolverOptions = {}) {
+    // Normalise to an absolute path so a relative `cacheRoot` (or a relative
+    // `URBAN_CONTEXT_CACHE_DIR`) still yields an absolute `localPath`, honouring
+    // `SubstrateResolveOptions.localPath` ("Absolute path…"). Note this resolves
+    // a relative `cacheRoot` against *this* process's CWD, so the cross-process
+    // sharing promised in the module header only holds for an ABSOLUTE
+    // `cacheRoot`; a relative one is shared only among instances that happen to
+    // share a working directory.
+    this.#cacheRoot = resolvePath(options.cacheRoot ?? defaultContextCacheRoot());
+    this.#backend = options.backend ?? new GitSubstrateBackend();
+  }
+
+  /** The cache root this resolver clones into. */
+  get cacheRoot(): string {
+    return this.#cacheRoot;
+  }
+
+  /**
+   * Resolve a binding (validated first) to a {@link ResolvedContextHandle}. Two
+   * bindings that name the same context return the identical handle from this
+   * resolver; distinct names return distinct handles.
+   */
+  async resolve(
+    binding: unknown,
+    options: ResolveOptions = {},
+  ): Promise<ResolvedContextHandle> {
+    const parsed = parseContextBinding(binding);
+    const identity = resolveContextIdentity(parsed);
+    const localPath = join(this.#cacheRoot, identity.slug);
+
+    // Shared-on-same-name: concurrent or repeated resolves of one identity share
+    // a single materialisation. Coalesce onto an in-flight one regardless of
+    // `refresh` — it is already producing a fresh working copy, so starting a
+    // second `materialise()` would double-clone into the same `localPath` and
+    // break the single-in-flight guarantee. Only re-materialise once the prior
+    // resolution has settled AND the caller explicitly asked to `refresh`.
+    const existing = this.#resolutions.get(identity.key);
+    if (existing && (!existing.settled || options.refresh !== true)) {
+      return existing.promise;
+    }
+
+    const record: { promise: Promise<ResolvedContextHandle>; settled: boolean } = {
+      promise: this.#backend
+        .materialise(identity, { localPath, refresh: options.refresh })
+        .catch((error) => {
+          if (this.#resolutions.get(identity.key) === record) {
+            this.#resolutions.delete(identity.key);
+          }
+          throw error;
+        }),
+      settled: false,
+    };
+    this.#resolutions.set(identity.key, record);
+    record.promise.then(
+      () => {
+        record.settled = true;
+      },
+      () => {
+        // Rejection is surfaced to the caller via the returned promise; the map
+        // entry is already removed in the catch above.
+      },
+    );
+    return record.promise;
+  }
+}
+
+/**
+ * One-shot convenience: resolve a single binding with a fresh resolver. Prefer a
+ * long-lived {@link ContextResolver} when resolving many bindings so sharing is
+ * memoised across calls.
+ */
+export function resolveContextBinding(
+  binding: unknown,
+  options: ContextResolverOptions & ResolveOptions = {},
+): Promise<ResolvedContextHandle> {
+  const { cacheRoot, backend, ...resolveOptions } = options;
+  return new ContextResolver({ cacheRoot, backend }).resolve(binding, resolveOptions);
+}

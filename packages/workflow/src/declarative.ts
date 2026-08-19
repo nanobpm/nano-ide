@@ -45,26 +45,31 @@ import type {
   NodeEnvelopes,
   StepContract,
   StepHandler,
-  SwitchCase,
   TimerStart,
 } from "./types.js";
 import type { Envelope, EnvelopeField } from "./envelope.js";
-import { assertIdent, assertJobType, assertTimerCycle, assertTimerDate, assertTimerDuration, escapeXml, jobType, messageName } from "./xml.js";
+import { assertIdent, assertTimerCycle, assertTimerDate, assertTimerDuration, escapeXml, jobType, messageName } from "./xml.js";
+import { eachNodeKind, requireNodeKind } from "./nodes/registry.js";
+// Import the generated barrel purely for its registration side effects: every
+// built-in (and slice-added) kind module registers its FlowNode variant, builder
+// method, and walk/emit handlers at import time. MUST run before `makeBuilder`
+// or the `Compiler` dispatch through the registry.
+import "./nodes/index.js";
 
 // --- Authoring surface -------------------------------------------------------
 
 /** The TS payload type of a contract's input envelope (untyped fallback). */
-type InPayload<Ct> = Ct extends { in: Envelope } ? Ct["in"]["type"] & JsonObject : JsonObject;
+export type InPayload<Ct> = Ct extends { in: Envelope } ? Ct["in"]["type"] & JsonObject : JsonObject;
 /** The TS payload type of a contract's output envelope (untyped fallback). */
-type OutPayload<Ct> = Ct extends { out: Envelope } ? Ct["out"]["type"] & JsonObject : JsonObject;
+export type OutPayload<Ct> = Ct extends { out: Envelope } ? Ct["out"]["type"] & JsonObject : JsonObject;
 /** The input payload type of step `K` under contracts `C`. */
-type VarsOf<C, K extends string> = K extends keyof C ? InPayload<C[K]> : JsonObject;
+export type VarsOf<C, K extends string> = K extends keyof C ? InPayload<C[K]> : JsonObject;
 /** The output payload type of step `K` under contracts `C`. */
-type ResultOf<C, K extends string> = K extends keyof C ? OutPayload<C[K]> : JsonObject;
+export type ResultOf<C, K extends string> = K extends keyof C ? OutPayload<C[K]> : JsonObject;
 
 /** A typed handler for a `run` step: its job variables and result are resolved
  *  from the flow contracts by the step name. */
-type TypedHandler<V extends JsonObject, R extends JsonObject> = (job: {
+export type TypedHandler<V extends JsonObject, R extends JsonObject> = (job: {
   jobKey: string;
   processInstanceKey: string;
   elementId: string;
@@ -73,7 +78,7 @@ type TypedHandler<V extends JsonObject, R extends JsonObject> = (job: {
 }) => Promise<R | void> | R | void;
 
 /** A block: the callback that populates a nested body (a case, arm, or loop). */
-type Block<C extends object> = (b: FlowBuilder<C>) => void;
+export type Block<C extends object = object> = (b: FlowBuilder<C>) => void;
 
 /** The typed builder for a flow body.
  *
@@ -246,6 +251,47 @@ function contractEnvelopes(ctx: BuilderCtx, name: string): { in?: Envelope; out?
   return { in: c.in, out: c.out };
 }
 
+/** A builder method as stored on the dynamically-assembled builder. Its precise,
+ *  generic user-facing signature comes from the `FlowBuilder<C>` interface (a
+ *  built-in method declared centrally, a slice method declaration-merged from
+ *  its module); this loose shape is only what the registry stores/installs. */
+export type BuilderMethod = (...args: never[]) => unknown;
+
+/** The per-body authoring context a kind module's `build` factory closes over to
+ *  implement its builder method. Everything a method needs to append its node —
+ *  claim its step name, resolve contract envelopes, recurse into nested bodies,
+ *  and return the builder for chaining — without reaching into `declarative.ts`
+ *  internals or the shared `FlowNode` union. */
+export interface BuildApi {
+  /** The flow id (for error messages). */
+  readonly id: string;
+  /** Whether this is the root (top-level) builder — e.g. `startOn` is root-only. */
+  readonly isRoot: boolean;
+  /** The node list this builder appends to (`api.out.push(node)`). */
+  readonly out: FlowNode[];
+  /** The flow's typed I/O contracts, keyed by step name. */
+  readonly contracts: FlowContracts;
+  /** The flow's handler registry — a `run`-like kind registers its handler here. */
+  readonly handlers: Record<string, StepHandler>;
+  /** The current loop-nesting depth (0 outside any loop) — `break`/`continue`
+   *  guard on it. */
+  readonly loopDepth: number;
+  /** The builder itself, for chaining (`return api.self()`). */
+  self(): FlowBuilder;
+  /** Populate a nested body block, returning its node list. `inLoop` deepens the
+   *  loop nesting (a `loop` body); use it for bodies that can `break`/`continue`. */
+  child(fn: (b: FlowBuilder) => void, inLoop: boolean): FlowNode[];
+  /** Populate a nested body that runs in its OWN token scope (an embedded
+   *  sub-process): `break`/`continue` cannot cross the boundary (loop depth 0). */
+  childScoped(fn: (b: FlowBuilder) => void): FlowNode[];
+  /** Claim a step name (rejects duplicates / reserved ids), as every leaf does. */
+  claim(name: string): void;
+  /** Resolve the declared envelopes for a step name from the contracts. */
+  contractEnvelopes(name: string): { in?: Envelope; out?: Envelope } | undefined;
+  /** Lift a durable timer start onto the flow (used only by `startOn`). */
+  setStartTimer(t: TimerStart): void;
+}
+
 /** Build a FlowBuilder that appends its nodes to `out`, sharing the flow-wide
  *  `ctx` (contracts, handler registry, name set, loop nesting). Structural
  *  combinators recurse with a fresh `out` array for each nested body. */
@@ -255,209 +301,184 @@ function makeBuilder<C extends object>(
   ctx: BuilderCtx,
   isRoot = false,
 ): FlowBuilder<C> {
-  const child = (fn: Block<C>, inLoop: boolean): FlowNode[] => {
+  const child = (fn: (b: FlowBuilder) => void, inLoop: boolean): FlowNode[] => {
     const body: FlowNode[] = [];
     const depth = inLoop ? ctx.loopDepth + 1 : ctx.loopDepth;
-    fn(makeBuilder<C>(id, body, { ...ctx, loopDepth: depth }));
+    fn(makeBuilder(id, body, { ...ctx, loopDepth: depth }));
     return body;
   };
   // A body that runs in its OWN token scope (an embedded sub-process): the
   // enclosing loop is not reachable across the scope boundary, so `break`/
   // `continue` inside it are rejected (loopDepth resets to 0). A `loop` declared
   // INSIDE the body still works — it creates its own scope.
-  const childScoped = (fn: Block<C>): FlowNode[] => {
+  const childScoped = (fn: (b: FlowBuilder) => void): FlowNode[] => {
     const body: FlowNode[] = [];
-    fn(makeBuilder<C>(id, body, { ...ctx, loopDepth: 0 }));
+    fn(makeBuilder(id, body, { ...ctx, loopDepth: 0 }));
     return body;
   };
-  const b: FlowBuilder<C> = {
-    run<K extends string>(
-      name: K,
-      handler: TypedHandler<VarsOf<C, K>, ResultOf<C, K>>,
-    ): FlowBuilder<C> {
-      claimName(ctx, id, name);
-      if (typeof handler !== "function") throw new Error(`run("${name}") needs a handler function`);
-      ctx.handlers[name] = handler;
-      out.push({ kind: "run", name, envelopes: contractEnvelopes(ctx, name) });
-      return b;
-    },
-    task(name: string, opts?: { jobType?: string }): FlowBuilder<C> {
-      claimName(ctx, id, name);
-      const override = opts?.jobType;
-      if (override !== undefined) assertJobType("task jobType", override);
-      out.push({ kind: "task", name, envelopes: contractEnvelopes(ctx, name), jobType: override });
-      return b;
-    },
-    signal(name: string, opts: { correlationKey: string }): FlowBuilder<C> {
-      claimName(ctx, id, name);
-      if (!opts || !opts.correlationKey) throw new Error(`signal("${name}") needs { correlationKey }`);
-      assertIdent("correlationKey", opts.correlationKey);
-      out.push({ kind: "signal", name, correlationKey: opts.correlationKey, payload: ctx.contracts[name]?.in });
-      return b;
-    },
-    timer(name: string, opts: { after: string } | { at: string }): FlowBuilder<C> {
-      claimName(ctx, id, name);
-      const hasAfter = "after" in opts && typeof opts.after === "string";
-      const hasAt = "at" in opts && typeof opts.at === "string";
-      if (hasAfter === hasAt) {
-        throw new Error(`timer("${name}") needs exactly one of { after } (a delay) or { at } (an instant)`);
-      }
-      if ("after" in opts) {
-        const after = opts.after.trim();
-        assertTimerDuration(`timer("${name}") after`, after);
-        out.push({ kind: "timer", name, after });
-      } else {
-        const at = opts.at.trim();
-        assertTimerDate(`timer("${name}") at`, at);
-        out.push({ kind: "timer", name, at });
-      }
-      return b;
-    },
-    startOn(spec: { cycle: string } | { after: string } | { at: string }): FlowBuilder<C> {
-      if (!isRoot) {
-        throw new Error(`startOn() is only valid at the top level of flow "${id}" (not inside switch/branch/loop)`);
-      }
-      if (out.length !== 0) throw new Error(`startOn() must be the first statement in flow "${id}"`);
-      if (ctx.startTimer) throw new Error(`startOn() may be called only once in flow "${id}"`);
-      const setCount = TIMER_START_KEYS.filter((key) => typeof timerStartValue(spec, key) === "string").length;
-      if (setCount !== 1) {
-        throw new Error(`startOn() needs exactly one of { cycle }, { after }, or { at } in flow "${id}"`);
-      }
-      if ("cycle" in spec) {
-        const cycle = spec.cycle.trim();
-        assertTimerCycle(`startOn cycle`, cycle);
-        ctx.startTimer = { cycle };
-      } else if ("after" in spec) {
-        const after = spec.after.trim();
-        assertTimerDuration(`startOn after`, after);
-        ctx.startTimer = { after };
-      } else {
-        const at = spec.at.trim();
-        assertTimerDate(`startOn at`, at);
-        ctx.startTimer = { at };
-      }
-      return b;
-    },
-    switch(subject: string, cases: Record<string, Block<C>> & { default?: Block<C> }): FlowBuilder<C> {
-      if (typeof subject !== "string" || subject.trim() === "") {
-        throw new Error(`switch() needs a non-empty subject expression`);
-      }
-      const caseNodes: SwitchCase[] = [];
-      for (const [value, fn] of Object.entries(cases)) {
-        if (value === "default") continue;
-        if (typeof fn !== "function") throw new Error(`switch("${subject}") cases must be blocks (b) => {…}`);
-        caseNodes.push({ value, body: child(fn, false) });
-      }
-      if (caseNodes.length === 0) throw new Error(`switch("${subject}") needs at least one case`);
-      const def = cases.default ? child(cases.default, false) : undefined;
-      out.push({ kind: "switch", subject, cases: caseNodes, default: def });
-      return b;
-    },
-    branch(condition: string, arms: { then: Block<C>; else?: Block<C> }): FlowBuilder<C> {
-      if (typeof condition !== "string" || condition.trim() === "") {
-        throw new Error(`branch() needs a non-empty FEEL condition`);
-      }
-      if (!arms || typeof arms.then !== "function") throw new Error(`branch("${condition}") needs a then arm`);
-      out.push({
-        kind: "branch",
-        condition,
-        then: child(arms.then, false),
-        else: arms.else ? child(arms.else, false) : undefined,
-      });
-      return b;
-    },
-    loop(body: Block<C>): FlowBuilder<C> {
-      if (typeof body !== "function") throw new Error(`loop() needs a body function`);
-      out.push({ kind: "loop", body: child(body, true) });
-      return b;
-    },
-    parallel(branches: Block<C>[]): FlowBuilder<C> {
-      if (!Array.isArray(branches) || branches.length < 2) {
-        throw new Error(`parallel() needs at least two branch blocks`);
-      }
-      for (const fn of branches) {
-        if (typeof fn !== "function") throw new Error(`parallel() branches must all be blocks (b) => {…}`);
-      }
-      // Each branch runs in its own token scope up to the AND-join, so a
-      // `break`/`continue` must not escape the fork/join into an enclosing
-      // loop. Scope branches (loopDepth resets to 0) so cross-boundary
-      // break/continue is rejected at build time, matching forEach.
-      out.push({ kind: "parallel", branches: branches.map((fn) => childScoped(fn)) });
-      return b;
-    },
-    forEach(
-      collection: string,
-      itemVar: string,
-      body: Block<C>,
-      opts?: {
-        sequential?: boolean;
-        outputCollection?: string;
-        outputElement?: string;
-        completionCondition?: string;
-      },
-    ): FlowBuilder<C> {
-      if (typeof collection !== "string" || collection.trim() === "") {
-        throw new Error(`forEach() needs a non-empty FEEL collection expression`);
-      }
-      // Authors may paste a leading "=" (common in Zeebe FEEL examples). Strip
-      // it so the emitter's own "=" prefix never produces an invalid "==...".
-      const collExpr = collection.trim().replace(/^=/, "").trim();
-      if (collExpr === "") {
-        throw new Error(`forEach() collection expression is empty after stripping the leading "="`);
-      }
-      assertIdent("forEach itemVar", itemVar);
-      if (typeof body !== "function") throw new Error(`forEach("${itemVar}") needs a body function`);
-      const nodes = childScoped(body);
-      if (nodes.length === 0) throw new Error(`forEach("${itemVar}") body declared no steps`);
-      const node: Extract<FlowNode, { kind: "forEach" }> = {
-        kind: "forEach",
-        collection: collExpr,
-        itemVar,
-        body: nodes,
-      };
-      if (opts?.sequential) node.sequential = true;
-      if (opts?.outputCollection !== undefined) {
-        assertIdent("forEach outputCollection", opts.outputCollection);
-        node.outputCollection = opts.outputCollection;
-      }
-      if (opts?.outputElement !== undefined) {
-        if (typeof opts.outputElement !== "string" || opts.outputElement.trim() === "") {
-          throw new Error(`forEach("${itemVar}") outputElement must be a non-empty FEEL expression`);
-        }
-        const outEl = opts.outputElement.trim().replace(/^=/, "").trim();
-        if (outEl === "") {
-          throw new Error(`forEach("${itemVar}") outputElement is empty after stripping the leading "="`);
-        }
-        node.outputElement = outEl;
-      }
-      if (opts?.completionCondition !== undefined) {
-        if (typeof opts.completionCondition !== "string" || opts.completionCondition.trim() === "") {
-          throw new Error(`forEach("${itemVar}") completionCondition must be a non-empty FEEL expression`);
-        }
-        const compCond = opts.completionCondition.trim().replace(/^=/, "").trim();
-        if (compCond === "") {
-          throw new Error(`forEach("${itemVar}") completionCondition is empty after stripping the leading "="`);
-        }
-        node.completionCondition = compCond;
-      }
-      if (node.outputElement && !node.outputCollection) {
-        throw new Error(`forEach("${itemVar}") outputElement needs an outputCollection to collect into`);
-      }
-      out.push(node);
-      return b;
-    },
-    break(): FlowBuilder<C> {
-      if (ctx.loopDepth === 0) throw new Error(`break() is only valid inside a loop`);
-      out.push({ kind: "break" });
-      return b;
-    },
-    continue(): FlowBuilder<C> {
-      if (ctx.loopDepth === 0) throw new Error(`continue() is only valid inside a loop`);
-      out.push({ kind: "continue" });
-      return b;
-    },
+  const setStartTimer = (t: TimerStart): void => {
+    if (!isRoot) {
+      throw new Error(`startOn() is only valid at the top level of flow "${id}" (not inside switch/branch/loop)`);
+    }
+    if (out.length !== 0) throw new Error(`startOn() must be the first statement in flow "${id}"`);
+    if (ctx.startTimer) throw new Error(`startOn() may be called only once in flow "${id}"`);
+    ctx.startTimer = t;
   };
-  return b;
+
+  let builderRef: FlowBuilder | undefined;
+  const api: BuildApi = {
+    id,
+    isRoot,
+    out,
+    contracts: ctx.contracts,
+    handlers: ctx.handlers,
+    get loopDepth() {
+      return ctx.loopDepth;
+    },
+    self() {
+      if (!builderRef) throw new Error("internal: builder method invoked before assembly");
+      return builderRef;
+    },
+    child,
+    childScoped,
+    claim(name) {
+      claimName(ctx, id, name);
+    },
+    contractEnvelopes(name) {
+      return contractEnvelopes(ctx, name);
+    },
+    setStartTimer,
+  };
+
+  // `startOn` is not a node KIND — it lifts a timer onto the start event and
+  // emits no `FlowNode` — so it is installed centrally. Every actual node kind's
+  // builder method is contributed by its own module through the registry.
+  // A NULL-PROTOTYPE table: collision detection below is an OWN-property check,
+  // and building on `Object.prototype` would make both `in`/`Object.hasOwn`
+  // spuriously see inherited names (`toString`, `constructor`, …) as registered
+  // methods — so a kind whose builder method is legitimately named `toString`
+  // would be rejected as a "duplicate" — and would turn a `__proto__` method
+  // name into a prototype-mutating footgun. A null prototype removes both.
+  const methods: Record<string, BuilderMethod> = Object.create(null);
+  methods.startOn = startOnMethod(api);
+  for (const [kind, handlers] of eachNodeKind()) {
+    if (!handlers.build) continue;
+    const method = handlers.builderMethod ?? kind;
+    if (Object.hasOwn(methods, method)) {
+      throw new Error(`two flow-node kinds both contribute the builder method "${method}"`);
+    }
+    methods[method] = handlers.build(api);
+  }
+
+  if (!isFlowBuilder(methods)) {
+    throw new Error(assemblyFailureMessage(methods));
+  }
+  // `methods` is now the untyped `FlowBuilder` (object) stored for `api.self()`;
+  // a chaining method's precise return type is the interface's, not this value's.
+  builderRef = methods;
+  if (!isFlowBuilder<C>(methods)) {
+    throw new Error(assemblyFailureMessage(methods));
+  }
+  return methods;
+}
+
+/** The STABLE built-in authoring surface every assembled `FlowBuilder` must
+ *  expose: `startOn` (installed centrally by {@link startOnMethod}) plus every
+ *  core method a wave-0 built-in node-kind module under `src/nodes/`
+ *  contributes. The runtime guard below fails fast if any of these is missing
+ *  (e.g. a built-in module was tree-shaken away).
+ *
+ *  `satisfies readonly (keyof FlowBuilder)[]` pins each listed name to a real
+ *  `FlowBuilder` method — a typo or a renamed built-in is caught at compile
+ *  time. This is deliberately a ONE-DIRECTIONAL pin: it does NOT assert the
+ *  list mirrors *every* `FlowBuilder` key. `FlowBuilder<C>` is an OPEN,
+ *  declaration-merged interface — the whole point of the `src/nodes/` seam is
+ *  that a feature slice adds a builder method by merging into `FlowBuilder`
+ *  from its own module with NO central edit (see `src/nodes/README.md`). An
+ *  exhaustiveness check here would force every such slice to also edit this
+ *  central list, defeating that seam; a slice's own method is instead installed
+ *  and exercised through its `registerNodeKind` registration and tests. */
+const BUILTIN_BUILDER_METHODS = [
+  "startOn",
+  "run",
+  "task",
+  "signal",
+  "timer",
+  "switch",
+  "branch",
+  "loop",
+  "parallel",
+  "forEach",
+  "break",
+  "continue",
+] as const satisfies readonly (keyof FlowBuilder)[];
+
+/** A dynamically-assembled builder satisfies `FlowBuilder<C>` once every core
+ *  built-in method is installed. The check is a runtime type guard (not an `as`
+ *  cast): each own-property must be a function, AND every built-in method in
+ *  {@link BUILTIN_BUILDER_METHODS} must be present — so a missing or
+ *  tree-shaken node-kind registration fails fast here at builder assembly (a
+ *  clear "missing registered methods" error) instead of surfacing later as an
+ *  opaque `w.run is not a function` at authoring time. */
+export function isFlowBuilder<C extends object = object>(x: object): x is FlowBuilder<C> {
+  return missingBuilderMethods(x).length === 0 && nonFunctionOwnProperties(x).length === 0;
+}
+
+/** The subset of {@link BUILTIN_BUILDER_METHODS} not installed as a function on
+ *  `x`. Single source of truth for both the {@link isFlowBuilder} guard and the
+ *  assembly-failure diagnostic below, so the two never drift. */
+function missingBuilderMethods(x: object): readonly string[] {
+  return BUILTIN_BUILDER_METHODS.filter((method) => typeof Reflect.get(x, method) !== "function");
+}
+
+/** The own-property names of `x` whose value is not a function — the second
+ *  half of the {@link isFlowBuilder} invariant, factored out so the
+ *  assembly-failure diagnostic can name the offending property without drifting
+ *  from the guard. */
+function nonFunctionOwnProperties(x: object): readonly string[] {
+  return Object.getOwnPropertyNames(x).filter((k) => typeof Reflect.get(x, k) !== "function");
+}
+
+/** Diagnostic for a failed builder assembly. Names the missing built-in
+ *  method(s) when a registration was tree-shaken/omitted so the failure is
+ *  actionable; otherwise, when every built-in is present but some own-property
+ *  isn't a function, names that offending property instead. Exported (like
+ *  {@link isFlowBuilder}) so the assembly invariant is unit-testable. */
+export function assemblyFailureMessage(x: object): string {
+  const missing = missingBuilderMethods(x);
+  if (missing.length > 0) {
+    return `internal: assembled FlowBuilder is missing registered methods: ${missing.join(", ")}`;
+  }
+  const nonFunctions = nonFunctionOwnProperties(x);
+  if (nonFunctions.length > 0) {
+    const label = nonFunctions.length === 1 ? "property" : "properties";
+    return `internal: assembled FlowBuilder has non-function own-${label}: ${nonFunctions.join(", ")}`;
+  }
+  return "internal: assembled FlowBuilder failed its assembly invariant";
+}
+
+/** The central `startOn` builder method (not a node kind). */
+function startOnMethod(api: BuildApi): BuilderMethod {
+  return (spec: { cycle: string } | { after: string } | { at: string }) => {
+    const setCount = TIMER_START_KEYS.filter((key) => typeof timerStartValue(spec, key) === "string").length;
+    if (setCount !== 1) {
+      throw new Error(`startOn() needs exactly one of { cycle }, { after }, or { at } in flow "${api.id}"`);
+    }
+    if ("cycle" in spec) {
+      const cycle = spec.cycle.trim();
+      assertTimerCycle(`startOn cycle`, cycle);
+      api.setStartTimer({ cycle });
+    } else if ("after" in spec) {
+      const after = spec.after.trim();
+      assertTimerDuration(`startOn after`, after);
+      api.setStartTimer({ after });
+    } else {
+      const at = spec.at.trim();
+      assertTimerDate(`startOn at`, at);
+      api.setStartTimer({ at });
+    }
+    return api.self();
+  };
 }
 
 /**
@@ -504,32 +525,17 @@ export function defineFlow(
 
 // --- Tree walkers ------------------------------------------------------------
 
-/** Depth-first visit of every node in a flow tree (structural combinators
- *  recurse into their bodies). */
+/** Depth-first visit of every node in a flow tree. Recursion into a kind's
+ *  nested bodies is DISPATCHED through the registry (each kind's `walk` handler),
+ *  so a slice's structural combinator recurses without editing a central switch.
+ *  Fails fast (via `requireNodeKind`) on an unregistered kind — matching the
+ *  emitter — so a tree-shaken/missing registration surfaces as a clear error
+ *  rather than silently skipping recursion into that node's nested bodies. A
+ *  registered leaf kind with no `walk` handler is fine (nothing to recurse). */
 export function walkNodes(nodes: FlowNode[], visit: (n: FlowNode) => void): void {
   for (const n of nodes) {
     visit(n);
-    switch (n.kind) {
-      case "switch":
-        for (const c of n.cases) walkNodes(c.body, visit);
-        if (n.default) walkNodes(n.default, visit);
-        break;
-      case "branch":
-        walkNodes(n.then, visit);
-        if (n.else) walkNodes(n.else, visit);
-        break;
-      case "loop":
-        walkNodes(n.body, visit);
-        break;
-      case "parallel":
-        for (const branch of n.branches) walkNodes(branch, visit);
-        break;
-      case "forEach":
-        walkNodes(n.body, visit);
-        break;
-      default:
-        break;
-    }
+    requireNodeKind(n.kind).walk?.(n, (body) => walkNodes(body, visit));
   }
 }
 
@@ -563,7 +569,10 @@ function requireStartAt(timer: TimerStart): string {
 
 // --- Model emitter (two-phase graph compiler) --------------------------------
 
-interface RenderNode {
+/** A renderable BPMN element the emitter has placed. A kind's `emit` handler
+ *  adds one (or more) via `api.addNode(...)` (or a typed helper like
+ *  `api.addServiceTask`). */
+export interface RenderNode {
   id: string;
   render(incoming: string[], outgoing: string[]): string;
   /** For exclusive gateways: the flow id of the unconditional default edge. */
@@ -573,7 +582,9 @@ interface RenderNode {
   scope?: string;
 }
 
-interface Edge {
+/** A BPMN sequence flow being wired. A kind's `emit` handler creates danglers
+ *  with `api.newEdge(from)` and resolves them with `api.connect(edges, toId)`. */
+export interface Edge {
   id: string;
   from: string;
   to?: string;
@@ -584,9 +595,63 @@ interface Edge {
   scope?: string;
 }
 
-interface LoopCtx {
+/** The enclosing-loop context threaded through `emit`: `break`/`continue` route
+ *  to `headId`, and `break` danglers collect in `breaks`. `null` outside a loop. */
+export interface LoopCtx {
   headId: string;
   breaks: Edge[];
+}
+
+/** The emitter primitives a kind's `emit` handler uses to place its BPMN nodes
+ *  and wire its sequence flows — WITHOUT reaching into `Compiler` internals or a
+ *  central emit switch. Built-in kinds and slice-added kinds emit through this
+ *  same surface. Node-render string helpers (`incomingOutgoing`, `escapeXml`, …)
+ *  are exported alongside for building custom `RenderNode.render` closures. */
+export interface EmitApi {
+  /** The flow id (for error messages). */
+  readonly flowId: string;
+  /** Create a new (dangling) sequence flow from `from`; resolve its target with
+   *  `connect`. */
+  newEdge(from: string, opts?: { condition?: string; name?: string }): Edge;
+  /** Point every one of `incoming` at `toId`. */
+  connect(incoming: Edge[], toId: string): void;
+  /** Record a referenced data envelope so it is lifted to a `nano:shape`. */
+  recordEnvelope(env?: Envelope): void;
+  /** Emit a sequence of nodes, threading danglers; used to emit nested bodies. */
+  emitList(list: FlowNode[], incoming: Edge[], loop: LoopCtx | null): Edge[];
+  /** Place a fully custom BPMN element (a slice's own render closure). */
+  addNode(node: RenderNode): void;
+  /** Place a `<bpmn:serviceTask>` with the standard taskDefinition/envelope
+   *  extension elements. `opts.mi` adds multi-instance characteristics; `opts.extraExt`
+   *  injects additional `<bpmn:extensionElements>` content (e.g. a
+   *  `zeebe:linkedResources` prompt binding) after the taskDefinition/properties,
+   *  so a variant task only supplies its delta rather than re-rendering the shell. */
+  addServiceTask(
+    node: { name: string; envelopes?: NodeEnvelopes; jobType?: string },
+    opts?: { mi?: string; extraExt?: string },
+  ): void;
+  /** Place a `<bpmn:intermediateCatchEvent>` with a message event definition. */
+  addCatchEvent(node: { name: string }): void;
+  /** Place a `<bpmn:intermediateCatchEvent>` with a timer event definition. */
+  addTimerCatchEvent(node: { name: string; after?: string; at?: string }): void;
+  /** Place a `<bpmn:exclusiveGateway>`, returning it so `defaultFlow` can be set. */
+  addGateway(id: string, name?: string): RenderNode;
+  /** Place a `<bpmn:parallelGateway>`. */
+  addParallelGateway(id: string): RenderNode;
+  /** Place an embedded `<bpmn:subProcess>` whose body renders in its own scope. */
+  addSubProcess(id: string, mi: string): RenderNode;
+  /** Place a plain none `<bpmn:startEvent>` (for an embedded sub-process). */
+  addPlainStart(id: string): void;
+  /** Place a plain `<bpmn:endEvent>` (for an embedded sub-process). */
+  addPlainEnd(id: string): void;
+  /** A fresh monotonic counter value for generated gateway/loop/sub ids. */
+  nextGw(): number;
+  /** The current scope (enclosing sub-process id, or undefined at the top level). */
+  currentScope(): string | undefined;
+  /** Open a sub-process scope (subsequent nodes/edges nest inside it). */
+  pushScope(id: string): void;
+  /** Close the current sub-process scope. */
+  popScope(): void;
 }
 
 class Compiler {
@@ -602,8 +667,37 @@ class Compiler {
   private live: Edge[] = [];
   private seq = 0;
   private gw = 0;
+  /** The emit surface handed to each kind's registered `emit` handler. */
+  private readonly emitApi: EmitApi;
 
-  constructor(private readonly flow: DeclarativeFlow) {}
+  constructor(private readonly flow: DeclarativeFlow) {
+    this.emitApi = {
+      flowId: flow.id,
+      newEdge: (from, opts) => this.newEdge(from, opts),
+      connect: (incoming, toId) => this.connect(incoming, toId),
+      recordEnvelope: (env) => this.recordEnvelope(env),
+      emitList: (list, incoming, loop) => this.emitList(list, incoming, loop),
+      addNode: (node) => {
+        this.nodes.push({ ...node, scope: node.scope ?? this.currentScope() });
+      },
+      addServiceTask: (node, opts) => this.addServiceTask(node, opts),
+      addCatchEvent: (node) => this.addCatchEvent(node),
+      addTimerCatchEvent: (node) => this.addTimerCatchEvent(node),
+      addGateway: (id, name) => this.addGateway(id, name),
+      addParallelGateway: (id) => this.addParallelGateway(id),
+      addSubProcess: (id, mi) => this.addSubProcess(id, mi),
+      addPlainStart: (id) => this.addPlainStart(id),
+      addPlainEnd: (id) => this.addPlainEnd(id),
+      nextGw: () => this.gw++,
+      currentScope: () => this.currentScope(),
+      pushScope: (id) => {
+        this.scopeStack.push(id);
+      },
+      popScope: () => {
+        this.scopeStack.pop();
+      },
+    };
+  }
 
   private currentScope(): string | undefined {
     return this.scopeStack.length ? this.scopeStack[this.scopeStack.length - 1] : undefined;
@@ -639,7 +733,11 @@ class Compiler {
     this.envelopes.set(env.name, env.fields);
   }
 
-  private addServiceTask(node: { name: string; envelopes?: NodeEnvelopes; jobType?: string }, mi = ""): void {
+  private addServiceTask(
+    node: { name: string; envelopes?: NodeEnvelopes; jobType?: string },
+    opts: { mi?: string; extraExt?: string } = {},
+  ): void {
+    const { mi = "", extraExt = "" } = opts;
     const type = node.jobType ?? jobType(this.flow.id, node.name);
     this.recordEnvelope(node.envelopes?.in);
     this.recordEnvelope(node.envelopes?.out);
@@ -650,6 +748,7 @@ class Compiler {
       `      <bpmn:extensionElements>\n` +
       `        <zeebe:taskDefinition type="${escapeXml(type)}" />\n` +
       (props.length ? `        <zeebe:properties>\n${props.join("\n")}\n        </zeebe:properties>\n` : "") +
+      extraExt +
       `      </bpmn:extensionElements>`;
     const id = node.name;
     this.nodes.push({
@@ -760,144 +859,16 @@ class Compiler {
     return node;
   }
 
-  /** The `<bpmn:multiInstanceLoopCharacteristics>` block for a `forEach` node —
-   *  the same shape whether lifted onto a leaf service task or a sub-process. */
-  private miCharacteristics(node: Extract<FlowNode, { kind: "forEach" }>): string {
-    const seq = node.sequential ? "true" : "false";
-    const attrs = [
-      `inputCollection="${escapeXml(`=${node.collection}`)}"`,
-      `inputElement="${escapeXml(node.itemVar)}"`,
-    ];
-    if (node.outputCollection) attrs.push(`outputCollection="${escapeXml(node.outputCollection)}"`);
-    if (node.outputElement) attrs.push(`outputElement="${escapeXml(`=${node.outputElement}`)}"`);
-    const completion = node.completionCondition
-      ? `      <bpmn:completionCondition>${escapeXml(`=${node.completionCondition}`)}</bpmn:completionCondition>\n`
-      : "";
-    return (
-      `      <bpmn:multiInstanceLoopCharacteristics isSequential="${seq}">\n` +
-      `        <bpmn:extensionElements>\n` +
-      `          <zeebe:loopCharacteristics ${attrs.join(" ")} />\n` +
-      `        </bpmn:extensionElements>\n` +
-      completion +
-      `      </bpmn:multiInstanceLoopCharacteristics>\n`
-    );
-  }
-
   private emitList(list: FlowNode[], incoming: Edge[], loop: LoopCtx | null): Edge[] {
     let cur = incoming;
     for (const node of list) cur = this.emitNode(node, cur, loop);
     return cur;
   }
 
+  /** Emit one node by DISPATCHING to its registered `emit` handler — no central
+   *  switch on `node.kind`. A slice's kind is emitted by its own module. */
   private emitNode(node: FlowNode, incoming: Edge[], loop: LoopCtx | null): Edge[] {
-    switch (node.kind) {
-      case "run":
-      case "task": {
-        this.addServiceTask(node);
-        this.connect(incoming, node.name);
-        return [this.newEdge(node.name)];
-      }
-      case "signal": {
-        this.addCatchEvent(node);
-        this.connect(incoming, node.name);
-        this.recordEnvelope(node.payload);
-        return [this.newEdge(node.name)];
-      }
-      case "timer": {
-        this.addTimerCatchEvent(node);
-        this.connect(incoming, node.name);
-        return [this.newEdge(node.name)];
-      }
-      case "switch": {
-        const id = `Gw_${this.gw++}`;
-        const gw = this.addGateway(id, node.subject);
-        this.connect(incoming, id);
-        const out: Edge[] = [];
-        for (const c of node.cases) {
-          const e = this.newEdge(id, { condition: feelEquals(node.subject, c.value), name: c.value });
-          out.push(...this.emitList(c.body, [e], loop));
-        }
-        // The default (or a synthesised fall-through) is the unconditional edge.
-        const de = this.newEdge(id, { name: "default" });
-        gw.defaultFlow = de.id;
-        out.push(...this.emitList(node.default ?? [], [de], loop));
-        return out;
-      }
-      case "branch": {
-        const id = `Gw_${this.gw++}`;
-        const gw = this.addGateway(id);
-        this.connect(incoming, id);
-        const te = this.newEdge(id, { condition: feel(node.condition), name: "then" });
-        const out = this.emitList(node.then, [te], loop);
-        const ee = this.newEdge(id, { name: "else" });
-        gw.defaultFlow = ee.id;
-        out.push(...this.emitList(node.else ?? [], [ee], loop));
-        return out;
-      }
-      case "loop": {
-        const headId = `Loop_${this.gw++}`;
-        this.addGateway(headId);
-        this.connect(incoming, headId);
-        const ctx: LoopCtx = { headId, breaks: [] };
-        const headOut = this.newEdge(headId);
-        const bodyOut = this.emitList(node.body, [headOut], ctx);
-        // Normal fall-through of the body loops back to the head (continue).
-        this.connect(bodyOut, headId);
-        // The loop exits only via break edges.
-        return ctx.breaks;
-      }
-      case "break": {
-        if (!loop) throw new Error(`break outside a loop in flow "${this.flow.id}"`);
-        // The incoming edges (from the previous node) become the loop's exit
-        // danglers; this path does not fall through.
-        loop.breaks.push(...incoming);
-        return [];
-      }
-      case "continue": {
-        if (!loop) throw new Error(`continue outside a loop in flow "${this.flow.id}"`);
-        this.connect(incoming, loop.headId);
-        return [];
-      }
-      case "parallel": {
-        // A diverging parallel gateway forks a token onto every branch; a
-        // converging one joins them (AND-join) into a single continuation.
-        const splitId = `Gw_${this.gw++}`;
-        this.addParallelGateway(splitId);
-        this.connect(incoming, splitId);
-        const joinId = `Gw_${this.gw++}`;
-        this.addParallelGateway(joinId);
-        for (const branch of node.branches) {
-          const e = this.newEdge(splitId);
-          const branchOut = this.emitList(branch, [e], loop);
-          this.connect(branchOut, joinId);
-        }
-        return [this.newEdge(joinId)];
-      }
-      case "forEach": {
-        const mi = this.miCharacteristics(node);
-        const only = node.body.length === 1 ? node.body[0] : undefined;
-        // A single service-task body carries the MI characteristics directly; a
-        // multi-step body is wrapped in an embedded MI sub-process (its own token
-        // scope, with its own start/end).
-        if (only && (only.kind === "run" || only.kind === "task")) {
-          this.addServiceTask(only, mi);
-          this.connect(incoming, only.name);
-          return [this.newEdge(only.name)];
-        }
-        const subId = `Sub_${this.gw++}`;
-        this.addSubProcess(subId, mi);
-        this.connect(incoming, subId);
-        this.scopeStack.push(subId);
-        const startId = `${subId}_start`;
-        this.addPlainStart(startId);
-        const innerOut = this.emitList(node.body, [this.newEdge(startId)], null);
-        const endId = `${subId}_end`;
-        this.addPlainEnd(endId);
-        this.connect(innerOut, endId);
-        this.scopeStack.pop();
-        return [this.newEdge(subId)];
-      }
-    }
+    return requireNodeKind(node.kind).emit(node, incoming, loop, this.emitApi);
   }
 
   /** Render every node + sequence flow that belongs to `scope` (undefined = the
@@ -962,6 +933,7 @@ class Compiler {
     return (
       `<?xml version="1.0" encoding="UTF-8"?>\n` +
       `<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" ` +
+      `xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ` +
       `xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" ` +
       `xmlns:nano="https://nanobpm.io/schema/shapes/1.0" ` +
       `id="Definitions_${escapeXml(this.flow.id)}" targetNamespace="http://bpmn.io/schema/bpmn">\n` +
@@ -1029,21 +1001,29 @@ export function declarativeToBpmn(flow: DeclarativeFlow): string {
 const envelopeProp = (dir: "in" | "out", value: string): string =>
   `          <zeebe:property name="io.nanobpm.dataEnvelope.${dir}" value="${escapeXml(value)}" />`;
 
-/** Wrap a raw FEEL expression as a Zeebe condition body (leading `=`). */
-const feel = (expr: string): string => `=${expr}`;
+/** Wrap a raw FEEL expression as a Zeebe condition body (leading `=`). Exported
+ *  for slice-added combinators that emit conditional sequence flows. */
+export const feel = (expr: string): string => `=${expr}`;
 
-/** A FEEL equality test `subject = "value"`, with the value as a FEEL string. */
-const feelEquals = (subject: string, value: string): string =>
+/** A FEEL equality test `subject = "value"`, with the value as a FEEL string.
+ *  Exported for slice-added combinators that emit an XOR gateway. */
+export const feelEquals = (subject: string, value: string): string =>
   `=${subject} = "${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
-function incomingOutgoing(inc: string[], outg: string[]): string {
+/** Render the `<bpmn:incoming>`/`<bpmn:outgoing>` refs of a flow node. Exported
+ *  for slice `RenderNode.render` closures. */
+export function incomingOutgoing(inc: string[], outg: string[]): string {
   return (
     inc.map((f) => `      <bpmn:incoming>${f}</bpmn:incoming>\n`).join("") +
     outg.map((f) => `      <bpmn:outgoing>${f}</bpmn:outgoing>\n`).join("")
   );
 }
-const incomingOnly = (inc: string[]): string => inc.map((f) => `<bpmn:incoming>${f}</bpmn:incoming>`).join("");
-const outgoingOnly = (outg: string[]): string => outg.map((f) => `<bpmn:outgoing>${f}</bpmn:outgoing>`).join("");
+/** Render only the `<bpmn:incoming>` refs (for end-like events). Exported. */
+export const incomingOnly = (inc: string[]): string =>
+  inc.map((f) => `<bpmn:incoming>${f}</bpmn:incoming>`).join("");
+/** Render only the `<bpmn:outgoing>` refs (for start-like events). Exported. */
+export const outgoingOnly = (outg: string[]): string =>
+  outg.map((f) => `<bpmn:outgoing>${f}</bpmn:outgoing>`).join("");
 
 function sequenceFlow(e: Edge): string {
   const nm = e.name ? ` name="${escapeXml(e.name)}"` : "";

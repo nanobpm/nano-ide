@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/workflow",
-  "version": "0.8.2",
+  "version": "0.11.0",
   "description": "Code-first durable orchestration for nanobpmn (ADR 0044/0045). Author a durable workflow as a declarative flow — `defineFlow(id, w => { w.run(...); w.signal(...); w.task(...) })` — and the SDK derives the executable BPMN model, the job types, and the message/correlation wiring, then hosts a generic worker. `w.run` is a local step, `w.signal` is a durable human-in-the-loop wait, `w.task` is a step serviced by an external worker. `defineFlow` is the single code-first surface; the imperative `defineWorkflow` replay function is experimental/internal, not a recommended API. No diagram, no task-type wiring, no correlation plumbing authored by hand — and you can optionally auto-generate a diagram (DI) for the derived model with `declarativeToLayoutedBpmn` via the optional `bpmn-auto-layout` peer dependency. Talks to a running nanobpmn gateway through @nanobpm/nano-sdk (the shared engine-transport spine — ADR 0055), which negotiates the Falcon protocol on a Nano server and REST elsewhere.",
   "type": "module",
   "license": "Apache-2.0",
@@ -17,6 +17,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./test-support": {
+      "types": "./dist/test-support/index.d.ts",
+      "default": "./dist/test-support/index.js"
+    },
     "./source": "./src/index.ts"
   },
   "files": [
@@ -26,13 +30,17 @@
   "engines": {
     "node": ">=22.6"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/nodes/*.js",
+    "./src/nodes/*.ts"
+  ],
   "dependencies": {
     "@nanobpm/nano-sdk": "^1.2.5"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.types.json",
+    "gen:nodes": "node scripts/gen-node-registry.mjs",
+    "build": "npm run gen:nodes && tsc -p tsconfig.json",
+    "typecheck": "npm run gen:nodes && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.types.json",
     "test": "npm run build && npm run test:ci",
     "test:ci": "node --experimental-strip-types --test test/*.test.ts",
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts",

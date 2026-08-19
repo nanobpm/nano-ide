@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:nano="https://nanobpm.io/schema/shapes/1.0" id="g_Definitions_smoke-demo" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="g_smoke-demo" name="smoke-demo" isExecutable="true">
+    <bpmn:startEvent id="g_Start"><bpmn:outgoing>g_f_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:serviceTask id="g_prepare" name="prepare">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="smoke-demo:prepare" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>g_f_0</bpmn:incoming>
+      <bpmn:outgoing>g_f_1</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:serviceTask id="g_external-sign" name="external-sign">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="smoke-demo:external-sign" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>g_f_1</bpmn:incoming>
+      <bpmn:outgoing>g_f_2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:exclusiveGateway id="g_Gw_0" name="status" default="g_f_5">
+      <bpmn:incoming>g_f_2</bpmn:incoming>
+      <bpmn:outgoing>g_f_3</bpmn:outgoing>
+      <bpmn:outgoing>g_f_5</bpmn:outgoing>
+    </bpmn:exclusiveGateway>
+    <bpmn:serviceTask id="g_finish" name="finish">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="smoke-demo:finish" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>g_f_3</bpmn:incoming>
+      <bpmn:outgoing>g_f_4</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:intermediateCatchEvent id="g_await-fix" name="await-fix">
+      <bpmn:incoming>g_f_5</bpmn:incoming>
+      <bpmn:outgoing>g_f_6</bpmn:outgoing>
+      <bpmn:messageEventDefinition messageRef="g_Msg_await-fix" />
+    </bpmn:intermediateCatchEvent>
+    <bpmn:intermediateCatchEvent id="g_cooldown" name="cooldown">
+      <bpmn:incoming>g_f_4</bpmn:incoming>
+      <bpmn:incoming>g_f_6</bpmn:incoming>
+      <bpmn:outgoing>g_f_7</bpmn:outgoing>
+      <bpmn:timerEventDefinition>
+        <bpmn:timeDuration>PT5M</bpmn:timeDuration>
+      </bpmn:timerEventDefinition>
+    </bpmn:intermediateCatchEvent>
+    <bpmn:endEvent id="g_End"><bpmn:incoming>g_f_7</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="g_f_0" sourceRef="g_Start" targetRef="g_prepare" />
+    <bpmn:sequenceFlow id="g_f_1" sourceRef="g_prepare" targetRef="g_external-sign" />
+    <bpmn:sequenceFlow id="g_f_2" sourceRef="g_external-sign" targetRef="g_Gw_0" />
+    <bpmn:sequenceFlow id="g_f_3" sourceRef="g_Gw_0" targetRef="g_finish" name="ok">
+      <bpmn:conditionExpression>=status = &quot;ok&quot;</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="g_f_4" sourceRef="g_finish" targetRef="g_cooldown" />
+    <bpmn:sequenceFlow id="g_f_5" sourceRef="g_Gw_0" targetRef="g_await-fix" name="default" />
+    <bpmn:sequenceFlow id="g_f_6" sourceRef="g_await-fix" targetRef="g_cooldown" />
+    <bpmn:sequenceFlow id="g_f_7" sourceRef="g_cooldown" targetRef="g_End" />
+  </bpmn:process>
+  <bpmn:message id="g_Msg_await-fix" name="smoke-demo:await-fix">
+    <bpmn:extensionElements>
+      <zeebe:subscription correlationKey="=caseId" />
+    </bpmn:extensionElements>
+  </bpmn:message>
+  <bpmndi:BPMNDiagram id="g_Di" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"><bpmndi:BPMNPlane id="g_Plane" bpmnElement="g_smoke-demo"><bpmndi:BPMNShape id="g_S1" bpmnElement="g_Start"/></bpmndi:BPMNPlane></bpmndi:BPMNDiagram>
+</bpmn:definitions>

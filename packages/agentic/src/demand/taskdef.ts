@@ -22,6 +22,17 @@ export interface TaskDefinitionLeaf {
   readonly process: string;
   /** The service-task element id carrying the leaf (best-effort, may be empty). */
   readonly elementId: string;
+  /**
+   * True when the service task carries a `<zeebe:linkedResource … linkName="prompt">`
+   * — its base-prompt side-car. This is the *structural* agentic signal (per nwf
+   * `SPEC.md` §"Agent job contract"): every external agent task delivers its base
+   * prompt through a `linkName="prompt"` linked resource, and no in-process
+   * (deterministic) worker task does. Agentic-ness is read from this flag, NOT
+   * from the `taskType` string — the deployed models use arbitrary type strings
+   * (colon-form `senior:retro`, dot-form, bare) that a routing-token grammar
+   * would mis-classify.
+   */
+  readonly agentic: boolean;
 }
 
 function attr(tag: string, name: string): string {
@@ -35,12 +46,30 @@ function processId(xml: string): string {
 }
 
 /**
+ * True when a service-task body carries a `linkName="prompt"` linked resource —
+ * the base-prompt side-car that marks a task as external agentic work.
+ *
+ * Scans every `<zeebe:linkedResource …>` in the body (tolerating attribute
+ * ordering and self-closing tags, consistent with {@link scanTaskDefinitions})
+ * and returns true as soon as one carries `linkName="prompt"`.
+ */
+function hasPromptLink(body: string): boolean {
+  const linkRe = /<zeebe:linkedResource\b[^>]*?\/?>/g;
+  let link: RegExpExecArray | null;
+  while ((link = linkRe.exec(body)) !== null) {
+    if (attr(link[0], "linkName") === "prompt") return true;
+  }
+  return false;
+}
+
+/**
  * Scan one BPMN document for its service-task `taskDefinition` leaves.
  *
  * Every `<bpmn:serviceTask>` carrying a `<zeebe:taskDefinition type="…">` with a
  * non-empty type yields a leaf; tasks without a task definition (or with an empty
  * type) are skipped. The scan is order-preserving and tolerant of attribute
- * ordering and self-closing task-definition tags.
+ * ordering and self-closing task-definition tags. Each leaf also records whether
+ * the task carries a `linkName="prompt"` linked resource (its `agentic` flag).
  */
 export function scanTaskDefinitions(xml: string): TaskDefinitionLeaf[] {
   const proc = processId(xml);
@@ -55,7 +84,7 @@ export function scanTaskDefinitions(xml: string): TaskDefinitionLeaf[] {
     if (!tdMatch) continue;
     const taskType = attr(tdMatch[0], "type");
     if (!taskType) continue;
-    out.push({ taskType, elementId, process: proc });
+    out.push({ taskType, elementId, process: proc, agentic: hasPromptLink(body) });
   }
   return out;
 }

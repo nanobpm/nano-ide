@@ -4,7 +4,6 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
 import type { EngineClient, HttpRequest, HttpResponse } from "../host.ts";
 import { makeRouter } from "../router.ts";
 import { createPagesRoutes, type PagesDataSource, type PagesDeps } from "./pages.ts";
@@ -379,10 +378,12 @@ test("renderer interpolates a column's per-cell template into DOM text (#214)", 
   // resolving to prototype cruft — guard the own-property gate explicitly.
   assert.match(js, /Object\.prototype\.hasOwnProperty\.call\(row, key\) \? row\[key\] : null/);
   assert.match(js, /return v == null \? "" : String\(v\);/);
-  // gridCell keeps the raw single-field value separate (drives the badge gate)
-  // and lets a string template win for the rendered text.
+  // gridCell keeps the raw single-field value separate (drives the badge gate),
+  // applies an opt-in col.format to the field text (#327), and lets a string
+  // template win for the rendered text over that formatted/raw field value.
   assert.match(js, /const rawText = row\[col\.field\] == null \? "" : String\(row\[col\.field\]\);/);
-  assert.match(js, /const text = typeof col\.template === "string" \? interpTemplate\(col\.template, row\) : rawText;/);
+  assert.match(js, /const fieldText = col\.format \? fmtCellValue\(col\.format, rawText\) : rawText;/);
+  assert.match(js, /const text = typeof col\.template === "string" \? interpTemplate\(col\.template, row\) : fieldText;/);
 });
 
 test("renderer renders a column's subtitle as a muted second line, never an href (#257)", async () => {
@@ -505,7 +506,7 @@ test("renderer binds a route param: parseRoute splits page/param, filters + text
   assert.match(js, /const slash = raw\.indexOf\("\/"\)/);
   assert.match(js, /const paramRaw = slash >= 0 \? raw\.slice\(slash \+ 1\) : ""/);
   assert.match(js, /param = paramRaw \? decodeURIComponent\(paramRaw\) : ""/);
-  assert.match(js, /let PARAM = parseRoute\(\)\.param/);
+  assert.match(js, /PARAM = parseRoute\(\)\.param/);
   // renderPage refreshes PARAM from the current route on every (re)render.
   assert.match(js, /const route = parseRoute\(\);\s*CURRENT = route\.page;\s*PARAM = route\.param;/s);
   // A datasource filter with { eqParam: true } binds its value to the live PARAM,
@@ -589,7 +590,7 @@ test("renderer exposes an embed-gated host-navigation bridge", async () => {
   // data can't smuggle a path. The same-origin gate reads parent.location.origin
   // in a try/catch (a cross-origin parent throws under the same-origin policy).
   assert.match(js, /window\.parent\.location\.origin === window\.location\.origin/);
-  assert.match(js, /const NANO_EMBEDDED =/);
+  assert.match(js, /NANO_EMBEDDED = computeEmbedded\(\)/);
   assert.match(js, /function hostNavigate\(target, params\)/);
   assert.match(js, /if \(!NANO_EMBEDDED\) return false;/);
   assert.match(
@@ -597,7 +598,7 @@ test("renderer exposes an embed-gated host-navigation bridge", async () => {
     /window\.parent\.postMessage\(\s*\{\s*type:\s*"nano-navigate",\s*target:\s*target,\s*params:\s*params\s*\}\s*,\s*window\.location\.origin\s*\)/,
   );
   // The theme bridge reuses the same embed flag (no second window.parent probe).
-  assert.match(js, /if \(NANO_EMBEDDED\) \{/);
+  assert.match(js, /function installThemeBridge\(\)\s*\{\s*if \(!NANO_EMBEDDED\) return;/);
 });
 
 test("the renderer honours numeric actionForm fields", async () => {
@@ -695,7 +696,7 @@ test("renderer makes collapsible nodes persist their state across sessions", asy
   assert.match(js, /localStorage\.setItem\(key, val \? "1" : "0"\)/);
   assert.match(js, /catch \(e\) \{\s*return dflt;/);
   // And the wrapper is actually applied at the dispatch layer.
-  assert.match(js, /makeCollapsible\(n, \(RENDERERS\[n\.type\]/);
+  assert.match(js, /makeCollapsible\(n, \(\/\*\* @type \{Record<string, Renderer>\} \*\/ \(RENDERERS\)\[n\.type\]/);
   // Non-card renderer output (e.g. text -> <p>) is nested whole inside a fresh
   // <section class="pc-card"> rather than having a <button>/<div> injected into
   // it — so the feature is valid markup across every node type, not just cards.
@@ -1002,9 +1003,8 @@ test("the prose renderer ships a safe, dependency-free markdown → DOM converte
   // Underscore emphasis is word-boundary guarded so snake_case identifiers survive.
   assert.match(js, /function mdIsWordChar\(c\)/);
   assert.match(js, /!mdIsWordChar\(s\[i - 1\]\)/);
-  // The code backtick is built from a char code so this source stays inside the
-  // String.raw template literal.
-  assert.match(js, /const MD_BACKTICK = String\.fromCharCode\(96\)/);
+  // The markdown code backtick is a literal in the standalone runtime source.
+  assert.match(js, /const MD_BACKTICK = "`"/);
 });
 
 test("the shell styles the prose/markdown list at a comfortable reading measure (#274)", async () => {
@@ -1044,6 +1044,33 @@ test("GET /app/data whitelists filter columns", async () => {
   const good = await router(req("GET", "/app/data/app/orders", { query: "where=status:new" }));
   assert.equal(good.status, 200);
   const bad = await router(req("GET", "/app/data/app/orders", { query: "where=evil:1" }));
+  assert.equal(bad.status, 400);
+});
+
+test("#338: GET /app/data?count=1 returns a COUNT(*), honouring the same whitelisted where", async () => {
+  // count mode issues a COUNT(*) (not SELECT *) so a nav badge can show a live
+  // number without transferring rows; the where filter is still column-whitelisted.
+  let seenSql = "";
+  let seenParams: unknown[] = [];
+  const { router } = build({
+    query: async (sql: string, params?: unknown[]) => {
+      if (/PRAGMA table_info/i.test(sql)) {
+        return [{ name: "id" }, { name: "status" }, { name: "total" }];
+      }
+      seenSql = sql;
+      seenParams = params ?? [];
+      return [{ n: 7 }];
+    },
+  });
+  const res = await router(req("GET", "/app/data/app/orders", { query: "count=1&where=status:new" }));
+  assert.equal(res.status, 200);
+  assert.equal(JSON.parse(res.body ?? "{}").count, 7);
+  assert.match(seenSql, /SELECT COUNT\(\*\) AS n FROM/i, "count mode must issue a COUNT(*), not SELECT *");
+  assert.doesNotMatch(seenSql, /LIMIT/i, "a count has no LIMIT");
+  assert.deepEqual(seenParams, ["new"], "the where value is still bound as a parameter");
+
+  // An unknown filter column is rejected in count mode too (no whitelist bypass).
+  const bad = await router(req("GET", "/app/data/app/orders", { query: "count=1&where=evil:1" }));
   assert.equal(bad.status, 400);
 });
 
@@ -1314,6 +1341,111 @@ test("child grids reuse the same per-row More toggle for hidden columns (#268)",
   assert.match(js, /if \(chasHidden\) ctr\.append\(mobileMoreCell\(ctr\)\);/);
 });
 
+test("child grids support per-row detail expansion, collapsed by default (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A child grid opts into per-row expansion with a `detail` (alias `expandable`)
+  // block that reuses the top-level grid's detailPanel() — so a nested table (e.g.
+  // a Convergence "Rounds" child) can render each row as an expandable, collapsed
+  // affordance instead of dumping the whole history flat.
+  assert.match(js, /const cdetail = cg\.detail \|\| cg\.expandable \|\| null;/);
+  assert.match(js, /const chasExpand = cdetail != null;/);
+  // The expander shares the top-level detail look and the shared chevronToggle()
+  // factory: a pc-chevron disclosure button in a pc-row-actions cell, revealing
+  // detailPanel(cr, cdetail) in a following row. setChevronOpen seeds the glyph +
+  // aria-expanded from the persisted collapse state so they can't drift.
+  // The panel's escalation form (if any) is threaded a child-scoped onSuccess so
+  // answering it re-fetches only this child grid (load()), not the whole page (#333).
+  assert.match(js, /const ctoggle = chevronToggle\("Toggle row details"\);\s*setChevronOpen\(ctoggle, !collapsed\);/);
+  assert.match(js, /cells\.push\(el\("td", \{ class: "pc-row-actions" \}, ctoggle\)\);/);
+  assert.match(js, /cdtr\.firstChild\.append\(detailPanel\(cr, cdetail, \(\) => load\(\)\)\)/);
+  // Rows are collapsed by default; detail.defaultCollapsed/detail.collapsed (both
+  // defaulting to true) seed the initial state.
+  assert.match(js, /cdetail\.defaultCollapsed != null/);
+  assert.match(js, /cdetail\.collapsed != null/);
+  // detailPanel is now config-parametrised so the top-level grid and child grids
+  // share one implementation (link + fields + nested children + form). Its optional
+  // onSuccess lets each caller scope the form's post-answer refresh (#333).
+  assert.match(js, /function detailPanel\(row, cfg, onSuccess\)/);
+  assert.match(js, /const d = cfg \|\| detail;/);
+});
+
+test("child-grid per-row collapse state is persisted across the refresh poll (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The top-level grid rebuilds each child grid on every refreshMs poll, so an
+  // open row would collapse on the next tick without durable state. Per-row
+  // collapse is persisted in localStorage — keyed by page + node + parent
+  // discriminator + child rowKey — via the same readCollapsed/writeCollapsed
+  // helpers groupBy group-collapse uses, so it survives both the poll and a full
+  // reload.
+  assert.match(js, /const cskey = ckeyBase && crk != null \? ckeyBase \+ crk : null;/);
+  assert.match(js, /readCollapsed\(cskey, cdefaultCollapsed\)/);
+  assert.match(js, /if \(cskey\) writeCollapsed\(cskey, !open\);/);
+  assert.match(js, /"pc:collapsed:" \+ CURRENT \+ ":" \+ cnodeId \+ ":" \+ cchildId/);
+});
+
+test("child-grid collapse key is scoped by row[cg.parentField], not the parent grid's rowKey (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The parent-row discriminator in the localStorage key MUST be the value the
+  // child grid is queried by (row[cg.parentField]) — NOT rowKeyOf(row), which is
+  // null whenever the top-level grid declares no `rowKey`. With the old rowKeyOf
+  // key every parent row collapsed under the literal "_", so opening one parent's
+  // child row silently toggled the same-keyed child row under every other parent.
+  assert.match(
+    js,
+    /const cparentKey = cg\.parentField != null && row\[cg\.parentField\] != null\s*\?\s*String\(row\[cg\.parentField\]\) : null;/,
+  );
+  // No safe key ⇒ persistence disabled (ckeyBase null), never a colliding "_".
+  assert.match(js, /const ckeyBase = cparentKey == null \? null/);
+  assert.doesNotMatch(js, /cparentKey == null \? "_" : cparentKey/);
+});
+
+test("child-grid detail panel never falls back to the top-level grid's form (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // detailPanel(cr, cdetail) renders a child grid's own detail config. Its form is
+  // built from d.form (the panel's own config): when the child config declares no
+  // `form` the panel must have NO form — it must NOT implicitly reuse the top-level
+  // grid's detail.form. So the shared buildDetailForm uses its `f` argument verbatim
+  // (returning null when it is missing) rather than falling back to detail.form.
+  assert.match(js, /const form = buildDetailForm\(d\.form, row,/);
+  assert.match(js, /function buildDetailForm\(f, row, onSuccess\) \{\s*if \(!f \|\| !row\[f\.showWhenField\]\) return null;/);
+  assert.doesNotMatch(js, /d\.form \|\| \(?detail/);
+});
+
+test("child-grid and top-level detail forms thread different post-answer refreshes (#333)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The #333 vs #332 reconciliation (#336): both grids share one detailPanel /
+  // buildDetailForm, but they thread DIFFERENT onSuccess callbacks. A child-grid
+  // row's inline answer must refresh ONLY that child grid — via its local load()
+  // re-fetch — so the answered row drops without a disruptive whole-page re-poll.
+  // The child callback returns the load() promise (not swallowed) so a failed
+  // re-fetch surfaces in buildDetailForm and re-enables its submit button.
+  assert.match(js, /detailPanel\(cr, cdetail, \(\) => load\(\)\)/);
+  // load() is the child-scoped re-fetch: it repaints just this child grid's tbody.
+  assert.match(js, /async function load\(\) \{[\s\S]*?cbody\.replaceChildren\(\);/);
+  // The top-level grid keeps its whole-page re-poll: detailPanel's default onSuccess
+  // (used when no child-scoped callback is passed) dispatches pc:refresh.
+  assert.match(js, /onSuccess \|\| \(\(\) => \{ document\.dispatchEvent\(new CustomEvent\("pc:refresh"\)\); \}\)/);
+  // The single shared expander (cdetail) hosts the form — there is no duplicate,
+  // parallel form-only child expander (the pre-reconciliation cdetailForm surface).
+  assert.doesNotMatch(js, /const cdetailForm = /);
+});
+
+test("child-grid fetch failure renders a full-width error row (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The child grid's colspan is computed eagerly, BEFORE the getJSON() fetch (now
+  // wrapped in load() so the grid can re-fetch itself after an inline answer, #333),
+  // so the catch path's error row (colspan: cspan) spans the whole table even when
+  // the fetch throws. A lazily-assigned cspan would be undefined in the catch.
+  assert.match(js, /const cspan = String\(\(ccols\.length \|\| 1\) \+ cextra\);[\s\S]*?async function load\(\) \{[\s\S]*?await getJSON\(dataUrl\(cg\.source/);
+  assert.match(js, /\} catch \(e\) \{\s*cbody\.replaceChildren\(el\("tr", \{\}, el\("td", \{ colspan: cspan \}/);
+});
+
 test("the renderer honours an optional Tier-2 page-level mobile layout variant (#268)", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
@@ -1429,7 +1561,26 @@ test("pipeline builds a locus link via the shared pageHashHref route builder, on
   assert.match(js, /const href = pageHashHref\(col\.link\.page, row\[col\.link\.keyField\]\)/);
   // The locus link uses it and the shared .pc-link class; blank key → "" → plain.
   assert.match(js, /pageHashHref\(locus\.link\.page, locusKey\)/);
-  assert.match(js, /el\("a", \{ class: "pc-link pc-pipe-label", href: locusHref \}, label\)/);
+  assert.match(js, /el\("a", \{ class: "pc-link pc-pipe-label", href \}, label\)/);
+});
+
+test("pipeline locus supports a processExplorer link routing to the console explorer via the shared explorerAnchor", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A pipeline column whose locus declares `link:{ kind:"processExplorer" }` links
+  // the locus stage to the console explorer for the row's process instance — via
+  // the SAME single-source explorerAnchor builder the grid link cell uses, so the
+  // href and the embedded-in-place / standalone-new-tab navigation can't drift.
+  assert.match(js, /function explorerAnchor\(label, key, cls\)/);
+  assert.match(js, /"\/console\/explorer\?instance="\s*\+\s*encodeURIComponent\(keyStr\)/);
+  assert.match(js, /hostNavigate\("processExplorer",\s*\{\s*instance:\s*keyStr\s*\}\)/);
+  // The pipeline locus branches to it on the processExplorer kind, reusing the
+  // .pc-pipe-label class; the grid link cell routes through the same builder.
+  assert.match(js, /locus\.link\.kind === "processExplorer"/);
+  assert.match(js, /return explorerAnchor\(label, locusKey, "pc-link pc-pipe-label"\)/);
+  assert.match(js, /explorerAnchor\(text, row\[col\.link\.keyField\], "pc-link"\)/);
+  // Unknown kind / blank key → no link → the stage stays plain (graceful).
+  assert.match(js, /if \(!locus \|\| !locus\.link \|\| locusKey === ""\) return null/);
 });
 
 test("pipeline exposes step semantics to assistive tech (role/list + aria-current)", async () => {
@@ -1477,27 +1628,10 @@ test("shell CSS carries the .pc-pipe* track chrome reusing --nano-* tokens", asy
   assert.match(html, /\.pc-pipe-upcoming \{[^}]*var\(--nano-text-faint\)/);
 });
 
-test("runtime RENDERERS cover exactly the shared PAGE_NODE_TYPES registry", async () => {
-  // The browser renderer's RENDERERS table (the runtime source of truth for which
-  // page-node types can be drawn) lives inside the served runtime module. It must
-  // stay in lockstep with @nanobpm/nano-app-schema's PAGE_NODE_TYPES — the same
-  // registry the Console's Page Composer is compile-time locked to. If the two
-  // drift, a page the Composer accepts renders as a blank <div> in the App (or
-  // vice-versa); this guard turns that silent gap into a loud CI failure.
-  const res = await dispatch("GET", "/app/runtime.js");
-  const js = res.body ?? "";
-  const m = js.match(/const\s+RENDERERS\s*=\s*\{([^}]*)\}/);
-  assert.ok(m, "runtime module must define a RENDERERS map");
-  const runtimeTypes = m[1]
-    .split(",")
-    .map((entry) => entry.split(":")[0].trim())
-    .filter((k) => k.length > 0);
-  assert.deepEqual(
-    [...runtimeTypes].sort(),
-    [...PAGE_NODE_TYPES].sort(),
-    "runtime RENDERERS keys must equal the shared PAGE_NODE_TYPES registry",
-  );
-});
+// NOTE (#291): the RENDERERS ↔ PAGE_NODE_TYPES drift guard no longer string-scrapes
+// the served module. RENDERERS is now compile-time locked (`satisfies
+// Record<PageNodeType, Renderer>`) in the real source, and verified at runtime by a
+// direct-import test in ../../browser/runtime.browser.test.ts — no regex needed.
 
 function hasStderr(err: unknown): err is { stderr: unknown } {
   return typeof err === "object" && err !== null && "stderr" in err;

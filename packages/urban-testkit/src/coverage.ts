@@ -26,6 +26,16 @@ export interface SurfaceReport {
    *  (usually an internal/system element or a stale declaration). Informational only:
    *  the gate does NOT fail on these. Sorted. */
   readonly unexpected: readonly string[];
+  /** Declared elements that were exercised **via a mock at least once** (epic #296, S4).
+   *  Recorded additively: an id enters this set the first time it is exercised via a mock
+   *  (`record(..., true)`) and stays — a *later* real dispatch of the same element does NOT
+   *  remove it. So for a mixed mock+real element this means "mock-satisfied at least once",
+   *  not "exclusively via mock". A mocked element still counts as exercised — so it is NOT a
+   *  gap and never fails `assertFullCoverage` — but it is surfaced here so a reader can see the
+   *  coverage was satisfied (at least partly) by a mock rather than solely by driving the real
+   *  handler. Always a subset of `exercised`, sorted. Empty when nothing on this surface was
+   *  mock-satisfied. */
+  readonly mocked: readonly string[];
   /** True when nothing declared is missing (`missing` is empty). */
   readonly complete: boolean;
 }
@@ -58,6 +68,15 @@ function difference(a: ReadonlySet<string>, b: ReadonlySet<string>): string[] {
   return out.sort();
 }
 
+/** Element ids present in both `a` and `b`, sorted. */
+function intersection(a: ReadonlySet<string>, b: ReadonlySet<string>): string[] {
+  const out: string[] = [];
+  for (const id of a) {
+    if (b.has(id)) out.push(id);
+  }
+  return out.sort();
+}
+
 /**
  * Tracks declared-vs-exercised coverage across an app's surfaces. Construct with an
  * initial set of declared surfaces (or add them later with {@link declareSurface}),
@@ -67,6 +86,12 @@ function difference(a: ReadonlySet<string>, b: ReadonlySet<string>): string[] {
 export class SurfaceCoverage {
   readonly #declared = new Map<string, Set<string>>();
   readonly #exercised = new Map<string, Set<string>>();
+  /** Per-surface set of element ids that were exercised via a mock at least once (epic #296,
+   *  S4). Additive: an id added here on a mock dispatch (`record(..., true)`) stays even if the
+   *  same element is later dispatched for real. A subset of `#exercised`: an element added here
+   *  is always also recorded exercised. Used to surface `SurfaceReport.mocked` so a mock-satisfied
+   *  element is honest and visible, never a hidden gap. */
+  readonly #mocked = new Map<string, Set<string>>();
 
   /** @param declared surface name → its declared element ids. */
   constructor(declared?: Readonly<Record<string, Iterable<string>>>) {
@@ -95,11 +120,18 @@ export class SurfaceCoverage {
 
   /** Mark `id` on `surface` as exercised. A hit on an undeclared surface still records
    *  (surfacing later as `unexpected`), so instrumentation can run before a surface is
-   *  declared without losing data. */
-  record(surface: string, id: string): void {
+   *  declared without losing data. Pass `mocked: true` when the element was exercised via a
+   *  mock (epic #296, S4): it still counts as exercised (so it is not a gap), and is
+   *  additionally flagged in {@link SurfaceReport.mocked} so the mock is visible, not hidden. */
+  record(surface: string, id: string, mocked = false): void {
     const exercised = this.#exercised.get(surface) ?? new Set<string>();
     exercised.add(id);
     this.#exercised.set(surface, exercised);
+    if (mocked) {
+      const mockedSet = this.#mocked.get(surface) ?? new Set<string>();
+      mockedSet.add(id);
+      this.#mocked.set(surface, mockedSet);
+    }
   }
 
   /** Build a full coverage {@link CoverageReport}. */
@@ -116,6 +148,7 @@ export class SurfaceCoverage {
   #surfaceReport(surface: string): SurfaceReport {
     const declared = this.#declared.get(surface) ?? new Set<string>();
     const exercised = this.#exercised.get(surface) ?? new Set<string>();
+    const mocked = this.#mocked.get(surface) ?? new Set<string>();
     const missing = difference(declared, exercised);
     return {
       surface,
@@ -123,6 +156,11 @@ export class SurfaceCoverage {
       exercised: sorted(exercised),
       missing,
       unexpected: difference(exercised, declared),
+      // Report only mock-satisfied elements that are actually declared on this surface (mocked ids
+      // are exercised by construction, so this is mocked ∩ declared ∩ exercised) — an honest,
+      // visible signal that a *declared* element's coverage came via a mock. An undeclared mock hit
+      // stays purely `unexpected`, never inflating `mocked` past the documented "declared" contract.
+      mocked: intersection(mocked, declared),
       complete: missing.length === 0,
     };
   }

@@ -48,6 +48,16 @@ jobs:
       - run: npm run typecheck
       - run: npm test --if-present
 
+      # The served browser page runtime lives as real, type-checked/linted source
+      # (packages/urban/src/runtime/browser/runtime.browser.js) and is emitted into
+      # a committed generated artifact (runtime.gen.ts) by scripts/gen-runtime.mjs.
+      # Re-generate here and fail on any drift so a stale artifact can never ship.
+      # Regenerate + commit locally with `npm run gen:runtime -w packages/urban`.
+      - name: Runtime artifact is up to date
+        run: |
+          npm run gen:runtime -w packages/urban
+          git diff --exit-code -- packages/urban/src/runtime/core/modules/runtime.gen.ts
+
   # db/migrations/*.sql are forward-only and applied in lexical filename order, so
   # the numeric prefix is load-bearing (see scripts/lib/migration-order.mjs). Two
   # branches that fork off the same state can each pick "the next free prefix N"

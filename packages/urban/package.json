@@ -1,6 +1,6 @@
 {
 	"name": "@nanobpm/urban",
-	"version": "0.55.0",
+	"version": "0.67.0",
 	"description": "Urban: build and run code-first apps on Nano — runtime, derivation toolkit, and CLI in one. Author durable processes with @nanobpm/workflow (defineFlow), a typed datasource, forms, triggers and surfaces from a nano.app.json manifest, on Node or Deno.",
 	"license": "Apache-2.0",
 	"type": "module",
@@ -51,6 +51,35 @@
 			"types": "./dist/effect/index.d.ts",
 			"default": "./dist/effect/index.js"
 		},
+		"./context": {
+			"types": "./dist/context/index.d.ts",
+			"default": "./dist/context/index.js"
+		},
+		"./context/binding": {
+			"types": "./dist/context/binding/index.d.ts",
+			"default": "./dist/context/binding/index.js"
+		},
+		"./context/schema": {
+			"types": "./dist/context/schema/index.d.ts",
+			"default": "./dist/context/schema/index.js"
+		},
+		"./context/pii": {
+			"types": "./dist/context/pii/index.d.ts",
+			"default": "./dist/context/pii/index.js"
+		},
+		"./context/git": {
+			"types": "./dist/context/git/index.d.ts",
+			"default": "./dist/context/git/index.js"
+		},
+		"./context/retrieval": {
+			"types": "./dist/context/retrieval/index.d.ts",
+			"default": "./dist/context/retrieval/index.js"
+		},
+		"./context/conformance": {
+			"types": "./dist/context/conformance/index.d.ts",
+			"default": "./dist/context/conformance/index.js"
+		},
+		"./context/source": "./src/context/index.ts",
 		"./source": "./src/index.ts"
 	},
 	"files": [
@@ -61,14 +90,18 @@
 	"scripts": {
 		"build": "tsc -p tsconfig.build.json",
 		"prepack": "npm run build",
-		"typecheck": "tsc --noEmit -p tsconfig.json",
+		"typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser.json",
+		"gen:runtime": "node scripts/gen-runtime.mjs",
+		"check:runtime": "node scripts/gen-runtime.mjs --check",
 		"test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
+		"test:conformance": "node --test --experimental-strip-types \"src/context/conformance/**/*.conformance.ts\"",
+		"check:pii": "node --experimental-strip-types scripts/check-pii.ts",
 		"test:deno": "deno test -A --no-check src/"
 	},
 	"dependencies": {
 		"@nanobpm/nano-app-schema": "^0.9.0",
 		"@nanobpm/nano-sdk": "^1.2.5",
-		"@nanobpm/workflow": "^0.8.0",
+		"@nanobpm/workflow": "^0.11.0",
 		"bpmn-auto-layout": "^2.0.0-alpha.2",
 		"create-urban-app": "^0.14.0",
 		"yaml": "^2.9.0"

@@ -359,3 +359,39 @@ export interface EngineClient {
   /** Tear down all connections. */
   close(): Promise<void>;
 }
+
+/**
+ * The names of every method on {@link EngineClient} — the single *runtime* source of
+ * truth for the interface's surface. It is compile-time-pinned to `keyof EngineClient`
+ * in both directions (see the two assertions below): the `satisfies` rejects a stray or
+ * misspelled name, and the exhaustiveness assertion rejects an *omitted* one, so adding,
+ * renaming, or removing an `EngineClient` method that this list does not mirror fails
+ * `npm run typecheck`.
+ *
+ * A fake/adapter (e.g. `@nanobpm/urban-testkit`'s `WasmEngineClient`) can iterate this
+ * list to assert at *runtime* that it implements the full surface — catching the
+ * "the SDK grew a method the test double lags" seam-lag class (issue #341: `openUserTasks`,
+ * and `getForm` before it) that a purely structural `implements EngineClient` check no
+ * longer catches once the fake is published/compiled against an older `@nanobpm/urban`.
+ */
+export const ENGINE_CLIENT_METHODS = [
+  "deployResources",
+  "createInstance",
+  "cancelInstance",
+  "publishMessage",
+  "searchUserTasks",
+  "openUserTasks",
+  "getForm",
+  "completeUserTask",
+  "searchProcessInstances",
+  "registerWorker",
+  "close",
+] as const satisfies readonly (keyof EngineClient)[];
+
+// Compile-time exhaustiveness: every `EngineClient` method must appear in
+// `ENGINE_CLIENT_METHODS`. If one is omitted, `Exclude<...>` is a non-`never` union of
+// the missing keys, so this type resolves to `never` and the `true` assignment fails to
+// compile — the twin of the `satisfies` above, together pinning the list to
+// `keyof EngineClient` exactly (No Drift Surfaces).
+type MissingEngineClientMethods = Exclude<keyof EngineClient, (typeof ENGINE_CLIENT_METHODS)[number]>;
+const _engineClientMethodsAreExhaustive: [MissingEngineClientMethods] extends [never] ? true : never = true;

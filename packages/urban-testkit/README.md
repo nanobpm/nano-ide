@@ -188,3 +188,56 @@ plain `bootTestApp(root)` carries zero overhead.
 The core (`SurfaceCoverage`) is surface-agnostic and free of any runtime import, so later
 slices can add surfaces (webhook triggers, BPMN elements, SQLite tables) by declaring their
 ids and recording hits — no change to the gate itself (issue #157).
+
+## Fluent assertions — `assertThat*` (issue #295)
+
+A fluent, intent-revealing assertion DSL for Urban e2e tests. Every matcher reads
+synchronously from `snapshot()` / the engine read models and is fully
+deterministic (no wall-clock, no polling); failures throw a `node:assert`
+`AssertionError` that names the actual state. The public surface is wired through
+the package barrel.
+
+- **`assertThatInstance(app, keyOrSelector?)`** — assertions over a single
+  process instance. The instance is selected by a bare process-instance key,
+  `byKey(...)`, `byProcessId(...)`, or omitted for the single ACTIVE instance.
+  Matchers: `isActive`, `hasCompleted`, `isTerminated`, `hasActiveElement(s)`,
+  `hasCompletedElements`, `hasVariable`, `hasVariables`, `hasNoVariable`,
+  `hasIncident`, `hasNoIncident`. Synchronous and chainable.
+
+  ```ts
+  assertThatInstance(app, processInstanceKey)
+    .isActive()
+    .hasActiveElement("work")
+    .hasVariables({ who: "world" });
+  assertThatInstance(app, byProcessId("order")).hasCompleted();
+  ```
+
+- **`assertThatUserTask(app, selector)`** — assertions over the user-task read
+  model. `selector` is `{ instance?, elementId? }` (instance is a key, `byKey`,
+  or `byProcessId`). Matchers are **async** — chain with `await`: `isCreated`,
+  `isCompleted`, `hasAssignee`, `hasCandidateGroup`.
+
+  ```ts
+  await assertThatUserTask(app, { elementId: "review" })
+    .isCreated()
+    .then((a) => a.hasAssignee("alice"));
+  ```
+
+- **`assertThatDb(app).table(name)`** — assertions over `app.db`. Matchers are
+  **async**: `hasRow(subset)`, `rowCount(n)`, `isEmpty`.
+
+  ```ts
+  await assertThatDb(app).table("orders").rowCount(1);
+  ```
+
+- **`assertThatResponse(res)`** — synchronous assertions over an already-resolved
+  HTTP `ApiResponse`: `hasStatus`, `hasJson`, `hasHeader`.
+
+  ```ts
+  assertThatResponse(res).hasStatus(200).hasJson({ ok: true });
+  ```
+
+The shared selector resolver (`src/assert/selectors.ts`) — the single source of
+truth for turning a key/`byKey`/`byProcessId`/default into a concrete instance —
+and the failure-message helpers (`src/assert/format.ts`) back all matcher
+families.

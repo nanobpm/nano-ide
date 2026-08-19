@@ -30,6 +30,8 @@ import {
 import { createTestHost, type TestHost } from "./test-host.ts";
 import { createWasmEngineClient, type WasmEngineClient } from "./wasm-engine.ts";
 import { SurfaceCoverage } from "./coverage.ts";
+import type { MockWorkerBuilder } from "./worker-mock.ts";
+import type { MockChildProcessBuilder } from "./child-process-mock.ts";
 
 /** A route invocation against the in-process router (no socket is opened). */
 export interface RouteRequest {
@@ -96,6 +98,26 @@ export interface TestApp {
   callRoute<T = unknown>(req: RouteRequest): Promise<ApiResponse<T>>;
   /** The virtual-clock scheduler driving the app's background loops. */
   readonly scheduler: ManualScheduler;
+  /**
+   * Register (or fetch) a job-worker mock for `taskType` (epic #296, S1). The returned
+   * {@link MockWorkerBuilder} lets a test complete/fail/error a task type — optionally
+   * conditionally via `when(...)` — instead of running the app's real worker handler, while
+   * un-mocked types keep running real code. Opt-in and zero-cost when unused; call the
+   * builder's `.reset()` (or `engine.clearWorkerMock(taskType)`) to restore real behaviour.
+   * Delegates to {@link WasmEngineClient.mockWorker}.
+   */
+  mockWorker(taskType: string): MockWorkerBuilder;
+  /**
+   * Register (or fetch) a child-process (call-activity) mock for `processId` (epic #296, S3).
+   * The returned {@link MockChildProcessBuilder} lets a test resolve a parent's call activity to
+   * `processId` — `completeWith(vars)` continues the parent with `vars` merged, `failWith(...)`
+   * raises an incident — **without** deploying/executing the real called process, while un-mocked
+   * call activities keep the engine's native behaviour. Reuses the shared outcome model. Opt-in
+   * and zero-cost when unused; call the builder's `.reset()` (or
+   * `engine.clearChildProcessMock(processId)`) to restore native behaviour. Delegates to
+   * {@link WasmEngineClient.mockChildProcess}.
+   */
+  mockChildProcess(processId: string): MockChildProcessBuilder;
   /**
    * The coverage-exhaustive gate (S4), present only when `bootTestApp` was called with
    * `{ coverage: true }`. Pre-declared with the app's "operations" (from its OpenAPI spec)
@@ -303,7 +325,7 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
       if (specPath) declared.operations = operations.map((op) => op.operationId);
       const cov = new SurfaceCoverage(declared);
       for (const jobType of jobHits) cov.record("workers", jobType);
-      unobserveJobs = engine.observeJobs((jobType) => cov.record("workers", jobType));
+      unobserveJobs = engine.observeJobs((jobType, mocked) => cov.record("workers", jobType, mocked));
       if (specPath) apiDriver = instrumentApiCoverage(driver, cov);
       coverage = cov;
     }
@@ -339,6 +361,8 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
       scheduler,
       logs: testHost.logs,
       now: () => scheduler.now(),
+      mockWorker: (taskType: string) => engine.mockWorker(taskType),
+      mockChildProcess: (processId: string) => engine.mockChildProcess(processId),
       snapshot: () => engine.snapshot(),
       settle,
       advanceTime,

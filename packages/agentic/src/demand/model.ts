@@ -72,10 +72,13 @@ export interface DemandSupplyReport {
   /** The overall SLO state: worst of the missing-agent signal and diversity. */
   readonly status: SloStatus;
   /**
-   * Deployed `taskDefinition` types that are NOT valid routing tokens — ordinary
-   * (non-agentic) C8 jobs the engine also runs. Surfaced (not silently dropped)
-   * so an operator can spot a mistyped agentic token, but excluded from the
-   * agentic demand×supply accounting.
+   * Deployed `taskDefinition` types that carry NO `linkName="prompt"` linked
+   * resource — ordinary (non-agentic) in-process C8 jobs the engine also runs
+   * (e.g. the deterministic `pr.*` workers). Classification is by the prompt
+   * signal, not the token string, so a prompt-less type is `nonAgentic` even when
+   * it happens to parse as a routing token. Surfaced (not silently dropped) so an
+   * operator can spot a mis-modelled task, but excluded from the agentic
+   * demand×supply accounting.
    */
   readonly nonAgentic: readonly string[];
 }
@@ -90,14 +93,23 @@ export interface DemandSupplyInput {
   readonly resolver: VocabResolver;
 }
 
-/** A demanded token's network-prefix bucket, or `undefined` if not a routing token. */
-function bucketOf(token: string): string | undefined {
+/**
+ * A demanded token's bucket. For a valid routing token this is its network
+ * prefix (or a bare token's own role). For an arbitrary agentic type that is not
+ * a routing token (colon-form `senior:retro`, etc.) this is best-effort: the
+ * segment before the first `:` when present, else the whole type — a synthetic
+ * bucket so the leaf still surfaces as demand rather than being dropped. This is
+ * only ever called for prompt-bearing (agentic) leaves; non-agentic leaves are
+ * classified out before bucketing.
+ */
+function bucketOf(token: string): string {
   try {
     const parsed = parseToken(token);
     // A bare (network-less) token like `decide` buckets under its own role name.
     return parsed.network ?? parsed.role;
   } catch {
-    return undefined;
+    const colon = token.indexOf(":");
+    return colon > 0 ? token.slice(0, colon) : token;
   }
 }
 
@@ -127,15 +139,24 @@ export function computeDemandSupply(input: DemandSupplyInput): DemandSupplyRepor
   }
 
   const demandTokens = distinctTaskTypes(input.taskDefinitions);
+  // Agentic-ness is the prompt signal, OR-folded across every leaf of a type: a
+  // type is agentic demand iff at least one deployed leaf carries a
+  // `linkName="prompt"` linked resource. This is independent of the type string,
+  // so colon-form fleet types (`senior:retro`) are admitted and prompt-less
+  // deterministic `pr.*` tasks are excluded — regardless of token grammar.
+  const agenticByToken = new Map<string, boolean>();
+  for (const leaf of input.taskDefinitions) {
+    agenticByToken.set(leaf.taskType, (agenticByToken.get(leaf.taskType) ?? false) || leaf.agentic);
+  }
   const byNetwork = new Map<string, Map<string, TokenDemand>>();
   const nonAgentic: string[] = [];
 
   for (const token of demandTokens) {
-    const network = bucketOf(token);
-    if (network === undefined) {
+    if (!(agenticByToken.get(token) ?? false)) {
       nonAgentic.push(token);
       continue;
     }
+    const network = bucketOf(token);
     const instances = sortedUnique(supplyByToken.get(token) ?? []);
     const demand: TokenDemand = {
       token,

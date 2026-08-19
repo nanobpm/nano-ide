@@ -111,7 +111,7 @@ workflow `…` without `workflow` scope"* — and it fails at `git push`, before
 PR or CI exists, so it silently costs a wave. Point `origin` at SSH first:
 
 ```
-git remote set-url origin git@github.com:nanobpm/nano-ide.git
+git remote set-url origin git@github.com:<owner>/nano-ide.git
 ```
 
 Non-workflow changes push fine over HTTPS; this only bites when the diff touches

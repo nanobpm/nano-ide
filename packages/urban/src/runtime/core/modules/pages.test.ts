@@ -1352,16 +1352,19 @@ test("child grids support per-row detail expansion, collapsed by default (#332)"
   assert.match(js, /const chasExpand = cdetail != null;/);
   // The expander shares the top-level detail look: a pc-chevron button in a
   // pc-row-actions cell, revealing detailPanel(cr, cdetail) in a following row.
+  // The panel's escalation form (if any) is threaded a child-scoped onSuccess so
+  // answering it re-fetches only this child grid (load()), not the whole page (#333).
   assert.match(js, /class: "pc-btn pc-btn-sm pc-chevron" \}, collapsed \? "▸" : "▾"/);
   assert.match(js, /cells\.push\(el\("td", \{ class: "pc-row-actions" \}, ctoggle\)\);/);
-  assert.match(js, /cdtr\.firstChild\.append\(detailPanel\(cr, cdetail\)\)/);
+  assert.match(js, /cdtr\.firstChild\.append\(detailPanel\(cr, cdetail, \(\) => \{ load\(\)\.catch\(\(\) => \{\}\); \}\)\)/);
   // Rows are collapsed by default; detail.defaultCollapsed/detail.collapsed (both
   // defaulting to true) seed the initial state.
   assert.match(js, /cdetail\.defaultCollapsed != null/);
   assert.match(js, /cdetail\.collapsed != null/);
   // detailPanel is now config-parametrised so the top-level grid and child grids
-  // share one implementation (link + fields + nested children + form).
-  assert.match(js, /function detailPanel\(row, cfg\)/);
+  // share one implementation (link + fields + nested children + form). Its optional
+  // onSuccess lets each caller scope the form's post-answer refresh (#333).
+  assert.match(js, /function detailPanel\(row, cfg, onSuccess\)/);
   assert.match(js, /const d = cfg \|\| detail;/);
 });
 
@@ -1401,22 +1404,42 @@ test("child-grid detail panel never falls back to the top-level grid's form (#33
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
   // detailPanel(cr, cdetail) renders a child grid's own detail config. Its form is
-  // detailForm(row, d.form): when the child config declares no `form` the panel
-  // must have NO form — it must NOT implicitly reuse the top-level grid's
-  // detail.form. So detailForm uses its argument verbatim rather than falling back
-  // to `detail && detail.form` when the argument is undefined.
-  assert.match(js, /function detailForm\(row, formCfg\) \{\s*const f = formCfg;/);
-  assert.doesNotMatch(js, /formCfg !== undefined \? formCfg : \(detail && detail\.form\)/);
+  // built from d.form (the panel's own config): when the child config declares no
+  // `form` the panel must have NO form — it must NOT implicitly reuse the top-level
+  // grid's detail.form. So the shared buildDetailForm uses its `f` argument verbatim
+  // (returning null when it is missing) rather than falling back to detail.form.
+  assert.match(js, /const form = buildDetailForm\(d\.form, row,/);
+  assert.match(js, /function buildDetailForm\(f, row, onSuccess\) \{\s*if \(!f \|\| !row\[f\.showWhenField\]\) return null;/);
+  assert.doesNotMatch(js, /d\.form \|\| \(?detail/);
+});
+
+test("child-grid and top-level detail forms thread different post-answer refreshes (#333)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The #333 vs #332 reconciliation (#336): both grids share one detailPanel /
+  // buildDetailForm, but they thread DIFFERENT onSuccess callbacks. A child-grid
+  // row's inline answer must refresh ONLY that child grid — via its local load()
+  // re-fetch — so the answered row drops without a disruptive whole-page re-poll.
+  assert.match(js, /detailPanel\(cr, cdetail, \(\) => \{ load\(\)\.catch\(\(\) => \{\}\); \}\)/);
+  // load() is the child-scoped re-fetch: it repaints just this child grid's tbody.
+  assert.match(js, /async function load\(\) \{[\s\S]*?cbody\.replaceChildren\(\);/);
+  // The top-level grid keeps its whole-page re-poll: detailPanel's default onSuccess
+  // (used when no child-scoped callback is passed) dispatches pc:refresh.
+  assert.match(js, /onSuccess \|\| \(\(\) => document\.dispatchEvent\(new CustomEvent\("pc:refresh"\)\)\)/);
+  // The single shared expander (cdetail) hosts the form — there is no duplicate,
+  // parallel form-only child expander (the pre-reconciliation cdetailForm surface).
+  assert.doesNotMatch(js, /const cdetailForm = /);
 });
 
 test("child-grid fetch failure renders a full-width error row (#332)", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";
-  // The child grid's colspan is computed eagerly, BEFORE the getJSON() fetch, so
-  // the catch path's error row (colspan: cspan) spans the whole table even when
+  // The child grid's colspan is computed eagerly, BEFORE the getJSON() fetch (now
+  // wrapped in load() so the grid can re-fetch itself after an inline answer, #333),
+  // so the catch path's error row (colspan: cspan) spans the whole table even when
   // the fetch throws. A lazily-assigned cspan would be undefined in the catch.
-  assert.match(js, /const cspan = String\(\(ccols\.length \|\| 1\) \+ cextra\);\s*try \{/);
-  assert.match(js, /\} catch \(e\) \{\s*cbody\.append\(el\("tr", \{\}, el\("td", \{ colspan: cspan \}/);
+  assert.match(js, /const cspan = String\(\(ccols\.length \|\| 1\) \+ cextra\);[\s\S]*?async function load\(\) \{[\s\S]*?await getJSON\(dataUrl\(cg\.source/);
+  assert.match(js, /\} catch \(e\) \{\s*cbody\.replaceChildren\(el\("tr", \{\}, el\("td", \{ colspan: cspan \}/);
 });
 
 test("the renderer honours an optional Tier-2 page-level mobile layout variant (#268)", async () => {

@@ -1514,6 +1514,52 @@ function renderProse(node) {
   return card;
 }
 
+// Build a detail/escalation answer form for a single grid row. This is the ONE
+// implementation of the `detail.form` contract — shared verbatim by the
+// top-level grid's detail panel AND a dataGrid child-grid row (#333) so the two
+// can never drift. The form has a single free-text field (f.inputKey), an
+// optional prompt echoed from the row (f.promptField), and a route-driven submit
+// (f.action) whose path/body interpolate {{form.*}} / {{row.*}} tokens. It
+// renders only when the row's f.showWhenField is truthy (an answerable
+// escalation), returning null otherwise. On a successful submit it invokes
+// onSuccess — the top-level grid re-polls the whole page (pc:refresh) so the
+// answered row drops out on the next tick; a child grid re-fetches just its own
+// rows, matching the Tasks page where the row disappears once its user-task
+// completes.
+/** @param {any} f
+ *  @param {Record<string, any>} row
+ *  @param {() => void} onSuccess
+ *  @returns {HTMLElement|null}
+ */
+function buildDetailForm(f, row, onSuccess) {
+  if (!f || !row[f.showWhenField]) return null;
+  const box = el("div", { class: "pc-subform" });
+  if (f.title) box.append(el("div", { class: "pc-subform-title" }, f.title));
+  if (f.promptField && row[f.promptField] != null) {
+    box.append(el("div", { class: "pc-prompt" }, String(row[f.promptField])));
+  }
+  const input = el("textarea", { class: "pc-textarea", placeholder: f.inputLabel || f.inputKey });
+  const msg = el("p", { class: "pc-msg" });
+  const btn = el("button", { class: "pc-btn pc-btn-sm" }, f.submitLabel || "Submit");
+  btn.addEventListener("click", async () => {
+    btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Sending…";
+    try {
+      // The textarea value is the form's single field (f.inputKey); route + body
+      // template come from f.action, e.g. { path: "/app/actions/message",
+      // body: { name, correlationKey: "{{row.pr_key}}", variables: "{{form}}" } }.
+      // Null-proto so an f.inputKey of "__proto__"/"constructor" can't mutate a prototype.
+      const form = Object.create(null); form[f.inputKey] = input.value;
+      await runRoute(f.action, { form, row });
+      msg.className = "pc-msg ok"; msg.textContent = (f.action && f.action.successLabel) || "Sent";
+      onSuccess();
+    } catch (e) {
+      btn.disabled = false; msg.className = "pc-msg err"; msg.textContent = String(e.message || e);
+    }
+  });
+  box.append(el("div", { class: "pc-field" }, input), btn, msg);
+  return box;
+}
+
 /** @param {any} node */
 function renderDataGrid(node) {
   const p = node.props;
@@ -1630,42 +1676,6 @@ function renderDataGrid(node) {
     return b;
   }
 
-  /** @param {Record<string, any>} row
-   * @param {any} formCfg the panel's own form config (top-level or child grid); a
-   *   missing/undefined form means this panel has no form — it must NOT fall back to
-   *   the top-level grid's form, or a child panel would render the parent's form.
-   * @returns {HTMLElement|null}
-   */
-  function detailForm(row, formCfg) {
-    const f = formCfg;
-    if (!f || !row[f.showWhenField]) return null;
-    const box = el("div", { class: "pc-subform" });
-    if (f.title) box.append(el("div", { class: "pc-subform-title" }, f.title));
-    if (f.promptField && row[f.promptField] != null) {
-      box.append(el("div", { class: "pc-prompt" }, String(row[f.promptField])));
-    }
-    const input = el("textarea", { class: "pc-textarea", placeholder: f.inputLabel || f.inputKey });
-    const msg = el("p", { class: "pc-msg" });
-    const btn = el("button", { class: "pc-btn pc-btn-sm" }, f.submitLabel || "Submit");
-    btn.addEventListener("click", async () => {
-      btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Sending…";
-      try {
-        // The textarea value is the form's single field (f.inputKey); route + body
-        // template come from f.action, e.g. { path: "/app/actions/message",
-        // body: { name, correlationKey: "{{row.pr_key}}", variables: "{{form}}" } }.
-        // Null-proto so an f.inputKey of "__proto__"/"constructor" can't mutate a prototype.
-        const form = Object.create(null); form[f.inputKey] = input.value;
-        await runRoute(f.action, { form, row });
-        msg.className = "pc-msg ok"; msg.textContent = (f.action && f.action.successLabel) || "Sent";
-        document.dispatchEvent(new CustomEvent("pc:refresh"));
-      } catch (e) {
-        btn.disabled = false; msg.className = "pc-msg err"; msg.textContent = String(e.message || e);
-      }
-    });
-    box.append(el("div", { class: "pc-field" }, input), btn, msg);
-    return box;
-  }
-
   /** @param {any} cg
    * @param {Record<string, any>} row
    */
@@ -1685,7 +1695,11 @@ function renderDataGrid(node) {
     // parent rowKey + child rowKey, so it survives the top-level grid's refresh
     // poll (which rebuilds this whole subtree) and a full reload, mirroring how
     // groupBy group-collapse is persisted. Absent a `detail` block the child grid
-    // is byte-for-byte unchanged (backward compatible).
+    // is byte-for-byte unchanged (backward compatible). A `detail.form` (#333) is
+    // rendered inside that panel by the shared detailPanel/buildDetailForm, and its
+    // submit re-fetches only this child grid (see load() below) rather than the
+    // whole page — so answering a nested escalation drops the answered row without
+    // disturbing the parent grid.
     const cdetail = cg.detail || cg.expandable || null;
     const chasExpand = cdetail != null;
     const cextra = (cg.lazyField ? 1 : 0) + (chasExpand ? 1 : 0);
@@ -1727,12 +1741,20 @@ function renderDataGrid(node) {
     // the catch's error row have a valid, table-spanning colspan — if getJSON()
     // throws, a lazily-assigned cspan would still be undefined here.
     const cspan = String((ccols.length || 1) + cextra);
-    try {
+    // Re-fetch and repaint just this child grid's rows. Wired to the child detail
+    // panel's form onSuccess so answering a nested escalation drops the row once
+    // its user-task completes — the child-scoped mirror of the top-level grid's
+    // pc:refresh re-poll, without disturbing the parent grid or its other detail
+    // rows (which a global pc:refresh would leave untouched anyway, since open
+    // detail rows are reused across the poll).
+    async function load() {
       /** @type {{ rows: Array<Record<string, any>> }} */
       const { rows } = await getJSON(dataUrl(cg.source || "app", cg.table,
         [{ field: cg.childField, eq: row[cg.parentField] }], cg.orderBy));
+      cbody.replaceChildren();
       if (!rows.length) {
         cbody.append(el("tr", {}, el("td", { colspan: cspan }, "None")));
+        return;
       }
       for (const cr of rows) {
         const cells = ccols.map((c, i) => gridCell(c, cr, croles[i]));
@@ -1755,7 +1777,8 @@ function renderDataGrid(node) {
         // Per-row expander cell (trailing, after any lazyField cell): a chevron
         // that reveals this row's detailPanel in a following full-width row. The
         // panel is built lazily on first open (and eagerly when the row starts
-        // expanded), matching the top-level grid.
+        // expanded), matching the top-level grid. The panel's escalation form (if
+        // any) is wired to load() so answering it re-fetches only this child grid.
         /** @type {any} */
         let cdtr = null;
         if (chasExpand) {
@@ -1767,7 +1790,7 @@ function renderDataGrid(node) {
           cdtr = el("tr", { hidden: collapsed ? "" : null }, el("td", { colspan: cspan }));
           let built = false;
           const build = () => {
-            if (!built) { built = true; cdtr.firstChild.append(detailPanel(cr, cdetail)); }
+            if (!built) { built = true; cdtr.firstChild.append(detailPanel(cr, cdetail, () => { load().catch(() => {}); })); }
           };
           if (!collapsed) build();
           ctoggle.addEventListener("click", /** @param {MouseEvent} ev */ (ev) => {
@@ -1788,8 +1811,11 @@ function renderDataGrid(node) {
         cbody.append(ctr);
         if (cdtr) cbody.append(cdtr);
       }
+    }
+    try {
+      await load();
     } catch (e) {
-      cbody.append(el("tr", {}, el("td", { colspan: cspan }, String(e.message || e))));
+      cbody.replaceChildren(el("tr", {}, el("td", { colspan: cspan }, String(e.message || e))));
     }
     return wrap;
   }
@@ -1800,8 +1826,12 @@ function renderDataGrid(node) {
    * and an optional escalation form.
    * @param {Record<string, any>} row
    * @param {any} [cfg] detail config; defaults to the top-level grid's `detail`
+   * @param {(() => void)} [onSuccess] invoked after the panel's escalation form
+   *   submits successfully. Defaults to a whole-page `pc:refresh` re-poll (the
+   *   top-level grid's behaviour); a child grid passes a child-scoped reload so
+   *   answering a nested escalation refreshes only that child grid, not the page.
    */
-  function detailPanel(row, cfg) {
+  function detailPanel(row, cfg, onSuccess) {
     const d = cfg || detail;
     const box = el("div", { class: "pc-detail" });
     if (d.linkField && row[d.linkField]) {
@@ -1825,7 +1855,7 @@ function renderDataGrid(node) {
       box.append(holder);
       childGrid(cg, row).then((w) => holder.replaceChildren(w));
     }
-    const form = detailForm(row, d.form);
+    const form = buildDetailForm(d.form, row, onSuccess || (() => document.dispatchEvent(new CustomEvent("pc:refresh"))));
     if (form) box.append(form);
     return box;
   }
@@ -2371,4 +2401,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm };

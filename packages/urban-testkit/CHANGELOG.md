@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.6.4...@nanobpm/urban-testkit-0.7.0) (2026-08-19)
+
+
+### Features
+
+* test dsl ([#326](https://github.com/nanobpm/nano-ide/issues/326)) ([21d02d7](https://github.com/nanobpm/nano-ide/commit/21d02d7d7b0337003921dc6c1b81b19da450457c))
+
 ## [0.6.4](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.6.3...@nanobpm/urban-testkit-0.6.4) (2026-08-19)
 
 

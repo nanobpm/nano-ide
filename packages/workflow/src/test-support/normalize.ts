@@ -16,9 +16,10 @@
 //     linked-resources extension elements, multi-instance characteristics, event
 //     definitions); sequence flows as endpoint pairs with their condition /
 //     default marker; message subscriptions (a catch event's `messageRef`
-//     resolved to the referenced message NAME); timer definitions; and boundary
-//     events (their `attachedToRef` modelled as a structural attach edge to the
-//     host, never as a raw-id attribute).
+//     resolved to the referenced message's full definition — name plus its
+//     `zeebe:subscription correlationKey` and `zeebe:properties` envelope);
+//     timer definitions; and boundary events (their `attachedToRef` modelled as
+//     a structural attach edge to the host, never as a raw-id attribute).
 
 import { localName, parseXml, type XmlElement } from "./xml.js";
 
@@ -31,7 +32,10 @@ export interface CanonicalModel {
   /** Every sequence flow as `«fromNode» =[tag]=> «toNode»`, plus structural
    *  attach (boundary→host) and containment (subProcess→child) edges, sorted. */
   flows: string[];
-  /** Names of every message a catch event subscribes to, sorted (deduped). */
+  /** The full semantic identity of every message a catch event subscribes to,
+   *  sorted (deduped): the serialized `<bpmn:message>` definition — its name plus
+   *  the `zeebe:subscription correlationKey` and any `zeebe:properties` envelope —
+   *  so a differing correlation key or envelope is a structural difference. */
   messages: string[];
 }
 
@@ -87,6 +91,7 @@ interface Edge {
 /** Accumulates the flat graph while walking every process / sub-process. */
 class Collector {
   readonly refNames = new Map<string, string>();
+  readonly messageDefs = new Map<string, XmlElement>();
   readonly nodes = new Map<string, Node>();
   readonly edges: Edge[] = [];
   readonly messages = new Set<string>();
@@ -94,10 +99,20 @@ class Collector {
   private readonly seqFlows: XmlElement[] = [];
 
   /** Resolve a *Ref value to the referenced element's name (falling back to the
-   *  raw ref only when the target is unknown), recording message subscriptions. */
+   *  raw ref only when the target is unknown), recording message subscriptions.
+   *  A `messageRef` records the subscribed message's FULL semantic identity — the
+   *  serialized `<bpmn:message>` definition (its name plus the `zeebe:subscription
+   *  correlationKey` and any `zeebe:properties` envelope), not just its name — so
+   *  two models whose catch events share a message name but differ in correlation
+   *  key or envelope properties do NOT compare equal (the parity oracle would
+   *  otherwise be blind to a wrong-correlationKey derivation). Falls back to the
+   *  bare name only when the referenced message definition is unknown. */
   private resolveRef(attr: string, value: string): string {
     const name = this.refNames.get(value) ?? value;
-    if (attr === "messageRef") this.messages.add(name);
+    if (attr === "messageRef") {
+      const def = this.messageDefs.get(value);
+      this.messages.add(def ? this.serialize(def) : name);
+    }
     return `@${name}`;
   }
 
@@ -189,6 +204,7 @@ function collectRefs(el: XmlElement, c: Collector): void {
   const l = localName(el.name);
   if ((l === "message" || l === "error" || l === "signal" || l === "escalation") && el.attrs.id) {
     c.refNames.set(el.attrs.id, el.attrs.name ?? el.attrs.errorCode ?? el.attrs.id);
+    if (l === "message") c.messageDefs.set(el.attrs.id, el);
   }
   for (const child of el.children) if (!isDI(child)) collectRefs(child, c);
 }

@@ -132,6 +132,42 @@ test("normalize: is invariant to child ORDER (compares as a multiset)", () => {
   assert.ok(modelsEqual(normalize(a), normalize(b)));
 });
 
+test("normalize: a message's correlationKey and envelope are part of its identity", () => {
+  // Two models identical except for the subscription's correlationKey (and, in
+  // the third, an envelope property) must NOT compare equal — the parity oracle
+  // has to catch a wrong-correlationKey / wrong-envelope derivation, not just a
+  // wrong message NAME. Guards the defect class where a signal step emits a
+  // message subscription whose semantics the oracle used to drop.
+  const model = (corr: string, prop = ""): string => `<?xml version="1.0"?>
+    <bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                      xmlns:zeebe="http://camunda.org/schema/zeebe/1.0">
+      <bpmn:process id="p" isExecutable="true">
+        <bpmn:startEvent id="s"><bpmn:outgoing>e1</bpmn:outgoing></bpmn:startEvent>
+        <bpmn:intermediateCatchEvent id="c">
+          <bpmn:incoming>e1</bpmn:incoming>
+          <bpmn:messageEventDefinition messageRef="m"/>
+        </bpmn:intermediateCatchEvent>
+        <bpmn:sequenceFlow id="e1" sourceRef="s" targetRef="c"/>
+      </bpmn:process>
+      <bpmn:message id="m" name="await">
+        <bpmn:extensionElements>
+          <zeebe:subscription correlationKey="=${corr}"/>${prop}
+        </bpmn:extensionElements>
+      </bpmn:message>
+    </bpmn:definitions>`;
+
+  // Same name, same key, same envelope -> equal (identity is stable).
+  assert.ok(modelsEqual(normalize(model("caseId")), normalize(model("caseId"))));
+
+  // Differing correlationKey -> NOT equal, and the diff names the section.
+  assert.ok(!modelsEqual(normalize(model("caseId")), normalize(model("orderId"))));
+  assert.match(diffModels(normalize(model("caseId")), normalize(model("orderId"))), /message subscriptions:/);
+
+  // Differing envelope property (zeebe:properties) -> NOT equal.
+  const prop = `\n          <zeebe:properties><zeebe:property name="in" value="Envelope"/></zeebe:properties>`;
+  assert.ok(!modelsEqual(normalize(model("caseId")), normalize(model("caseId", prop))));
+});
+
 test("parity: a matching pair passes and a deliberately mismatched pair reports a legible diff", () => {
   // Matching: a golden equals its id-renamed self.
   const golden = nwf("feature");

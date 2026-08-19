@@ -12,6 +12,7 @@ import "./continue.js";
 import "./forEach.js";
 import "./loop.js";
 import "./parallel.js";
+import "./race.js";
 import "./run.js";
 import "./signal.js";
 import "./switch.js";

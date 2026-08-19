@@ -56,6 +56,23 @@ test("declarative emit: service tasks + derived types + message/subscription", (
   assert.match(xml, /<zeebe:subscription correlationKey="=prId" \/>/);
 });
 
+test("signal: trims a correlationKey before validating/storing (parity with race signal arm)", () => {
+  const flow = defineFlow("wait-trim", (w) => {
+    w.signal("humanApproval", { correlationKey: "  prId  " });
+  });
+  const xml = toBpmn(flow);
+  // Stray surrounding whitespace must not fail the NCName check nor leak into
+  // the emitted subscription — the value is trimmed exactly like race()'s arm.
+  assert.match(xml, /<zeebe:subscription correlationKey="=prId" \/>/);
+});
+
+test("signal: rejects a whitespace-only correlationKey", () => {
+  assert.throws(
+    () => defineFlow("f", (w) => w.signal("s", { correlationKey: "   " })),
+    /needs \{ correlationKey \}/,
+  );
+});
+
 test("declarative emit: timer intermediate catch (after → timeDuration)", () => {
   const flow = defineFlow("delayed", (w) => {
     w.task("kickoff");
@@ -905,6 +922,20 @@ test("declarative emit: forEach over a single task lifts a PARALLEL multi-instan
   // The MI activity is wired inline between plan and done.
   assert.match(xml, /sourceRef="plan" targetRef="handle"/);
   assert.match(xml, /sourceRef="handle" targetRef="done"/);
+});
+
+test("declarative emit: forEach over a single PROMPT task preserves its linkedResource (no fast-path drop)", () => {
+  // A prompt-carrying task as the sole forEach body must NOT take the MI
+  // service-task fast path (which renders only the plain taskDefinition and
+  // would silently drop the prompt binding); it falls through to an embedded MI
+  // sub-process that renders the agent service task with its linkedResource.
+  const flow = defineFlow("agents", (w) => {
+    w.forEach("plan.items", "item", (b) => b.task("review", { jobType: "senior:review", prompt: { resourceId: "review.md" } }));
+  });
+  const xml = toBpmn(flow);
+  assert.match(xml, /<bpmn:subProcess[\s\S]*?<bpmn:multiInstanceLoopCharacteristics isSequential="false">/);
+  assert.match(xml, /<zeebe:loopCharacteristics inputCollection="=plan\.items" inputElement="item" \/>/);
+  assert.match(xml, /<zeebe:linkedResource resourceId="review\.md"[\s\S]*?linkName="prompt" \/>/);
 });
 
 test("declarative emit: forEach { sequential } emits a sequential multi-instance", () => {

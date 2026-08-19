@@ -15,9 +15,15 @@ declare module "../types.js" {
 registerNodeKind("signal", {
   build: (api) => (name: string, opts: { correlationKey: string }) => {
     api.claim(name);
-    if (!opts || !opts.correlationKey) throw new Error(`signal("${name}") needs { correlationKey }`);
-    assertIdent("correlationKey", opts.correlationKey);
-    api.out.push({ kind: "signal", name, correlationKey: opts.correlationKey, payload: api.contracts[name]?.in });
+    if (!opts || typeof opts.correlationKey !== "string" || opts.correlationKey.trim() === "") {
+      throw new Error(`signal("${name}") needs { correlationKey }`);
+    }
+    // Trim before validating/storing, in parity with the race() signal arm: a
+    // value like " prKey " is usable after trimming, so it must not fail the
+    // NCName check on stray whitespace. Name the node in the assertIdent context.
+    const correlationKey = opts.correlationKey.trim();
+    assertIdent(`signal("${name}") correlationKey`, correlationKey);
+    api.out.push({ kind: "signal", name, correlationKey, payload: api.contracts[name]?.in });
     return api.self();
   },
   emit: (node, incoming, _loop, api) => {

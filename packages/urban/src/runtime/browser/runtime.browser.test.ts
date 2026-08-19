@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
-import { RENDERERS, renderText, fmtCellValue, gridCell } from "./runtime.browser.js";
+import { RENDERERS, renderText, navLink, applyNavBadge, fmtCellValue, gridCell } from "./runtime.browser.js";
 
 // ── Minimal fake DOM ────────────────────────────────────────────────────────
 // Just enough of the Element/Document surface that el()/renderText touch:
@@ -157,4 +157,111 @@ test("#327: gridCell applies col.format to the cell text, leaving an unformatted
   // No `format` → the field value renders exactly as stored (backward compatible).
   const plain = gridCell({ field: "updated_at", header: "Updated" }, { updated_at: iso }, "secondary");
   assert.equal(plain.textContent, iso);
+});
+
+// Find the first descendant span carrying `cls` in a FakeElement tree. Accepts
+// `any` so it can walk either a FakeElement or a renderer's DOM-typed return.
+function findByClass(node: any, cls: string): FakeElement | null {
+  for (const kid of node.children) {
+    if (kid instanceof FakeElement) {
+      if (kid.className.split(/\s+/).includes(cls)) return kid;
+      const deep = findByClass(kid, cls);
+      if (deep) return deep;
+    }
+  }
+  return null;
+}
+
+// Install a fake `fetch` on globalThis returning a fixed JSON body, so navLink's
+// badge poll resolves deterministically without a real network call. Returns a
+// restore fn (register with t.after) so it never leaks into other tests.
+function installFakeFetch(body: unknown): () => void {
+  const prior = Reflect.getOwnPropertyDescriptor(globalThis, "fetch");
+  Reflect.set(globalThis, "fetch", () =>
+    Promise.resolve({ ok: true, json: () => Promise.resolve(body) }),
+  );
+  return () => {
+    if (prior) Reflect.defineProperty(globalThis, "fetch", prior);
+    else Reflect.deleteProperty(globalThis, "fetch");
+  };
+}
+
+test("#338: navLink without a badge is unchanged — no pill, no aria-label override", (t) => {
+  t.after(installFakeDom());
+  const link = navLink({ label: "Home", page: "home" });
+  assert.ok(link, "expected a nav link");
+  assert.equal(link.tagName, "A");
+  assert.equal(findByClass(link, "pc-nav-badge"), null, "no badge pill without item.badge");
+  assert.equal(link.getAttribute("aria-label"), null, "aria-label untouched without a badge");
+});
+
+test("#338: navLink with a badge appends a hidden tone-classed pill and polls a count", async (t) => {
+  t.after(installFakeDom());
+  t.after(installFakeFetch({ count: 3 }));
+  const link = navLink({
+    label: "Tasks",
+    page: "tasks",
+    badge: { source: "app", table: "user_tasks", filter: [], tone: "danger" },
+  });
+  assert.ok(link);
+  const pill = findByClass(link, "pc-nav-badge");
+  assert.ok(pill, "expected a badge pill for item.badge");
+  assert.ok(pill.className.includes("pc-badge"), "reuses the .pc-badge pill");
+  assert.ok(pill.className.includes("pc-badge-danger"), "carries the requested tone class");
+  // The poll resolves asynchronously; flush microtasks then assert the live count.
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(pill.hidden, false, "pill shows once a positive count arrives");
+  assert.equal(pill.textContent, "3");
+  assert.equal(link.getAttribute("aria-label"), "Tasks (3 open)", "accessible name carries the count");
+});
+
+test("#338: navLink badge degrades to no pill (never a broken nav) when the fetch fails", async (t) => {
+  t.after(installFakeDom());
+  const prior = Reflect.getOwnPropertyDescriptor(globalThis, "fetch");
+  Reflect.set(globalThis, "fetch", () => Promise.reject(new Error("boom")));
+  t.after(() => {
+    if (prior) Reflect.defineProperty(globalThis, "fetch", prior);
+    else Reflect.deleteProperty(globalThis, "fetch");
+  });
+  const link = navLink({ label: "Tasks", page: "tasks", badge: { table: "user_tasks" } });
+  const pill = findByClass(link, "pc-nav-badge");
+  assert.ok(pill);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(pill.hidden, true, "a failed fetch leaves the pill hidden");
+  assert.equal(pill.textContent, "");
+});
+
+test("#338: applyNavBadge honours hideWhenZero and mirrors the count into the accessible name", (t) => {
+  const restore = installFakeDom();
+  t.after(restore);
+  const doc: { createElement: (tag: string) => FakeElement } = Reflect.get(globalThis, "document");
+  // The renderer's applyNavBadge is DOM-typed (HTMLElement); the fake elements
+  // satisfy the subset it touches, so the locals are `any` (no banned `as` cast).
+  const mk = (): { link: any; pill: any } => ({ link: doc.createElement("a"), pill: doc.createElement("span") });
+
+  // Positive count → visible pill + "(n open)" accessible name.
+  const a = mk();
+  applyNavBadge(a.link, a.pill, "Tasks", true, 5);
+  assert.equal(a.pill.hidden, false);
+  assert.equal(a.pill.textContent, "5");
+  assert.equal(a.link.getAttribute("aria-label"), "Tasks (5 open)");
+
+  // Zero with hideWhenZero → nothing (a quiet nav stays clean), label reset.
+  const b = mk();
+  applyNavBadge(b.link, b.pill, "Tasks", true, 0);
+  assert.equal(b.pill.hidden, true);
+  assert.equal(b.pill.textContent, "");
+  assert.equal(b.link.getAttribute("aria-label"), "Tasks");
+
+  // Zero WITHOUT hideWhenZero → the pill still shows "0".
+  const c = mk();
+  applyNavBadge(c.link, c.pill, "Tasks", false, 0);
+  assert.equal(c.pill.hidden, false);
+  assert.equal(c.pill.textContent, "0");
+
+  // A non-finite/malformed count degrades to hidden, never "NaN".
+  const d = mk();
+  applyNavBadge(d.link, d.pill, "Tasks", false, Number.NaN);
+  assert.equal(d.pill.hidden, true);
+  assert.equal(d.pill.textContent, "");
 });

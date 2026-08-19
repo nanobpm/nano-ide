@@ -92,6 +92,15 @@ function javascript(
  * (checked against `schema()`), so `/app/data/:table` can never inject SQL. */
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
+// A query flag (e.g. ?count=1) is "on" when present and not one of the falsy
+// spellings. A bare `?count` (empty string) still counts as on, so a caller can
+// opt in without inventing a value.
+function isTruthyParam(v: string | null): boolean {
+  if (v === null) return false;
+  const s = v.trim().toLowerCase();
+  return s !== "0" && s !== "false" && s !== "no";
+}
+
 /**
  * Build the page-runtime routes over an injected datasource + engine. Pure over its deps
  * so it is unit-testable without a real host/server (see pages.test.ts).
@@ -272,6 +281,24 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
         orderSql = ` ORDER BY ${quoteIdent(field)} ${dir}`;
       }
       const whereSql = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+      // ?count=1 → a lightweight COUNT(*) instead of the rows themselves. The same
+      // whitelisted where clauses apply, so a caller (e.g. a nav item's live count
+      // badge) gets exactly the number of matching rows without transferring or
+      // materialising them. ORDER BY / LIMIT are irrelevant to a count and skipped.
+      if (isTruthyParam(req.query.get("count"))) {
+        try {
+          const rows = await db.query(
+            `SELECT COUNT(*) AS n FROM ${quoteIdent(table)}${whereSql}`,
+            params,
+          );
+          const first = Array.isArray(rows) && rows.length > 0 ? rows[0] : undefined;
+          const rawCount = isRecord(first) ? first.n : 0;
+          const count = Number(rawCount);
+          return json({ count: Number.isFinite(count) ? count : 0 });
+        } catch (e) {
+          return json({ error: errorMessage(e) }, 500);
+        }
+      }
       try {
         const rows = await db.query(
           `SELECT * FROM ${quoteIdent(table)}${whereSql}${orderSql} LIMIT ${rowLimit}`,
@@ -682,6 +709,11 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-nav-link:hover { background:var(--nano-hover); color:var(--nano-text); }
 .pc-nav-link.active { background:var(--nano-accent); color:var(--nano-on-accent); }
 .pc-nav-icon { line-height:1; }
+/* A nav item's live count pill (item.badge). Slightly more compact than the base
+   .pc-badge so it sits neatly beside a nav label; [hidden] must win over the
+   .pc-badge inline-flex display so hideWhenZero / a failed fetch truly hides it. */
+.pc-nav-badge { min-width:1.1rem; height:1.1rem; font-size:.68rem; padding:0 .35rem; margin-left:.1rem; }
+.pc-nav-badge[hidden] { display:none; }
 .pc-nav-empty { color:var(--nano-text-faint); font-size:.85rem; padding:.4rem .7rem; }
 /* The per-row mobile "More" toggle (revealing mobile:{priority:"hidden"} columns)
    only exists for the card view — hidden on the desktop table, shown by the

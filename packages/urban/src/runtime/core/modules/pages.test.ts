@@ -1047,6 +1047,33 @@ test("GET /app/data whitelists filter columns", async () => {
   assert.equal(bad.status, 400);
 });
 
+test("#338: GET /app/data?count=1 returns a COUNT(*), honouring the same whitelisted where", async () => {
+  // count mode issues a COUNT(*) (not SELECT *) so a nav badge can show a live
+  // number without transferring rows; the where filter is still column-whitelisted.
+  let seenSql = "";
+  let seenParams: unknown[] = [];
+  const { router } = build({
+    query: async (sql: string, params?: unknown[]) => {
+      if (/PRAGMA table_info/i.test(sql)) {
+        return [{ name: "id" }, { name: "status" }, { name: "total" }];
+      }
+      seenSql = sql;
+      seenParams = params ?? [];
+      return [{ n: 7 }];
+    },
+  });
+  const res = await router(req("GET", "/app/data/app/orders", { query: "count=1&where=status:new" }));
+  assert.equal(res.status, 200);
+  assert.equal(JSON.parse(res.body ?? "{}").count, 7);
+  assert.match(seenSql, /SELECT COUNT\(\*\) AS n FROM/i, "count mode must issue a COUNT(*), not SELECT *");
+  assert.doesNotMatch(seenSql, /LIMIT/i, "a count has no LIMIT");
+  assert.deepEqual(seenParams, ["new"], "the where value is still bound as a parameter");
+
+  // An unknown filter column is rejected in count mode too (no whitelist bypass).
+  const bad = await router(req("GET", "/app/data/app/orders", { query: "count=1&where=evil:1" }));
+  assert.equal(bad.status, 400);
+});
+
 test("POST /app/actions/start/<process> creates an instance", async () => {
   const { router, calls } = build();
   const res = await router(req("POST", "/app/actions/start/my-proc", { body: { variables: { a: 1 } } }));

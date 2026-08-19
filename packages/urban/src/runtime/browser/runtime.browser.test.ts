@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
-import { RENDERERS, renderText, navLink, applyNavBadge, fmtCellValue, gridCell } from "./runtime.browser.js";
+import { RENDERERS, renderText, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell } from "./runtime.browser.js";
 
 // ── Minimal fake DOM ────────────────────────────────────────────────────────
 // Just enough of the Element/Document surface that el()/renderText touch:
@@ -264,4 +264,46 @@ test("#338: applyNavBadge honours hideWhenZero and mirrors the count into the ac
   applyNavBadge(d.link, d.pill, "Tasks", false, Number.NaN);
   assert.equal(d.pill.hidden, true);
   assert.equal(d.pill.textContent, "");
+});
+
+test("#338: wireNavBadge registers its poll interval with the per-page teardown so page switches stop it", (t) => {
+  // Defect-class guard: any refreshMs poller MUST clear its interval on teardown,
+  // or navigating between pages leaks a setInterval that fetches forever and pins
+  // the old link/pill alive via closure. This drives wireNavBadge with stubbed
+  // timers + fetch and asserts teardown() actually clears the interval it started.
+  const restore = installFakeDom();
+  t.after(restore);
+  const doc: { createElement: (tag: string) => FakeElement } = Reflect.get(globalThis, "document");
+
+  const cleared: number[] = [];
+  let nextId = 1;
+  const started: number[] = [];
+  const priorSet = Reflect.getOwnPropertyDescriptor(globalThis, "setInterval");
+  const priorClear = Reflect.getOwnPropertyDescriptor(globalThis, "clearInterval");
+  const priorFetch = Reflect.getOwnPropertyDescriptor(globalThis, "fetch");
+  Reflect.set(globalThis, "setInterval", (): number => {
+    const id = nextId++;
+    started.push(id);
+    return id;
+  });
+  Reflect.set(globalThis, "clearInterval", (id: number): void => {
+    cleared.push(id);
+  });
+  // getJSON awaits fetch(); a rejection is swallowed by wireNavBadge's .catch, so
+  // the immediate poll degrades quietly without an unhandled rejection.
+  Reflect.set(globalThis, "fetch", () => Promise.reject(new Error("offline")));
+  t.after(() => {
+    if (priorSet) Reflect.defineProperty(globalThis, "setInterval", priorSet);
+    if (priorClear) Reflect.defineProperty(globalThis, "clearInterval", priorClear);
+    if (priorFetch) Reflect.defineProperty(globalThis, "fetch", priorFetch);
+    else Reflect.deleteProperty(globalThis, "fetch");
+  });
+
+  const link: any = doc.createElement("a");
+  wireNavBadge(link, "Tasks", { source: "app", table: "tasks", refreshMs: 5000 });
+  assert.equal(started.length, 1, "wireNavBadge should start exactly one poll interval");
+  assert.equal(cleared.length, 0, "interval must not be cleared before teardown");
+
+  teardown();
+  assert.deepEqual(cleared, started, "teardown() must clear the interval wireNavBadge started");
 });

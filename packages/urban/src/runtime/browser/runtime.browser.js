@@ -2115,7 +2115,10 @@ function wireNavBadge(link, baseLabel, badge) {
       .catch(() => applyNavBadge(link, pill, baseLabel, hideWhenZero, NaN));
   refresh();
   const ms = Number(badge.refreshMs);
-  if (Number.isFinite(ms) && ms > 0) setInterval(refresh, ms);
+  if (Number.isFinite(ms) && ms > 0) {
+    const timer = setInterval(refresh, ms);
+    disposers.push(() => clearInterval(timer));
+  }
 }
 
 // Reflect a fetched count into the pill + the link's accessible name. A
@@ -2357,4 +2360,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, applyNavBadge, fmtCellValue, gridCell };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell };

@@ -65,9 +65,17 @@ test("declarative race parks on both arms, the message wins, the timer loser is 
 
     const final = await client.getInstance(String(inst.processInstanceKey));
     assert.ok(final, "getInstance should return the completed instance");
-    const state = (final?.state ?? (final as { processInstance?: { state?: string } })?.processInstance?.state) as
-      | string
-      | undefined;
+    // Read the optional `state` from either the top-level response or a nested
+    // `processInstance`, narrowing at runtime (no unsafe type assertions).
+    let state: string | undefined;
+    if (typeof final.state === "string") {
+      state = final.state;
+    } else {
+      const pi = final.processInstance;
+      if (typeof pi === "object" && pi !== null && !Array.isArray(pi) && typeof pi.state === "string") {
+        state = pi.state;
+      }
+    }
     assert.ok(state === "COMPLETED" || state === undefined, `instance should complete after the race (state=${state})`);
   } finally {
     await worker.stop();

@@ -907,6 +907,20 @@ test("declarative emit: forEach over a single task lifts a PARALLEL multi-instan
   assert.match(xml, /sourceRef="handle" targetRef="done"/);
 });
 
+test("declarative emit: forEach over a single PROMPT task preserves its linkedResource (no fast-path drop)", () => {
+  // A prompt-carrying task as the sole forEach body must NOT take the MI
+  // service-task fast path (which renders only the plain taskDefinition and
+  // would silently drop the prompt binding); it falls through to an embedded MI
+  // sub-process that renders the agent service task with its linkedResource.
+  const flow = defineFlow("agents", (w) => {
+    w.forEach("plan.items", "item", (b) => b.task("review", { jobType: "senior:review", prompt: { resourceId: "review.md" } }));
+  });
+  const xml = toBpmn(flow);
+  assert.match(xml, /<bpmn:subProcess[\s\S]*?<bpmn:multiInstanceLoopCharacteristics isSequential="false">/);
+  assert.match(xml, /<zeebe:loopCharacteristics inputCollection="=plan\.items" inputElement="item" \/>/);
+  assert.match(xml, /<zeebe:linkedResource resourceId="review\.md"[\s\S]*?linkName="prompt" \/>/);
+});
+
 test("declarative emit: forEach { sequential } emits a sequential multi-instance", () => {
   const flow = defineFlow("seq", (w) => w.forEach("xs", "x", (b) => b.task("step"), { sequential: true }));
   assert.match(toBpmn(flow), /<bpmn:multiInstanceLoopCharacteristics isSequential="true">/);

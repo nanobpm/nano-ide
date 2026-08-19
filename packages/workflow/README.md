@@ -121,7 +121,9 @@ const reviewWait = defineFlow("review-wait", (w) => {
   });
   w.run("finalize", finalize);
 });
-``` `switch` /
+```
+
+`switch` /
 `branch` → an exclusive gateway (in-order conditions, first match wins, default =
 unconditional flow); `loop` → a convergent gateway whose body falls through back to
 the head; nodes with multiple incoming flows are an implicit XOR merge; `parallel`

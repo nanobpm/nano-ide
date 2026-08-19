@@ -22,6 +22,7 @@ function serviceTask(xml: string, id: string): string {
   const start = xml.indexOf(`<bpmn:serviceTask id="${id}"`);
   assert.notEqual(start, -1, `serviceTask id="${id}" not found`);
   const end = xml.indexOf("</bpmn:serviceTask>", start);
+  assert.notEqual(end, -1, `closing </bpmn:serviceTask> for id="${id}" not found`);
   return xml.slice(start, end + "</bpmn:serviceTask>".length);
 }
 

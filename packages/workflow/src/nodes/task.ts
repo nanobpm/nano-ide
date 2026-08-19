@@ -76,7 +76,7 @@ function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
   }
   const resolved: PromptBinding = { resourceId, bindingType };
   if (prompt.append !== undefined) {
-    if (typeof prompt.append !== "string" || prompt.append === "") {
+    if (typeof prompt.append !== "string" || prompt.append.trim() === "") {
       throw new Error(`task("${name}") prompt.append must be a non-empty string when provided`);
     }
     resolved.append = prompt.append;

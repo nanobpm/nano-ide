@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.6](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.8.5...@nanobpm/urban-testkit-0.8.6) (2026-08-19)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @nanobpm/urban bumped from >=0.66.0 to >=0.66.1
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.50.0 to >=0.66.1
+
 ## [0.8.5](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.8.4...@nanobpm/urban-testkit-0.8.5) (2026-08-19)
 
 

@@ -3,7 +3,7 @@
 // is S3); this only materialises a working copy pinned to the requested ref.
 
 import { execFile } from "node:child_process";
-import { lstat, mkdir, readFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { ContextIdentity } from "./identity.ts";
@@ -124,9 +124,17 @@ function isWithin(root: string, child: string): boolean {
  * working copy as "already cloned" is only safe when that gitdir stays inside
  * the cache root: a marker whose `gitdir:` resolves OUTSIDE the cache root would
  * make every subsequent `git fetch`/`checkout` operate on an out-of-cache
- * repository — a cache escape of the same class as a `.git` symlink. Returns
- * true iff the marker is well-formed AND its resolved gitdir is within
- * `cacheRoot`; a malformed marker (no `gitdir:` line) is not trusted.
+ * repository — a cache escape of the same class as a `.git` symlink.
+ *
+ * A string-only containment check is insufficient: an in-cache `gitdir:` path
+ * can itself be a *symlink* to an out-of-cache repository (git follows it), and a
+ * broken/missing `gitdir:` target must not be trusted as a clone either. So the
+ * resolved target is canonicalised through `realpath` (collapsing every symlink
+ * along the path — including the gitdir itself) and the cache root is likewise
+ * canonicalised, before checking containment. Returns true iff the marker is
+ * well-formed AND its fully-resolved gitdir is a real directory within the
+ * canonical `cacheRoot`; a malformed marker (no `gitdir:` line), a
+ * missing/broken target, or one resolving to a non-directory is not trusted.
  */
 async function gitFileTargetWithinRoot(
   gitFile: string,
@@ -141,7 +149,22 @@ async function gitFileTargetWithinRoot(
   // A relative `gitdir:` is interpreted by git relative to the working copy, so
   // resolve it against `localPath` before checking cache-root containment.
   const target = resolve(localPath, match[1]);
-  return isWithin(cacheRoot, target);
+  // Canonicalise both sides through `realpath` so any symlink along the path —
+  // notably an in-cache `gitdir:` symlinked to an out-of-cache repository that a
+  // string check would wrongly trust — is collapsed before the comparison. A
+  // missing/broken target (ENOENT/ENOTDIR) is not a real gitdir and is rejected.
+  let realTarget: string;
+  let realRoot: string;
+  try {
+    realTarget = await realpath(target);
+    realRoot = await realpath(cacheRoot);
+  } catch (cause) {
+    if (isNodeErrno(cause, "ENOENT") || isNodeErrno(cause, "ENOTDIR")) {
+      return false;
+    }
+    throw new SubstrateResolveError(`substrate .git target is not accessible: ${target}`, { cause });
+  }
+  return isWithin(realRoot, realTarget) && (await isDirectory(realTarget));
 }
 
 /**

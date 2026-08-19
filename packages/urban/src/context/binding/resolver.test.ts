@@ -281,6 +281,58 @@ test("git backend rejects a real directory whose .git is a file (worktree/submod
   }
 });
 
+test("git backend rejects a `.git` file whose in-cache gitdir is a symlink to an out-of-cache repository", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-gitfile-symlink-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // Defeat a string-only containment check: the `gitdir:` path lands INSIDE the
+    // cache root, but that in-cache path is itself a *symlink* to a foreign gitdir
+    // OUTSIDE the cache root. git would follow the link and operate on the
+    // out-of-cache repository — a cache escape. The marker must be canonicalised
+    // (realpath) so the symlink is collapsed and the escape is rejected.
+    const foreignGit = join(root, "foreign-git");
+    await mkdir(foreignGit, { recursive: true });
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    const inCacheLink = join(cacheRoot, "linked-gitdir");
+    await symlink(foreignGit, inCacheLink);
+    await writeFile(join(localPath, ".git"), `gitdir: ${inCacheLink}\n`);
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(
+      resolver.resolve(binding),
+      /\.git points outside the cache root and would escape it/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend rejects a `.git` file whose gitdir target is missing/broken (not trusted as cloned)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-gitfile-broken-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // The `gitdir:` path is textually inside the cache root but does not exist. A
+    // string-only check would trust it as "already cloned"; the realpath probe
+    // must treat a missing/broken gitdir as not-a-clone and reject it.
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    await writeFile(join(localPath, ".git"), `gitdir: ${join(cacheRoot, "does-not-exist")}\n`);
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(
+      resolver.resolve(binding),
+      /\.git points outside the cache root and would escape it/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("git backend surfaces a non-ENOENT lstat error (unreadable path) instead of treating it as missing", async () => {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return; // root bypasses permission bits, so EACCES can't be provoked

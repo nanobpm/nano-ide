@@ -101,7 +101,7 @@ Add an endpoint: declare the path + a unique `operationId` in `openapi.yaml`, th
 
 ## Test it
 
-Two e2e tests ship in `tests/`, powered by
+Two tests ship in `tests/` (an e2e app test and an engine-contract test), powered by
 [`@nanobpm/urban-testkit`](https://www.npmjs.com/package/@nanobpm/urban-testkit) (a
 devDependency). They drive the app against an in-process WASM build of the engine — no
 server, no wall-clock waits, CI-friendly.

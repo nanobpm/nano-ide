@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.66.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.65.0...@nanobpm/urban-0.66.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** derive awaiting_operator from open user tasks (onWaitingHuman) ([#356](https://github.com/nanobpm/nano-ide/issues/356)) ([d27c8d8](https://github.com/nanobpm/nano-ide/commit/d27c8d8babd4d58414aa9b476e85bec9f49d8cb4))
+
 ## [0.65.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.64.0...@nanobpm/urban-0.65.0) (2026-08-19)
 
 

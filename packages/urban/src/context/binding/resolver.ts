@@ -87,8 +87,11 @@ export class ContextResolver {
   constructor(options: ContextResolverOptions = {}) {
     // Normalise to an absolute path so a relative `cacheRoot` (or a relative
     // `URBAN_CONTEXT_CACHE_DIR`) still yields an absolute `localPath`, honouring
-    // `SubstrateResolveOptions.localPath` ("Absolute path…") and keeping the
-    // on-disk location deterministic across processes whose CWD differs.
+    // `SubstrateResolveOptions.localPath` ("Absolute path…"). Note this resolves
+    // a relative `cacheRoot` against *this* process's CWD, so the cross-process
+    // sharing promised in the module header only holds for an ABSOLUTE
+    // `cacheRoot`; a relative one is shared only among instances that happen to
+    // share a working directory.
     this.#cacheRoot = resolvePath(options.cacheRoot ?? defaultContextCacheRoot());
     this.#backend = options.backend ?? new GitSubstrateBackend();
   }

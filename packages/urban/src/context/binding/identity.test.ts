@@ -36,6 +36,19 @@ test("shorthand and equivalent HTTPS URL normalise to the same identity", () => 
   assert.equal(shorthand.key, url.key);
 });
 
+test("a trailing slash after .git does not fork identity (canonical drift guard)", () => {
+  // `stripGitSuffix` must remove `.git` even when a trailing slash follows it,
+  // or `…/name.git/` canonicalises to a different substrate than `…/name`.
+  const plain = resolveContextIdentity({ repo: "https://github.com/owner/name", ref: "main" });
+  const dotGitSlash = resolveContextIdentity({
+    repo: "https://github.com/owner/name.git/",
+    ref: "main",
+  });
+  const scpSlash = resolveContextIdentity({ repo: "git@github.com:owner/name.git/", ref: "main" });
+  assert.equal(dotGitSlash.key, plain.key);
+  assert.equal(scpSlash.key, plain.key);
+});
+
 test("shorthand resolves to a concrete GitHub HTTPS clone URL", () => {
   const identity = resolveContextIdentity({ repo: "owner/name", ref: "main" });
   assert.equal(identity.repo, "https://github.com/owner/name.git");

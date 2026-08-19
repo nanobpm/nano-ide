@@ -51,7 +51,12 @@ interface ClassifiedRepo {
 }
 
 function stripGitSuffix(value: string): string {
-  return value.replace(/\.git$/i, "").replace(/\/+$/, "");
+  // Trim trailing slashes BEFORE stripping `.git` so a trailing-slash spelling
+  // (`owner/name.git/`, a URL pathname ending `.git/`) still has its `.git`
+  // suffix removed — otherwise `.git$` would not match and equivalent repo
+  // spellings would canonicalise to different identities (different substrates).
+  // Trim once more afterwards to drop any slash exposed by removing the suffix.
+  return value.replace(/\/+$/, "").replace(/\.git$/i, "").replace(/\/+$/, "");
 }
 
 // A URL's scheme-default port is equivalent to omitting the port, so it must not

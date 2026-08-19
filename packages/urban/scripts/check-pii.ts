@@ -20,7 +20,8 @@
 // with their kind + located field path and a length-only redacted excerpt, so a
 // failing run never re-leaks the PII it caught.
 
-import { lstat, readFile, readdir } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { classifyPii, type PiiFinding } from "../src/context/pii/index.ts";
 import { LAYOUT_ROOT, isRecordPath } from "../src/context/git/index.ts";
@@ -45,27 +46,39 @@ function isPlainObject(value: unknown): value is Readonly<Record<string, unknown
 /** Walk a substrate root and return every layout record file (absolute paths). */
 async function collectRecordFiles(root: string): Promise<string[]> {
   const layoutRoot = join(root, LAYOUT_ROOT);
-  let entries: string[];
-  try {
-    entries = await readdir(layoutRoot, { recursive: true });
-  } catch (error) {
-    // A root with no `records/` directory simply has nothing to scan.
-    if (isMissingPath(error)) return [];
-    throw error;
-  }
   const files: string[] = [];
-  for (const entry of entries) {
-    const absolute = join(layoutRoot, entry);
-    const relFromRoot = relative(root, absolute).split(sep).join("/");
-    if (!isRecordPath(relFromRoot)) continue;
-    // Only scan real, regular files. `lstat` (not `stat`) does not follow the
-    // final component, so a symlink — even one matching `records/**.json` — is
-    // rejected here and can never make the scanner `readFile` a target outside
-    // the substrate root (e.g. a CI secret), which would otherwise be read and
-    // classified. Non-regular entries (fifos, devices, sockets) are skipped too.
-    const stats = await lstat(absolute);
-    if (stats.isFile()) files.push(absolute);
+  // A hand-rolled walk (NOT `readdir(recursive: true)`) is mandatory here: the
+  // built-in recursive readdir FOLLOWS symlinked directories, so a
+  // `records/<scope>` symlink pointing outside the substrate root would have its
+  // contents traversed and scanned. We instead read one level with
+  // `withFileTypes` and refuse to descend into — or collect — ANY symlink, so no
+  // path outside `root` (e.g. a CI secret) can ever be `readFile`d and
+  // classified, whether the symlink is an intermediate directory or the final
+  // record file.
+  async function walk(dir: string): Promise<void> {
+    let dirents: Dirent[];
+    try {
+      dirents = await readdir(dir, { withFileTypes: true });
+    } catch (error) {
+      // A root with no `records/` directory simply has nothing to scan.
+      if (isMissingPath(error)) return;
+      throw error;
+    }
+    for (const dirent of dirents) {
+      // Skip symlinks outright (dirs and files alike): descending into or
+      // reading one is exactly the escape-outside-root vector we must not allow.
+      if (dirent.isSymbolicLink()) continue;
+      const absolute = join(dir, dirent.name);
+      if (dirent.isDirectory()) {
+        await walk(absolute);
+        continue;
+      }
+      if (!dirent.isFile()) continue;
+      const relFromRoot = relative(root, absolute).split(sep).join("/");
+      if (isRecordPath(relFromRoot)) files.push(absolute);
+    }
   }
+  await walk(layoutRoot);
   return files;
 }
 

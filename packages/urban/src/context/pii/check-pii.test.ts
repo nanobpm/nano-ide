@@ -167,3 +167,30 @@ test("check:pii does not follow a symlink record into a target outside the root"
   assert.equal(code, 0, `symlinked record must be skipped, not scanned; stdout=${stdout}`);
   assert.match(stdout, /0 record\(s\) scanned/);
 });
+
+test("check:pii does not follow a symlinked DIRECTORY into a target outside the root", async () => {
+  const root = await makeRoot();
+  // A directory OUTSIDE the substrate root holding a record-shaped file that
+  // carries an email address — content the scanner must never reach.
+  const outsideDir = join(await makeRoot(), "outside-bucket");
+  await mkdir(outsideDir, { recursive: true });
+  await writeFile(
+    join(outsideDir, "rec-leak.json"),
+    `${JSON.stringify(record({ id: "rec-leak", statement: "owned by alice.example@contoso.com" }), null, 2)}\n`,
+    "utf8",
+  );
+  // Symlink an INTERMEDIATE bucket directory in the layout to that outside dir.
+  // `records/epic/issue-303` → outsideDir makes `records/epic/issue-303/rec-leak.json`
+  // look like a canonical record path. `readdir(recursive:true)` would follow
+  // the symlinked directory and scan (and re-leak) the outside file; the walk
+  // must refuse to descend into any symlinked directory.
+  const bucketLink = join(root, "records", "epic", "issue-303");
+  await mkdir(dirname(bucketLink), { recursive: true });
+  await symlink(outsideDir, bucketLink);
+
+  const { code, stdout, stderr } = await runCheck(root);
+  assert.equal(code, 0, `symlinked bucket dir must not be traversed; stderr=${stderr}`);
+  assert.match(stdout, /0 record\(s\) scanned/);
+  // And it must never re-leak the outside PII it refused to scan.
+  assert.doesNotMatch(stderr, /alice\.example@contoso\.com/);
+});

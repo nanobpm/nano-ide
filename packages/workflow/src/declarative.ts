@@ -371,13 +371,13 @@ function makeBuilder<C extends object>(
   }
 
   if (!isFlowBuilder(methods)) {
-    throw new Error("internal: assembled FlowBuilder is missing registered methods");
+    throw new Error(assemblyFailureMessage(methods));
   }
   // `methods` is now the untyped `FlowBuilder` (object) stored for `api.self()`;
   // a chaining method's precise return type is the interface's, not this value's.
   builderRef = methods;
   if (!isFlowBuilder<C>(methods)) {
-    throw new Error("internal: assembled FlowBuilder is missing registered methods");
+    throw new Error(assemblyFailureMessage(methods));
   }
   return methods;
 }
@@ -421,10 +421,29 @@ const BUILTIN_BUILDER_METHODS = [
  *  clear "missing registered methods" error) instead of surfacing later as an
  *  opaque `w.run is not a function` at authoring time. */
 export function isFlowBuilder<C extends object = object>(x: object): x is FlowBuilder<C> {
-  for (const method of BUILTIN_BUILDER_METHODS) {
-    if (typeof Reflect.get(x, method) !== "function") return false;
-  }
-  return Object.getOwnPropertyNames(x).every((k) => typeof Reflect.get(x, k) === "function");
+  return (
+    missingBuilderMethods(x).length === 0 &&
+    Object.getOwnPropertyNames(x).every((k) => typeof Reflect.get(x, k) === "function")
+  );
+}
+
+/** The subset of {@link BUILTIN_BUILDER_METHODS} not installed as a function on
+ *  `x`. Single source of truth for both the {@link isFlowBuilder} guard and the
+ *  assembly-failure diagnostic below, so the two never drift. */
+function missingBuilderMethods(x: object): readonly string[] {
+  return BUILTIN_BUILDER_METHODS.filter((method) => typeof Reflect.get(x, method) !== "function");
+}
+
+/** Diagnostic for a failed builder assembly. Names the missing built-in
+ *  method(s) when a registration was tree-shaken/omitted so the failure is
+ *  actionable; falls back to a generic message when every built-in is present
+ *  but some other own-property isn't a function. Exported (like
+ *  {@link isFlowBuilder}) so the assembly invariant is unit-testable. */
+export function assemblyFailureMessage(x: object): string {
+  const missing = missingBuilderMethods(x);
+  return missing.length > 0
+    ? `internal: assembled FlowBuilder is missing registered methods: ${missing.join(", ")}`
+    : "internal: assembled FlowBuilder is missing registered methods";
 }
 
 /** The central `startOn` builder method (not a node kind). */

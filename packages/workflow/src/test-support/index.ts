@@ -50,4 +50,4 @@ export { diffModels, modelsEqual } from "./diff.js";
 export { parseXml, localName } from "./xml.js";
 export type { XmlElement } from "./xml.js";
 // The internal builder invariant guard, exposed for the fail-fast guard test.
-export { isFlowBuilder } from "../declarative.js";
+export { isFlowBuilder, assemblyFailureMessage } from "../declarative.js";

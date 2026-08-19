@@ -40,7 +40,13 @@ function decodeEntities(s: string): string {
     if (body[0] === "#") {
       const code =
         body[1] === "x" || body[1] === "X" ? Number.parseInt(body.slice(2), 16) : Number.parseInt(body.slice(1), 10);
-      return Number.isFinite(code) ? String.fromCodePoint(code) : m;
+      // Only decode a valid Unicode scalar value. `String.fromCodePoint` throws
+      // a `RangeError` for code points outside 0..0x10FFFF (e.g. `&#x110000;`),
+      // and surrogate halves (0xD800..0xDFFF) are not valid characters — treat
+      // any such reference as malformed and leave it verbatim rather than
+      // throwing an opaque exception out of `parseXml`.
+      const isScalar = Number.isInteger(code) && code >= 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff);
+      return isScalar ? String.fromCodePoint(code) : m;
     }
     return m;
   });

@@ -18,6 +18,7 @@ import {
   deploySmoke,
   parseXml,
   isFlowBuilder,
+  assemblyFailureMessage,
 } from "../dist/test-support/index.js";
 import { Gateway, resolveServerBin } from "./server.ts";
 
@@ -95,6 +96,50 @@ test("isFlowBuilder: fails fast when a core built-in method is missing (tree-sha
   const { run: _dropped, ...missingRun } = complete;
   void _dropped;
   assert.equal(isFlowBuilder(missingRun), false);
+});
+
+test("assemblyFailureMessage: names the missing built-in method(s) so the failure is actionable", () => {
+  const complete = {
+    startOn: () => {},
+    run: () => {},
+    task: () => {},
+    signal: () => {},
+    timer: () => {},
+    switch: () => {},
+    branch: () => {},
+    loop: () => {},
+    parallel: () => {},
+    forEach: () => {},
+    break: () => {},
+    continue: () => {},
+  };
+  // A missing built-in (e.g. `run` + `task` tree-shaken away) must be NAMED in
+  // the diagnostic — the generic "missing registered methods" alone gave no
+  // clue which registration was dropped.
+  const { run: _r, task: _t, ...missing } = complete;
+  void _r;
+  void _t;
+  const msg = assemblyFailureMessage(missing);
+  assert.match(msg, /missing registered methods:/);
+  assert.match(msg, /run/);
+  assert.match(msg, /task/);
+  // When every built-in is present, no name list is appended.
+  assert.equal(assemblyFailureMessage(complete), "internal: assembled FlowBuilder is missing registered methods");
+});
+
+test("parseXml: out-of-range numeric character references are left verbatim, not thrown", () => {
+  // `String.fromCodePoint` throws a RangeError for code points > 0x10FFFF; the
+  // reader must treat such a reference as malformed and leave it as-is rather
+  // than surfacing an opaque exception out of parseXml.
+  assert.doesNotThrow(() => parseXml('<a v="&#x110000;"/>'));
+  assert.equal(parseXml('<a v="&#x110000;"/>').attrs.v, "&#x110000;");
+  // A negative / non-scalar decimal reference is likewise left verbatim.
+  assert.equal(parseXml('<a v="&#1114112;"/>').attrs.v, "&#1114112;");
+  // Surrogate halves are not valid characters → left verbatim.
+  assert.equal(parseXml('<a v="&#xD800;"/>').attrs.v, "&#xD800;");
+  // A valid scalar value still decodes (BMP + astral).
+  assert.equal(parseXml('<a v="&#x41;"/>').attrs.v, "A");
+  assert.equal(parseXml('<a v="&#128512;"/>').attrs.v, "\u{1f600}");
 });
 
 test("normalize: sees through element-id renaming (canonicalizes ids + sequence-flow ids)", () => {

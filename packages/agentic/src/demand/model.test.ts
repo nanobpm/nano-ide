@@ -25,8 +25,8 @@ const AMBER_VOCAB: VocabDocument = {
 };
 const amberResolver = new VocabResolver(AMBER_VOCAB);
 
-function leaf(taskType: string, process = "p", elementId = "e"): TaskDefinitionLeaf {
-  return { taskType, process, elementId };
+function leaf(taskType: string, process = "p", elementId = "e", agentic = true): TaskDefinitionLeaf {
+  return { taskType, process, elementId, agentic };
 }
 
 function worker(instance: string, cognition: string, family: string, weight?: number): RegisteredWorker {
@@ -155,9 +155,9 @@ test("distinct demand: a token demanded by many elements is one entry", () => {
   assert.equal(qa.tokens[0].supply, 1);
 });
 
-test("non-routing-token task types are surfaced but excluded from accounting", () => {
+test("non-agentic (prompt-less) task types are surfaced but excluded from accounting", () => {
   const report = computeDemandSupply({
-    taskDefinitions: [leaf("planning.planner"), leaf("legacy:job#bad#token")],
+    taskDefinitions: [leaf("planning.planner"), leaf("legacy:job#bad#token", "p", "e", false)],
     workers: [worker("w", "planning", "gpt")],
     resolver,
   });
@@ -168,6 +168,84 @@ test("non-routing-token task types are surfaced but excluded from accounting", (
   );
   assert.deepEqual(report.missing, []);
 });
+
+test("a prompt-less pr.* leaf is nonAgentic (not falsely reported missing)", () => {
+  // `pr.retro-record` parses as a routing token, but with no prompt link it is a
+  // deterministic in-process worker — it must NOT show as missing agentic demand.
+  const report = computeDemandSupply({
+    taskDefinitions: [leaf("pr.retro-record", "p", "e", false)],
+    workers: [],
+    resolver,
+  });
+  assert.deepEqual(report.nonAgentic, ["pr.retro-record"]);
+  assert.deepEqual(report.networks, []);
+  assert.deepEqual(report.missing, []);
+  assert.equal(report.status, "green");
+});
+
+test("a prompt-bearing colon-form fleet type is agentic demand, not nonAgentic", () => {
+  // `senior:retro` / `senior:rebase` do not parse as routing tokens, but carry a
+  // prompt link → they must appear as agentic demand (bucketed), never dropped.
+  const report = computeDemandSupply({
+    taskDefinitions: [leaf("senior:retro"), leaf("senior:rebase")],
+    workers: [],
+    resolver,
+  });
+  assert.deepEqual(report.nonAgentic, []);
+  assert.deepEqual(
+    report.networks.map((n) => n.network),
+    ["senior"],
+  );
+  const senior = report.networks[0];
+  assert.deepEqual(
+    senior.tokens.map((t) => t.token),
+    ["senior:rebase", "senior:retro"],
+  );
+  assert.deepEqual(senior.missing, ["senior:rebase", "senior:retro"]);
+});
+
+// Defect-class guard: classification must follow the prompt signal, NOT the
+// token string. This table pairs adversarial type strings (colon-form, dot-form,
+// bare, malformed) with a hasPrompt flag and asserts agentic-ness tracks the
+// flag alone — locking the class so a future naming convention can't re-invert
+// the buckets.
+const CLASSIFICATION_CASES: ReadonlyArray<{ type: string; hasPrompt: boolean }> = [
+  { type: "senior:retro", hasPrompt: true },
+  { type: "senior:retro", hasPrompt: false },
+  { type: "planning.planner", hasPrompt: true },
+  { type: "planning.planner", hasPrompt: false },
+  { type: "pr.retro-record", hasPrompt: true },
+  { type: "pr.retro-record", hasPrompt: false },
+  { type: "decide", hasPrompt: true },
+  { type: "decide", hasPrompt: false },
+  { type: "legacy:job#bad#token", hasPrompt: true },
+  { type: "legacy:job#bad#token", hasPrompt: false },
+  { type: "UPPER::weird!!", hasPrompt: true },
+  { type: "UPPER::weird!!", hasPrompt: false },
+  { type: "", hasPrompt: true },
+];
+
+for (const { type, hasPrompt } of CLASSIFICATION_CASES) {
+  test(`classification follows the prompt signal, not the token: ${JSON.stringify(type)} hasPrompt=${hasPrompt}`, () => {
+    const report = computeDemandSupply({
+      taskDefinitions: [{ taskType: type, process: "p", elementId: "e", agentic: hasPrompt }],
+      workers: [],
+      resolver,
+    });
+    if (hasPrompt) {
+      // Prompt-bearing → agentic demand: bucketed, never dumped in nonAgentic,
+      // and admitted without throwing regardless of how pathological the string.
+      assert.deepEqual(report.nonAgentic, []);
+      assert.equal(report.networks.length, 1);
+      assert.equal(report.networks[0].tokens[0].token, type);
+    } else {
+      // Prompt-less → nonAgentic, whatever the string parses to.
+      assert.deepEqual(report.nonAgentic, [type]);
+      assert.deepEqual(report.networks, []);
+      assert.deepEqual(report.missing, []);
+    }
+  });
+}
 
 test("the report is deterministic: lists sorted regardless of input order", () => {
   const a = computeDemandSupply({

@@ -27,8 +27,8 @@ const MODEL = `<?xml version="1.0" encoding="UTF-8"?>
 test("scans taskDefinition leaves with process and element provenance", () => {
   const leaves = scanTaskDefinitions(MODEL);
   assert.deepEqual(leaves, [
-    { taskType: "planning.planner", process: "plan-fanout", elementId: "plan" },
-    { taskType: "qa.tester", process: "plan-fanout", elementId: "test" },
+    { taskType: "planning.planner", process: "plan-fanout", elementId: "plan", agentic: false },
+    { taskType: "qa.tester", process: "plan-fanout", elementId: "test", agentic: false },
   ]);
 });
 
@@ -69,17 +69,62 @@ test("tolerates whitespace around attribute equals signs (id / type / process id
   </bpmn:definitions>`;
   const leaves = scanTaskDefinitions(xml);
   assert.deepEqual(leaves, [
-    { taskType: "ci.runner", process: "spaced-proc", elementId: "t" },
+    { taskType: "ci.runner", process: "spaced-proc", elementId: "t", agentic: false },
   ]);
 });
 
 test("distinctTaskTypes de-duplicates in first-occurrence order", () => {
   assert.deepEqual(
     distinctTaskTypes([
-      { taskType: "b", process: "p", elementId: "1" },
-      { taskType: "a", process: "p", elementId: "2" },
-      { taskType: "b", process: "p", elementId: "3" },
+      { taskType: "b", process: "p", elementId: "1", agentic: false },
+      { taskType: "a", process: "p", elementId: "2", agentic: false },
+      { taskType: "b", process: "p", elementId: "3", agentic: false },
     ]),
     ["b", "a"],
   );
+});
+
+test("marks a leaf agentic when it carries a linkName=\"prompt\" linked resource", () => {
+  const xml = `<bpmn:definitions xmlns:bpmn="x" xmlns:zeebe="y">
+    <bpmn:process id="nwf-retro">
+      <bpmn:serviceTask id="retro">
+        <bpmn:extensionElements>
+          <zeebe:taskDefinition type="senior:retro" />
+          <zeebe:linkedResources>
+            <zeebe:linkedResource resourceId="retro.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" />
+          </zeebe:linkedResources>
+        </bpmn:extensionElements>
+      </bpmn:serviceTask>
+      <bpmn:serviceTask id="gather">
+        <bpmn:extensionElements>
+          <zeebe:taskDefinition type="pr.retro-gather" />
+        </bpmn:extensionElements>
+      </bpmn:serviceTask>
+    </bpmn:process>
+  </bpmn:definitions>`;
+  const leaves = scanTaskDefinitions(xml);
+  assert.deepEqual(leaves, [
+    { taskType: "senior:retro", process: "nwf-retro", elementId: "retro", agentic: true },
+    { taskType: "pr.retro-gather", process: "nwf-retro", elementId: "gather", agentic: false },
+  ]);
+});
+
+test("prompt detection tolerates attribute ordering (linkName before resourceId)", () => {
+  const xml = `<bpmn:definitions xmlns:bpmn="x" xmlns:zeebe="y">
+    <bpmn:serviceTask id="t">
+      <zeebe:taskDefinition type="senior:feature" />
+      <zeebe:linkedResource linkName="prompt" resourceId="feature.md" />
+    </bpmn:serviceTask>
+  </bpmn:definitions>`;
+  assert.equal(scanTaskDefinitions(xml)[0].agentic, true);
+});
+
+test("a non-prompt linked resource (other linkName) does not mark a leaf agentic", () => {
+  const xml = `<bpmn:definitions xmlns:bpmn="x" xmlns:zeebe="y">
+    <bpmn:serviceTask id="t">
+      <zeebe:taskDefinition type="senior:feature" />
+      <zeebe:linkedResource resourceId="schema.md" linkName="schema" />
+    </bpmn:serviceTask>
+  </bpmn:definitions>`;
+  assert.equal(scanTaskDefinitions(xml)[0].agentic, false);
 });

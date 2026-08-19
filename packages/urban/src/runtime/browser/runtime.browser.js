@@ -634,7 +634,7 @@ function pageHashHref(page, key) {
 }
 
 // SINGLE source of truth for a console process-explorer link. The grid link cell
-// (link kind "processExplorer") and the pipeline locus link (issue #265) both
+// (link kind "processExplorer") and the pipeline locus link (issue #347) both
 // route here so they can't drift on the href or the embedded-vs-standalone
 // navigation. The console path is constructed HERE (never taken from row data)
 // and the trimmed key URL-encoded, so row data can't smuggle a path/scheme.

@@ -71,18 +71,28 @@ declare module "../declarative.js" {
   }
 }
 
+/** A present, non-empty, non-whitespace-only string — the shape every human()
+ *  id / assignment / mapping-expression field must have. A blank value would
+ *  emit a meaningless BPMN attribute (an empty formId, assignee, candidateGroups,
+ *  or ioMapping source/target) that fails or misbehaves at deploy/run time, so we
+ *  fail fast at build. Non-blank values are kept verbatim — FEEL expressions are
+ *  never trimmed or normalized. */
+function isNonBlankString(v: unknown): v is string {
+  return typeof v === "string" && v.trim() !== "";
+}
+
 function isEntry(e: unknown): e is HumanIoEntry {
   if (e === null || typeof e !== "object") return false;
   if (!("source" in e) || !("target" in e)) return false;
   const { source, target } = e;
-  return typeof source === "string" && typeof target === "string";
+  return isNonBlankString(source) && isNonBlankString(target);
 }
 
 function validateEntries(name: string, dir: "input" | "output", entries: HumanIoEntry[] | undefined): void {
   if (entries === undefined) return;
   if (!Array.isArray(entries)) throw new Error(`human("${name}") io.${dir} must be an array of { source, target }`);
   for (const e of entries) {
-    if (!isEntry(e)) throw new Error(`human("${name}") io.${dir} entries must be { source: string, target: string }`);
+    if (!isEntry(e)) throw new Error(`human("${name}") io.${dir} entries must be { source: non-empty string, target: non-empty string }`);
   }
 }
 
@@ -137,14 +147,14 @@ registerNodeKind("human", {
     if (opts === null || typeof opts !== "object") {
       throw new Error(`human("${name}") needs an options object { form, … }`);
     }
-    if (typeof opts.form !== "string" || opts.form.trim() === "") {
+    if (!isNonBlankString(opts.form)) {
       throw new Error(`human("${name}") needs a non-empty { form } (the zeebe:formDefinition form id)`);
     }
-    if (opts.assignee !== undefined && typeof opts.assignee !== "string") {
-      throw new Error(`human("${name}") { assignee } must be a string`);
+    if (opts.assignee !== undefined && !isNonBlankString(opts.assignee)) {
+      throw new Error(`human("${name}") { assignee } must be a non-empty string`);
     }
-    if (opts.candidateGroups !== undefined && typeof opts.candidateGroups !== "string") {
-      throw new Error(`human("${name}") { candidateGroups } must be a string`);
+    if (opts.candidateGroups !== undefined && !isNonBlankString(opts.candidateGroups)) {
+      throw new Error(`human("${name}") { candidateGroups } must be a non-empty string`);
     }
     if (opts.io !== undefined && (opts.io === null || typeof opts.io !== "object" || Array.isArray(opts.io))) {
       throw new Error(`human("${name}") { io } must be an object { input?, output? }`);

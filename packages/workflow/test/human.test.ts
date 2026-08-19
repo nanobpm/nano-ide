@@ -112,15 +112,28 @@ test("human: rejects a non-object options argument", () => {
 
 test("human: rejects a non-string assignee / candidateGroups and a malformed io entry", () => {
   const badAssignee = JSON.parse('{"form":"f","assignee":5}');
-  assert.throws(() => defineFlow("h", (w) => { w.human("d", badAssignee); }), /\{ assignee \} must be a string/);
+  assert.throws(() => defineFlow("h", (w) => { w.human("d", badAssignee); }), /\{ assignee \} must be a non-empty string/);
   const badGroups = JSON.parse('{"form":"f","candidateGroups":5}');
-  assert.throws(() => defineFlow("h", (w) => { w.human("d", badGroups); }), /\{ candidateGroups \} must be a string/);
+  assert.throws(() => defineFlow("h", (w) => { w.human("d", badGroups); }), /\{ candidateGroups \} must be a non-empty string/);
   const badIo = JSON.parse('{"form":"f","io":{"output":[{"source":"=x"}]}}');
   assert.throws(() => defineFlow("h", (w) => { w.human("d", badIo); }), /io\.output entries must be/);
   const nonObjectIo = JSON.parse('{"form":"f","io":"oops"}');
   assert.throws(() => defineFlow("h", (w) => { w.human("d", nonObjectIo); }), /\{ io \} must be an object/);
   const arrayIo = JSON.parse('{"form":"f","io":[]}');
   assert.throws(() => defineFlow("h", (w) => { w.human("d", arrayIo); }), /\{ io \} must be an object/);
+});
+
+test("human: rejects blank/whitespace-only string fields (they would emit meaningless BPMN attributes)", () => {
+  // A whitespace-only form is as invalid as an empty one.
+  assert.throws(() => defineFlow("h", (w) => { w.human("d", { form: "   " }); }), /needs a non-empty \{ form \}/);
+  // Whitespace-only assignee / candidateGroups are rejected, not emitted as empty attributes.
+  assert.throws(() => defineFlow("h", (w) => { w.human("d", { form: "f", assignee: "  " }); }), /\{ assignee \} must be a non-empty string/);
+  assert.throws(() => defineFlow("h", (w) => { w.human("d", { form: "f", candidateGroups: "\t" }); }), /\{ candidateGroups \} must be a non-empty string/);
+  // A blank io source/target would emit <zeebe:input source="" target="" /> — reject it.
+  const blankSource = JSON.parse('{"form":"f","io":{"input":[{"source":"  ","target":"case"}]}}');
+  assert.throws(() => defineFlow("h", (w) => { w.human("d", blankSource); }), /io\.input entries must be/);
+  const blankTarget = JSON.parse('{"form":"f","io":{"output":[{"source":"=x","target":""}]}}');
+  assert.throws(() => defineFlow("h", (w) => { w.human("d", blankTarget); }), /io\.output entries must be/);
 });
 
 test("human: rejects a duplicate step name (claims its name like every leaf)", () => {

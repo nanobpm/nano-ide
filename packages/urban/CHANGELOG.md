@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.64.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.63.1...@nanobpm/urban-0.64.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** pipeline locus supports a processExplorer link ([#348](https://github.com/nanobpm/nano-ide/issues/348)) ([7f9fe1a](https://github.com/nanobpm/nano-ide/commit/7f9fe1ab8328c02e5e488640f35ed6710cb330ff))
+
 ## [0.63.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.63.0...@nanobpm/urban-0.63.1) (2026-08-19)
 
 

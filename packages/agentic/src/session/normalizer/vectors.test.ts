@@ -126,8 +126,13 @@ function semantic(event: SessionEvent): DistributiveOmit<SessionEvent, "id" | "p
 }
 
 // Every dialect in the fleet has a vector (no harness ships without a test vector).
+// Compare the harness-id *sets* (not just counts) and assert vector uniqueness, so a
+// duplicated vector masking a missing normalizer cannot slip through a length check.
 test("every fleet normalizer has a shared test vector", () => {
-  assert.equal(VECTORS.length, FLEET_NORMALIZERS.length, "every fleet normalizer must have a shared test vector");
+  const vectorHarnesses = VECTORS.map((v) => v.normalizer.harness).sort();
+  const fleetHarnesses = FLEET_NORMALIZERS.map((n) => n.harness).sort();
+  assert.equal(new Set(vectorHarnesses).size, vectorHarnesses.length, "each harness must have a unique shared test vector (no duplicates)");
+  assert.deepEqual(vectorHarnesses, fleetHarnesses, "the set of test-vector harnesses must match the fleet exactly");
 });
 
 for (const { normalizer, records } of VECTORS) {

@@ -20,7 +20,7 @@ export interface SpawnAcpOptions {
   readonly cwd?: string;
   /** Extra environment for the harness (merged over `process.env`). */
   readonly env?: Readonly<Record<string, string>>;
-  /** Where to route the harness's stderr diagnostics. Default: inherit. */
+  /** Where to route the harness's stderr diagnostics. Default: drained and discarded. */
   readonly onStderr?: (chunk: string) => void;
 }
 
@@ -33,7 +33,8 @@ export interface SpawnedAcpTransport extends AcpTransport {
 /**
  * Spawn the harness and return a transport over its stdin/stdout with ACP's
  * newline-delimited JSON framing. The child's stderr is protocol-irrelevant
- * (diagnostics only) and is routed to `onStderr` or inherited.
+ * (diagnostics only): it is always piped and routed to `onStderr` when provided,
+ * otherwise drained and discarded (never inherited by the parent's stderr).
  */
 export function spawnAcpTransport(options: SpawnAcpOptions): SpawnedAcpTransport {
   // Omitting `stdio` defaults every stream to "pipe", which is both what ACP's

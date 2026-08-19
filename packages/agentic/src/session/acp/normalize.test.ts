@@ -58,7 +58,17 @@ test("tool_call → a tool-call using title as the name and rawInput as args", (
 
 test("tool_call without a title falls back to the call id for the name", () => {
   const result = classifyUpdate({ sessionUpdate: "tool_call", toolCallId: "call-2" });
-  assert.deepEqual(result, { kind: "tool-call", callId: "call-2", name: "call-2", args: undefined });
+  assert.deepEqual(result, { kind: "tool-call", callId: "call-2", name: "call-2", args: null });
+});
+
+test("tool_call without rawInput yields JSON-serialisable args (null, not dropped undefined)", () => {
+  const result = classifyUpdate({ sessionUpdate: "tool_call", toolCallId: "call-3" });
+  assert.equal(result.kind, "tool-call");
+  // `ToolCallEvent.args` is documented as a JSON-serialisable value; `undefined`
+  // is silently dropped by JSON.stringify, so the key must survive a round-trip.
+  const roundTripped = JSON.parse(JSON.stringify(result));
+  assert.ok("args" in roundTripped, "args key must survive JSON serialisation");
+  assert.equal(roundTripped.args, null);
 });
 
 test("tool_call_update completed → a successful tool-result carrying rawOutput", () => {

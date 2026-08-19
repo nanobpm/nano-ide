@@ -87,8 +87,11 @@ function classifyToolCall(update: Record<string, unknown>): AcpClassifiedUpdate 
   const title = update.title;
   const name = typeof title === "string" && title.length > 0 ? title : callId;
   // The call arguments live in `rawInput` (an opaque JSON value) when the agent
-  // exposes them; otherwise there is nothing structured to record.
-  const args = "rawInput" in update ? update.rawInput : undefined;
+  // exposes them; otherwise there is nothing structured to record. Fall back to
+  // `null` (never `undefined`), mirroring the tool-result `rawOutput` path: the
+  // canonical `ToolCallEvent.args` is a JSON-serialisable value, and `undefined`
+  // is dropped by `JSON.stringify`, which would violate that shape on persist/replay.
+  const args = "rawInput" in update && update.rawInput !== undefined ? update.rawInput : null;
   return { kind: "tool-call", callId, name, args };
 }
 

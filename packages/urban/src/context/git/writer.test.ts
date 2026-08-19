@@ -130,6 +130,64 @@ class FailingSubstrate implements WriteSubstrate {
   }
 }
 
+/**
+ * Wraps a REAL {@link GitWriteSubstrate} but makes `mergeBranch` throw, so a
+ * ratifying merge fails AFTER its `checkout(base)` has already moved the shared
+ * working tree. Every other step (including the `restoreClean` cleanup) runs
+ * against the real repo, and `restored` records whether the `finally` cleanup
+ * fired — proving `ratify` restores the tree like `appendRecord`/`proposePrior`.
+ */
+class MergeFailingSubstrate implements WriteSubstrate {
+  readonly restored: string[] = [];
+  readonly #inner: GitWriteSubstrate;
+
+  constructor(inner: GitWriteSubstrate) {
+    this.#inner = inner;
+  }
+
+  get rootPath(): string {
+    return this.#inner.rootPath;
+  }
+  writeRecordFile(relPath: string, content: string): Promise<void> {
+    return this.#inner.writeRecordFile(relPath, content);
+  }
+  readFileAtRef(ref: string, relPath: string): Promise<string> {
+    return this.#inner.readFileAtRef(ref, relPath);
+  }
+  diffPaths(baseRef: string, branch: string): Promise<readonly string[]> {
+    return this.#inner.diffPaths(baseRef, branch);
+  }
+  currentBranch(): Promise<string> {
+    return this.#inner.currentBranch();
+  }
+  createBranch(name: string, from: string): Promise<void> {
+    return this.#inner.createBranch(name, from);
+  }
+  checkout(ref: string): Promise<void> {
+    return this.#inner.checkout(ref);
+  }
+  stageAndCommit(message: string, author: CommitAuthor): Promise<string> {
+    return this.#inner.stageAndCommit(message, author);
+  }
+  async mergeBranch(
+    _branch: string,
+    _message: string,
+    _author: CommitAuthor,
+  ): Promise<string> {
+    throw new Error("simulated merge failure");
+  }
+  branchExists(name: string): Promise<boolean> {
+    return this.#inner.branchExists(name);
+  }
+  isMerged(commit: string, ref: string): Promise<boolean> {
+    return this.#inner.isMerged(commit, ref);
+  }
+  async restoreClean(ref: string, pathspec: string): Promise<void> {
+    this.restored.push(ref);
+    await this.#inner.restoreClean(ref, pathspec);
+  }
+}
+
 test("appendRecord persists a measured fact on the base branch", async () => {
   const dir = await makeSubstrate();
   const writer = new ContextWriter({ localPath: dir, ref: "main" });
@@ -542,6 +600,43 @@ test("proposePrior restores the working tree to base after a mid-operation failu
 
   assert.equal(substrate.current, "main");
   assert.deepEqual(substrate.restored, ["main"]);
+});
+
+test("ratify restores the working tree to base after a merge failure", async () => {
+  const dir = await makeSubstrate();
+  // A real proposal on its bot branch, created via the normal path.
+  const proposer = new ContextWriter({ localPath: dir, ref: "main" });
+  const proposal = await proposer.proposePrior(
+    record({ id: "retro-mergefail", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // Ratify through a substrate whose merge fails AFTER checkout(base) has moved the
+  // shared tree — the exact window where a missing `finally` would strand it.
+  const substrate = new MergeFailingSubstrate(new GitWriteSubstrate(dir));
+  const writer = new ContextWriter({ localPath: dir, ref: "main" }, { substrate });
+
+  await assert.rejects(() => writer.ratify(proposal), /simulated merge failure/);
+
+  // The `finally` cleanup fired (like appendRecord/proposePrior) so the next
+  // serialised op inherits a clean tree on the resolved base, not a half-merged one.
+  assert.deepEqual(substrate.restored, ["main"]);
+  assert.equal(await git(dir, "rev-parse", "--abbrev-ref", "HEAD"), "main");
+  assert.equal(await git(dir, "status", "--porcelain"), "");
+});
+
+test("commit subject line is capped so an unbounded id cannot bloat the message", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  // The schema only requires `id` to be a non-empty string, so an accidental or
+  // adversarial extremely long id must not produce a huge commit subject.
+  const longId = "x".repeat(500);
+  const result = await writer.appendRecord(record({ id: longId }));
+
+  const subject = await git(dir, "log", "-1", "--format=%s", result.mergeCommit);
+  assert.ok(subject.length < 200, `commit subject must stay bounded, got ${subject.length}`);
+  assert.ok(subject.includes("…"), "an over-long id must be truncated with an ellipsis");
+  assert.ok(!subject.includes("x".repeat(200)), "the full over-long id must not reach the subject");
 });
 
 test("restoreClean discards untracked record residue and returns to the base branch", async () => {

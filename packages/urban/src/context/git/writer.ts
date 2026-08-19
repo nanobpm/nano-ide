@@ -353,20 +353,30 @@ export class ContextWriter {
         );
       }
 
-      await this.#substrate.checkout(base);
-      // The merge commit message is derived from the GUARDED, schema-validated
-      // `record.id` (re-read and re-guarded above), never the caller-controlled
-      // `proposal.proposalId` on the plain-object handle. Interpolating the latter
-      // would let a consumer inject unguarded content (PII, newlines) into the
-      // commit message and bypass the mandatory PII guard, which only inspects
-      // record content. `commitLine` additionally collapses the id to a single
-      // line so even a guarded-but-newline-bearing id cannot inject a trailer.
-      const mergeCommit = await this.#substrate.mergeBranch(
-        proposal.branch,
-        `context(ratify): merge record ${commitLine(record.id)} onto ${base}`,
-        this.#botAuthor,
-      );
-      return { mergeCommit, baseBranch: base };
+      // A ratifying merge is a mutating op on the SHARED working tree, so — like
+      // `appendRecord` and `proposePrior` — its checkout+merge must run under a
+      // `finally` that restores the base. A `mergeBranch` failure (conflict, or a
+      // failed abort) would otherwise strand the tree on `base` mid-merge (or with
+      // conflict residue) for the next serialised op to inherit, breaking the
+      // class contract that every mutating op leaves the tree clean and on base.
+      try {
+        await this.#substrate.checkout(base);
+        // The merge commit message is derived from the GUARDED, schema-validated
+        // `record.id` (re-read and re-guarded above), never the caller-controlled
+        // `proposal.proposalId` on the plain-object handle. Interpolating the latter
+        // would let a consumer inject unguarded content (PII, newlines) into the
+        // commit message and bypass the mandatory PII guard, which only inspects
+        // record content. `commitLine` additionally collapses the id to a single
+        // line so even a guarded-but-newline-bearing id cannot inject a trailer.
+        const mergeCommit = await this.#substrate.mergeBranch(
+          proposal.branch,
+          `context(ratify): merge record ${commitLine(record.id)} onto ${base}`,
+          this.#botAuthor,
+        );
+        return { mergeCommit, baseBranch: base };
+      } finally {
+        await this.#restoreBase(base);
+      }
     });
   }
 
@@ -455,15 +465,22 @@ function parseRecordJson(content: string, path: string): unknown {
 
 /**
  * Reduce a value to a single commit-message line: collapse every whitespace run
- * (spaces, tabs, and crucially CR/LF) to one space and trim. The record `id` is
- * schema-validated only as a NON-EMPTY string, so without this a newline in `id`
- * would split the commit subject and inject extra message lines or a forged
- * trailer (e.g. a fake `Signed-off-by:`). This is the categorical guard for that
- * defect class at every commit/merge interpolation site; distinct from
- * `sanitizeRef`, which builds git-ref-safe branch segments.
+ * (spaces, tabs, and crucially CR/LF) to one space, trim, and cap the length. The
+ * record `id` is schema-validated only as a NON-EMPTY string, so without this a
+ * newline in `id` would split the commit subject and inject extra message lines or
+ * a forged trailer (e.g. a fake `Signed-off-by:`), and an unbounded-length `id`
+ * would produce a huge commit subject/merge message that degrades git and
+ * log/telemetry handling (the on-disk path is already length-bounded by
+ * `sanitizeSegment`). This is the categorical guard for both defect classes at
+ * every commit/merge interpolation site; distinct from `sanitizeRef`, which builds
+ * git-ref-safe branch segments.
  */
+const MAX_COMMIT_LINE = 120;
 function commitLine(value: string): string {
-  return value.replace(/\s+/g, " ").trim();
+  const collapsed = value.replace(/\s+/g, " ").trim();
+  return collapsed.length > MAX_COMMIT_LINE
+    ? `${collapsed.slice(0, MAX_COMMIT_LINE - 1)}…`
+    : collapsed;
 }
 
 /** Reduce an id to a git-ref-safe branch segment (no `..`, spaces, or `~^:?*[`). */

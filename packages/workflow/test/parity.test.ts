@@ -123,8 +123,57 @@ test("assemblyFailureMessage: names the missing built-in method(s) so the failur
   assert.match(msg, /missing registered methods:/);
   assert.match(msg, /run/);
   assert.match(msg, /task/);
-  // When every built-in is present, no name list is appended.
-  assert.equal(assemblyFailureMessage(complete), "internal: assembled FlowBuilder is missing registered methods");
+  // When every built-in is present, no missing-method list is appended.
+  assert.equal(assemblyFailureMessage(complete), "internal: assembled FlowBuilder failed its assembly invariant");
+});
+
+test("assemblyFailureMessage: names a non-function own-property when every built-in is present", () => {
+  const complete = {
+    startOn: () => {},
+    run: () => {},
+    task: () => {},
+    signal: () => {},
+    timer: () => {},
+    switch: () => {},
+    branch: () => {},
+    loop: () => {},
+    parallel: () => {},
+    forEach: () => {},
+    break: () => {},
+    continue: () => {},
+  };
+  // Every built-in is present, but an own-property is not a function (e.g. a
+  // stray descriptor/value leaked onto the assembled builder). The old
+  // diagnostic still claimed "missing registered methods", which is misleading
+  // when nothing is missing — it must now NAME the offending property instead.
+  const withBadProp = { ...complete, oops: 42 };
+  const msg = assemblyFailureMessage(withBadProp);
+  assert.doesNotMatch(msg, /missing registered methods/);
+  assert.match(msg, /non-function own-property:/);
+  assert.match(msg, /oops/);
+});
+
+test("switch: rejects a non-object cases argument with a helpful message, not a raw TypeError", () => {
+  // A JSON-derived / runtime-invalid `cases` (null) previously reached
+  // `Object.entries(null)` and threw an opaque `TypeError: Cannot convert
+  // undefined or null to object` out of the builder. It must now fail with a
+  // clear switch(...) diagnostic (like `timer` guards its opts). JSON.parse
+  // yields `any`, so no `as`-cast is needed to build the invalid input.
+  const badCases = JSON.parse("null");
+  assert.throws(
+    () => defineFlow("bad-switch", (w) => { w.switch("status", badCases); }),
+    /switch\("status"\) needs a cases object/,
+  );
+  // A valid cases object still assembles.
+  assert.doesNotThrow(() =>
+    defineFlow("ok-switch", (w) => {
+      w.switch("status", {
+        ok: (c) => {
+          c.task("t");
+        },
+      });
+    }),
+  );
 });
 
 test("parseXml: out-of-range numeric character references are left verbatim, not thrown", () => {

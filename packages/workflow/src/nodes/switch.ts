@@ -18,6 +18,9 @@ registerNodeKind("switch", {
     if (typeof subject !== "string" || subject.trim() === "") {
       throw new Error(`switch() needs a non-empty subject expression`);
     }
+    if (cases === null || typeof cases !== "object") {
+      throw new Error(`switch("${subject}") needs a cases object { value: (b) => {…} }`);
+    }
     const caseNodes: SwitchCase[] = [];
     for (const [value, fn] of Object.entries(cases)) {
       if (value === "default") continue;

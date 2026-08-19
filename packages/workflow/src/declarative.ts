@@ -421,10 +421,7 @@ const BUILTIN_BUILDER_METHODS = [
  *  clear "missing registered methods" error) instead of surfacing later as an
  *  opaque `w.run is not a function` at authoring time. */
 export function isFlowBuilder<C extends object = object>(x: object): x is FlowBuilder<C> {
-  return (
-    missingBuilderMethods(x).length === 0 &&
-    Object.getOwnPropertyNames(x).every((k) => typeof Reflect.get(x, k) === "function")
-  );
+  return missingBuilderMethods(x).length === 0 && nonFunctionOwnProperties(x).length === 0;
 }
 
 /** The subset of {@link BUILTIN_BUILDER_METHODS} not installed as a function on
@@ -434,16 +431,30 @@ function missingBuilderMethods(x: object): readonly string[] {
   return BUILTIN_BUILDER_METHODS.filter((method) => typeof Reflect.get(x, method) !== "function");
 }
 
+/** The own-property names of `x` whose value is not a function — the second
+ *  half of the {@link isFlowBuilder} invariant, factored out so the
+ *  assembly-failure diagnostic can name the offending property without drifting
+ *  from the guard. */
+function nonFunctionOwnProperties(x: object): readonly string[] {
+  return Object.getOwnPropertyNames(x).filter((k) => typeof Reflect.get(x, k) !== "function");
+}
+
 /** Diagnostic for a failed builder assembly. Names the missing built-in
  *  method(s) when a registration was tree-shaken/omitted so the failure is
- *  actionable; falls back to a generic message when every built-in is present
- *  but some other own-property isn't a function. Exported (like
+ *  actionable; otherwise, when every built-in is present but some own-property
+ *  isn't a function, names that offending property instead. Exported (like
  *  {@link isFlowBuilder}) so the assembly invariant is unit-testable. */
 export function assemblyFailureMessage(x: object): string {
   const missing = missingBuilderMethods(x);
-  return missing.length > 0
-    ? `internal: assembled FlowBuilder is missing registered methods: ${missing.join(", ")}`
-    : "internal: assembled FlowBuilder is missing registered methods";
+  if (missing.length > 0) {
+    return `internal: assembled FlowBuilder is missing registered methods: ${missing.join(", ")}`;
+  }
+  const nonFunctions = nonFunctionOwnProperties(x);
+  if (nonFunctions.length > 0) {
+    const label = nonFunctions.length === 1 ? "property" : "properties";
+    return `internal: assembled FlowBuilder has non-function own-${label}: ${nonFunctions.join(", ")}`;
+  }
+  return "internal: assembled FlowBuilder failed its assembly invariant";
 }
 
 /** The central `startOn` builder method (not a node kind). */

@@ -141,6 +141,18 @@ test("task prompt: rejects an empty bindingType / append override", () => {
   );
 });
 
+test("task prompt: rejects an explicit non-string bindingType (null) instead of defaulting", () => {
+  // A runtime-invalid flow explicitly setting `bindingType: null` must be
+  // rejected as an authoring mistake, not silently defaulted to "latest" via
+  // `??`. Only an ABSENT (undefined) bindingType defaults. Built via JSON.parse
+  // so the runtime-invalid shape carries no `as` cast.
+  assert.throws(
+    () =>
+      defineFlow("x", (w) => w.task("a", { prompt: JSON.parse('{"resourceId":"r.md","bindingType":null}') })),
+    /prompt\.bindingType must be a non-empty string/,
+  );
+});
+
 // ── Derivation parity against the hand-authored golden ───────────────────────
 // The `retro` model's `synthesize` step is an agent service task carrying the
 // linkedResource prompt binding (plus an `appendPrompt` ioMapping input); the

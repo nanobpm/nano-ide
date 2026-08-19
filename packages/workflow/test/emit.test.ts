@@ -56,6 +56,23 @@ test("declarative emit: service tasks + derived types + message/subscription", (
   assert.match(xml, /<zeebe:subscription correlationKey="=prId" \/>/);
 });
 
+test("signal: trims a correlationKey before validating/storing (parity with race signal arm)", () => {
+  const flow = defineFlow("wait-trim", (w) => {
+    w.signal("humanApproval", { correlationKey: "  prId  " });
+  });
+  const xml = toBpmn(flow);
+  // Stray surrounding whitespace must not fail the NCName check nor leak into
+  // the emitted subscription — the value is trimmed exactly like race()'s arm.
+  assert.match(xml, /<zeebe:subscription correlationKey="=prId" \/>/);
+});
+
+test("signal: rejects a whitespace-only correlationKey", () => {
+  assert.throws(
+    () => defineFlow("f", (w) => w.signal("s", { correlationKey: "   " })),
+    /needs \{ correlationKey \}/,
+  );
+});
+
 test("declarative emit: timer intermediate catch (after → timeDuration)", () => {
   const flow = defineFlow("delayed", (w) => {
     w.task("kickoff");

@@ -75,7 +75,11 @@ function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
   if (typeof resourceId !== "string" || resourceId.trim() === "") {
     throw new Error(`task("${name}") prompt.resourceId must be a non-empty string`);
   }
-  const bindingType = prompt.bindingType ?? "latest";
+  // Only an ABSENT bindingType defaults to "latest"; `??` would also swallow an
+  // explicit `null`, masking an authoring mistake. Distinguish `undefined` (use
+  // the default) from any other non-string (reject), in parity with how `append`
+  // below treats `!== undefined` as "provided, so validate strictly".
+  const bindingType = prompt.bindingType === undefined ? "latest" : prompt.bindingType;
   if (typeof bindingType !== "string" || bindingType.trim() === "") {
     throw new Error(`task("${name}") prompt.bindingType must be a non-empty string`);
   }

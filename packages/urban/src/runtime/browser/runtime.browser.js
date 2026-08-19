@@ -1549,7 +1549,7 @@ function setChevronOpen(btn, open) {
 
 /** @param {any} f
  *  @param {Record<string, any>} row
- *  @param {() => void} onSuccess
+ *  @param {() => void | Promise<void>} onSuccess
  *  @returns {HTMLElement|null}
  */
 function buildDetailForm(f, row, onSuccess) {
@@ -1574,7 +1574,12 @@ function buildDetailForm(f, row, onSuccess) {
       const form = Object.create(null); form[f.inputKey] = input.value;
       await runRoute(f.action, { form, row });
       msg.className = "pc-msg ok"; msg.textContent = (f.action && f.action.successLabel) || "Sent";
-      onSuccess();
+      // Await onSuccess so a refresh that rejects (e.g. a child grid's re-fetch
+      // failing) is surfaced here and re-enables the button below, instead of the
+      // operator being stuck on a permanently-disabled button with a silent
+      // failure. On success the refresh detaches/rebuilds this form, so leaving
+      // the button disabled is moot; we only re-enable on the error path.
+      await onSuccess();
     } catch (e) {
       btn.disabled = false; msg.className = "pc-msg err"; msg.textContent = String(e.message || e);
     }
@@ -1816,7 +1821,10 @@ function renderDataGrid(node) {
           cdtr = el("tr", { hidden: collapsed ? "" : null }, el("td", { colspan: cspan }));
           let built = false;
           const build = () => {
-            if (!built) { built = true; cdtr.firstChild.append(detailPanel(cr, cdetail, () => { load().catch(() => {}); })); }
+            // Return the reload promise (don't swallow it) so buildDetailForm can
+            // surface a failed re-fetch and re-enable its submit button instead of
+            // leaving the operator stuck on a false "Sent".
+            if (!built) { built = true; cdtr.firstChild.append(detailPanel(cr, cdetail, () => load())); }
           };
           if (!collapsed) build();
           ctoggle.addEventListener("click", /** @param {MouseEvent} ev */ (ev) => {
@@ -1881,7 +1889,7 @@ function renderDataGrid(node) {
       box.append(holder);
       childGrid(cg, row).then((w) => holder.replaceChildren(w));
     }
-    const form = buildDetailForm(d.form, row, onSuccess || (() => document.dispatchEvent(new CustomEvent("pc:refresh"))));
+    const form = buildDetailForm(d.form, row, onSuccess || (() => { document.dispatchEvent(new CustomEvent("pc:refresh")); }));
     if (form) box.append(form);
     return box;
   }

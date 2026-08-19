@@ -1358,7 +1358,7 @@ test("child grids support per-row detail expansion, collapsed by default (#332)"
   // answering it re-fetches only this child grid (load()), not the whole page (#333).
   assert.match(js, /const ctoggle = chevronToggle\("Toggle row details"\);\s*setChevronOpen\(ctoggle, !collapsed\);/);
   assert.match(js, /cells\.push\(el\("td", \{ class: "pc-row-actions" \}, ctoggle\)\);/);
-  assert.match(js, /cdtr\.firstChild\.append\(detailPanel\(cr, cdetail, \(\) => \{ load\(\)\.catch\(\(\) => \{\}\); \}\)\)/);
+  assert.match(js, /cdtr\.firstChild\.append\(detailPanel\(cr, cdetail, \(\) => load\(\)\)\)/);
   // Rows are collapsed by default; detail.defaultCollapsed/detail.collapsed (both
   // defaulting to true) seed the initial state.
   assert.match(js, /cdetail\.defaultCollapsed != null/);
@@ -1422,12 +1422,14 @@ test("child-grid and top-level detail forms thread different post-answer refresh
   // buildDetailForm, but they thread DIFFERENT onSuccess callbacks. A child-grid
   // row's inline answer must refresh ONLY that child grid — via its local load()
   // re-fetch — so the answered row drops without a disruptive whole-page re-poll.
-  assert.match(js, /detailPanel\(cr, cdetail, \(\) => \{ load\(\)\.catch\(\(\) => \{\}\); \}\)/);
+  // The child callback returns the load() promise (not swallowed) so a failed
+  // re-fetch surfaces in buildDetailForm and re-enables its submit button.
+  assert.match(js, /detailPanel\(cr, cdetail, \(\) => load\(\)\)/);
   // load() is the child-scoped re-fetch: it repaints just this child grid's tbody.
   assert.match(js, /async function load\(\) \{[\s\S]*?cbody\.replaceChildren\(\);/);
   // The top-level grid keeps its whole-page re-poll: detailPanel's default onSuccess
   // (used when no child-scoped callback is passed) dispatches pc:refresh.
-  assert.match(js, /onSuccess \|\| \(\(\) => document\.dispatchEvent\(new CustomEvent\("pc:refresh"\)\)\)/);
+  assert.match(js, /onSuccess \|\| \(\(\) => \{ document\.dispatchEvent\(new CustomEvent\("pc:refresh"\)\); \}\)/);
   // The single shared expander (cdetail) hosts the form — there is no duplicate,
   // parallel form-only child expander (the pre-reconciliation cdetailForm surface).
   assert.doesNotMatch(js, /const cdetailForm = /);

@@ -227,3 +227,42 @@ test("#333: a failed submit surfaces the error, re-enables submit, and does NOT 
   const msg = created.find((n) => n.tagName === "P" && n.className.includes("err"));
   assert.equal(msg?.textContent, "boom", "the server error is surfaced");
 });
+
+test("#333: a failed onSuccess refresh is surfaced and re-enables submit — no silent failure / stuck button", async (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const priorFetch = globalThis.fetch;
+  Reflect.set(globalThis, "fetch", async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) }));
+  t.after(() => Reflect.set(globalThis, "fetch", priorFetch));
+
+  // The submit itself succeeds, but the follow-up refresh (a child grid's
+  // re-fetch) rejects. buildDetailForm awaits onSuccess, so the reload failure
+  // must NOT be swallowed: the error is shown and the button re-enabled, instead
+  // of the operator being stuck on a permanently-disabled button under a false
+  // "Sent". Guards both suppressed advisories on runtime.browser.js:1581/1807.
+  const box = buildDetailForm(FORM, { answerable: true, question: "Ship it?", task_id: "T-7" }, async () => {
+    throw new Error("reload failed");
+  });
+  assert.ok(box);
+  const button = created.find((n) => n.tagName === "BUTTON");
+  await button!.fire("click");
+
+  assert.equal(button?.disabled, false, "submit re-enabled when the refresh fails so the operator isn't stuck");
+  const err = created.find((n) => n.tagName === "P" && n.className.includes("err"));
+  assert.equal(err?.textContent, "reload failed", "the refresh failure is surfaced, not swallowed");
+});
+
+test("#333: on a fully successful submit the button stays disabled — the refresh detaches/rebuilds the form", async (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const priorFetch = globalThis.fetch;
+  Reflect.set(globalThis, "fetch", async () => ({ ok: true, status: 200, json: async () => ({ ok: true }) }));
+  t.after(() => Reflect.set(globalThis, "fetch", priorFetch));
+
+  const box = buildDetailForm(FORM, { answerable: true, question: "Ship it?", task_id: "T-1" }, () => {});
+  assert.ok(box);
+  const button = created.find((n) => n.tagName === "BUTTON");
+  await button!.fire("click");
+
+  assert.equal(button?.disabled, true, "left disabled on success — the refresh replaces the form, so re-enabling is moot");
+});

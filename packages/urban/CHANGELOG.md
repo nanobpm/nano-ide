@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.67.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.66.2...@nanobpm/urban-0.67.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** add PII classifier + mandatory pre-commit guard for @nanobpm/urban/context/pii ([#358](https://github.com/nanobpm/nano-ide/issues/358)) ([f794ec3](https://github.com/nanobpm/nano-ide/commit/f794ec3c64de47b42698615107518b7e69c95e97))
+
 ## [0.66.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.66.1...@nanobpm/urban-0.66.2) (2026-08-19)
 
 

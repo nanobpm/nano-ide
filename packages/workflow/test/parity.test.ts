@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defineFlow } from "../dist/index.js";
+import { WorkflowClient } from "../dist/index.js";
 import {
   normalize,
   diffModels,
@@ -210,6 +211,51 @@ test("deploySmoke: skips cleanly when no engine is reachable", async () => {
   } finally {
     if (prev !== undefined) process.env.WORKFLOW_GATEWAY_URL = prev;
   }
+});
+
+// An engine that answers with an empty object (e.g. an SDK response whose only
+// fields are non-JSON and get dropped by toJsonObject) is NOT an acceptance —
+// deploySmoke's error message literally calls this the "empty deploy result"
+// case, so the guard must reject `{}`, not just a non-object.
+function stubClient(deployResult: unknown): WorkflowClient {
+  return new WorkflowClient({
+    client: {
+      async createDeployment() {
+        return deployResult;
+      },
+      async createProcessInstance() {
+        return {};
+      },
+      async correlateMessage() {
+        return {};
+      },
+      async getProcessInstance() {
+        return {};
+      },
+      createJobWorker() {
+        return { start() {}, stop() {} };
+      },
+    },
+  });
+}
+
+test("deploySmoke: rejects an empty deploy result ({}) instead of reporting acceptance", async () => {
+  await assert.rejects(
+    () => deploySmoke(smokeFlow, { client: stubClient({}) }),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.match(err.message, /empty deploy result/);
+      assert.match(err.message, /smoke-demo/);
+      return true;
+    },
+  );
+});
+
+test("deploySmoke: accepts a non-empty deploy result", async () => {
+  const res = await deploySmoke(smokeFlow, { client: stubClient({ deploymentKey: "1" }) });
+  assert.equal(res.deployed, true);
+  assert.equal(res.skipped, false);
+  assert.deepEqual(res.result, { deploymentKey: "1" });
 });
 
 const hasBin = resolveServerBin();

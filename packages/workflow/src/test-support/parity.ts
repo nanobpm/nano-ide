@@ -78,7 +78,7 @@ export async function deploySmoke(model: Workflow, opts: DeploySmokeOptions = {}
     return { deployed: false, skipped: true, reason: "no engine reachable (set baseUrl/client/WORKFLOW_GATEWAY_URL)" };
   }
   const result = await client.deploy(model);
-  if (!result || typeof result !== "object") {
+  if (!result || typeof result !== "object" || Object.keys(result).length === 0) {
     throw new Error(`deploySmoke: engine did not accept "${model.id}" (empty deploy result)`);
   }
   return { deployed: true, skipped: false, result };

@@ -1550,9 +1550,17 @@ function renderProse(node) {
 // Build a detail/escalation answer form for a single grid row. This is the ONE
 // implementation of the `detail.form` contract — shared verbatim by the
 // top-level grid's detail panel AND a dataGrid child-grid row (#333) so the two
-// can never drift. The form has a single free-text field (f.inputKey), an
-// optional prompt echoed from the row (f.promptField), and a route-driven submit
-// (f.action) whose path/body interpolate {{form.*}} / {{row.*}} tokens. It
+// can never drift. The form is SCHEMA-DERIVED (#372): its fields come from the
+// element's `.form` contract, not hand-rolled markup. A form may declare either a
+// single free-text field (legacy: f.inputKey, rendered exactly as before) or an
+// array of field descriptors (f.fields) — each a `select` (enumerated
+// value/label options), `textarea`, or `text` widget bound to its own
+// f.inputKey, optionally gated by a per-field `conditional.hide` FEEL expression
+// measured against the form's other field values. Every visible field is
+// assembled into ONE `{{form}}` body ({ inputKey: value, … }); a hidden field is
+// omitted. There is an optional prompt echoed from the row (f.promptField), and a
+// route-driven submit (f.action) whose path/body interpolate {{form.*}} /
+// {{row.*}} tokens. It
 // renders only when the row's f.showWhenField is truthy (an answerable
 // escalation), returning null otherwise. On a successful submit it invokes
 // onSuccess — the top-level grid re-polls the whole page (pc:refresh) so the
@@ -1580,6 +1588,176 @@ function setChevronOpen(btn, open) {
   btn.setAttribute("aria-expanded", String(open));
 }
 
+// Normalise a `detail.form` descriptor to a list of field descriptors so the
+// legacy single-field form (f.inputKey + free-text textarea) and the
+// schema-derived multi-field form (f.fields) share ONE render/submit path (no
+// drift). A descriptor carrying f.fields is used verbatim; otherwise the whole
+// form collapses to a single textarea field bound to f.inputKey — which renders
+// byte-for-byte as the pre-#372 form.
+/** @param {any} f
+ * @returns {any[]}
+ */
+function normalizeDetailFields(f) {
+  if (Array.isArray(f.fields) && f.fields.length > 0) return f.fields;
+  return [{ inputKey: f.inputKey, type: "textarea", inputLabel: f.inputLabel }];
+}
+
+// Normalise a select field's enumerated values (from the `.form` contract) to
+// {value,label} pairs. Accepts either objects ({ value, label } — label
+// defaults to the value) or bare scalars (value === label), so an adopter can
+// author the terse or the labelled form without a bespoke shape.
+/** @param {any} options
+ * @returns {Array<{value: string, label: string}>}
+ */
+function normalizeDetailOptions(options) {
+  /** @type {Array<{value: string, label: string}>} */
+  const out = [];
+  for (const opt of Array.isArray(options) ? options : []) {
+    if (opt && typeof opt === "object") {
+      const value = opt.value != null ? String(opt.value) : "";
+      const label = opt.label != null ? String(opt.label) : value;
+      out.push({ value, label });
+    } else {
+      out.push({ value: String(opt), label: String(opt) });
+    }
+  }
+  return out;
+}
+
+// ── conditional.hide evaluation (a tiny, SAFE FEEL subset) ──────────────────
+// A `.form` field can carry `conditional.hide` — a FEEL boolean (optionally with
+// the FEEL `=` prefix, e.g. `=resolution != "answer"`) that, when true, hides
+// the field from the operator AND drops it from the submitted `{{form}}` body.
+// We evaluate it against the form's CURRENT field values with a purpose-built
+// recursive-descent parser — never `eval`/`new Function` — so a schema-supplied
+// string can't execute arbitrary code. The grammar is deliberately small:
+//   or   := and ( "or" and )*
+//   and  := cmp ( "and" cmp )*
+//   cmp  := primary ( op primary )?      op ∈ = == != < <= > >=
+//   primary := ident | string | number | true | false | null | "(" or ")"
+// An identifier resolves to the same-form field's current value. Anything the
+// parser can't understand fails OPEN (returns false → the field stays visible),
+// because erroneously HIDING a field could silently drop a required input.
+/** @param {string} src
+ * @returns {any[]}
+ */
+function tokenizeDetailCondition(src) {
+  /** @type {any[]} */
+  const toks = [];
+  const s = String(src);
+  let i = 0;
+  while (i < s.length) {
+    const ch = s[i];
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") { i++; continue; }
+    if (ch === '"' || ch === "'") {
+      const quote = ch; let j = i + 1; let str = "";
+      while (j < s.length && s[j] !== quote) {
+        if (s[j] === "\\" && j + 1 < s.length) { str += s[j + 1]; j += 2; } else { str += s[j]; j++; }
+      }
+      toks.push({ t: "val", v: str }); i = j + 1; continue;
+    }
+    if (ch === "(") { toks.push({ t: "(" }); i++; continue; }
+    if (ch === ")") { toks.push({ t: ")" }); i++; continue; }
+    if (ch === "!" && s[i + 1] === "=") { toks.push({ t: "op", v: "!=" }); i += 2; continue; }
+    if (ch === "=" && s[i + 1] === "=") { toks.push({ t: "op", v: "=" }); i += 2; continue; }
+    if (ch === "<" && s[i + 1] === "=") { toks.push({ t: "op", v: "<=" }); i += 2; continue; }
+    if (ch === ">" && s[i + 1] === "=") { toks.push({ t: "op", v: ">=" }); i += 2; continue; }
+    if (ch === "=") { toks.push({ t: "op", v: "=" }); i++; continue; }
+    if (ch === "<") { toks.push({ t: "op", v: "<" }); i++; continue; }
+    if (ch === ">") { toks.push({ t: "op", v: ">" }); i++; continue; }
+    if (/[0-9]/.test(ch) || (ch === "-" && /[0-9]/.test(s[i + 1] || ""))) {
+      let j = i + 1;
+      while (j < s.length && /[0-9.]/.test(s[j])) j++;
+      toks.push({ t: "val", v: Number(s.slice(i, j)) }); i = j; continue;
+    }
+    if (/[A-Za-z_]/.test(ch)) {
+      let j = i + 1;
+      while (j < s.length && /[A-Za-z0-9_.]/.test(s[j])) j++;
+      const word = s.slice(i, j);
+      const lower = word.toLowerCase();
+      if (lower === "and" || lower === "or") toks.push({ t: lower });
+      else if (lower === "true") toks.push({ t: "val", v: true });
+      else if (lower === "false") toks.push({ t: "val", v: false });
+      else if (lower === "null") toks.push({ t: "val", v: null });
+      else toks.push({ t: "id", v: word });
+      i = j; continue;
+    }
+    // An unrecognised character can't be part of the grammar; abandon parsing so
+    // the whole expression fails open (field stays visible) rather than silently
+    // mis-parsing.
+    throw new Error("unexpected character in condition");
+  }
+  return toks;
+}
+/** @param {any} a @param {any} b @returns {boolean} */
+function detailLooseEq(a, b) {
+  if (a === b) return true;
+  if (a == null || b == null) return a == null && b == null;
+  return String(a) === String(b);
+}
+/** @param {string} op @param {any} a @param {any} b @returns {boolean} */
+function detailCompare(op, a, b) {
+  if (op === "=") return detailLooseEq(a, b);
+  if (op === "!=") return !detailLooseEq(a, b);
+  const na = Number(a); const nb = Number(b);
+  if (!Number.isFinite(na) || !Number.isFinite(nb)) return false;
+  if (op === "<") return na < nb;
+  if (op === "<=") return na <= nb;
+  if (op === ">") return na > nb;
+  if (op === ">=") return na >= nb;
+  return false;
+}
+// A bare (op-less) primary used where a boolean is expected — a FEEL flag like
+// `=isUrgent`. Only an explicit boolean true / the string "true" reads as true.
+/** @param {any} v @returns {boolean} */
+function detailTruthy(v) { return v === true || v === "true"; }
+/** @param {any} f
+ * @param {Record<string, any>} values
+ * @returns {boolean}
+ */
+function evalDetailCondition(f, values) {
+  /** @param {any} p @returns {boolean} */
+  const parseOr = (p) => {
+    let left = parseAnd(p);
+    while (p.i < p.toks.length && p.toks[p.i].t === "or") { p.i++; const right = parseAnd(p); left = left || right; }
+    return left;
+  };
+  /** @param {any} p @returns {boolean} */
+  function parseAnd(p) {
+    let left = parseCmp(p);
+    while (p.i < p.toks.length && p.toks[p.i].t === "and") { p.i++; const right = parseCmp(p); left = left && right; }
+    return left;
+  }
+  /** @param {any} p @returns {boolean} */
+  function parseCmp(p) {
+    const left = parsePrimary(p);
+    const tok = p.toks[p.i];
+    if (tok && tok.t === "op") { p.i++; const right = parsePrimary(p); return detailCompare(tok.v, left, right); }
+    return detailTruthy(left);
+  }
+  /** @param {any} p @returns {any} */
+  function parsePrimary(p) {
+    const tok = p.toks[p.i];
+    if (!tok) throw new Error("unexpected end of condition");
+    if (tok.t === "(") { p.i++; const r = parseOr(p); if (!p.toks[p.i] || p.toks[p.i].t !== ")") throw new Error("missing )"); p.i++; return r; }
+    if (tok.t === "id") { p.i++; return values[tok.v]; }
+    if (tok.t === "val") { p.i++; return tok.v; }
+    throw new Error("unexpected token in condition");
+  }
+  try {
+    let src = String(f == null ? "" : f).trim();
+    if (src === "") return false;
+    if (src.startsWith("=")) src = src.slice(1);
+    const p = { toks: tokenizeDetailCondition(src), i: 0 };
+    if (p.toks.length === 0) return false;
+    const result = parseOr(p);
+    if (p.i !== p.toks.length) return false;
+    return result === true;
+  } catch (e) {
+    return false;
+  }
+}
+
 /** @param {any} f
  *  @param {Record<string, any>} row
  *  @param {() => void | Promise<void>} onSuccess
@@ -1592,19 +1770,74 @@ function buildDetailForm(f, row, onSuccess) {
   if (f.promptField && row[f.promptField] != null) {
     box.append(el("div", { class: "pc-prompt" }, String(row[f.promptField])));
   }
-  const input = el("textarea", { class: "pc-textarea", placeholder: f.inputLabel || f.inputKey, "aria-label": f.inputLabel || f.inputKey });
+  // Multi-field only when the descriptor supplies f.fields; a legacy single-field
+  // form renders exactly as before (one bare textarea, no visible <label>).
+  const multi = Array.isArray(f.fields) && f.fields.length > 0;
+  const fields = normalizeDetailFields(f);
   // role=status + aria-live so the "Sending…"/success/error transitions are
   // announced to screen readers instead of silently changing text.
   const msg = el("p", { class: "pc-msg", role: "status", "aria-live": "polite" });
   const btn = el("button", { class: "pc-btn pc-btn-sm", type: "button" }, f.submitLabel || "Submit");
+  /** @type {Array<{key: string, input: any, wrap: any, hideExpr: any}>} */
+  const controls = [];
+  for (const fd of fields) {
+    const key = fd.inputKey != null ? fd.inputKey : fd.key;
+    const label = fd.inputLabel || fd.label || key;
+    const type = fd.type === "select" ? "select" : fd.type === "text" ? "text" : "textarea";
+    let input;
+    if (type === "select") {
+      input = el("select", { class: "pc-select", "aria-label": label });
+      for (const opt of normalizeDetailOptions(fd.options)) input.append(el("option", { value: opt.value }, opt.label));
+      if (fd.default != null) input.value = String(fd.default);
+    } else if (type === "text") {
+      input = el("input", { type: "text", class: "pc-input", placeholder: label, "aria-label": label });
+      if (fd.default != null) input.value = String(fd.default);
+    } else {
+      input = el("textarea", { class: "pc-textarea", placeholder: label, "aria-label": label });
+      if (fd.default != null) input.value = String(fd.default);
+    }
+    // A multi-field form gets a visible <label> per widget; the legacy single
+    // free-text form keeps its bare textarea (unchanged DOM).
+    const wrap = multi
+      ? el("div", { class: "pc-field" }, el("label", {}, label), input)
+      : el("div", { class: "pc-field" }, input);
+    const hideExpr = fd.conditional && typeof fd.conditional.hide === "string" ? fd.conditional.hide : null;
+    controls.push({ key, input, wrap, hideExpr });
+    box.append(wrap);
+  }
+  // Snapshot every field's current value, then hide/show each conditional field.
+  // A field with no conditional.hide is always visible; the value map is keyed by
+  // inputKey so a hide expression can reference a sibling field (e.g. `answer`
+  // hidden when `resolution != "answer"`).
+  const applyConditions = () => {
+    /** @type {Record<string, any>} */
+    const values = Object.create(null);
+    for (const c of controls) values[c.key] = c.input.value;
+    for (const c of controls) {
+      const hidden = c.hideExpr != null && evalDetailCondition(c.hideExpr, values);
+      c.wrap.hidden = hidden;
+    }
+  };
+  // Re-evaluate the conditions whenever any field changes so a select flip
+  // reveals/hides its dependent field live.
+  if (controls.some((c) => c.hideExpr != null)) {
+    for (const c of controls) {
+      c.input.addEventListener("change", applyConditions);
+      c.input.addEventListener("input", applyConditions);
+    }
+    applyConditions();
+  }
   btn.addEventListener("click", async () => {
     btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Sending…";
     try {
-      // The textarea value is the form's single field (f.inputKey); route + body
-      // template come from f.action, e.g. { path: "/app/actions/message",
+      // Assemble every VISIBLE field into one form body, keyed by its inputKey;
+      // route + body template come from f.action, e.g. { path: "/app/actions/message",
       // body: { name, correlationKey: "{{row.pr_key}}", variables: "{{form}}" } }.
-      // Null-proto so an f.inputKey of "__proto__"/"constructor" can't mutate a prototype.
-      const form = Object.create(null); form[f.inputKey] = input.value;
+      // Null-proto so an inputKey of "__proto__"/"constructor" can't mutate a
+      // prototype. A hidden (conditional.hide) field is omitted so a stale value
+      // for an inapplicable choice never reaches the action.
+      const form = Object.create(null);
+      for (const c of controls) { if (c.wrap.hidden) continue; form[c.key] = c.input.value; }
       await runRoute(f.action, { form, row });
       msg.className = "pc-msg ok"; msg.textContent = (f.action && f.action.successLabel) || "Sent";
       // Await onSuccess so a refresh that rejects (e.g. a child grid's re-fetch
@@ -1617,7 +1850,7 @@ function buildDetailForm(f, row, onSuccess) {
       btn.disabled = false; msg.className = "pc-msg err"; msg.textContent = String(e.message || e);
     }
   });
-  box.append(el("div", { class: "pc-field" }, input), btn, msg);
+  box.append(btn, msg);
   return box;
 }
 
@@ -2468,4 +2701,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, chevronToggle, setChevronOpen };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };

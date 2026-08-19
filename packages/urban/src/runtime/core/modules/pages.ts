@@ -646,6 +646,13 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-subform-title { font-weight:600; font-size:.85rem; margin-bottom:.4rem; }
 .pc-prompt { font-size:.85rem; color:var(--nano-text-muted); margin-bottom:.4rem; white-space:pre-wrap; }
 .pc-textarea { width:100%; min-height:4rem; padding:.5rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); }
+/* Schema-derived multi-field detail.form widgets (#372): a short free-text
+   <input> and an enumerated-choice <select>, styled to match .pc-textarea so a
+   select/text/textarea form reads as one coherent set. A field hidden by its
+   conditional.hide expression carries the plain [hidden] attribute (display:none
+   by default), so no extra rule is needed to remove it from the layout. */
+.pc-input, .pc-select { width:100%; padding:.5rem .6rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); }
+.pc-subform .pc-field label { font-size:.8rem; color:var(--nano-text-muted); }
 .pc-collapse-header { display:flex; align-items:center; gap:.5rem; width:100%; margin:0 0 .75rem; padding:0; background:transparent; border:0; color:inherit; font:inherit; font-size:1rem; font-weight:600; cursor:pointer; text-align:left; }
 .pc-chevron-inline { color:var(--nano-text-faint); font-size:.75rem; width:1em; }
 .pc-card-body[hidden] { display:none; }

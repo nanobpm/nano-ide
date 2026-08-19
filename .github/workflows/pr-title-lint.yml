@@ -2,7 +2,7 @@ name: PR title lint
 
 # main is squash-merged, so the PR title becomes the commit subject on `main`.
 # release-please reads those subjects as Conventional Commits to decide each
-# package's next version (feat -> minor, fix/perf -> patch, `!`/BREAKING ->
+# package's next version (feat -> minor, fix/perf/retro -> patch, `!`/BREAKING ->
 # major; other types land but don't bump). A non-conventional title lands on
 # `main` and is silently ignored by the release automation — so gate the title
 # against the Conventional Commits grammar here. Do NOT bump versions by hand;
@@ -28,6 +28,7 @@ jobs:
             feat
             fix
             perf
+            retro
             build
             chore
             ci

@@ -112,7 +112,17 @@ export class GitSubstrateBackend implements SubstrateBackend {
         `substrate path is a symlink and would escape the cache root: ${localPath}`,
       );
     }
-    const alreadyCloned = await pathExists(join(localPath, ".git"));
+    // Likewise, a `.git` symlink *inside* an otherwise-legitimate `localPath`
+    // would make git treat an arbitrary out-of-cache gitdir as this working
+    // copy's repository (cache escape). A real clone never has a symlinked
+    // `.git`, so reject one before it is trusted as "already cloned".
+    const gitDir = join(localPath, ".git");
+    if (await isSymlink(gitDir)) {
+      throw new SubstrateResolveError(
+        `substrate .git is a symlink and would escape the cache root: ${gitDir}`,
+      );
+    }
+    const alreadyCloned = await pathExists(gitDir);
 
     if (!alreadyCloned) {
       // A pre-existing entry at `localPath` that is not a git working copy — a

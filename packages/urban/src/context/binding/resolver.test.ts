@@ -228,6 +228,30 @@ test("git backend rejects a symlink at localPath pointing to a real working copy
   }
 });
 
+test("git backend rejects a real directory whose .git is a symlink escaping the cache root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-gitlink-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // `localPath` itself is a genuine directory (passing the symlink-at-localPath
+    // guard), but its `.git` is a symlink pointing at a foreign gitdir OUTSIDE the
+    // cache root. Trusting it as "already cloned" would run fetch/pin against that
+    // out-of-cache repository — a cache escape. The `.git`-symlink guard must
+    // reject it before the working copy is considered cloned.
+    const foreignGit = join(root, "foreign-git");
+    await mkdir(foreignGit, { recursive: true });
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    await symlink(foreignGit, join(localPath, ".git"));
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(resolver.resolve(binding), /\.git is a symlink and would escape the cache root/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("git backend surfaces a non-ENOENT lstat error (unreadable path) instead of treating it as missing", async () => {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return; // root bypasses permission bits, so EACCES can't be provoked

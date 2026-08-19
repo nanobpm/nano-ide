@@ -29,9 +29,13 @@ export interface ContextBinding {
    * Accepts an `owner/name` GitHub shorthand (resolved to
    * `https://github.com/owner/name.git`), a full git URL
    * (`https://…`, `ssh://…`, `git@host:owner/name.git`), or a local/`file://`
-   * path (used chiefly for tests and self-hosted substrates). The MVP substrate
-   * is git-only, but resolution does not hard-code *public* git — see the
-   * backend seam in `./resolver.ts`.
+   * path (used chiefly for tests and self-hosted substrates). A local path must
+   * be spelled unambiguously so it is not mistaken for the `owner/name`
+   * shorthand: use an absolute path, a `file://…` URL, or a `./`- or
+   * `../`-prefixed relative path. A bare relative path such as `subdir/repo`
+   * matches the shorthand and is treated as GitHub, not a local path. The MVP
+   * substrate is git-only, but resolution does not hard-code *public* git — see
+   * the backend seam in `./resolver.ts`.
    */
   readonly repo: string;
 

@@ -72,8 +72,10 @@ data, and two independent nets keep it that way:
    rejected **before any commit** — a caller cannot opt out.
 
 2. **Build-time, in CI (this slice, s6-pii-ci).** `npm run check:pii` walks the
-   S3 record layout (`records/<scope>/<scopeRef>/…json`) and re-classifies every
-   record with the **same** `classifyPii`, failing the build on any violation.
+   S3 record layout (`records/<scope>/<scopeRef-bucket>/<id>.json`, where
+   `<scopeRef-bucket>` is the sanitised `scopeRef` or the shared `_` bucket when a
+   record carries no `scopeRef` — see `recordRelativePath`) and re-classifies
+   every record with the **same** `classifyPii`, failing the build on any violation.
    The `.github/workflows/urban-context-pii.yml` workflow runs it (plus
    build/typecheck/test) as a second line of defence in case content reaches a
    git-backed context by some path other than the writer.

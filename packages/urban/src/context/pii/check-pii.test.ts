@@ -7,7 +7,7 @@
 
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
@@ -145,5 +145,25 @@ test("check:pii is a no-op (exit 0) on a root with no records/ layout", async ()
   const root = await makeRoot();
   const { code, stdout } = await runCheck(root);
   assert.equal(code, 0);
+  assert.match(stdout, /0 record\(s\) scanned/);
+});
+
+test("check:pii does not follow a symlink record into a target outside the root", async () => {
+  const root = await makeRoot();
+  // A secret file OUTSIDE the substrate root (e.g. a CI secret the scanner
+  // should never touch), carrying an email address.
+  const secret = join(await makeRoot(), "ci-secret.txt");
+  await writeFile(secret, "token owner: alice.example@contoso.com\n", "utf8");
+  // A symlink placed at a canonical record path that points at that secret. The
+  // scanner must reject non-regular files (symlinks) up front — otherwise a
+  // crafted `records/**.json` symlink would make it read and classify content
+  // outside the intended substrate root.
+  const rel = recordRelativePath(record({ id: "evil-link" }));
+  const linkPath = join(root, rel);
+  await mkdir(dirname(linkPath), { recursive: true });
+  await symlink(secret, linkPath);
+
+  const { code, stdout } = await runCheck(root);
+  assert.equal(code, 0, `symlinked record must be skipped, not scanned; stdout=${stdout}`);
   assert.match(stdout, /0 record\(s\) scanned/);
 });

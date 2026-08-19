@@ -20,7 +20,7 @@
 // with their kind + located field path and a length-only redacted excerpt, so a
 // failing run never re-leaks the PII it caught.
 
-import { readFile, readdir } from "node:fs/promises";
+import { lstat, readFile, readdir } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { classifyPii, type PiiFinding } from "../src/context/pii/index.ts";
 import { LAYOUT_ROOT, isRecordPath } from "../src/context/git/index.ts";
@@ -57,7 +57,14 @@ async function collectRecordFiles(root: string): Promise<string[]> {
   for (const entry of entries) {
     const absolute = join(layoutRoot, entry);
     const relFromRoot = relative(root, absolute).split(sep).join("/");
-    if (isRecordPath(relFromRoot)) files.push(absolute);
+    if (!isRecordPath(relFromRoot)) continue;
+    // Only scan real, regular files. `lstat` (not `stat`) does not follow the
+    // final component, so a symlink — even one matching `records/**.json` — is
+    // rejected here and can never make the scanner `readFile` a target outside
+    // the substrate root (e.g. a CI secret), which would otherwise be read and
+    // classified. Non-regular entries (fifos, devices, sockets) are skipped too.
+    const stats = await lstat(absolute);
+    if (stats.isFile()) files.push(absolute);
   }
   return files;
 }

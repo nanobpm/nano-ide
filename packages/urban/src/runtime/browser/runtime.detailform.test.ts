@@ -6,7 +6,7 @@
 // child-grid parity can't silently drift.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDetailForm } from "./runtime.browser.js";
+import { buildDetailForm, chevronToggle, setChevronOpen } from "./runtime.browser.js";
 
 // ── Fake DOM with fire-able listeners ───────────────────────────────────────
 // Richer than the render-only fake in runtime.browser.test.ts: it records event
@@ -117,6 +117,54 @@ test("#333: buildDetailForm echoes the prompt and labels the field/submit from t
   const button = created.find((n) => n.tagName === "BUTTON");
   assert.equal(textarea?.getAttribute("placeholder"), "Your answer");
   assert.equal(button?.textContent, "Answer & resume");
+});
+
+test("#333: the answer form is screen-reader accessible — textarea has an aria-label and the status is a live region", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const box = buildDetailForm(FORM, { answerable: true, question: "Ship it?" }, () => {});
+  assert.ok(box);
+  const textarea = created.find((n) => n.tagName === "TEXTAREA");
+  // The placeholder alone is not an accessible name; an explicit aria-label makes
+  // the field usable without a visible <label>.
+  assert.equal(textarea?.getAttribute("aria-label"), "Your answer");
+  const msg = created.find((n) => n.tagName === "P" && n.className.includes("pc-msg"));
+  assert.equal(msg?.getAttribute("role"), "status", "status message is a live region role");
+  assert.equal(msg?.getAttribute("aria-live"), "polite", "status transitions are announced politely");
+});
+
+test("#333: the answer form's aria-label falls back to inputKey when inputLabel is absent", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const noLabel = { ...FORM, inputLabel: undefined };
+  buildDetailForm(noLabel, { answerable: true }, () => {});
+  const textarea = created.find((n) => n.tagName === "TEXTAREA");
+  assert.equal(textarea?.getAttribute("aria-label"), "comment", "aria-label mirrors the placeholder fallback (inputKey)");
+});
+
+test("#333: chevronToggle is an accessible disclosure button and setChevronOpen keeps the glyph and aria-expanded in lock-step", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const btn = chevronToggle("Toggle answer form");
+  assert.equal(btn.getAttribute("type"), "button", "explicit type so it never submits an enclosing form");
+  assert.equal(btn.getAttribute("aria-label"), "Toggle answer form", "has an accessible name");
+  assert.equal(btn.getAttribute("aria-expanded"), "false", "starts collapsed");
+  assert.equal(btn.textContent, "▸");
+
+  setChevronOpen(btn, true);
+  assert.equal(btn.textContent, "▾", "glyph flips to open");
+  assert.equal(btn.getAttribute("aria-expanded"), "true", "aria-expanded tracks the glyph");
+
+  setChevronOpen(btn, false);
+  assert.equal(btn.textContent, "▸");
+  assert.equal(btn.getAttribute("aria-expanded"), "false");
+});
+
+test("#333: chevronToggle falls back to a generic accessible name when none is given", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const btn = chevronToggle();
+  assert.equal(btn.getAttribute("aria-label"), "Toggle details");
 });
 
 test("#333: submitting POSTs the interpolated {{row.*}}/{{form.*}} body, shows successLabel, and fires onSuccess", async (t) => {

@@ -1526,6 +1526,27 @@ function renderProse(node) {
 // answered row drops out on the next tick; a child grid re-fetches just its own
 // rows, matching the Tasks page where the row disappears once its user-task
 // completes.
+// A disclosure chevron for expanding an inline detail row. This is the ONE place
+// a "▸/▾" toggle button is built, so the glyph and its `aria-expanded` state can
+// never drift apart (they used to be set independently, leaving assistive tech
+// unaware a row had opened). Every chevron gets an explicit type="button" (so it
+// never submits an enclosing form) and an accessible name.
+/** @param {string} [label] @returns {HTMLElement} */
+function chevronToggle(label) {
+  return el("button", {
+    class: "pc-btn pc-btn-sm pc-chevron",
+    type: "button",
+    "aria-label": label || "Toggle details",
+    "aria-expanded": "false",
+  }, "▸");
+}
+// Set a chevron's open/closed state, keeping the glyph and aria-expanded in lock-step.
+/** @param {HTMLElement} btn @param {boolean} open */
+function setChevronOpen(btn, open) {
+  btn.textContent = open ? "▾" : "▸";
+  btn.setAttribute("aria-expanded", String(open));
+}
+
 /** @param {any} f
  *  @param {Record<string, any>} row
  *  @param {() => void} onSuccess
@@ -1538,8 +1559,10 @@ function buildDetailForm(f, row, onSuccess) {
   if (f.promptField && row[f.promptField] != null) {
     box.append(el("div", { class: "pc-prompt" }, String(row[f.promptField])));
   }
-  const input = el("textarea", { class: "pc-textarea", placeholder: f.inputLabel || f.inputKey });
-  const msg = el("p", { class: "pc-msg" });
+  const input = el("textarea", { class: "pc-textarea", placeholder: f.inputLabel || f.inputKey, "aria-label": f.inputLabel || f.inputKey });
+  // role=status + aria-live so the "Sending…"/success/error transitions are
+  // announced to screen readers instead of silently changing text.
+  const msg = el("p", { class: "pc-msg", role: "status", "aria-live": "polite" });
   const btn = el("button", { class: "pc-btn pc-btn-sm" }, f.submitLabel || "Submit");
   btn.addEventListener("click", async () => {
     btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Sending…";
@@ -1779,13 +1802,16 @@ function renderDataGrid(node) {
         // panel is built lazily on first open (and eagerly when the row starts
         // expanded), matching the top-level grid. The panel's escalation form (if
         // any) is wired to load() so answering it re-fetches only this child grid.
+        // The chevron uses the shared chevronToggle()/setChevronOpen() so its glyph
+        // and aria-expanded stay in lock-step for assistive tech.
         /** @type {any} */
         let cdtr = null;
         if (chasExpand) {
           const crk = crowKeyOf(cr);
           const cskey = ckeyBase && crk != null ? ckeyBase + crk : null;
           const collapsed = cskey ? readCollapsed(cskey, cdefaultCollapsed) : cdefaultCollapsed;
-          const ctoggle = el("button", { class: "pc-btn pc-btn-sm pc-chevron" }, collapsed ? "▸" : "▾");
+          const ctoggle = chevronToggle("Toggle row details");
+          setChevronOpen(ctoggle, !collapsed);
           cells.push(el("td", { class: "pc-row-actions" }, ctoggle));
           cdtr = el("tr", { hidden: collapsed ? "" : null }, el("td", { colspan: cspan }));
           let built = false;
@@ -1797,7 +1823,7 @@ function renderDataGrid(node) {
             ev.stopPropagation();
             const open = cdtr.hidden;
             cdtr.hidden = !open;
-            ctoggle.textContent = open ? "▾" : "▸";
+            setChevronOpen(ctoggle, open);
             if (open) build();
             if (cskey) writeCollapsed(cskey, !open);
           });
@@ -1870,7 +1896,7 @@ function renderDataGrid(node) {
     if (hasExtra) {
       const actionCell = el("td", { class: "pc-row-actions" });
       if (detail) {
-        toggle = el("button", { class: "pc-btn pc-btn-sm pc-chevron" }, "▸");
+        toggle = chevronToggle("Toggle row details");
         actionCell.append(toggle);
       }
       for (const ra of rowActions) {
@@ -1902,12 +1928,12 @@ function renderDataGrid(node) {
         if (isOpen) { entry.built = true; dtr.firstChild.append(detailPanel(row)); }
       }
       const dtr = entry.dtr;
-      toggle.textContent = dtr.hidden ? "▸" : "▾";
+      setChevronOpen(toggle, !dtr.hidden);
       toggle.addEventListener("click", /** @param {MouseEvent} ev */ (ev) => {
         ev.stopPropagation();
         const open = dtr.hidden;
         dtr.hidden = !open;
-        toggle.textContent = open ? "▾" : "▸";
+        setChevronOpen(toggle, open);
         if (open) {
           if (key != null) expanded.add(key);
           if (!entry.built) { entry.built = true; dtr.firstChild.append(detailPanel(row)); }
@@ -2401,4 +2427,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, chevronToggle, setChevronOpen };

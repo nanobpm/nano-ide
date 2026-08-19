@@ -1350,11 +1350,13 @@ test("child grids support per-row detail expansion, collapsed by default (#332)"
   // affordance instead of dumping the whole history flat.
   assert.match(js, /const cdetail = cg\.detail \|\| cg\.expandable \|\| null;/);
   assert.match(js, /const chasExpand = cdetail != null;/);
-  // The expander shares the top-level detail look: a pc-chevron button in a
-  // pc-row-actions cell, revealing detailPanel(cr, cdetail) in a following row.
+  // The expander shares the top-level detail look and the shared chevronToggle()
+  // factory: a pc-chevron disclosure button in a pc-row-actions cell, revealing
+  // detailPanel(cr, cdetail) in a following row. setChevronOpen seeds the glyph +
+  // aria-expanded from the persisted collapse state so they can't drift.
   // The panel's escalation form (if any) is threaded a child-scoped onSuccess so
   // answering it re-fetches only this child grid (load()), not the whole page (#333).
-  assert.match(js, /class: "pc-btn pc-btn-sm pc-chevron" \}, collapsed \? "▸" : "▾"/);
+  assert.match(js, /const ctoggle = chevronToggle\("Toggle row details"\);\s*setChevronOpen\(ctoggle, !collapsed\);/);
   assert.match(js, /cells\.push\(el\("td", \{ class: "pc-row-actions" \}, ctoggle\)\);/);
   assert.match(js, /cdtr\.firstChild\.append\(detailPanel\(cr, cdetail, \(\) => \{ load\(\)\.catch\(\(\) => \{\}\); \}\)\)/);
   // Rows are collapsed by default; detail.defaultCollapsed/detail.collapsed (both

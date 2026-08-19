@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.61.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.60.0...@nanobpm/urban-0.61.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** live count badge on nav items (datasource-bound) ([#342](https://github.com/nanobpm/nano-ide/issues/342)) ([ee99d4f](https://github.com/nanobpm/nano-ide/commit/ee99d4fcbcc0d80f98acc393da62b582c44f7edf))
+
 ## [0.60.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.59.0...@nanobpm/urban-0.60.0) (2026-08-19)
 
 

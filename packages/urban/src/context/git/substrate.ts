@@ -92,8 +92,15 @@ export interface WriteSubstrate {
   mergeBranch(branch: string, message: string, author: CommitAuthor): Promise<string>;
   /** `true` iff a local branch named `name` exists. */
   branchExists(name: string): Promise<boolean>;
-  /** `true` iff `commit` is an ancestor of (or equal to) `ref` — i.e. landed on it. */
-  isMerged(commit: string, ref: string): Promise<boolean>;
+  /**
+   * `true` iff `commitish` is an ancestor of (or equal to) `ref` — i.e. landed
+   * on it. Both operands are git commit-ish inputs: a raw sha, a branch name, or
+   * any other ref resolvable to a commit. `ContextWriter.isRatified` deliberately
+   * passes a branch ref (the proposal branch tip) here to bind the check to the
+   * real tip rather than a caller-supplied sha, so implementations MUST resolve
+   * `commitish` as a general ref, not assume a sha-only input.
+   */
+  isMerged(commitish: string, ref: string): Promise<boolean>;
 }
 
 /**
@@ -251,9 +258,9 @@ export class GitWriteSubstrate implements WriteSubstrate {
     }
   }
 
-  async isMerged(commit: string, ref: string): Promise<boolean> {
+  async isMerged(commitish: string, ref: string): Promise<boolean> {
     try {
-      await this.#git(["merge-base", "--is-ancestor", commit, ref], this.rootPath);
+      await this.#git(["merge-base", "--is-ancestor", commitish, ref], this.rootPath);
       return true;
     } catch {
       return false;

@@ -125,7 +125,7 @@ class FailingSubstrate implements WriteSubstrate {
   async branchExists(_name: string): Promise<boolean> {
     return true;
   }
-  async isMerged(_commit: string, _ref: string): Promise<boolean> {
+  async isMerged(_commitish: string, _ref: string): Promise<boolean> {
     return false;
   }
   async restoreClean(ref: string, _pathspec: string): Promise<void> {
@@ -183,8 +183,8 @@ class MergeFailingSubstrate implements WriteSubstrate {
   branchExists(name: string): Promise<boolean> {
     return this.#inner.branchExists(name);
   }
-  isMerged(commit: string, ref: string): Promise<boolean> {
-    return this.#inner.isMerged(commit, ref);
+  isMerged(commitish: string, ref: string): Promise<boolean> {
+    return this.#inner.isMerged(commitish, ref);
   }
   async restoreClean(ref: string, pathspec: string): Promise<void> {
     this.restored.push(ref);

@@ -25,6 +25,9 @@ registerNodeKind("switch", {
       caseNodes.push({ value, body: api.child(fn, false) });
     }
     if (caseNodes.length === 0) throw new Error(`switch("${subject}") needs at least one case`);
+    if (cases.default !== undefined && typeof cases.default !== "function") {
+      throw new Error(`switch("${subject}") default must be a block (b) => {…}`);
+    }
     const def = cases.default ? api.child(cases.default, false) : undefined;
     api.out.push({ kind: "switch", subject, cases: caseNodes, default: def });
     return api.self();

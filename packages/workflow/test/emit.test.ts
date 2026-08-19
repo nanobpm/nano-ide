@@ -544,6 +544,21 @@ test("switch: requires at least one non-default case", () => {
   );
 });
 
+test("switch: a runtime-invalid default arm is rejected with a helpful error", () => {
+  assert.throws(
+    () =>
+      defineFlow("f", (w) => {
+        w.run("a", async () => ({}));
+        // A JS/JSON-derived config could pass a non-function default; it must
+        // fail with the builder's own message, not an opaque TypeError.
+        const bogus = JSON.parse('{"default":"not a block"}');
+        bogus.active = (c) => c.run("b", async () => ({}));
+        w.switch("x", bogus);
+      }),
+    /switch\("x"\) default must be a block/,
+  );
+});
+
 test("branch: then is guarded by the condition, else is the gateway default", () => {
   const flow = defineFlow("guard", (w) => {
     w.run("check", async () => ({}));
@@ -557,6 +572,20 @@ test("branch: then is guarded by the condition, else is the gateway default", ()
   assert.match(xml, /<bpmn:conditionExpression>=count &gt;= 3<\/bpmn:conditionExpression>/);
   assert.match(xml, /<bpmn:serviceTask id="tooMany"/);
   assert.match(xml, /<bpmn:serviceTask id="again"/);
+});
+
+test("branch: a runtime-invalid else arm is rejected with a helpful error", () => {
+  assert.throws(
+    () =>
+      defineFlow("f", (w) => {
+        w.run("a", async () => ({}));
+        const bogus = JSON.parse('{"then":null,"else":"not a block"}');
+        // then must still be caught first; make it a real block so we exercise else.
+        bogus.then = (g) => g.run("t", async () => ({}));
+        w.branch("count >= 3", bogus);
+      }),
+    /branch\("count >= 3"\) else arm must be a block/,
+  );
 });
 
 test("loop: the body falls through back to the loop head; break exits to End", () => {

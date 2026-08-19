@@ -108,8 +108,9 @@ All are exported from `../declarative.js`; the registration function and its
   `verbatimModuleSyntax`).
 - **No `as T` assertions** (repo-wide ban — see the root `AGENTS.md`); narrow with
   a type guard, an annotation, or `satisfies`.
-- Register **exactly once** per kind (the registry throws on a duplicate kind or a
-  duplicate builder-method name).
+- Register **exactly once** per kind (`registerNodeKind` throws on a duplicate
+  kind; builder assembly in `makeBuilder` additionally throws when two kinds
+  contribute the same duplicate builder-method name).
 
 ## The generated barrel
 

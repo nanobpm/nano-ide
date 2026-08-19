@@ -19,6 +19,9 @@ registerNodeKind("branch", {
       throw new Error(`branch() needs a non-empty FEEL condition`);
     }
     if (!arms || typeof arms.then !== "function") throw new Error(`branch("${condition}") needs a then arm`);
+    if (arms.else !== undefined && typeof arms.else !== "function") {
+      throw new Error(`branch("${condition}") else arm must be a block (b) => {…}`);
+    }
     api.out.push({
       kind: "branch",
       condition,

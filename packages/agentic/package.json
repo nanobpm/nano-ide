@@ -15,6 +15,7 @@
     "transcript",
     "blackboard",
     "cockpit",
+    "session",
     "conformance"
   ],
   "publishConfig": {
@@ -63,6 +64,11 @@
       "default": "./dist/relay/index.js"
     },
     "./source/relay": "./src/relay/index.ts",
+    "./session": {
+      "types": "./dist/session/index.d.ts",
+      "default": "./dist/session/index.js"
+    },
+    "./source/session": "./src/session/index.ts",
     "./transcript": {
       "types": "./dist/transcript/index.d.ts",
       "default": "./dist/transcript/index.js"

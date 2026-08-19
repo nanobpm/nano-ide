@@ -16,6 +16,7 @@ The **Nano agentic protocol** (ADR 0056): one app-tier channel carrying agent pr
 | `@nanobpm/agentic/transcript` | Transcript store, retention-by-lifecycle (S6) |
 | `@nanobpm/agentic/blackboard` | Blackboard channel family (S7) |
 | `@nanobpm/agentic/cockpit` | Operator visibility page — the cockpit (S8) |
+| `@nanobpm/agentic/session` | Canonical `SessionEvent` + authoritative session log for durable agent-session resume (ADR 0062) |
 
 The barrel `@nanobpm/agentic` re-exports each family as a namespace (`protocol`, `channel`, …). The worker-side client ships separately as `@nanobpm/urban-agent-client`.
 

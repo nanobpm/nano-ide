@@ -69,6 +69,22 @@ function isNodeErrno(error: unknown, code: string): boolean {
 }
 
 /**
+ * True iff `path` exists and is itself a symlink (inspected with `lstat`, so the
+ * link — not its target — is examined). A missing entry (`ENOENT`/`ENOTDIR`) is
+ * not a symlink; any other error is re-thrown rather than silently swallowed.
+ */
+async function isSymlink(path: string): Promise<boolean> {
+  try {
+    return (await lstat(path)).isSymbolicLink();
+  } catch (cause) {
+    if (isNodeErrno(cause, "ENOENT") || isNodeErrno(cause, "ENOTDIR")) {
+      return false;
+    }
+    throw new SubstrateResolveError(`substrate path is not accessible: ${path}`, { cause });
+  }
+}
+
+/**
  * The default, git-only substrate backend. Clones the substrate on first use
  * and, on subsequent resolutions, fetches and re-pins the working copy to the
  * requested ref (branch tip, tag, or SHA) without clobbering unrelated state.
@@ -86,6 +102,16 @@ export class GitSubstrateBackend implements SubstrateBackend {
   ): Promise<ResolvedContextHandle> {
     const { localPath } = options;
     const refresh = options.refresh ?? true;
+    // A symlink AT `localPath` would make every subsequent `join(localPath, …)`
+    // and git invocation operate on the link's target — which can point outside
+    // the cache root at an arbitrary pre-existing working copy. Reject it before
+    // it is ever trusted as a clone, so resolution can never escape the cache
+    // root via a planted symlink.
+    if (await isSymlink(localPath)) {
+      throw new SubstrateResolveError(
+        `substrate path is a symlink and would escape the cache root: ${localPath}`,
+      );
+    }
     const alreadyCloned = await pathExists(join(localPath, ".git"));
 
     if (!alreadyCloned) {

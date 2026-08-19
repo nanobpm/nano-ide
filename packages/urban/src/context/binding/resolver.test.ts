@@ -185,22 +185,44 @@ test("git backend fails clearly when localPath exists but is a non-directory (fi
   }
 });
 
-test("git backend fails clearly when localPath is a dangling symlink", async () => {
+test("git backend rejects a symlink at localPath (dangling) — never trusts a link as a clone", async () => {
   const root = await mkdtemp(join(tmpdir(), "urban-ctx-symlink-"));
   try {
     const cacheRoot = join(root, "cache");
     const binding = { repo: join(root, "origin"), ref: "main" };
     const identity = resolveContextIdentity(binding);
-    // Squat the target path with a symlink to a non-existent target. `stat()`
-    // follows the link and reports "not found", so a stat-based guard would let
-    // `git clone` fail opaquely; the backend uses `lstat` to detect the link
-    // itself and report any pre-existing non-git entry clearly.
+    // Squat the target path with a symlink to a non-existent target. A symlink AT
+    // localPath is rejected outright (via `lstat`, which sees the link itself),
+    // because trusting it would make every git op operate on the link's target.
     const localPath = join(cacheRoot, identity.slug);
     await mkdir(dirname(localPath), { recursive: true });
     await symlink(join(root, "does-not-exist"), localPath);
 
     const resolver = new ContextResolver({ cacheRoot });
-    await assert.rejects(resolver.resolve(binding), /not a git working copy/);
+    await assert.rejects(resolver.resolve(binding), /symlink and would escape the cache root/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend rejects a symlink at localPath pointing to a real working copy (cache escape)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-escape-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // A symlink whose target is a genuine, existing git working copy OUTSIDE the
+    // cache root: `join(localPath, ".git")` would resolve through the link and
+    // make the backend treat the foreign copy as an already-cloned substrate,
+    // running git operations in it. The symlink guard must reject it up front.
+    const foreign = join(root, "foreign");
+    await mkdir(join(foreign, ".git"), { recursive: true });
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(dirname(localPath), { recursive: true });
+    await symlink(foreign, localPath);
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(resolver.resolve(binding), /symlink and would escape the cache root/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

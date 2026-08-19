@@ -69,6 +69,36 @@ test("embedded credentials and explicit default port do not affect identity", ()
   assert.equal(port.key, plain.key);
 });
 
+test("ssh:// explicit default port (22) does not affect identity", () => {
+  const plain = resolveContextIdentity({ repo: "ssh://git@github.com/owner/name.git", ref: "main" });
+  const port = resolveContextIdentity({
+    repo: "ssh://git@github.com:22/owner/name.git",
+    ref: "main",
+  });
+  assert.equal(port.key, plain.key);
+});
+
+test("non-default ports produce DISTINCT identities (no cross-repo collision)", () => {
+  const plain = resolveContextIdentity({ repo: "https://host.example/owner/name.git", ref: "main" });
+  const alt = resolveContextIdentity({
+    repo: "https://host.example:8443/owner/name.git",
+    ref: "main",
+  });
+  const other = resolveContextIdentity({
+    repo: "https://host.example:9443/owner/name.git",
+    ref: "main",
+  });
+  assert.notEqual(alt.key, plain.key);
+  assert.notEqual(alt.key, other.key);
+  // ssh non-default ports must distinguish too.
+  const ssh = resolveContextIdentity({ repo: "ssh://git@host.example/owner/name.git", ref: "main" });
+  const sshPort = resolveContextIdentity({
+    repo: "ssh://git@host.example:2222/owner/name.git",
+    ref: "main",
+  });
+  assert.notEqual(ssh.key, sshPort.key);
+});
+
 test("local file paths canonicalise by absolute path", () => {
   const relative = resolveContextIdentity({ repo: "./sub/../sub/repo", ref: "main" });
   const absolute = resolveContextIdentity({

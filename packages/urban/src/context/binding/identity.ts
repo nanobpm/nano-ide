@@ -54,6 +54,33 @@ function stripGitSuffix(value: string): string {
   return value.replace(/\.git$/i, "").replace(/\/+$/, "");
 }
 
+// A URL's scheme-default port is equivalent to omitting the port, so it must not
+// split identity. `URL` already strips the default port for the web schemes it
+// knows (http/https/ws/…), but NOT for git transports like ssh:// and git://, so
+// their defaults are normalised here explicitly.
+const DEFAULT_PORTS: Record<string, string> = {
+  "http:": "80",
+  "https:": "443",
+  "ssh:": "22",
+  "git:": "9418",
+  "ftp:": "21",
+};
+
+/**
+ * The canonical authority (`host` or `host:port`) for a scheme URL identity.
+ * Excludes any `user:pass@` userinfo (uses `hostname`, never `host`) so
+ * credentials never affect identity, and drops a scheme's DEFAULT port while
+ * retaining any NON-default port as a distinguishing factor.
+ */
+function canonicalAuthority(parsed: URL): string {
+  const host = parsed.hostname.toLowerCase();
+  const defaultPort = DEFAULT_PORTS[parsed.protocol.toLowerCase()];
+  if (parsed.port && parsed.port !== defaultPort) {
+    return `${host}:${parsed.port}`;
+  }
+  return host;
+}
+
 /**
  * Resolve a `file://` URL to an absolute filesystem path, honouring the host
  * component and percent-encoding. Falls back to naive `file://` stripping for a
@@ -108,11 +135,14 @@ function classifyRepo(repo: string): ClassifiedRepo {
   if (SCHEME_URL.test(raw)) {
     try {
       const parsed = new URL(raw);
-      // `hostname` (not `host`) excludes any `user:pass@` userinfo and the port,
-      // so credential-bearing or explicit-default-port spellings of one repo
-      // (e.g. `ssh://git@github.com/o/n`, `https://github.com:443/o/n`,
-      // `https://github.com/o/n`) all canonicalise to one identity.
-      const host = parsed.hostname.toLowerCase();
+      // Build the authority from `hostname` (never `host`) so any `user:pass@`
+      // userinfo is excluded — credentials never affect identity. The port is
+      // *normalised*, not dropped: a scheme's DEFAULT port collapses to the
+      // portless spelling (so `https://h:443/o/n` ≡ `https://h/o/n` and
+      // `ssh://h:22/o/n` ≡ `ssh://h/o/n`), but a NON-default port is retained as
+      // a distinguishing factor — two remotes on the same host but different
+      // ports are genuinely different repos and MUST NOT share a substrate.
+      const host = canonicalAuthority(parsed);
       const path = stripGitSuffix(parsed.pathname).replace(/^\/+/, "").toLowerCase();
       return { url: raw, canonical: `${host}/${path}` };
     } catch {

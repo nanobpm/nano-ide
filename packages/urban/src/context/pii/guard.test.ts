@@ -108,3 +108,17 @@ test("PiiGuardError defensively snapshots findings — caller mutation can't cor
   assert.equal(err.findings.length, 1);
   assert.equal(err.findings[0].kind, "email");
 });
+
+test("override reporting !clean with no findings throws a loud error, not an empty PiiGuardError", () => {
+  // Defect class: a buggy override that claims PII but locates nothing would
+  // otherwise make `assert` throw a PiiGuardError with an empty (contract says
+  // "never empty") findings array and a meaningless summary. The guard must
+  // surface that as a loud programming error instead — while never letting the
+  // write through (default-DENY is preserved).
+  const guard = createPiiGuard({ classify: () => ({ clean: false, findings: [] }) });
+  assert.throws(() => guard.assert("nothing sensitive"), (err: unknown) => {
+    assert.ok(err instanceof TypeError);
+    assert.ok(!(err instanceof PiiGuardError));
+    return true;
+  });
+});

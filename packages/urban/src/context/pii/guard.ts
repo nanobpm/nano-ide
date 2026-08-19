@@ -107,8 +107,22 @@ export function createPiiGuard(options: PiiGuardOptions = {}): PiiGuard {
     const base = classifyPii(candidate);
     if (override === undefined) return base;
     const extra = override(candidate);
-    if (base.clean && extra.clean) return { clean: true, findings: [] };
-    return { clean: false, findings: [...base.findings, ...extra.findings] };
+    const findings = [...base.findings, ...extra.findings];
+    // Derive the verdict from the merged findings — the single source of truth.
+    // A guard is default-DENY, so any `!clean` classification MUST carry the
+    // findings that justify it; a non-clean result with no findings would make
+    // `assert` throw a PiiGuardError whose summary is empty, contradicting the
+    // "findings are never empty" contract. Surface that override bug loudly
+    // rather than as a confusing, empty rejection.
+    if (findings.length === 0 && (!base.clean || !extra.clean)) {
+      throw new TypeError(
+        "PII classifier override returned a non-clean classification with no findings; " +
+          "an override may only ADD located findings, never report PII without locating it.",
+      );
+    }
+    return findings.length === 0
+      ? { clean: true, findings: [] }
+      : { clean: false, findings };
   };
   return {
     name,

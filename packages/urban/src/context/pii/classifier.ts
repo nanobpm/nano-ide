@@ -42,7 +42,11 @@ export interface PiiFinding {
   readonly path: string;
   /** Character offset of the match within that field's text. */
   readonly index: number;
-  /** The matched substring, partially redacted so the finding never re-leaks the value. */
+  /**
+   * A length-only placeholder for the matched substring (e.g. `[redacted:17]`).
+   * Contains NO part of the value, so a finding can be logged/surfaced without
+   * re-leaking any character of the PII/secret it located.
+   */
   readonly excerpt: string;
   /** Human-readable explanation of why this was flagged. */
   readonly reason: string;
@@ -196,9 +200,11 @@ function deobfuscate(text: string): { text: string; map: number[] } {
 }
 
 function redact(match: string): string {
-  const trimmed = match.trim();
-  if (trimmed.length <= 4) return "****";
-  return `${trimmed.slice(0, 2)}…${trimmed.slice(-2)}`;
+  // Findings are explicitly logged/surfaced, so the excerpt must never contain
+  // ANY part of the sensitive value — even the first/last characters would leak
+  // PII/secrets into logs. Emit a length-only placeholder: useful for
+  // debugging ("how long was it?") without re-leaking a single character.
+  return `[redacted:${match.trim().length}]`;
 }
 
 function scanText(path: string, text: string): PiiFinding[] {

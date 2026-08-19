@@ -145,13 +145,24 @@ test("obfuscated-email finding index maps back to the original text offset", () 
 });
 
 test("findings are located and redacted, never re-leaking the value", () => {
-  const result = classifyPii("email alice@example.com");
+  const value = "alice@example.com";
+  const result = classifyPii(`email ${value}`);
   assert.equal(result.clean, false);
   if (!result.clean) {
     const f = result.findings[0];
     assert.equal(typeof f.index, "number");
     assert.ok(f.index >= 0);
-    assert.equal(f.excerpt.includes("alice@example.com"), false);
+    assert.equal(f.excerpt.includes(value), false);
+    // Defect class: the excerpt must not leak ANY 2-char run of the value — not
+    // just the whole string. A first/last-character redaction would slip through
+    // an `includes(value)` check while still surfacing part of the secret.
+    for (let i = 0; i + 2 <= value.length; i++) {
+      assert.equal(
+        f.excerpt.includes(value.slice(i, i + 2)),
+        false,
+        `excerpt leaked substring "${value.slice(i, i + 2)}"`,
+      );
+    }
   }
 });
 

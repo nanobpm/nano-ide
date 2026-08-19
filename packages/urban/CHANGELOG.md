@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.62.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.61.0...@nanobpm/urban-0.62.0) (2026-08-19)
+
+
+### Features
+
+* **urban-testkit:** guard the fake against the full EngineClient surface ([#343](https://github.com/nanobpm/nano-ide/issues/343)) ([a2e57e9](https://github.com/nanobpm/nano-ide/commit/a2e57e92ac0db07f670e96ca8966bd6ea2e4342d))
+
 ## [0.61.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.60.0...@nanobpm/urban-0.61.0) (2026-08-19)
 
 

@@ -326,11 +326,77 @@ test("git backend rejects a `.git` file whose gitdir target is missing/broken (n
     const resolver = new ContextResolver({ cacheRoot });
     await assert.rejects(
       resolver.resolve(binding),
-      /\.git points outside the cache root and would escape it/,
+      /gitdir target is missing or broken/,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("git backend rejects a `.git` marker file with no `gitdir:` line as malformed (distinct message)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-gitfile-malformed-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // A `.git` *file* that exists but carries no `gitdir:` line is malformed, not
+    // an escape. The rejection message must name that reason rather than the
+    // misleading "points outside the cache root" used for a genuine escape.
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    await writeFile(join(localPath, ".git"), "this is not a gitdir marker\n");
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(
+      resolver.resolve(binding),
+      /\.git marker is malformed \(no `gitdir:` line\)/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend rejects a `.git` marker whose in-cache gitdir target is a file, not a directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-gitfile-notdir-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // The `gitdir:` target is inside the cache root and exists, but it is a plain
+    // file rather than a real gitdir directory. It stays in the cache root (not an
+    // escape), so the rejection must name "not a directory", not "points outside".
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    const notAGitdir = join(cacheRoot, "not-a-gitdir");
+    await writeFile(notAGitdir, "i am a file\n");
+    await writeFile(join(localPath, ".git"), `gitdir: ${notAGitdir}\n`);
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(
+      resolver.resolve(binding),
+      /gitdir target is not a directory/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend rejects a relative localPath before running any git command", async () => {
+  const calls: string[][] = [];
+  const runner: GitRunner = async (args) => {
+    calls.push([...args]);
+    return "";
+  };
+  const backend = new GitSubstrateBackend(runner);
+  const identity = resolveContextIdentity({ repo: "/tmp/origin", ref: "main" });
+  // A direct backend caller that passes a relative `localPath` would otherwise run
+  // clone/fetch/checkout relative to the process CWD, sidestepping the cache-root
+  // containment guards. It must be rejected up front, before any git runs.
+  await assert.rejects(
+    backend.materialise(identity, { localPath: "relative/cache/copy", refresh: true }),
+    /localPath must be absolute/,
+  );
+  assert.equal(calls.length, 0, "no git command runs for a relative localPath");
 });
 
 test("git backend surfaces a non-ENOENT lstat error (unreadable path) instead of treating it as missing", async () => {

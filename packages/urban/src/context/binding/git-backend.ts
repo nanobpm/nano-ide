@@ -153,16 +153,19 @@ function isWithin(root: string, child: string): boolean {
  * broken/missing `gitdir:` target must not be trusted as a clone either. So the
  * resolved target is canonicalised through `realpath` (collapsing every symlink
  * along the path — including the gitdir itself) and the cache root is likewise
- * canonicalised, before checking containment. Returns true iff the marker is
+ * canonicalised, before checking containment. Resolves when the marker is
  * well-formed AND its fully-resolved gitdir is a real directory within the
- * canonical `cacheRoot`; a malformed marker (no `gitdir:` line), a
- * missing/broken target, or one resolving to a non-directory is not trusted.
+ * canonical `cacheRoot`. Otherwise it throws a `SubstrateResolveError` whose
+ * message names the *actual* reason — a malformed marker (no `gitdir:` line), a
+ * missing/broken target, one resolving to a non-directory, or one that genuinely
+ * escapes the cache root — rather than collapsing every rejection into a single
+ * "points outside the cache root" message that would mislead incident triage.
  */
-async function gitFileTargetWithinRoot(
+async function assertGitFileMarkerWithinRoot(
   gitFile: string,
   localPath: string,
   cacheRoot: string,
-): Promise<boolean> {
+): Promise<void> {
   // Read the marker file through the same error-wrapping discipline as the rest
   // of this module's access guards: a filesystem failure (e.g. EACCES/EPERM on
   // an unreadable marker, or a race that removes it) surfaces as a
@@ -175,7 +178,9 @@ async function gitFileTargetWithinRoot(
   }
   const match = content.match(/^gitdir:[ \t]*(.+?)[ \t]*$/m);
   if (match === null) {
-    return false;
+    throw new SubstrateResolveError(
+      `substrate .git marker is malformed (no \`gitdir:\` line): ${gitFile}`,
+    );
   }
   // A relative `gitdir:` is interpreted by git relative to the working copy, so
   // resolve it against `localPath` before checking cache-root containment.
@@ -191,11 +196,23 @@ async function gitFileTargetWithinRoot(
     realRoot = await realpath(cacheRoot);
   } catch (cause) {
     if (isNodeErrno(cause, "ENOENT") || isNodeErrno(cause, "ENOTDIR")) {
-      return false;
+      throw new SubstrateResolveError(
+        `substrate .git gitdir target is missing or broken: ${target}`,
+        { cause },
+      );
     }
     throw new SubstrateResolveError(`substrate .git target is not accessible: ${target}`, { cause });
   }
-  return isWithin(realRoot, realTarget) && (await isDirectory(realTarget));
+  if (!isWithin(realRoot, realTarget)) {
+    throw new SubstrateResolveError(
+      `substrate .git points outside the cache root and would escape it: ${gitFile}`,
+    );
+  }
+  if (!(await isDirectory(realTarget))) {
+    throw new SubstrateResolveError(
+      `substrate .git gitdir target is not a directory: ${realTarget}`,
+    );
+  }
 }
 
 /**
@@ -236,6 +253,16 @@ export class GitSubstrateBackend implements SubstrateBackend {
   ): Promise<ResolvedContextHandle> {
     const { localPath } = options;
     const refresh = options.refresh ?? true;
+    // `SubstrateResolveOptions.localPath` is contractually absolute — the resolver
+    // derives it that way. Enforce it here too: a relative `localPath` from a
+    // direct backend caller would run clone/fetch/checkout relative to the process
+    // CWD, at an unpredictable location that also sidesteps the cache-root
+    // containment guards below. Reject it before any git command runs.
+    if (!isAbsolute(localPath)) {
+      throw new SubstrateResolveError(
+        `substrate localPath must be absolute: ${localPath}`,
+      );
+    }
     // A symlink AT `localPath` would make every subsequent `join(localPath, …)`
     // and git invocation operate on the link's target — which can point outside
     // the cache root at an arbitrary pre-existing working copy. Reject it before
@@ -258,20 +285,18 @@ export class GitSubstrateBackend implements SubstrateBackend {
     }
     // A genuine clone's `.git` is a *directory*. A `.git` that exists as
     // anything else is a git worktree/submodule marker *file* pointing at a real
-    // gitdir elsewhere: trust it as "already cloned" only when that gitdir stays
-    // inside the cache root, otherwise fetch/pin would run against an
-    // out-of-cache repository — a cache escape of the same class as the
+    // gitdir elsewhere, which must be validated before it is trusted — an
+    // out-of-cache gitdir would be a cache escape of the same class as the
     // `.git`-symlink case above.
     let alreadyCloned = await isDirectory(gitDir);
     if (!alreadyCloned && (await pathExists(gitDir))) {
-      const cacheRoot = dirname(localPath);
-      if (await gitFileTargetWithinRoot(gitDir, localPath, cacheRoot)) {
-        alreadyCloned = true;
-      } else {
-        throw new SubstrateResolveError(
-          `substrate .git points outside the cache root and would escape it: ${gitDir}`,
-        );
-      }
+      // `.git` exists but is not a directory: a git worktree/submodule marker
+      // *file* pointing at a real gitdir elsewhere. Trust it as "already cloned"
+      // only when that gitdir is well-formed and stays inside the cache root;
+      // otherwise this throws a precise error naming the actual reason (malformed
+      // marker, missing/broken target, non-directory, or genuine cache escape).
+      await assertGitFileMarkerWithinRoot(gitDir, localPath, dirname(localPath));
+      alreadyCloned = true;
     }
 
     if (!alreadyCloned) {

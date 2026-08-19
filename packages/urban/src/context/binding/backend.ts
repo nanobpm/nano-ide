@@ -43,7 +43,8 @@ export interface SubstrateResolveOptions {
   /**
    * Absolute path the working copy MUST live at. The resolver derives this
    * deterministically from the identity so that the same name maps to the same
-   * on-disk substrate (shared-on-same-name).
+   * on-disk substrate (shared-on-same-name). A backend rejects a relative path
+   * (see {@link SubstrateBackend.materialise}).
    */
   readonly localPath: string;
   /**
@@ -68,7 +69,8 @@ export interface SubstrateBackend {
    * `identity` at `options.localPath`, pinned to `identity.ref`, and return the
    * resolved handle. The pin is enforced on the clone and `refresh: true` paths;
    * `refresh: false` reuses an existing working copy as-is without re-pinning
-   * (see {@link SubstrateResolveOptions.refresh}).
+   * (see {@link SubstrateResolveOptions.refresh}). `options.localPath` must be
+   * absolute; a relative path is rejected before any git command runs.
    */
   materialise(
     identity: ContextIdentity,

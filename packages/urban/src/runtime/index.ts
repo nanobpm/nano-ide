@@ -118,6 +118,10 @@ export type { Logger, LogLevel, LogFields, LogSink } from "./core/logger.ts";
 // BPMN error contract: a handler throws `BpmnError(code)` to raise a modelled
 // error routed to an error boundary (ADR 0050), instead of a retryable failure.
 export { BpmnError, isBpmnError } from "./core/host.ts";
+// The runtime source of truth for the `EngineClient` method surface (issue #341): a test
+// double / adapter iterates it to prove at runtime that it implements the full interface,
+// catching the "fake lags the SDK" seam-lag class categorically.
+export { ENGINE_CLIENT_METHODS } from "./core/host.ts";
 
 // Connector packs (ADR 0050, in-process port)
 export {

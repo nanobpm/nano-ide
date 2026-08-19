@@ -74,7 +74,11 @@ function pickPipelineFactory(mod: unknown): PipelineFactory {
 }
 
 function isNumberIterable(value: unknown): value is Iterable<number> {
-  return typeof value === "object" && value !== null && Symbol.iterator in value;
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof Reflect.get(value, Symbol.iterator) === "function"
+  );
 }
 
 function extractEmbeddingVector(output: unknown): number[] {

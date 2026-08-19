@@ -75,6 +75,7 @@ test("opt-in gate: assertRealAiEnabled throws without the env var", () => {
 
 test("live activation is impossible without opt-in: every construction factory rejects, no network", async () => {
   // Block the network so a stray real activation would fail loudly rather than pass.
+  const hadFetch = Reflect.has(globalThis, "fetch");
   const original = Reflect.get(globalThis, "fetch");
   let networkTouched = false;
   const stubInstalled = Reflect.set(globalThis, "fetch", () => {
@@ -103,7 +104,7 @@ test("live activation is impossible without opt-in: every construction factory r
   } finally {
     // Restore the exact prior shape: if fetch was originally absent, delete the stub
     // rather than leaving a `fetch` property defined as undefined.
-    if (original === undefined) {
+    if (!hadFetch) {
       Reflect.deleteProperty(globalThis, "fetch");
     } else {
       Reflect.set(globalThis, "fetch", original);
@@ -168,6 +169,17 @@ test("LocalEmbeddingAdapter.embed rejects a pipeline vector with a non-finite va
   });
   const adapter = new LocalEmbeddingAdapter(pipeline, { embeddingDimension: 3 });
   await assert.rejects(adapter.embed("hi"), /non-finite value/);
+});
+
+test("LocalEmbeddingAdapter.embed rejects `data` whose Symbol.iterator is not callable", async () => {
+  // Regression guard (suppressed advisory local.ts:78): a `data` object that merely *has* a
+  // Symbol.iterator property set to a non-function must surface the adapter's descriptive
+  // "missing numeric `data`" error, not a raw non-actionable TypeError from Array.from.
+  const pipeline = async (_input: unknown, _options?: Record<string, unknown>) => ({
+    data: { [Symbol.iterator]: undefined },
+  });
+  const adapter = new LocalEmbeddingAdapter(pipeline, { embeddingDimension: 3 });
+  await assert.rejects(adapter.embed("hi"), /missing numeric `data`/);
 });
 
 test("LocalChatModelAdapter.chat forwards ChatInput.system as a prompt preamble (parity with hosted)", async () => {

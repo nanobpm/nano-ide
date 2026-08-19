@@ -103,5 +103,6 @@ export function isContextBinding(value: unknown): value is ContextBinding {
 function describe(value: unknown): string {
   if (typeof value === "string") return JSON.stringify(value);
   if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
   return typeof value;
 }

@@ -87,10 +87,13 @@ test("detects IPv4 addresses with valid octets only", () => {
 test("detects secrets: AWS key id, private key, JWT", () => {
   assert.ok(kinds("AKIAIOSFODNN7EXAMPLE").includes("aws-access-key-id"));
   assert.ok(kinds("-----BEGIN RSA PRIVATE KEY-----\nMIIE...").includes("private-key"));
-  assert.ok(
-    kinds("token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w")
-      .includes("jwt"),
-  );
+  // Build the JWT from real base64url-encoded JSON segments at runtime. A literal
+  // eyJ...eyJ... token is rewritten to `******` by secret-masking in diffs/tooling,
+  // which hid from reviewers that this test exercises the detector at all. Deriving
+  // it keeps the source diff reviewable while still matching the JWT pattern.
+  const seg = (o: unknown): string => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const jwt = [seg({ alg: "HS256", typ: "JWT" }), seg({ sub: "test-subject" }), "c2lnbmF0dXJlXY"].join(".");
+  assert.ok(kinds(`token ${jwt}`).includes("jwt"));
 });
 
 test("scans every string field of a record and reports its path", () => {

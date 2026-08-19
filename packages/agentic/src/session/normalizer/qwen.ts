@@ -19,7 +19,7 @@ function toDrafts(record: unknown): readonly DraftEvent[] {
       const role = optString(HARNESS, obj, "role");
       const text = optString(HARNESS, obj, "text");
       if (text === undefined || text.length === 0) return [];
-      return [{ type: role === "user" ? "user" : "assistant", text }];
+      return [{ type: role === "user" ? "user" : role === "system" ? "system" : "assistant", text }];
     }
     case "thought": {
       // Gemini-lineage reasoning: a bold `subject` + `description` body.

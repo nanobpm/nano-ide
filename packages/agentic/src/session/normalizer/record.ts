@@ -13,10 +13,17 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Describe a non-record value for a dialect error: distinguishes `null` and `array` from the bare `typeof`. */
+function describeNonRecord(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
 /** Narrow to a record or throw a dialect error attributing the harness. */
 export function asRecord(harness: string, value: unknown): Record<string, unknown> {
   if (!isRecord(value)) {
-    throw new NormalizerDialectError(harness, `record must be an object, got ${value === null ? "null" : typeof value}`);
+    throw new NormalizerDialectError(harness, `record must be a plain object, got ${describeNonRecord(value)}`);
   }
   return value;
 }

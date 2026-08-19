@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.70.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.69.1...@nanobpm/urban-0.70.0) (2026-08-19)
+
+
+### Features
+
+* **urban/retrieval:** retrieval over the git system-of-record (@nanobpm/urban/context/retrieval) ([#387](https://github.com/nanobpm/nano-ide/issues/387)) ([70a1854](https://github.com/nanobpm/nano-ide/commit/70a18548e44a76707df3be925f6967b50b13b096))
+
 ## [0.69.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.69.0...@nanobpm/urban-0.69.1) (2026-08-19)
 
 

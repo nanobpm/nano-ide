@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/urban-testkit",
-  "version": "0.11.1",
+  "version": "0.11.2",
   "description": "Generic, in-CI e2e test kit for Urban apps: a WASM-backed EngineClient adapter and a reusable engine contract suite. Install as a devDependency of your Urban app — the WASM engine never lands in production installs of @nanobpm/urban.",
   "license": "Apache-2.0",
   "type": "module",
@@ -67,7 +67,7 @@
     }
   },
   "devDependencies": {
-    "@nanobpm/urban": ">=0.69.1",
+    "@nanobpm/urban": ">=0.70.0",
     "@types/node": "^22.20.1",
     "typescript": "^5.9.3"
   }

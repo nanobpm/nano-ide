@@ -1,8 +1,10 @@
-// @nanobpm/urban-testkit `/ai` surface — S1 scaffold (issue #297).
+// @nanobpm/urban-testkit `/ai` surface (issue #297).
 //
 // AI-judge & semantic-similarity assertions for Urban apps. This barrel is the single
-// public entry for the `./ai` subpath; siblings (S2 similarity, S3 judge, S4 real
-// adapters) add code inside their own subdirectories and never edit this file.
+// public entry for the `./ai` subpath and now exports the full shipped surface — the
+// semantic-similarity matcher (S2), the judge matcher (S3) and the opt-in real adapter
+// factories/descriptors (S4); each slice lives in its own subdirectory and never edits
+// this file.
 //
 // The re-exports from `./similarity`, `./judge` and `./adapters/real` also import those
 // modules for their SIDE-EFFECT registration (matcher registration; static real-seam

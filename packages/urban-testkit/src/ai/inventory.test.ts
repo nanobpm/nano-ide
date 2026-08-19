@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { beforeEach, test } from "node:test";
-// Import the barrel so the fake + record/replay backings are declared for both seams.
-import "./index.ts";
+// Import ONLY the fake + record/replay backing modules — NOT the `/ai` barrel. The barrel
+// eagerly registers S4's static real-seam descriptors at import, so importing it here would
+// force `beforeEach` to clear them, making "hasReal is false" an artifact of the reset
+// rather than a genuine property of the import graph. Pulling in just the backings declares
+// both seams' fake + record/replay backings while keeping the empty-real default honest.
+import "./fakes.ts";
+import "./record-replay.ts";
 import {
   registerRealSeamDescriptor,
   resetRealSeamDescriptorsForTest,
@@ -25,9 +30,9 @@ test("seamInventory: enumerates exactly the two seams, fake + record/replay back
   }
 });
 
-test("seamInventory: hasReal is false in slice S1 (no static real descriptor registered)", () => {
+test("seamInventory: hasReal is false when no real descriptor is registered (fake + record/replay only)", () => {
   for (const entry of seamInventory()) {
-    assert.equal(entry.hasReal, false, `${entry.seam} has no real backend yet`);
+    assert.equal(entry.hasReal, false, `${entry.seam} has no real descriptor registered`);
     assert.equal(entry.docRef, null);
   }
 });

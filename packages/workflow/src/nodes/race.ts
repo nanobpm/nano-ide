@@ -104,11 +104,16 @@ registerNodeKind("race", {
       api.claim(name);
       let event: FlowNode;
       if (isSignal) {
-        const correlationKey = spec.signal.correlationKey;
-        if (typeof correlationKey !== "string" || correlationKey.trim() === "") {
+        const rawKey = spec.signal.correlationKey;
+        if (typeof rawKey !== "string" || rawKey.trim() === "") {
           throw new Error(`race() arm "${name}" signal needs a non-empty { correlationKey }`);
         }
-        assertIdent("correlationKey", correlationKey);
+        // Trim before validating/storing, in parity with the timer arm ({ after }/
+        // { at } are trimmed above): a value like " prKey " is usable after
+        // trimming, so it must not fail the NCName check on stray whitespace. The
+        // assertIdent context names the arm so a failure says WHICH arm is invalid.
+        const correlationKey = rawKey.trim();
+        assertIdent(`race() arm "${name}" signal correlationKey`, correlationKey);
         event = { kind: "signal", name, correlationKey, payload: api.contracts[name]?.in };
       } else {
         const timer = spec.timer;

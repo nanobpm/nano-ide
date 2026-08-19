@@ -127,6 +127,21 @@ test("race signal arm emits a message catch and lifts a correlated <bpmn:message
   assert.match(xml, /<zeebe:subscription correlationKey="=userId" \/>/);
 });
 
+test("race signal arm trims { correlationKey } before validating/emitting (timer-arm parity)", () => {
+  // A correlationKey with stray surrounding whitespace is usable once trimmed, so
+  // it must NOT fail the NCName check and must emit the trimmed identifier — in
+  // parity with how the timer arm trims { after }/{ at } before validation.
+  const flow = defineFlow("race-signal-trim", (w) => {
+    w.race({
+      approved: { signal: { correlationKey: "  prKey  " }, do: (b) => b.run("provision", async () => ({})) },
+      lapsed: { timer: { after: "=slaTimeout" }, do: (b) => b.run("expire", async () => ({})) },
+    });
+  });
+  const xml = declarativeToBpmn(flow);
+  assert.match(xml, /<zeebe:subscription correlationKey="=prKey" \/>/);
+  assert.doesNotMatch(xml, /correlationKey="=\s|correlationKey="=prKey\s/);
+});
+
 test("race timer arm emits a timer catch: { after } → timeDuration, { at } → timeDate", () => {
   const flow = defineFlow("race-timer", (w) => {
     w.race({

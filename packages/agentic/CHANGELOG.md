@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.3.0...@nanobpm/agentic-0.4.0) (2026-08-19)
+
+
+### Features
+
+* **agentic:** stream-json/native normalizer backend (ADR 0062 slice 3) ([#382](https://github.com/nanobpm/nano-ide/issues/382)) ([e727378](https://github.com/nanobpm/nano-ide/commit/e72737817039aa81d9d4bd262cd1d24ea91afd67))
+
 ## [0.3.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.2.0...@nanobpm/agentic-0.3.0) (2026-08-19)
 
 

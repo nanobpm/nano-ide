@@ -13,7 +13,7 @@ import { PiiGuardError } from "../pii/index.ts";
 import type { MemoryRecord } from "../schema/index.ts";
 import { LAYOUT_ROOT } from "./layout.ts";
 import { type CommitAuthor, GitWriteSubstrate, type WriteSubstrate } from "./substrate.ts";
-import { ContextWriter, GovernanceError } from "./writer.ts";
+import { ContextWriter, GovernanceError, serialiseRecord } from "./writer.ts";
 
 const execFileAsync = promisify(execFile);
 const TEMP_ROOTS: string[] = [];
@@ -821,5 +821,56 @@ test("proposePrior sanitises a newline-bearing id in the hypothesis commit messa
     mergeMsg.split("\n").filter((l) => l.trim() !== "").length,
     1,
     "ratify merge message must be a single non-empty line",
+  );
+});
+
+test("serialiseRecord is canonical — key INSERTION order cannot change the bytes", () => {
+  // Same record, two different construction orders. `JSON.stringify` preserves
+  // insertion order, so a naive serialiser would emit differing bytes; the
+  // canonical (sorted-key) serialiser must not.
+  const forward = record({ id: "canon-1", statement: "the canonical form is stable" });
+  const shuffled: MemoryRecord = {
+    supersedes: forward.supersedes,
+    statement: forward.statement,
+    createdAt: forward.createdAt,
+    authority: forward.authority,
+    provenance: forward.provenance,
+    mode: forward.mode,
+    scopeRef: forward.scopeRef,
+    scope: forward.scope,
+    id: forward.id,
+    schemaVersion: forward.schemaVersion,
+  };
+
+  assert.equal(
+    serialiseRecord(forward),
+    serialiseRecord(shuffled),
+    "records equal up to key insertion order must serialise identically",
+  );
+  // It is still valid, round-trippable JSON with the promised trailing LF.
+  assert.ok(serialiseRecord(forward).endsWith("\n"));
+  assert.deepEqual(JSON.parse(serialiseRecord(shuffled)), JSON.parse(serialiseRecord(forward)));
+  // Keys are emitted in sorted order.
+  const keys = Object.keys(JSON.parse(serialiseRecord(forward)));
+  assert.deepEqual(keys, [...keys].sort(), "serialised keys must be in canonical sorted order");
+});
+
+test("isMerged passes `--end-of-options` so an option-style ref is never parsed as a flag", async () => {
+  const calls: (readonly string[])[] = [];
+  const substrate = new GitWriteSubstrate("/virtual/substrate", async (args) => {
+    calls.push(args);
+    return "";
+  });
+
+  await substrate.isMerged("--not-a-flag", "main");
+
+  assert.equal(calls.length, 1);
+  const args = calls[0];
+  const eoo = args.indexOf("--end-of-options");
+  assert.ok(eoo >= 0, "isMerged must pass --end-of-options");
+  // The end-of-options marker must precede BOTH positional revisions.
+  assert.ok(
+    eoo < args.indexOf("--not-a-flag") && eoo < args.lastIndexOf("main"),
+    "--end-of-options must come before the commitish/ref operands",
   );
 });

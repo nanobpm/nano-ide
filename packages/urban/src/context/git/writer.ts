@@ -470,9 +470,17 @@ export class ContextWriter {
   }
 }
 
-/** Serialise a record to deterministic, pretty-printed JSON with a trailing LF. */
+/**
+ * Serialise a record to deterministic, pretty-printed JSON with a trailing LF.
+ * Keys are emitted in a canonical (sorted) order so two semantically identical
+ * records serialise byte-for-byte identically regardless of the key INSERTION
+ * order they were constructed with — `JSON.stringify` otherwise preserves
+ * insertion order, which would let equal records produce differing output. The
+ * key set is DERIVED from the record itself (not a hand-maintained list), so a
+ * newly added field is never silently dropped from the serialised form.
+ */
 export function serialiseRecord(record: MemoryRecord): string {
-  return `${JSON.stringify(record, null, 2)}\n`;
+  return `${JSON.stringify(record, Object.keys(record).sort(), 2)}\n`;
 }
 
 /** Parse proposal-branch JSON, surfacing malformed content as a GovernanceError. */

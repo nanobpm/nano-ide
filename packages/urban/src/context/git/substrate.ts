@@ -260,7 +260,13 @@ export class GitWriteSubstrate implements WriteSubstrate {
 
   async isMerged(commitish: string, ref: string): Promise<boolean> {
     try {
-      await this.#git(["merge-base", "--is-ancestor", commitish, ref], this.rootPath);
+      // `--end-of-options` (as every other ref-passing call in this file) stops an
+      // option-style `commitish`/`ref` (e.g. a caller-supplied baseBranch override)
+      // from being parsed as a `git merge-base` flag rather than a revision.
+      await this.#git(
+        ["merge-base", "--is-ancestor", "--end-of-options", commitish, ref],
+        this.rootPath,
+      );
       return true;
     } catch {
       return false;

@@ -109,7 +109,11 @@ class FailingSubstrate implements WriteSubstrate {
   async checkout(ref: string): Promise<void> {
     this.#current = ref;
   }
-  async stageAndCommit(_message: string, _author: CommitAuthor): Promise<string> {
+  async stageAndCommit(
+    _pathspec: string,
+    _message: string,
+    _author: CommitAuthor,
+  ): Promise<string> {
     if (this.#failAt === "stageAndCommit") {
       throw new Error("simulated commit failure");
     }
@@ -166,8 +170,8 @@ class MergeFailingSubstrate implements WriteSubstrate {
   checkout(ref: string): Promise<void> {
     return this.#inner.checkout(ref);
   }
-  stageAndCommit(message: string, author: CommitAuthor): Promise<string> {
-    return this.#inner.stageAndCommit(message, author);
+  stageAndCommit(pathspec: string, message: string, author: CommitAuthor): Promise<string> {
+    return this.#inner.stageAndCommit(pathspec, message, author);
   }
   async mergeBranch(
     _branch: string,
@@ -208,6 +212,28 @@ test("appendRecord persists a measured fact on the base branch", async () => {
   // ...and the merge landed a real commit.
   const head = await git(dir, "rev-parse", "HEAD");
   assert.equal(head, result.mergeCommit);
+});
+
+test("stageAndCommit stages ONLY the given pathspec — no blanket `git add -A` PII-guard bypass", async () => {
+  const dir = await makeSubstrate();
+  const substrate = new GitWriteSubstrate(dir);
+  const relPath = `${LAYOUT_ROOT}/epic/issue-303/scoped-1.json`;
+  await substrate.writeRecordFile(relPath, '{"id":"scoped-1"}\n');
+  // A stray, unrelated file the per-record PII guard never inspected. A blanket
+  // `git add -A` would sweep it (and any PII in it) into the commit; scoped
+  // staging must leave it untracked.
+  await writeFile(join(dir, "STRAY_UNGUARDED.txt"), "ssn 123-45-6789\n", "utf8");
+
+  const author: CommitAuthor = { name: "bot", email: "bot@nanobpm.local" };
+  const sha = await substrate.stageAndCommit(relPath, "context(test): scoped stage", author);
+
+  // Only the record path is in the commit...
+  const committed = await git(dir, "show", "--name-only", "--format=", sha);
+  const files = committed.split("\n").filter((line) => line.length > 0);
+  assert.deepEqual(files, [relPath], "only the record path may be committed");
+  // ...and the unguarded stray file was NOT swept in; it stays untracked.
+  const status = await git(dir, "status", "--porcelain", "--", "STRAY_UNGUARDED.txt");
+  assert.equal(status, "?? STRAY_UNGUARDED.txt", "stray file must remain untracked");
 });
 
 test("baseBranch defaults to the resolved handle's ref, not the checked-out branch", async () => {

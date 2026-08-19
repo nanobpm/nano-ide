@@ -214,6 +214,7 @@ export class ContextWriter {
         await this.#substrate.createBranch(writeBranch, base);
         await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
         const commit = await this.#substrate.stageAndCommit(
+          relPath,
           `context(append): ${record.provenance}/${record.scope} ${idLine}`,
           this.#author,
         );
@@ -262,6 +263,7 @@ export class ContextWriter {
         await this.#substrate.createBranch(proposalBranch, base);
         await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
         const commit = await this.#substrate.stageAndCommit(
+          relPath,
           `context(propose): ${record.provenance}/${record.scope} ${commitLine(record.id)} [hypothesis]`,
           this.#botAuthor,
         );

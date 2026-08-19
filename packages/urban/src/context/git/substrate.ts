@@ -80,8 +80,14 @@ export interface WriteSubstrate {
    * unrelated tracked edits in it across a write that might fail.
    */
   restoreClean(ref: string, pathspec: string): Promise<void>;
-  /** Stage all changes and commit them as `author`; returns the new commit sha. */
-  stageAndCommit(message: string, author: CommitAuthor): Promise<string>;
+  /**
+   * Stage the changes UNDER `pathspec` (only) and commit them as `author`;
+   * returns the new commit sha. Staging is deliberately scoped to the caller's
+   * record path(s) — never a blanket `git add -A` — so an unrelated change
+   * elsewhere in the shared working copy can never be swept into a commit that
+   * the per-record PII guard only inspected the record content for.
+   */
+  stageAndCommit(pathspec: string, message: string, author: CommitAuthor): Promise<string>;
   /** Merge `branch` into the current branch as `author`; returns the merge sha. */
   mergeBranch(branch: string, message: string, author: CommitAuthor): Promise<string>;
   /** `true` iff a local branch named `name` exists. */
@@ -176,8 +182,19 @@ export class GitWriteSubstrate implements WriteSubstrate {
     await this.#git(["clean", "-fd", "--", pathspec], this.rootPath);
   }
 
-  async stageAndCommit(message: string, author: CommitAuthor): Promise<string> {
-    await this.#git(["add", "-A"], this.rootPath);
+  async stageAndCommit(
+    pathspec: string,
+    message: string,
+    author: CommitAuthor,
+  ): Promise<string> {
+    // Stage ONLY the caller's record path(s) — `add -A -- <pathspec>` — never a
+    // blanket `git add -A`. A blanket stage would sweep ANY unrelated tracked or
+    // untracked change in the shared single-writer working copy into this commit,
+    // bypassing the per-record PII guard that inspected the record content alone
+    // (and risking committing stray residue outside the record layout). `-A` still
+    // captures adds/modifies/deletes, but confined to `pathspec`; `--` ends option
+    // parsing so a path that looks like a flag is never misread.
+    await this.#git(["add", "-A", "--", pathspec], this.rootPath);
     await this.#git(
       [
         "-c",

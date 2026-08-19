@@ -1,6 +1,6 @@
 name: Release Please
 
-# Maintains ONE batched "release PR" on main. As feat:/fix:/perf:/retro: commits
+# Maintains ONE batched "release PR" on main. As feat:/fix:/perf:/retro:/deps:/revert: commits
 # land (squash-merged PR titles — gated by pr-title-lint.yml), release-please keeps a
 # single PR open that bumps every affected package's version + CHANGELOG (and its
 # intra-repo dependents, via the node-workspace plugin) and refreshes the root

@@ -19,7 +19,9 @@
 //     ordering, and sequence-flow ids so only SEMANTIC structure remains. Returns
 //     a `CanonicalModel` — three sorted multisets: `nodes` (flow nodes with their
 //     type + definition + edge-degree signature), `flows` (sequence, attach, and
-//     containment edges by endpoint), and `messages` (subscribed message names).
+//     containment edges by endpoint), and `messages` (each subscribed message's
+//     full definition — name plus `zeebe:subscription correlationKey` and
+//     `zeebe:properties` envelope, so correlationKey/envelope differences count).
 //     Two models mean the same thing iff their `CanonicalModel`s are equal.
 //
 //   assertDerivationParity(derived, goldenBpmnPath): void
@@ -37,7 +39,7 @@
 //
 // LOWER-LEVEL HELPERS (for custom assertions):
 //   modelsEqual(a, b): boolean          — structural equality predicate.
-//   diffModels(expected, actual): string — the red/green diff (""" when equal).
+//   diffModels(expected, actual): string — the red/green diff ("" when equal).
 //   parseXml / localName                 — the dependency-free XML reader.
 
 export { normalize } from "./normalize.js";

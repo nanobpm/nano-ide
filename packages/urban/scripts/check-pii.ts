@@ -37,9 +37,9 @@ function isMissingPath(error: unknown): boolean {
   return code === "ENOENT";
 }
 
-/** Narrow an unknown JSON value to a scannable plain object. */
+/** Narrow an unknown JSON value to a scannable plain object (arrays excluded). */
 function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Walk a substrate root and return every layout record file (absolute paths). */

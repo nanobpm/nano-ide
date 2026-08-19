@@ -49,6 +49,14 @@ async function seed(root: string, rec: MemoryRecord): Promise<void> {
   await writeFile(abs, `${JSON.stringify(rec, null, 2)}\n`, "utf8");
 }
 
+/** Write raw file content into a substrate root at a record's canonical path. */
+async function seedRaw(root: string, rec: MemoryRecord, content: string): Promise<void> {
+  const rel = recordRelativePath(rec);
+  const abs = join(root, rel);
+  await mkdir(dirname(abs), { recursive: true });
+  await writeFile(abs, content, "utf8");
+}
+
 async function makeRoot(): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), "s6ci-substrate-"));
   TEMP_ROOTS.push(dir);
@@ -112,6 +120,24 @@ test("check:pii fails (non-zero) on a seeded PII violation in the S3 layout", as
   assert.match(stderr, /PII detected/);
   assert.match(stderr, /email/);
   // The gate must NOT re-leak the raw PII it caught (length-only redaction).
+  assert.doesNotMatch(stderr, /alice\.example@contoso\.com/);
+});
+
+test("check:pii catches PII in a JSON array record (arrays are not plain objects)", async () => {
+  const root = await makeRoot();
+  // A record file whose top-level JSON value is an array carrying an email
+  // address. Arrays must NOT be narrowed as plain objects — they fall through
+  // to the raw-text scan, so the leak is still caught.
+  await seedRaw(
+    root,
+    record({ id: "arr-leak" }),
+    `${JSON.stringify(["contact alice.example@contoso.com for details"], null, 2)}\n`,
+  );
+
+  const { code, stderr } = await runCheck(root);
+  assert.equal(code, 1, "expected a PII violation inside a JSON array record to fail the build");
+  assert.match(stderr, /PII detected/);
+  assert.match(stderr, /email/);
   assert.doesNotMatch(stderr, /alice\.example@contoso\.com/);
 });
 

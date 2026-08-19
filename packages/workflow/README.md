@@ -53,6 +53,15 @@ human-in-the-loop path), composed with control-flow combinators:
   `itemVar`). `{ sequential }` runs children one at a time; `{ outputCollection,
   outputElement }` collects each child's result into a list; `{ completionCondition }`
   completes the body early.
+- `w.race({ armName: { signal | timer, do }, … })` — a first-of race over ≥2
+  named arms, each waiting on **exactly one** event: a `signal` (a correlated
+  message catch, `{ correlationKey }`) or a `timer` (`{ after }` for a duration or
+  `{ at }` for a date, ISO or a leading-`=` FEEL expression). Whichever arm's event
+  fires **first wins**: its `do` block runs and the losers are cancelled. Compiles
+  to an **event-based gateway** fanning out to one intermediate catch event per arm
+  (a message- or timer-event-definition), the arm bodies rejoining downstream by an
+  implicit XOR merge. This is the shape a convergence loop uses to bound a
+  human-in-the-loop wait with a timeout.
 
 ```ts
 import { defineFlow, WorkflowClient, Worker } from "@nanobpm/workflow";
@@ -94,13 +103,33 @@ const convergence = defineFlow("convergence-loop", (w) => {
 });
 ```
 
-Each combinator compiles to a BPMN primitive the engine already runs: `switch` /
+Bound a human-in-the-loop wait with a timeout — `w.race` resolves to whichever
+arm fires first, cancelling the loser:
+
+```ts
+const reviewWait = defineFlow("review-wait", (w) => {
+  w.run("request-review", async (job) => ({ prKey: job.variables.prKey }));
+  w.race({
+    "review-arrived": {
+      signal: { correlationKey: "prKey" },
+      do: (b) => b.run("apply-review", applyReview),
+    },
+    "review-timed-out": {
+      timer: { after: "=reviewWaitTimeout" }, // FEEL duration, e.g. "PT48H"
+      do: (b) => b.run("escalate", escalate),
+    },
+  });
+  w.run("finalize", finalize);
+});
+``` `switch` /
 `branch` → an exclusive gateway (in-order conditions, first match wins, default =
 unconditional flow); `loop` → a convergent gateway whose body falls through back to
 the head; nodes with multiple incoming flows are an implicit XOR merge; `parallel`
 → a diverging/converging **parallel gateway** pair (AND fork/join); `forEach` → a
 **parallel multi-instance** activity (a single-step body) or an embedded
-multi-instance sub-process (a multi-step body). See **ADR 0047**.
+multi-instance sub-process (a multi-step body); `race` → an **event-based
+gateway** fanning out to one intermediate catch event per arm (message or timer),
+first event wins and cancels the losers. See **ADR 0047**.
 
 #### Typed data envelopes (eject to model-first with contracts intact)
 

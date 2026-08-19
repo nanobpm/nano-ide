@@ -99,6 +99,19 @@ for (const h of HARNESSES) {
     assert.equal(backend.restore(cp0.id).events.length, 1);
   });
 
+  test(`[${h.name}] restore(unknown id) falls back to the latest checkpoint`, () => {
+    const log = h.makeLog();
+    const backend = new SessionBackend(log, KEY, 1, { newCheckpointId: seqIds("cp") });
+    backend.emit(msg("e0", null, "a"));
+    backend.checkpoint("sha0", LEDGER); // offset 1
+    backend.emit(msg("e1", "e0", "b"));
+    const latest = backend.checkpoint("sha1", LEDGER); // offset 2
+
+    // The contract: an unknown id resolves the latest checkpoint, not a fresh seed.
+    assert.deepEqual(backend.restore("does-not-exist").checkpoint, latest);
+    assert.equal(backend.restore("does-not-exist").nextOffset, latest.offset);
+  });
+
   test(`[${h.name}] the incarnation fence rejects a stale writer`, () => {
     const log = h.makeLog();
     const inc1 = new SessionBackend(log, KEY, 1);

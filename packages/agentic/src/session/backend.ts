@@ -78,10 +78,12 @@ export class SessionBackend implements SessionAdapter {
   }
 
   restore(fromCheckpoint?: string): SessionSeed {
+    // Contract: no argument OR an unknown id resolves the latest checkpoint; a
+    // known id restores exactly that checkpoint.
     const checkpoint =
       fromCheckpoint === undefined
         ? this.#log.latestCheckpoint(this.key)
-        : this.#log.getCheckpoint(this.key, fromCheckpoint);
+        : (this.#log.getCheckpoint(this.key, fromCheckpoint) ?? this.#log.latestCheckpoint(this.key));
     if (checkpoint === undefined) {
       // No checkpoint to resume from: start the mind fresh at offset 0. The next
       // emit at offset 0 discards any uncommitted events a dead incarnation left.

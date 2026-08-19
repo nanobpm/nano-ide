@@ -27,6 +27,27 @@ test("replay honours from/to bounds", () => {
   assert.deepEqual(log.replay(KEY, 0).length, 5);
 });
 
+for (const make of [
+  { name: "in-memory", open: () => new InMemorySessionLog() },
+  {
+    name: "sqlite",
+    open: () => {
+      const log = new SqliteSessionLog(openTestDb());
+      log.ensureSchema();
+      return log;
+    },
+  },
+]) {
+  test(`[${make.name}] replay rejects an invalid 'to' bound just like 'from'`, () => {
+    const log = make.open();
+    log.lease(KEY, 1);
+    for (let i = 0; i < 3; i++) log.append(KEY, 1, i, ev(`e${i}`, i));
+    assert.throws(() => log.replay(KEY, 0, -1), RangeError, "negative to");
+    assert.throws(() => log.replay(KEY, 0, 1.5), RangeError, "non-integer to");
+    assert.throws(() => log.replay(KEY, 2, 1), RangeError, "to < from");
+  });
+}
+
 test("latestCheckpoint returns the highest-offset checkpoint", () => {
   const log = new InMemorySessionLog();
   log.lease(KEY, 1);

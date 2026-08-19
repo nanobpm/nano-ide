@@ -93,6 +93,23 @@ function assertOffset(offset: number): void {
 }
 
 /**
+ * Validate a `replay(from, to)` window: `from` is a normal offset, and when a
+ * bounded `to` is given it must itself be a valid offset that is not below
+ * `from` — so an out-of-range or inverted bound fails fast instead of silently
+ * yielding a surprising `Array.slice`/SQL range.
+ */
+function assertReplayBounds(from: number, to: number | undefined): void {
+  assertOffset(from);
+  if (to === undefined) return;
+  if (!isNonNegInt(to)) {
+    throw new RangeError(`session log replay 'to' must be a non-negative safe integer, got ${to}`);
+  }
+  if (to < from) {
+    throw new RangeError(`session log replay 'to' (${to}) must be >= 'from' (${from})`);
+  }
+}
+
+/**
  * The in-memory reference backend (the stub slices 2–5 code against and the tests
  * exercise). Reuses the relay {@link IncarnationFence} verbatim and keeps each
  * activation's full event array — the authoritative, non-evicting analogue of the
@@ -183,7 +200,7 @@ export class InMemorySessionLog implements SessionLog {
   }
 
   replay(key: ActivationKey, from: number, to?: number): AppendedSessionEvent[] {
-    assertOffset(from);
+    assertReplayBounds(from, to);
     const arr = this.#eventsFor(key);
     const end = to === undefined ? arr.length : to;
     return arr.slice(from, end);
@@ -409,7 +426,7 @@ export class SqliteSessionLog implements SessionLog {
   }
 
   replay(key: ActivationKey, from: number, to?: number): AppendedSessionEvent[] {
-    assertOffset(from);
+    assertReplayBounds(from, to);
     const upper = to === undefined ? Number.MAX_SAFE_INTEGER : to;
     return this.#db
       .all<DbEventRow>(

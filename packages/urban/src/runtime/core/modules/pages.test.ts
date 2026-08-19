@@ -1314,6 +1314,84 @@ test("child grids reuse the same per-row More toggle for hidden columns (#268)",
   assert.match(js, /if \(chasHidden\) ctr\.append\(mobileMoreCell\(ctr\)\);/);
 });
 
+test("child grids support per-row detail expansion, collapsed by default (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A child grid opts into per-row expansion with a `detail` (alias `expandable`)
+  // block that reuses the top-level grid's detailPanel() — so a nested table (e.g.
+  // a Convergence "Rounds" child) can render each row as an expandable, collapsed
+  // affordance instead of dumping the whole history flat.
+  assert.match(js, /const cdetail = cg\.detail \|\| cg\.expandable \|\| null;/);
+  assert.match(js, /const chasExpand = cdetail != null;/);
+  // The expander shares the top-level detail look: a pc-chevron button in a
+  // pc-row-actions cell, revealing detailPanel(cr, cdetail) in a following row.
+  assert.match(js, /class: "pc-btn pc-btn-sm pc-chevron" \}, collapsed \? "▸" : "▾"/);
+  assert.match(js, /cells\.push\(el\("td", \{ class: "pc-row-actions" \}, ctoggle\)\);/);
+  assert.match(js, /cdtr\.firstChild\.append\(detailPanel\(cr, cdetail\)\)/);
+  // Rows are collapsed by default; detail.defaultCollapsed/detail.collapsed (both
+  // defaulting to true) seed the initial state.
+  assert.match(js, /cdetail\.defaultCollapsed != null/);
+  assert.match(js, /cdetail\.collapsed != null/);
+  // detailPanel is now config-parametrised so the top-level grid and child grids
+  // share one implementation (link + fields + nested children + form).
+  assert.match(js, /function detailPanel\(row, cfg\)/);
+  assert.match(js, /const d = cfg \|\| detail;/);
+});
+
+test("child-grid per-row collapse state is persisted across the refresh poll (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The top-level grid rebuilds each child grid on every refreshMs poll, so an
+  // open row would collapse on the next tick without durable state. Per-row
+  // collapse is persisted in localStorage — keyed by page + node + parent
+  // discriminator + child rowKey — via the same readCollapsed/writeCollapsed
+  // helpers groupBy group-collapse uses, so it survives both the poll and a full
+  // reload.
+  assert.match(js, /const cskey = ckeyBase && crk != null \? ckeyBase \+ crk : null;/);
+  assert.match(js, /readCollapsed\(cskey, cdefaultCollapsed\)/);
+  assert.match(js, /if \(cskey\) writeCollapsed\(cskey, !open\);/);
+  assert.match(js, /"pc:collapsed:" \+ CURRENT \+ ":" \+ cnodeId \+ ":" \+ cchildId/);
+});
+
+test("child-grid collapse key is scoped by row[cg.parentField], not the parent grid's rowKey (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The parent-row discriminator in the localStorage key MUST be the value the
+  // child grid is queried by (row[cg.parentField]) — NOT rowKeyOf(row), which is
+  // null whenever the top-level grid declares no `rowKey`. With the old rowKeyOf
+  // key every parent row collapsed under the literal "_", so opening one parent's
+  // child row silently toggled the same-keyed child row under every other parent.
+  assert.match(
+    js,
+    /const cparentKey = cg\.parentField != null && row\[cg\.parentField\] != null\s*\?\s*String\(row\[cg\.parentField\]\) : null;/,
+  );
+  // No safe key ⇒ persistence disabled (ckeyBase null), never a colliding "_".
+  assert.match(js, /const ckeyBase = cparentKey == null \? null/);
+  assert.doesNotMatch(js, /cparentKey == null \? "_" : cparentKey/);
+});
+
+test("child-grid detail panel never falls back to the top-level grid's form (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // detailPanel(cr, cdetail) renders a child grid's own detail config. Its form is
+  // detailForm(row, d.form): when the child config declares no `form` the panel
+  // must have NO form — it must NOT implicitly reuse the top-level grid's
+  // detail.form. So detailForm uses its argument verbatim rather than falling back
+  // to `detail && detail.form` when the argument is undefined.
+  assert.match(js, /function detailForm\(row, formCfg\) \{\s*const f = formCfg;/);
+  assert.doesNotMatch(js, /formCfg !== undefined \? formCfg : \(detail && detail\.form\)/);
+});
+
+test("child-grid fetch failure renders a full-width error row (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The child grid's colspan is computed eagerly, BEFORE the getJSON() fetch, so
+  // the catch path's error row (colspan: cspan) spans the whole table even when
+  // the fetch throws. A lazily-assigned cspan would be undefined in the catch.
+  assert.match(js, /const cspan = String\(\(ccols\.length \|\| 1\) \+ cextra\);\s*try \{/);
+  assert.match(js, /\} catch \(e\) \{\s*cbody\.append\(el\("tr", \{\}, el\("td", \{ colspan: cspan \}/);
+});
+
 test("the renderer honours an optional Tier-2 page-level mobile layout variant (#268)", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";

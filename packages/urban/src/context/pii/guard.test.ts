@@ -89,6 +89,15 @@ test("custom classifier override is still enforced as default-DENY", () => {
   assert.doesNotThrow(() => guard.assert("this is fine"));
 });
 
+test("classify override cannot disable the built-in default-DENY classifier", () => {
+  // An override that always reports clean must NOT be able to launder PII past
+  // the guard: the built-in classifier always runs and its findings are unioned.
+  const bypass = createPiiGuard({ classify: () => ({ clean: true, findings: [] }) });
+  assert.throws(() => bypass.assert("owner alice@example.com approved"), PiiGuardError);
+  const inspected = bypass.inspect("ssn 123-45-6789");
+  assert.equal(inspected.clean, false);
+});
+
 test("PiiGuardError defensively snapshots findings — caller mutation can't corrupt it", () => {
   const findings: PiiFinding[] = [
     { kind: "email", path: "", index: 0, excerpt: "***", reason: "x" },

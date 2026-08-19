@@ -228,17 +228,23 @@ function scanText(path: string, text: string): PiiFinding[] {
   if (normalised !== text) {
     const emailDetector = DETECTORS.find((d) => d.kind === "email");
     if (emailDetector) {
+      // Dedupe per LOCATION, not per field: a field-wide "already saw an email"
+      // flag would drop every obfuscated hit as soon as one plain email exists
+      // anywhere in the field (under-reporting a mixed plain+obfuscated field).
+      const plainEmailIndices = new Set(
+        findings.filter((f) => f.kind === "email").map((f) => f.index),
+      );
       emailDetector.pattern.lastIndex = 0;
       let em: RegExpExecArray | null = emailDetector.pattern.exec(normalised);
-      const alreadyEmail = findings.some((f) => f.kind === "email");
       while (em !== null) {
-        if (!alreadyEmail) {
+        // Map the offset in the normalised copy back to the original text so the
+        // finding is located where the obfuscated value actually is.
+        const originalIndex = map[em.index] ?? em.index;
+        if (!plainEmailIndices.has(originalIndex)) {
           findings.push({
             kind: "email",
             path,
-            // Map the offset in the normalised copy back to the original text so
-            // the finding is located where the obfuscated value actually is.
-            index: map[em.index] ?? em.index,
+            index: originalIndex,
             excerpt: redact(em[0]),
             reason: "obfuscated email address",
           });

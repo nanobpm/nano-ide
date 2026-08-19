@@ -14,7 +14,7 @@ function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
     mode: "empirical",
     provenance: "human",
     authority: "authoritative",
-    statement: "the build is green after fixing the flaky test",
+    statement: "the build is green after fixing the test failure",
     createdAt: "2026-08-19T14:00:00.000Z",
   };
   return { ...full, ...overrides };
@@ -46,6 +46,19 @@ test("detects obfuscated emails", () => {
   assert.ok(kinds("reach alice (at) example dot com").includes("email"));
   assert.ok(kinds("reach alice[at]example[dot]com").includes("email"));
   assert.ok(kinds("reach alice AT example DOT com").includes("email"));
+});
+
+test("reports BOTH plain and obfuscated emails in the same field", () => {
+  // A plain email must not suppress obfuscated hits elsewhere in the same field:
+  // the dedupe is per-location, not a field-wide "already saw an email" flag.
+  const result = classifyPii("alice@example.com and reach bob (at) example dot com");
+  assert.equal(result.clean, false);
+  if (!result.clean) {
+    const emails = result.findings.filter((f) => f.kind === "email");
+    assert.equal(emails.length, 2);
+    assert.ok(emails.some((f) => f.reason === "email address"));
+    assert.ok(emails.some((f) => f.reason === "obfuscated email address"));
+  }
 });
 
 test("detects US SSN", () => {

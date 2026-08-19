@@ -23,7 +23,12 @@
 // and does NOT import `../git` (S3 imports us — the dependency points one way to
 // keep the graph acyclic).
 
-import { classifyPii, type PiiCandidate, type PiiClassification, type PiiFinding } from "./classifier.ts";
+import {
+  classifyPii,
+  type PiiCandidate,
+  type PiiClassification,
+  type PiiFinding,
+} from "./classifier.ts";
 
 /**
  * Thrown by {@link PiiGuard.assert} (and the default guard) when a candidate
@@ -77,9 +82,11 @@ export interface PiiGuardOptions {
   /** Override the guard's `name` (defaults to `"pre-commit-pii-guard"`). */
   readonly name?: string;
   /**
-   * Override the classifier. Defaults to the built-in {@link classifyPii}.
-   * Intended for tests and for a future stricter/looser policy — NOT a way for
-   * a caller to disable enforcement (a guard is always default-DENY).
+   * An ADDITIONAL classifier, unioned with the built-in {@link classifyPii}.
+   * The built-in classifier ALWAYS runs; this override's findings are merged on
+   * top, so an override can only make the guard STRICTER — it can never suppress
+   * a built-in detection or otherwise disable enforcement (a guard is always
+   * default-DENY). Intended for tests and for a future stricter policy.
    */
   readonly classify?: (candidate: PiiCandidate) => PiiClassification;
 }
@@ -87,11 +94,22 @@ export interface PiiGuardOptions {
 /**
  * Build a default-DENY PII guard. With no options this returns the same policy
  * as {@link preCommitPiiGuard}: it classifies with the built-in classifier and
- * rejects any candidate that carries PII.
+ * rejects any candidate that carries PII. A caller-supplied `classify` runs IN
+ * ADDITION to the built-in classifier (findings are unioned), so it can only
+ * ever make the guard stricter — never weaker.
  */
 export function createPiiGuard(options: PiiGuardOptions = {}): PiiGuard {
   const name = options.name ?? "pre-commit-pii-guard";
-  const classify = options.classify ?? classifyPii;
+  const override = options.classify;
+  // The built-in classifier ALWAYS runs; an override can only ADD findings.
+  // This makes the `classify` option unable to disable the default-DENY guard.
+  const classify = (candidate: PiiCandidate): PiiClassification => {
+    const base = classifyPii(candidate);
+    if (override === undefined) return base;
+    const extra = override(candidate);
+    if (base.clean && extra.clean) return { clean: true, findings: [] };
+    return { clean: false, findings: [...base.findings, ...extra.findings] };
+  };
   return {
     name,
     inspect(candidate) {

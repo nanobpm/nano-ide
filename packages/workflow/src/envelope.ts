@@ -95,11 +95,13 @@ const SCALARS: ReadonlySet<string> = new Set([
 
 class EnvelopeDef<S extends Record<string, FieldSpec>> implements Envelope<S> {
   readonly type!: EnvelopeType<S>;
+  readonly name: string;
+  readonly fields: EnvelopeField[];
 
-  constructor(
-    readonly name: string,
-    readonly fields: EnvelopeField[],
-  ) {}
+  constructor(name: string, fields: EnvelopeField[]) {
+    this.name = name;
+    this.fields = fields;
+  }
 }
 
 function normaliseField(name: string, spec: FieldSpec): EnvelopeField {

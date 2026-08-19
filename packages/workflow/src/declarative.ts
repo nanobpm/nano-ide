@@ -603,7 +603,11 @@ class Compiler {
   private seq = 0;
   private gw = 0;
 
-  constructor(private readonly flow: DeclarativeFlow) {}
+  private readonly flow: DeclarativeFlow;
+
+  constructor(flow: DeclarativeFlow) {
+    this.flow = flow;
+  }
 
   private currentScope(): string | undefined {
     return this.scopeStack.length ? this.scopeStack[this.scopeStack.length - 1] : undefined;

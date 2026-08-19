@@ -35,10 +35,15 @@ test("retrieval is correct on a COLD cache — the first query falls back to git
   const cold = await retriever.query({});
   assert.equal(cold.length, 2, "a cold cache must still return every record via git");
 
-  // A path-scoped structured query on a cold cache reads just that partition.
-  const scoped = await retriever.byNamespace("repo", "nano-ide");
+  // A path-scoped structured query on a COLD cache reads just that partition
+  // without forcing a full snapshot build. Use a FRESH retriever so the cache is
+  // genuinely cold here — the `query({})` above already warmed `retriever`.
+  const nsRetriever = new ContextRetriever({ localPath: dir, ref: "main" });
+  assert.equal(nsRetriever.cache.isWarm, false, "a fresh retriever's cache must be cold");
+  const scoped = await nsRetriever.byNamespace("repo", "nano-ide");
   assert.equal(scoped.length, 1);
   assert.equal(scoped[0].record.id, "cold-2");
+  assert.equal(nsRetriever.cache.isWarm, false, "a single-namespace query must not warm the full cache");
 });
 
 test("git is authoritative — the derived cache is disposable and rebuildable", async () => {

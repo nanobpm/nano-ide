@@ -56,9 +56,15 @@ export async function makeSubstrate(roots: string[]): Promise<string> {
   return dir;
 }
 
-/** Best-effort recursive cleanup of every registered temp root. */
+/**
+ * Best-effort recursive cleanup of every registered temp root. Per-root failures
+ * (e.g. a transient EBUSY/EPERM) are swallowed so teardown can never fail an
+ * otherwise-correct suite.
+ */
 export async function cleanup(roots: readonly string[]): Promise<void> {
-  await Promise.all(roots.map((dir) => rm(dir, { recursive: true, force: true })));
+  await Promise.all(
+    roots.map((dir) => rm(dir, { recursive: true, force: true }).catch(() => undefined)),
+  );
 }
 
 /** A well-formed measured/authoritative record, with per-test overrides. */

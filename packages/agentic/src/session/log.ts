@@ -110,6 +110,19 @@ function assertReplayBounds(from: number, to: number | undefined): void {
 }
 
 /**
+ * A checkpoint's own {@link SessionCheckpoint.incarnation} must equal the fence
+ * token it is written under — otherwise the row would be fenced with one
+ * incarnation but stamped with another, producing inconsistent durable data.
+ */
+function assertCheckpointIncarnation(incarnation: number, checkpoint: SessionCheckpoint): void {
+  if (checkpoint.incarnation !== incarnation) {
+    throw new RangeError(
+      `checkpoint ${checkpoint.id} incarnation (${checkpoint.incarnation}) must equal the write lease incarnation (${incarnation})`,
+    );
+  }
+}
+
+/**
  * The in-memory reference backend (the stub slices 2–5 code against and the tests
  * exercise). Reuses the relay {@link IncarnationFence} verbatim and keeps each
  * activation's full event array — the authoritative, non-evicting analogue of the
@@ -182,7 +195,12 @@ export class InMemorySessionLog implements SessionLog {
 
   putCheckpoint(key: ActivationKey, incarnation: number, checkpoint: SessionCheckpoint): SessionCheckpoint {
     this.#admit(key, incarnation);
-    this.#checkpointsFor(key).push(checkpoint);
+    assertCheckpointIncarnation(incarnation, checkpoint);
+    const arr = this.#checkpointsFor(key);
+    // First-wins on checkpoint.id — mirrors the durable backend's
+    // ON CONFLICT(checkpoint_id) DO NOTHING so a retry never duplicates.
+    if (arr.some((cp) => cp.id === checkpoint.id)) return checkpoint;
+    arr.push(checkpoint);
     return checkpoint;
   }
 
@@ -244,6 +262,7 @@ interface DbCheckpointRow {
   incarnation: number;
   commit_sha: string;
   effect_ledger: string;
+  created_at: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -286,24 +305,26 @@ export class SqliteSessionLog implements SessionLog {
     if (!isNonNegInt(incarnation)) {
       throw new RangeError(`incarnation must be a non-negative safe integer, got ${incarnation}`);
     }
+    // Insert the activation row if it is missing, or advance its fence high-water when
+    // this lease is newer — as one atomic UPSERT. A plain ON CONFLICT DO NOTHING would
+    // let a concurrent first-lease race slip through: if another writer created the row
+    // between a pre-read and this INSERT, DO NOTHING would neither advance the fence nor
+    // reject a stale lease. Re-read and assert afterwards (insert-then-get, mirroring the
+    // transcript store) so a lease below the stored high-water is always fenced out.
+    this.#db.run(
+      `INSERT INTO ${SESSION_LOG_TABLE} (process_instance_key, element_id, incarnation, created_at, next_offset)
+       VALUES (?, ?, ?, ?, 0)
+       ON CONFLICT(process_instance_key, element_id)
+         DO UPDATE SET incarnation = excluded.incarnation
+         WHERE excluded.incarnation > ${SESSION_LOG_TABLE}.incarnation`,
+      [key.processInstanceKey, key.elementId, incarnation, new Date(this.#clock.now()).toISOString()],
+    );
     const row = this.#logRow(key);
     if (row === undefined) {
-      this.#db.run(
-        `INSERT INTO ${SESSION_LOG_TABLE} (process_instance_key, element_id, incarnation, created_at, next_offset)
-         VALUES (?, ?, ?, ?, 0)
-         ON CONFLICT(process_instance_key, element_id) DO NOTHING`,
-        [key.processInstanceKey, key.elementId, incarnation, new Date(this.#clock.now()).toISOString()],
-      );
-      return;
+      throw new Error(`session log row vanished immediately after admit: ${activationKeyString(key)}`);
     }
     if (incarnation < row.incarnation) {
       throw new StaleIncarnationError(key, incarnation, row.incarnation);
-    }
-    if (incarnation > row.incarnation) {
-      this.#db.run(
-        `UPDATE ${SESSION_LOG_TABLE} SET incarnation = ? WHERE process_instance_key = ? AND element_id = ?`,
-        [incarnation, key.processInstanceKey, key.elementId],
-      );
     }
   }
 
@@ -363,6 +384,7 @@ export class SqliteSessionLog implements SessionLog {
 
   putCheckpoint(key: ActivationKey, incarnation: number, checkpoint: SessionCheckpoint): SessionCheckpoint {
     this.#admit(key, incarnation);
+    assertCheckpointIncarnation(incarnation, checkpoint);
     this.#db.run(
       `INSERT INTO ${SESSION_CHECKPOINT_TABLE}
          (process_instance_key, element_id, checkpoint_id, checkpoint_offset, incarnation, commit_sha, effect_ledger, created_at)
@@ -373,7 +395,7 @@ export class SqliteSessionLog implements SessionLog {
         key.elementId,
         checkpoint.id,
         checkpoint.offset,
-        checkpoint.incarnation,
+        incarnation,
         checkpoint.commitSha,
         JSON.stringify(checkpoint.effectLedger),
         checkpoint.at,
@@ -384,31 +406,26 @@ export class SqliteSessionLog implements SessionLog {
 
   latestCheckpoint(key: ActivationKey): SessionCheckpoint | undefined {
     const row = this.#db.all<DbCheckpointRow>(
-      `SELECT checkpoint_id, checkpoint_offset, incarnation, commit_sha, effect_ledger
+      `SELECT checkpoint_id, checkpoint_offset, incarnation, commit_sha, effect_ledger, created_at
        FROM ${SESSION_CHECKPOINT_TABLE}
        WHERE process_instance_key = ? AND element_id = ?
        ORDER BY checkpoint_offset DESC, rowid DESC LIMIT 1`,
       [key.processInstanceKey, key.elementId],
     )[0];
-    return row === undefined ? undefined : this.#toCheckpoint(key, row);
+    return row === undefined ? undefined : this.#toCheckpoint(row);
   }
 
   getCheckpoint(key: ActivationKey, id: string): SessionCheckpoint | undefined {
     const row = this.#db.all<DbCheckpointRow>(
-      `SELECT checkpoint_id, checkpoint_offset, incarnation, commit_sha, effect_ledger
+      `SELECT checkpoint_id, checkpoint_offset, incarnation, commit_sha, effect_ledger, created_at
        FROM ${SESSION_CHECKPOINT_TABLE}
        WHERE process_instance_key = ? AND element_id = ? AND checkpoint_id = ?`,
       [key.processInstanceKey, key.elementId, id],
     )[0];
-    return row === undefined ? undefined : this.#toCheckpoint(key, row);
+    return row === undefined ? undefined : this.#toCheckpoint(row);
   }
 
-  #toCheckpoint(key: ActivationKey, row: DbCheckpointRow): SessionCheckpoint {
-    const at = this.#db.all<{ created_at: string }>(
-      `SELECT created_at FROM ${SESSION_CHECKPOINT_TABLE}
-       WHERE process_instance_key = ? AND element_id = ? AND checkpoint_id = ?`,
-      [key.processInstanceKey, key.elementId, row.checkpoint_id],
-    )[0];
+  #toCheckpoint(row: DbCheckpointRow): SessionCheckpoint {
     const ledgerRaw: unknown = JSON.parse(row.effect_ledger);
     if (!isEffectLedger(ledgerRaw)) {
       throw new SessionLogCorruptionError(
@@ -421,7 +438,7 @@ export class SqliteSessionLog implements SessionLog {
       commitSha: row.commit_sha,
       effectLedger: ledgerRaw,
       incarnation: row.incarnation,
-      at: at?.created_at ?? "",
+      at: row.created_at,
     };
   }
 

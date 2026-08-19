@@ -1,0 +1,42 @@
+# Slice s6-pii-ci — the OUTER, build-time half of the Urban context no-PII guard.
+#
+# The inline enforcement is already by construction: S6-core ships the PII
+# classifier + mandatory default-DENY pre-commit guard, and S3 wires it as the
+# non-optional pre-commit step on every git write path. This workflow is the
+# SECOND line of defence: it re-classifies content already targeted at a
+# git-backed context (`npm run check:pii`) and also builds/typechecks/tests the
+# @nanobpm/urban package, so PII (or a regression that would let it through) is
+# caught in CI as well as at write time. Self-contained to this PR.
+name: Urban context — no-PII gate
+
+on:
+  push:
+    branches: [main, "epic/**"]
+  pull_request:
+    branches: [main, "epic/**"]
+
+jobs:
+  urban-pii:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # Build + typecheck + test the package so the gate runs against a
+      # green tree (and so a regression in the S6-core classifier / S3 layout
+      # this gate reuses fails here too).
+      - name: Build @nanobpm/urban
+        run: npm run build --workspace @nanobpm/urban
+      - name: Typecheck @nanobpm/urban
+        run: npm run typecheck --workspace @nanobpm/urban
+      - name: Test @nanobpm/urban
+        run: npm run test --workspace @nanobpm/urban
+
+      # The no-PII build-time net: scan every record already laid out under the
+      # S3 git layout and fail the build on any PII the S6-core classifier flags.
+      - name: No-PII gate (check:pii)
+        run: npm run check:pii --workspace @nanobpm/urban

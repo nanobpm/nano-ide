@@ -58,3 +58,44 @@ barrel.
 - `npm run test:conformance --workspace @nanobpm/urban` runs the conformance
   corpus.
 - `npm run check:pii --workspace @nanobpm/urban` runs the PII gate.
+
+## PII: no-PII by construction, and the immutability-vs-erasure boundary
+
+The MVP substrate is **no-PII by construction**. Nothing here stores personal
+data, and two independent nets keep it that way:
+
+1. **In-process, at write time (S6-core + S3).** `@nanobpm/urban/context/pii`
+   ships a pure classifier (`classifyPii`) and a mandatory, default-DENY
+   pre-commit guard (`preCommitPiiGuard`). S3's `ContextWriter` registers that
+   guard as a **non-optional** pre-commit step on **every** write path
+   (`PreCommitGuardRegistry`, seeded non-removably), so a record carrying PII is
+   rejected **before any commit** — a caller cannot opt out.
+
+2. **Build-time, in CI (this slice, s6-pii-ci).** `npm run check:pii` walks the
+   S3 record layout (`records/<scope>/<scopeRef>/…json`) and re-classifies every
+   record with the **same** `classifyPii`, failing the build on any violation.
+   The `.github/workflows/urban-context-pii.yml` workflow runs it (plus
+   build/typecheck/test) as a second line of defence in case content reaches a
+   git-backed context by some path other than the writer.
+
+### Why the guard, not erasure
+
+The substrate is an **append-only git history**. "Deleting" a record is just
+another commit that removes the file from the *tip*; every prior value remains
+in the reachable history (and in every clone, fork, and reflog). On this
+substrate there is **no true erasure** — you cannot unpublish a fact that was
+ever committed short of a history rewrite that every consumer must also adopt.
+Because real erasure is not achievable append-only, the only sound MVP policy is
+to **never admit PII in the first place** — hence the by-construction guard + CI
+net above rather than an after-the-fact delete.
+
+### The seam left for a future PII/mutable backend
+
+Real erasure (GDPR-style "right to be forgotten", tombstoning, crypto-shredding)
+requires a **mutable** substrate that can genuinely destroy a value, not merely
+append over it. The write path is already abstracted over the substrate
+(`WriteSubstrate` / `GitWriteSubstrate` in `@nanobpm/urban/context/git`) and the
+binding layer does not assume "public git only", so a future opt-in
+PII/mutable backend can slot in behind that seam and offer erasure semantics
+**without** touching the record schema, the layout, or this guard. That backend
+is intentionally **not built** in the MVP — only its seam is documented here.

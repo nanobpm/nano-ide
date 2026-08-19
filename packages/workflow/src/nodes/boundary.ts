@@ -51,7 +51,7 @@ declare module "../declarative.js" {
   interface FlowBuilder<C extends object> {
     /**
      * Attach an interrupting timer boundary event (an SLA) to the PRECEDING
-     * activity (a `run`/`task`/`human`). When `timer` elapses, the activity is
+     * activity (a `run`/`task`). When `timer` elapses, the activity is
      * cancelled (for an interrupting boundary) and the token routes to the
      * `onTimeout` escalation body; that body then converges with the activity's
      * normal continuation. `timer` is an ISO-8601 duration or a FEEL
@@ -60,6 +60,12 @@ declare module "../declarative.js" {
     boundary(opts: BoundaryOptions<C>): FlowBuilder<C>;
   }
 }
+
+/** The flow-node kinds a boundary event may attach to. BPMN restricts boundary
+ *  events to ACTIVITIES, so this is the set of activity kinds (the ones that
+ *  render as a `<bpmn:serviceTask>`) — NOT merely "any node with a `name`", which
+ *  would also admit catch events like `signal`/`timer` and produce invalid BPMN. */
+const BOUNDARY_HOST_KINDS = new Set(["run", "task"]);
 
 /** True for a FEEL expression body (a leading `=`), which renders with an
  *  `xsi:type="bpmn:tFormalExpression"` marker on the `timeDuration`. */
@@ -106,15 +112,19 @@ registerNodeKind("boundary", {
     if (!host) {
       throw new Error(`boundary(...) must follow the activity it attaches to (e.g. w.run(...).boundary(...))`);
     }
-    if (!("name" in host) || typeof host.name !== "string") {
-      throw new Error(`boundary(...) can only attach to a named activity (run/task/human), not a "${host.kind}"`);
+    if (!BOUNDARY_HOST_KINDS.has(host.kind) || !("name" in host) || typeof host.name !== "string") {
+      throw new Error(`boundary(...) can only attach to a named activity (run/task), not a "${host.kind}"`);
+    }
+    const onTimeout = api.child(opts.onTimeout, false);
+    if (onTimeout.length === 0) {
+      throw new Error(`boundary(...) needs a non-empty { onTimeout } escalation body (its outgoing flow has nowhere to go)`);
     }
     api.out.push({
       kind: "boundary",
       attachedTo: host.name,
       timer: duration,
       interrupting: opts.interrupting ?? true,
-      onTimeout: api.child(opts.onTimeout, false),
+      onTimeout,
       label: opts.name,
     });
     return api.self();

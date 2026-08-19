@@ -63,6 +63,9 @@ test("boundary: a FEEL-expression timeDuration renders an xsi:type formal expres
   });
   const xml = declarativeToBpmn(flow);
   assert.match(xml, /<bpmn:timeDuration xsi:type="bpmn:tFormalExpression">=agentSlaTimeout<\/bpmn:timeDuration>/);
+  // The `xsi:` prefix used above must be declared on the root, or the XML is not
+  // well-formed for standards-compliant parsers/modelers.
+  assert.match(xml, /<bpmn:definitions[^>]*\sxmlns:xsi="http:\/\/www\.w3\.org\/2001\/XMLSchema-instance"/);
 });
 
 test("boundary: a literal ISO-8601 timeDuration renders without a formal-expression marker", () => {
@@ -149,6 +152,30 @@ test("boundary: rejects invalid options with actionable messages", () => {
   assert.throws(
     () => defineFlow("e", (w) => { w.task("a"); w.boundary({ timer: "PT1H" }); }),
     /needs an \{ onTimeout \} escalation body/,
+  );
+  // An empty onTimeout body would leave the boundary event's outgoing flow with
+  // no target (a dangling sequenceFlow), so it is rejected.
+  assert.throws(
+    () => defineFlow("e", (w) => { w.task("a"); w.boundary({ timer: "PT1H", onTimeout: () => {} }); }),
+    /needs a non-empty \{ onTimeout \} escalation body/,
+  );
+  // A boundary may only attach to an ACTIVITY (run/task) — not to a catch event
+  // like `signal`/`timer`, even though those also carry a `name`.
+  assert.throws(
+    () =>
+      defineFlow("e", (w) => {
+        w.signal("wait", { correlationKey: "k" });
+        w.boundary({ timer: "PT1H", onTimeout: (b) => { b.task("x"); } });
+      }),
+    /can only attach to a named activity/,
+  );
+  assert.throws(
+    () =>
+      defineFlow("e", (w) => {
+        w.timer("wait", { after: "PT5M" });
+        w.boundary({ timer: "PT1H", onTimeout: (b) => { b.task("x"); } });
+      }),
+    /can only attach to a named activity/,
   );
   // A boundary with no preceding activity has nothing to attach to.
   assert.throws(

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:nano="https://nanobpm.io/schema/shapes/1.0" id="z_Definitions_boundary-demo" targetNamespace="http://bpmn.io/schema/bpmn">
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:nano="https://nanobpm.io/schema/shapes/1.0" id="z_Definitions_boundary-demo" targetNamespace="http://bpmn.io/schema/bpmn">
   <bpmn:process id="z_boundary-demo" name="boundary-demo" isExecutable="true">
     <bpmn:startEvent id="z_Start"><bpmn:outgoing>z_f_0</bpmn:outgoing></bpmn:startEvent>
     <bpmn:serviceTask id="z_prepare" name="prepare">

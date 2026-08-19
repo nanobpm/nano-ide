@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/urban-agent-client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Worker-side client for the Nano agentic channel (ADR 0056, S9): REGISTER→SERVE, heartbeat/deregister, produce relay bytes, and a local buffer / flush-on-reconnect ring that tolerates a hub outage. Speaks the @nanobpm/agentic wire contract (via its @nanobpm/agentic/protocol subpath) and is held to its shared conformance corpus.",
   "license": "Apache-2.0",
   "type": "module",
@@ -45,7 +45,7 @@
     "test:conformance": "node --test --experimental-strip-types \"src/conformance.test.ts\""
   },
   "dependencies": {
-    "@nanobpm/agentic": "^0.1.0"
+    "@nanobpm/agentic": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.20.1",

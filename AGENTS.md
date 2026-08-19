@@ -102,6 +102,21 @@ packages use — copy it rather than inventing a variant:
   with `Cannot find module @nanobpm/workflow` until root `npm run build` has emitted
   the dependency's `dist/`. Working order: **build → typecheck → test → lint**.
 
+## Editing CI Workflows (push over SSH, not the OAuth HTTPS remote)
+
+Any PR that **adds or edits a `.github/workflows/*.yml` file** cannot be pushed
+over the default HTTPS remote when the pusher is an OAuth App / bot token: the
+push is rejected with *"refusing to allow an OAuth App to create or update
+workflow `…` without `workflow` scope"* — and it fails at `git push`, before any
+PR or CI exists, so it silently costs a wave. Point `origin` at SSH first:
+
+```
+git remote set-url origin git@github.com:nanobpm/nano-ide.git
+```
+
+Non-workflow changes push fine over HTTPS; this only bites when the diff touches
+`.github/workflows/`.
+
 ## Database Migrations
 
 Migrations live in `db/migrations/NNN_description.sql`, are forward-only and

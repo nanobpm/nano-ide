@@ -97,8 +97,12 @@ export function parseXml(xml: string): XmlElement {
     if (gt === -1) throw new Error("parseXml: unterminated tag");
     let inner = xml.slice(lt + 1, gt);
     if (inner.startsWith("/")) {
-      stack.pop();
-      if (stack.length === 0) throw new Error("parseXml: unbalanced end tag");
+      const closeName = inner.slice(1).trim();
+      if (stack.length <= 1) throw new Error(`parseXml: unbalanced end tag </${closeName}>`);
+      const open = stack.pop();
+      if (open === undefined || open.name !== closeName) {
+        throw new Error(`parseXml: mismatched end tag </${closeName}> (expected </${open?.name ?? "#root"}>)`);
+      }
       i = gt + 1;
       continue;
     }
@@ -112,6 +116,13 @@ export function parseXml(xml: string): XmlElement {
     stack[stack.length - 1].children.push(el);
     if (!selfClosing) stack.push(el);
     i = gt + 1;
+  }
+  if (stack.length !== 1) {
+    const unclosed = stack
+      .slice(1)
+      .map((el) => `<${el.name}>`)
+      .join(", ");
+    throw new Error(`parseXml: unclosed tag(s): ${unclosed}`);
   }
   if (root.children.length === 0) throw new Error("parseXml: no root element");
   return root.children[0];

@@ -8,13 +8,14 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { defineFlow, declarativeToBpmn } from "../dist/index.js";
+import { defineFlow } from "../dist/index.js";
 import {
   normalize,
   diffModels,
   modelsEqual,
   assertDerivationParity,
   deploySmoke,
+  parseXml,
 } from "../dist/test-support/index.js";
 import { Gateway, resolveServerBin } from "./server.ts";
 
@@ -49,6 +50,20 @@ const smokeFlow = defineFlow("smoke-demo", (w) => {
     },
   });
   w.timer("cooldown", { after: "PT5M" });
+});
+
+test("parseXml: rejects malformed documents instead of silently accepting them", () => {
+  // Mismatched end tag: `<a><b></a>` must not be silently accepted as a tree.
+  assert.throws(() => parseXml("<a><b></a></a>"), /mismatched end tag/);
+  // Unclosed tag: the document ends with `<b>` still open.
+  assert.throws(() => parseXml("<a><b></b>"), /unclosed tag/);
+  // Stray end tag with nothing open.
+  assert.throws(() => parseXml("</a>"), /unbalanced end tag/);
+  // A well-formed document still parses.
+  const el = parseXml("<a><b/></a>");
+  assert.equal(el.name, "a");
+  assert.equal(el.children.length, 1);
+  assert.equal(el.children[0].name, "b");
 });
 
 test("normalize: sees through element-id renaming (canonicalizes ids + sequence-flow ids)", () => {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.10.0...@nanobpm/workflow-0.11.0) (2026-08-19)
+
+
+### Features
+
+* **workflow:** defineFlow activity boundary timer — .boundary({ timer, interrupting, onTimeout }) ([#317](https://github.com/nanobpm/nano-ide/issues/317)) ([#353](https://github.com/nanobpm/nano-ide/issues/353)) ([3038b5e](https://github.com/nanobpm/nano-ide/commit/3038b5eb68cb8f95790402f1f3d9692f06c652ce))
+
 ## [0.10.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.9.0...@nanobpm/workflow-0.10.0) (2026-08-19)
 
 

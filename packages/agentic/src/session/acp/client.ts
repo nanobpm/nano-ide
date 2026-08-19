@@ -327,11 +327,9 @@ function defaultPermissionResponse(params: unknown): unknown {
         return { outcome: { outcome: "selected", optionId: option.optionId } };
       }
     }
-    const first = params.options[0];
-    if (isRecord(first) && typeof first.optionId === "string") {
-      return { outcome: { outcome: "selected", optionId: first.optionId } };
-    }
   }
+  // No "allow"-flavoured option (or no options at all): cancel, as documented,
+  // rather than silently selecting an arbitrary — possibly deny — option.
   return { outcome: { outcome: "cancelled" } };
 }
 

@@ -31,6 +31,16 @@ function connectClient(
   return { client, closeAgent: () => agent.close() };
 }
 
+function connectClientWithAgent(
+  script: Parameters<typeof startFakeAcpAgent>[1],
+  sink: SessionEventSink,
+): { client: AcpSessionClient; agent: AcpConnection; closeAgent: () => void } {
+  const { client: clientTransport, agent: agentTransport } = inMemoryTransportPair();
+  const agent = startFakeAcpAgent(agentTransport, script);
+  const client = new AcpSessionClient(new AcpConnection(clientTransport), sink, { newEventId: seqIds("e") });
+  return { client, agent, closeAgent: () => agent.close() };
+}
+
 test("initialize surfaces durable-resume:true when the agent advertises loadSession", async () => {
   const { sink } = collector();
   const { client } = connectClient({ loadSession: true }, sink);
@@ -155,4 +165,32 @@ test("prompt before a session is established throws", async () => {
   const { client } = connectClient({}, sink);
   await client.initialize();
   await assert.rejects(() => client.prompt("hi"), /active session/);
+});
+
+test("default permission handler selects the allow-flavoured option", async () => {
+  const { sink } = collector();
+  const { client, agent } = connectClientWithAgent({}, sink);
+  await client.initialize();
+  const outcome = await agent.request("session/request_permission", {
+    options: [
+      { optionId: "reject", kind: "reject_once" },
+      { optionId: "ok", kind: "allow_once" },
+    ],
+  });
+  assert.deepEqual(outcome, { outcome: { outcome: "selected", optionId: "ok" } });
+});
+
+test("default permission handler cancels when no allow-flavoured option is offered", async () => {
+  const { sink } = collector();
+  const { client, agent } = connectClientWithAgent({}, sink);
+  await client.initialize();
+  // No option's kind starts with "allow" — the handler must cancel, not select the
+  // first (possibly deny) option by ordering.
+  const outcome = await agent.request("session/request_permission", {
+    options: [
+      { optionId: "reject", kind: "reject_once" },
+      { optionId: "reject-all", kind: "reject_always" },
+    ],
+  });
+  assert.deepEqual(outcome, { outcome: { outcome: "cancelled" } });
 });

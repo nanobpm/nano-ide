@@ -72,7 +72,14 @@ export class NewlineJsonDecoder {
 
 /** Serialise a JSON-RPC message as a single ACP wire line (JSON + `\n`). */
 export function encodeMessageLine(message: unknown): string {
-  return `${JSON.stringify(message)}\n`;
+  const json = JSON.stringify(message);
+  // `JSON.stringify(undefined)` (and other non-serialisable inputs) returns
+  // `undefined`, which would emit the literal line "undefined\n" and always fail
+  // `JSON.parse` on the peer. Fail loudly at the sender instead of on the wire.
+  if (json === undefined) {
+    throw new Error("ACP transport cannot encode a non-JSON-serialisable message");
+  }
+  return `${json}\n`;
 }
 
 /**

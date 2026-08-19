@@ -45,6 +45,12 @@ test("encodeMessageLine produces exactly one newline-terminated JSON line", () =
   assert.equal(line, '{"jsonrpc":"2.0","id":1}\n');
 });
 
+test("encodeMessageLine throws on a non-JSON-serialisable message instead of emitting a bad wire line", () => {
+  // `JSON.stringify(undefined)` returns `undefined`; a naive template would emit
+  // the literal line "undefined\n", which always fails JSON.parse on the peer.
+  assert.throws(() => encodeMessageLine(undefined), /non-JSON-serialisable/);
+});
+
 test("inMemoryTransportPair delivers what one side sends to the other, asynchronously", async () => {
   const { client, agent } = inMemoryTransportPair();
   const received: unknown[] = [];

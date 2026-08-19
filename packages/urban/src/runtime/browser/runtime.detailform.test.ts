@@ -435,6 +435,10 @@ test("#372: evalDetailCondition fails OPEN (false → field stays visible) on an
   // A garbage / partial expression must never hide (and thus drop) a field.
   assert.equal(evalDetailCondition("=resolution !!! answer", { resolution: "x" }), false);
   assert.equal(evalDetailCondition("=(unbalanced", { a: 1 }), false);
+  // An unterminated string literal must fail open too, not read the truncated
+  // remainder as a valid token.
+  assert.equal(evalDetailCondition('=resolution != "answer', { resolution: "abandon" }), false);
+  assert.equal(evalDetailCondition("=resolution = 'answer", { resolution: "answer" }), false);
   assert.equal(evalDetailCondition("", { a: 1 }), false);
   assert.equal(evalDetailCondition(null, { a: 1 }), false);
 });

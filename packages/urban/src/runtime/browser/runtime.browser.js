@@ -1650,10 +1650,15 @@ function tokenizeDetailCondition(src) {
     const ch = s[i];
     if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r") { i++; continue; }
     if (ch === '"' || ch === "'") {
-      const quote = ch; let j = i + 1; let str = "";
-      while (j < s.length && s[j] !== quote) {
+      const quote = ch; let j = i + 1; let str = ""; let closed = false;
+      while (j < s.length) {
+        if (s[j] === quote) { closed = true; break; }
         if (s[j] === "\\" && j + 1 < s.length) { str += s[j + 1]; j += 2; } else { str += s[j]; j++; }
       }
+      // An unterminated string literal can't be part of the grammar; abandon
+      // parsing so the whole expression fails open (field stays visible) rather
+      // than treating a truncated FEEL string as a valid token.
+      if (!closed) throw new Error("unterminated string in condition");
       toks.push({ t: "val", v: str }); i = j + 1; continue;
     }
     if (ch === "(") { toks.push({ t: "(" }); i++; continue; }

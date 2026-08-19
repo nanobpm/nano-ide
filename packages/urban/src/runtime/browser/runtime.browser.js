@@ -2054,7 +2054,9 @@ function renderDataGrid(node) {
 // ({ label, page } -> an in-app #/<page> hash link, highlighted when it's the
 // current page) or to an external URL ({ label, href } -> a hardened new-tab
 // link; only http(s) is honoured). With items:"auto" (or omitted) the nav
-// lists every page from the /app/pages index, using each page's title.
+// lists every page from the /app/pages index, using each page's title. An item
+// may also carry a `badge` ({ source, table, filter, tone, refreshMs,
+// hideWhenZero }) that renders a live count pill from the /app/data gateway.
 /** @param {any} item
  * @returns {HTMLAnchorElement|null}
  */
@@ -2073,8 +2075,87 @@ function navLink(item) {
   /** @type {Array<Node|string>} */
   const kids = [];
   if (item.icon != null) kids.push(el("span", { class: "pc-nav-icon" }, String(item.icon)));
-  kids.push(el("span", { class: "pc-nav-label" }, String(item.label != null ? item.label : (item.page || item.href))));
-  return el("a", attrs, ...kids);
+  const labelText = String(item.label != null ? item.label : (item.page || item.href));
+  kids.push(el("span", { class: "pc-nav-label" }, labelText));
+  const link = el("a", attrs, ...kids);
+  // A nav item may carry a live count badge sourced from a datasource (e.g. the
+  // Tasks tab showing how many escalations await a human). It reuses the same
+  // /app/data gateway + .pc-badge tone pills as dataGrid, and polls on refreshMs.
+  // Absent/invalid badge → the link is exactly as before (backward compatible).
+  wireNavBadge(link, labelText, item.badge);
+  return link;
+}
+
+// Attach + drive a nav item's live count badge. Best-effort throughout: a bad
+// config or a failed fetch degrades to no badge, never a broken nav link. The
+// pill is appended hidden and only appears once a fetch yields a count (and, when
+// hideWhenZero, only when that count is > 0). The accessible name of the whole
+// link is kept in sync ("Tasks (3 open)") so assistive tech announces the count,
+// which the small "3" glyph alone would not convey; the pill itself is aria-hidden
+// to avoid a double announcement.
+/** @param {HTMLElement} link
+ * @param {string} baseLabel
+ * @param {any} badge
+ */
+function wireNavBadge(link, baseLabel, badge) {
+  if (!badge || typeof badge !== "object") return;
+  if (typeof badge.table !== "string" || badge.table === "") return;
+  const source = typeof badge.source === "string" && badge.source !== "" ? badge.source : "app";
+  const t = badge.tone;
+  const tone = t === "warn" || t === "ok" || t === "info" || t === "danger" ? t : "danger";
+  const hideWhenZero = badge.hideWhenZero === true;
+  const pill = el("span", { class: "pc-badge pc-nav-badge pc-badge-" + tone, "aria-hidden": "true" });
+  pill.hidden = true;
+  link.append(pill);
+  const filter = Array.isArray(badge.filter) ? badge.filter : [];
+  const paramScoped = filter.some(/** @param {any} f */(f) => f && f.eqParam);
+  const refresh = () => {
+    // A param-scoped badge ("count for the selected entity") with no route param
+    // present would otherwise build the URL with dataUrl baking in an empty PARAM
+    // and query field="", surfacing a wrong count. Match the dataGrid/list pollers:
+    // degrade to 0 (hidden when hideWhenZero) without a request instead.
+    if (paramScoped && PARAM === "") {
+      applyNavBadge(link, pill, baseLabel, hideWhenZero, 0);
+      return;
+    }
+    const url = dataUrl(source, badge.table, filter, null);
+    const countUrl = url + (url.indexOf("?") >= 0 ? "&" : "?") + "count=1";
+    getJSON(countUrl)
+      .then(/** @param {any} res */(res) => applyNavBadge(link, pill, baseLabel, hideWhenZero, res && res.count))
+      .catch(() => applyNavBadge(link, pill, baseLabel, hideWhenZero, NaN));
+  };
+  refresh();
+  const ms = Number(badge.refreshMs);
+  if (Number.isFinite(ms) && ms > 0) {
+    const timer = setInterval(refresh, ms);
+    disposers.push(() => clearInterval(timer));
+  }
+}
+
+// Reflect a fetched count into the pill + the link's accessible name. A
+// non-finite/negative count (a failed or malformed fetch) hides the pill and
+// restores the plain label — the nav degrades quietly rather than showing a
+// broken/"NaN" badge. hideWhenZero also hides the pill at exactly 0.
+/** @param {HTMLElement} link
+ * @param {any} pill
+ * @param {string} baseLabel
+ * @param {boolean} hideWhenZero
+ * @param {any} count
+ */
+function applyNavBadge(link, pill, baseLabel, hideWhenZero, count) {
+  const n = Number(count);
+  if (!Number.isFinite(n) || n < 0 || (n === 0 && hideWhenZero)) {
+    pill.hidden = true;
+    pill.textContent = "";
+    link.setAttribute("aria-label", baseLabel);
+    return;
+  }
+  const shown = String(Math.floor(n));
+  pill.hidden = false;
+  pill.textContent = shown;
+  const aria = baseLabel + " (" + shown + " open)";
+  pill.setAttribute("title", aria);
+  link.setAttribute("aria-label", aria);
 }
 /** @param {HTMLElement} list
  * @param {any[]} items
@@ -2290,4 +2371,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, fmtCellValue, gridCell };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell };

@@ -32,7 +32,7 @@ export function asRecord(harness: string, value: unknown): Record<string, unknow
 export function reqString(harness: string, obj: Record<string, unknown>, field: string): string {
   const v = obj[field];
   if (typeof v !== "string") {
-    throw new NormalizerDialectError(harness, `field "${field}" must be a string, got ${typeof v}`);
+    throw new NormalizerDialectError(harness, `field "${field}" must be a string, got ${describeType(v)}`);
   }
   return v;
 }
@@ -42,7 +42,7 @@ export function optString(harness: string, obj: Record<string, unknown>, field: 
   const v = obj[field];
   if (v === undefined || v === null) return undefined;
   if (typeof v !== "string") {
-    throw new NormalizerDialectError(harness, `field "${field}" must be a string when present, got ${typeof v}`);
+    throw new NormalizerDialectError(harness, `field "${field}" must be a string when present, got ${describeType(v)}`);
   }
   return v;
 }
@@ -52,7 +52,7 @@ export function optNumber(harness: string, obj: Record<string, unknown>, field: 
   const v = obj[field];
   if (v === undefined || v === null) return undefined;
   if (typeof v !== "number" || !Number.isFinite(v)) {
-    throw new NormalizerDialectError(harness, `field "${field}" must be a finite number when present, got ${typeof v}`);
+    throw new NormalizerDialectError(harness, `field "${field}" must be a finite number when present, got ${describeType(v)}`);
   }
   return v;
 }

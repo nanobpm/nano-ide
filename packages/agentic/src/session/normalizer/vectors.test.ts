@@ -126,7 +126,9 @@ function semantic(event: SessionEvent): DistributiveOmit<SessionEvent, "id" | "p
 }
 
 // Every dialect in the fleet has a vector (no harness ships without a test vector).
-assert.equal(VECTORS.length, FLEET_NORMALIZERS.length, "every fleet normalizer must have a shared test vector");
+test("every fleet normalizer has a shared test vector", () => {
+  assert.equal(VECTORS.length, FLEET_NORMALIZERS.length, "every fleet normalizer must have a shared test vector");
+});
 
 for (const { normalizer, records } of VECTORS) {
   test(`[${normalizer.harness}] native transcript normalizes onto the shared canonical shape`, () => {

@@ -54,7 +54,9 @@ export interface ResolveOptions {
  * `URBAN_CONTEXT_CACHE_DIR`, then `XDG_CACHE_HOME`, then `~/.cache`, falling
  * back to the OS temp dir when no home directory is available.
  */
-export function defaultContextCacheRoot(env: NodeJS.ProcessEnv = process.env): string {
+export function defaultContextCacheRoot(
+  env: Record<string, string | undefined> = process.env,
+): string {
   if (env.URBAN_CONTEXT_CACHE_DIR) return env.URBAN_CONTEXT_CACHE_DIR;
   if (env.XDG_CACHE_HOME) return join(env.XDG_CACHE_HOME, "urban", "context");
   const home = safeHomedir();

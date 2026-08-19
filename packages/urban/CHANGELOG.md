@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.59.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.58.0...@nanobpm/urban-0.59.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** col.format="datetime" — render grid timestamps in the viewer's local time ([#329](https://github.com/nanobpm/nano-ide/issues/329)) ([66bfdb7](https://github.com/nanobpm/nano-ide/commit/66bfdb7acb34f151509334251677bbc1b72246d1))
+* **urban:** col.format="datetime" renders grid timestamps in the viewer's local time ([66bfdb7](https://github.com/nanobpm/nano-ide/commit/66bfdb7acb34f151509334251677bbc1b72246d1)), closes [#327](https://github.com/nanobpm/nano-ide/issues/327)
+
 ## [0.58.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.57.0...@nanobpm/urban-0.58.0) (2026-08-18)
 
 

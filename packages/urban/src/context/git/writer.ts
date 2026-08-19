@@ -277,13 +277,28 @@ export class ContextWriter {
             `(expected a ${PROPOSAL_BRANCH_PREFIX}* branch).`,
         );
       }
-      // DEFENCE 2 — the merge must introduce EXACTLY the one proposed record file
+      // DEFENCE 2 — the merge target is the writer's OWN resolved base branch, never
+      // a caller-supplied one. `ProposalResult` is a plain object, so a consumer can
+      // mutate `proposal.baseBranch` to steer the merge onto a different line than
+      // this writer is bound to (undermining the "one resolved handle" contract).
+      // Resolve the base ourselves and reject any proposal that targets a different
+      // one; every downstream step (diff, checkout, merge) uses `base`, not the
+      // untrusted `proposal.baseBranch`.
+      const base = await this.#resolveBaseBranch();
+      if (proposal.baseBranch !== base) {
+        throw new GovernanceError(
+          `cannot ratify: proposal targets base ${proposal.baseBranch}, but this ` +
+            `writer is bound to ${base}. A proposal may only be ratified onto the ` +
+            "base branch its writer resolved.",
+        );
+      }
+      // DEFENCE 3 — the merge must introduce EXACTLY the one proposed record file
       // and nothing else. A proposal branch created/amended outside `proposePrior`
       // could carry extra files (more records, or content outside the record
       // layout) that a single-file re-read would never see; merging it would land
       // that content UNGUARDED. Bounding the diff to `[proposal.path]` makes the
       // file we re-guard below provably the ONLY candidate content being merged.
-      const changed = await this.#substrate.diffPaths(proposal.baseBranch, proposal.branch);
+      const changed = await this.#substrate.diffPaths(base, proposal.branch);
       if (changed.length !== 1 || changed[0] !== proposal.path) {
         throw new GovernanceError(
           `cannot ratify: proposal branch ${proposal.branch} changes ` +
@@ -300,7 +315,7 @@ export class ContextWriter {
       const proposed = await this.#substrate.readFileAtRef(proposal.branch, proposal.path);
       const record = assertMemoryRecord(parseRecordJson(proposed, proposal.path));
       this.#guards.assertAll(record);
-      // DEFENCE 3 — the on-disk path must be the record's canonical layout path, so
+      // DEFENCE 4 — the on-disk path must be the record's canonical layout path, so
       // a record can never be ratified under a path that mismatches its validated
       // scope/scopeRef/id (which would make it invisible to layout-based retrieval).
       const canonical = recordRelativePath(record);
@@ -311,13 +326,13 @@ export class ContextWriter {
         );
       }
 
-      await this.#substrate.checkout(proposal.baseBranch);
+      await this.#substrate.checkout(base);
       const mergeCommit = await this.#substrate.mergeBranch(
         proposal.branch,
-        `context(ratify): merge proposal ${proposal.proposalId} onto ${proposal.baseBranch}`,
+        `context(ratify): merge proposal ${proposal.proposalId} onto ${base}`,
         this.#botAuthor,
       );
-      return { mergeCommit, baseBranch: proposal.baseBranch };
+      return { mergeCommit, baseBranch: base };
     });
   }
 

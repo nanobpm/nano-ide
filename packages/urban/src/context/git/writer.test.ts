@@ -357,6 +357,34 @@ test("ratify REFUSES a branch outside the proposal namespace", async () => {
   assert.equal(await git(dir, "status", "--porcelain"), "");
 });
 
+test("ratify REFUSES a proposal whose baseBranch was retargeted off the writer's resolved base", async () => {
+  const dir = await makeSubstrate();
+  // The writer is bound (by S1) to `main` as its resolved base.
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-rebase", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // A real branch the caller tries to steer the merge onto instead of `main`.
+  await git(dir, "branch", "rogue-base", "main");
+
+  // Mutate the plain-object handle to point at a different base than the writer
+  // resolved. ratify must refuse — the merge target is the writer's own base, not
+  // whatever the (untrusted) handle carries.
+  await assert.rejects(
+    () => writer.ratify({ ...proposal, baseBranch: "rogue-base" }),
+    GovernanceError,
+  );
+
+  assert.equal(await writer.isRatified(proposal), false);
+  assert.ok(
+    !(await exists(join(dir, proposal.path))),
+    "a proposal retargeted off the resolved base must never be ratified",
+  );
+  assert.equal(await git(dir, "status", "--porcelain"), "");
+});
+
 test("concurrent proposals use separate branches without clobbering", async () => {
   const dir = await makeSubstrate();
   const writer = new ContextWriter({ localPath: dir, ref: "main" });

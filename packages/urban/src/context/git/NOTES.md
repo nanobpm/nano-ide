@@ -25,13 +25,17 @@ const writer = new ContextWriter(resolvedHandle); // no wiring needed
 - `ratify(proposal)` — **merges** the bot branch onto the base branch. Merge ==
   ratification. Because the proposal branch may have been created or amended
   outside `proposePrior`, the branch is untrusted, so before merging `ratify`:
-  (1) refuses any branch outside the `context/proposal/` namespace; (2) bounds the
+  (1) refuses any branch outside the `context/proposal/` namespace; (2) rejects any
+  proposal whose `baseBranch` differs from the writer's **own resolved base**, and
+  merges onto that resolved base (never the caller-supplied one), so a mutated
+  handle can't steer the merge off the line the writer is bound to; (3) bounds the
   branch↔base diff to **exactly** the one proposed record file, so no extra file
   (another record, or content outside the record layout) can ride onto the
-  authoritative line **unguarded**; (3) **re-reads, re-validates (S2 schema) and
-  re-runs the mandatory PII guard** against that record; and (4) asserts its
+  authoritative line **unguarded**; (4) **re-reads, re-validates (S2 schema) and
+  re-runs the mandatory PII guard** against that record; and (5) asserts its
   on-disk path is the record's canonical layout path. Only then is it merged — so
-  a PII-carrying, invalid, mislocated, or smuggled record can never be ratified.
+  a PII-carrying, invalid, mislocated, smuggled, or misdirected record can never be
+  ratified.
   It accepts the hypothesis onto the authoritative line; it never upgrades an
   `agent-retro` record to `authoritative` (the S2 schema forbids that), so an
   unratified — or even a ratified — prior can never present as a

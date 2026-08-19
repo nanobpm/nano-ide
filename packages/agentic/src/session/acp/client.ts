@@ -233,6 +233,15 @@ export class AcpSessionClient {
 
   #ingest(params: unknown): void {
     if (!isRecord(params)) return;
+    // session/update carries the target sessionId (ACP). Once this client is driving
+    // a session, ignore updates addressed to a *different* session — a late update
+    // from a previous session, or a misrouted one, must not corrupt this stream.
+    // Guarded on #sessionId being set: during session/load replay the id is not yet
+    // stored, and those updates legitimately belong to the session being restored.
+    const sessionId = params.sessionId;
+    if (this.#sessionId !== undefined && typeof sessionId === "string" && sessionId !== this.#sessionId) {
+      return;
+    }
     const update = classifyUpdate(params.update);
     switch (update.kind) {
       case "message":

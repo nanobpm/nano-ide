@@ -40,6 +40,23 @@ test("NewlineJsonDecoder routes an unparseable line to onError without aborting"
   assert.deepEqual(messages, [{ ok: 1 }], "the stream continues past the bad line");
 });
 
+test("NewlineJsonDecoder.flush delivers a final unterminated line at EOF instead of dropping it", () => {
+  const messages: unknown[] = [];
+  const decoder = new NewlineJsonDecoder(
+    (m) => messages.push(m),
+    (e) => {
+      throw e;
+    },
+  );
+  // The second message has no trailing newline — as if the pipe hit EOF mid-line.
+  decoder.push('{"a":1}\n{"b":2}');
+  assert.deepEqual(messages, [{ a: 1 }], "push emits only the newline-terminated line");
+  decoder.flush();
+  assert.deepEqual(messages, [{ a: 1 }, { b: 2 }], "flush emits the buffered final line at EOF");
+  decoder.flush();
+  assert.deepEqual(messages, [{ a: 1 }, { b: 2 }], "flush is idempotent — the buffer is cleared");
+});
+
 test("encodeMessageLine produces exactly one newline-terminated JSON line", () => {
   const line = encodeMessageLine({ jsonrpc: "2.0", id: 1 });
   assert.equal(line, '{"jsonrpc":"2.0","id":1}\n');

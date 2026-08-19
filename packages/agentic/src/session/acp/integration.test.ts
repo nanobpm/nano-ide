@@ -13,7 +13,9 @@ import { AcpConnection } from "./jsonrpc.ts";
 import { spawnAcpTransport } from "./spawn.ts";
 
 const command = process.env.ACP_OPENCODE_CMD;
-const args = process.env.ACP_OPENCODE_ARGS ? process.env.ACP_OPENCODE_ARGS.split(" ") : ["acp"];
+const args = process.env.ACP_OPENCODE_ARGS
+  ? process.env.ACP_OPENCODE_ARGS.trim().split(/\s+/).filter(Boolean)
+  : ["acp"];
 
 test(
   "initialize against a real ACP harness reports its loadSession capability",

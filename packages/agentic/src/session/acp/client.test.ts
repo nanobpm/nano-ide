@@ -160,6 +160,32 @@ test("consecutive same-message chunks coalesce; a new messageId starts a new eve
   );
 });
 
+test("session/update addressed to a different session id is ignored", async () => {
+  const { sink, events } = collector();
+  const { client, agent } = connectClientWithAgent(
+    {
+      sessionId: "sess-mine",
+      promptUpdates: [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "mine" } }],
+      promptStopReason: "end_turn",
+    },
+    sink,
+  );
+  await client.initialize();
+  await client.newSession({ cwd: CWD });
+  // A stray update for a *different* session must not enter this session's stream.
+  agent.notify("session/update", {
+    sessionId: "sess-other",
+    update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "leak" } },
+  });
+  await client.prompt("hi");
+
+  assert.deepEqual(
+    events.map((e) => (e.type === "assistant" ? e.text : e.type)),
+    ["mine"],
+    "only the update addressed to sess-mine is ingested; the sess-other leak is dropped",
+  );
+});
+
 test("prompt before a session is established throws", async () => {
   const { sink } = collector();
   const { client } = connectClient({}, sink);

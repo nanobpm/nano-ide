@@ -58,6 +58,19 @@ export class NewlineJsonDecoder {
     }
   }
 
+  /**
+   * Deliver any final buffered line at stream end (EOF without a trailing
+   * newline). A compliant peer newline-terminates every message, but on abrupt
+   * process/pipe EOF a complete final message can sit unterminated in the buffer;
+   * flushing it surfaces the message (or a parse error) instead of silently
+   * dropping it. Idempotent: it clears the buffer, so a second call is a no-op.
+   */
+  flush(): void {
+    const line = this.#buffer.trim();
+    this.#buffer = "";
+    if (line.length > 0) this.#deliver(line);
+  }
+
   #deliver(line: string): void {
     let parsed: unknown;
     try {

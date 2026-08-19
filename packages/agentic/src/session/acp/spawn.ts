@@ -49,20 +49,26 @@ export function spawnAcpTransport(options: SpawnAcpOptions): SpawnedAcpTransport
 
   let messageHandler: ((message: unknown) => void) | undefined;
   let errorHandler: ((error: Error) => void) | undefined;
+  let closed = false;
   const decoder = new NewlineJsonDecoder(
     (message) => messageHandler?.(message),
     (error) => errorHandler?.(error),
   );
 
   child.stdout.on("data", (chunk: string) => decoder.push(chunk));
+  // On EOF, flush any final message the harness wrote without a trailing newline
+  // rather than dropping it.
+  child.stdout.on("end", () => decoder.flush());
   child.on("error", (error) => errorHandler?.(error));
   child.on("exit", (code, signal) => {
+    // A caller-initiated close() kills the child and triggers this exit; that is a
+    // normal shutdown, not a transport error, so do not surface a spurious error.
+    if (closed) return;
     errorHandler?.(new Error(`ACP harness exited (code=${String(code)}, signal=${String(signal)})`));
   });
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk: string) => options.onStderr?.(chunk));
 
-  let closed = false;
   return {
     child,
     send(message: unknown): void {

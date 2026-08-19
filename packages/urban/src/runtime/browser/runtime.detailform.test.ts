@@ -6,7 +6,7 @@
 // child-grid parity can't silently drift.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildDetailForm, chevronToggle, setChevronOpen } from "./runtime.browser.js";
+import { buildDetailForm, chevronToggle, setChevronOpen, evalDetailCondition, normalizeDetailOptions } from "./runtime.browser.js";
 
 // ── Fake DOM with fire-able listeners ───────────────────────────────────────
 // Richer than the render-only fake in runtime.browser.test.ts: it records event
@@ -265,4 +265,180 @@ test("#333: on a fully successful submit the button stays disabled — the refre
   await button!.fire("click");
 
   assert.equal(button?.disabled, true, "left disabled on success — the refresh replaces the form, so re-enabling is moot");
+});
+
+// ── #372: schema-derived multi-field / choice detail.form ───────────────────
+// The single-textarea form (above) is now the degenerate case of a form whose
+// fields are DERIVED from the element's `.form` contract: a form may declare an
+// array of `select`/`textarea`/`text` fields, each bound to its own inputKey and
+// optionally gated by a `conditional.hide` FEEL expression. These tests exercise
+// the multi-field render, the choice widget, the single assembled {{form}} body,
+// and the conditional gate — the surface nwf's five human-decision kinds need.
+
+const MULTI_ACTION = {
+  path: "/app/api/actions/complete-user-task",
+  body: { taskId: "{{row.task_id}}", variables: "{{form}}" },
+  successLabel: "Resolved ✓",
+};
+// A feature-escalation form: a required `resolution` choice plus a free-text
+// `answer` that only applies when the operator chose "answer".
+const ESCALATION_FORM = {
+  showWhenField: "answerable",
+  promptField: "question",
+  submitLabel: "Resolve",
+  action: MULTI_ACTION,
+  fields: [
+    {
+      inputKey: "resolution",
+      type: "select",
+      label: "Resolution",
+      options: [
+        { value: "answer", label: "Answer the question" },
+        { value: "abandon", label: "Abandon the feature" },
+      ],
+    },
+    {
+      inputKey: "answer",
+      type: "textarea",
+      label: "Your answer",
+      conditional: { hide: '=resolution != "answer"' },
+    },
+  ],
+};
+
+function fakeFetch(t: { after: (fn: () => void) => void }, calls: Array<{ url: unknown; init: { method?: string; body?: string } }>) {
+  const prior = globalThis.fetch;
+  Reflect.set(globalThis, "fetch", async (url: unknown, init: { method?: string; body?: string }) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  });
+  t.after(() => Reflect.set(globalThis, "fetch", prior));
+}
+
+test("#372: a multi-field form renders a labelled <select> (with option labels) and a <textarea>", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const box = buildDetailForm(ESCALATION_FORM, { answerable: true, question: "Ship it?" }, () => {});
+  assert.ok(box);
+  const select = created.find((n) => n.tagName === "SELECT");
+  const textarea = created.find((n) => n.tagName === "TEXTAREA");
+  assert.ok(select, "the choice field renders a native <select>");
+  assert.ok(textarea, "the free-text field renders a <textarea>");
+  const options = created.filter((n) => n.tagName === "OPTION");
+  assert.equal(options.length, 2, "one <option> per enumerated value");
+  assert.equal(options[0].getAttribute("value"), "answer");
+  assert.equal(options[0].textContent, "Answer the question", "the option's label (not the value) is shown");
+  assert.equal(select?.getAttribute("aria-label"), "Resolution", "the choice field is screen-reader labelled");
+  // A multi-field form gives each widget a visible <label> so the fields are
+  // distinguishable (the legacy single-textarea form stays label-less).
+  const labels = created.filter((n) => n.tagName === "LABEL");
+  assert.ok(labels.some((l) => l.textContent === "Resolution"), "the select carries a visible label");
+});
+
+test("#372: submit assembles every visible field into ONE {{form}} body keyed by inputKey", async (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const calls: Array<{ url: unknown; init: { method?: string; body?: string } }> = [];
+  fakeFetch(t, calls);
+  const box = buildDetailForm(ESCALATION_FORM, { answerable: true, question: "Ship it?", task_id: "T-5" }, () => {});
+  assert.ok(box);
+  const select = created.find((n) => n.tagName === "SELECT")!;
+  const textarea = created.find((n) => n.tagName === "TEXTAREA")!;
+  const button = created.find((n) => n.tagName === "BUTTON")!;
+  select.value = "answer";
+  await select.fire("change");
+  textarea.value = "Yes — proceed";
+  await button.fire("click");
+  assert.equal(calls.length, 1, "exactly one route POST");
+  const sent = JSON.parse(String(calls[0].init.body));
+  assert.deepEqual(
+    sent,
+    { taskId: "T-5", variables: { resolution: "answer", answer: "Yes — proceed" } },
+    "both fields splice into a single {{form}} keyed by their inputKeys",
+  );
+});
+
+test("#372: a field hidden by conditional.hide is dropped from the submitted body", async (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const calls: Array<{ url: unknown; init: { method?: string; body?: string } }> = [];
+  fakeFetch(t, calls);
+  const box = buildDetailForm(ESCALATION_FORM, { answerable: true, question: "Ship it?", task_id: "T-6" }, () => {});
+  assert.ok(box);
+  const select = created.find((n) => n.tagName === "SELECT")!;
+  const textarea = created.find((n) => n.tagName === "TEXTAREA")!;
+  const wrapOf = (input: FakeElement) => created.find((n) => n.tagName === "DIV" && n.className === "pc-field" && n.children.includes(input))!;
+  const button = created.find((n) => n.tagName === "BUTTON")!;
+  // Choosing "abandon" makes `resolution != "answer"` true, so the answer field
+  // is hidden — and must not smuggle a stale value through.
+  select.value = "abandon";
+  await select.fire("change");
+  assert.equal(wrapOf(textarea).hidden, true, "the answer field is hidden when the choice isn't 'answer'");
+  textarea.value = "leftover text that should be ignored";
+  await button.fire("click");
+  const sent = JSON.parse(String(calls[0].init.body));
+  assert.deepEqual(
+    sent,
+    { taskId: "T-6", variables: { resolution: "abandon" } },
+    "the hidden field is omitted from {{form}}",
+  );
+});
+
+test("#372: conditional.hide re-evaluates live — flipping the choice reveals the dependent field", async (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const box = buildDetailForm(ESCALATION_FORM, { answerable: true, question: "Ship it?" }, () => {});
+  assert.ok(box);
+  const select = created.find((n) => n.tagName === "SELECT")!;
+  const textarea = created.find((n) => n.tagName === "TEXTAREA")!;
+  const wrapOf = (input: FakeElement) => created.find((n) => n.tagName === "DIV" && n.className === "pc-field" && n.children.includes(input))!;
+  // Initial state: the select defaults to its first option ("answer" is empty in
+  // the fake until set), so an unset select value ("") != "answer" → hidden.
+  select.value = "abandon";
+  await select.fire("change");
+  assert.equal(wrapOf(textarea).hidden, true, "hidden while 'abandon' is chosen");
+  select.value = "answer";
+  await select.fire("change");
+  assert.equal(wrapOf(textarea).hidden, false, "revealed once 'answer' is chosen");
+});
+
+test("#372: normalizeDetailOptions accepts {value,label} objects and bare scalars", () => {
+  assert.deepEqual(normalizeDetailOptions([{ value: "a", label: "Alpha" }, { value: "b" }]), [
+    { value: "a", label: "Alpha" },
+    { value: "b", label: "b" },
+  ]);
+  assert.deepEqual(normalizeDetailOptions(["x", 2]), [
+    { value: "x", label: "x" },
+    { value: "2", label: "2" },
+  ]);
+  assert.deepEqual(normalizeDetailOptions(undefined), []);
+});
+
+test("#372: evalDetailCondition evaluates the FEEL subset used by .form conditional.hide", () => {
+  // Equality / inequality against a string literal (the feature-escalation case).
+  assert.equal(evalDetailCondition('=resolution != "answer"', { resolution: "abandon" }), true);
+  assert.equal(evalDetailCondition('=resolution != "answer"', { resolution: "answer" }), false);
+  assert.equal(evalDetailCondition('resolution = "answer"', { resolution: "answer" }), true);
+  // A missing field is not equal to a concrete literal.
+  assert.equal(evalDetailCondition('directive = "revise"', {}), false);
+  assert.equal(evalDetailCondition('directive != "revise"', {}), true);
+  // and / or combination and numeric comparison.
+  assert.equal(evalDetailCondition('action = "proceed" or action = "merge"', { action: "merge" }), true);
+  assert.equal(evalDetailCondition('count > 3 and flag = "on"', { count: "5", flag: "on" }), true);
+  assert.equal(evalDetailCondition('count > 3 and flag = "on"', { count: "2", flag: "on" }), false);
+  // Boolean flag (bare primary) and null literal.
+  assert.equal(evalDetailCondition("=urgent", { urgent: true }), true);
+  assert.equal(evalDetailCondition("=urgent", { urgent: false }), false);
+});
+
+test("#372: evalDetailCondition fails OPEN (false → field stays visible) on any unparseable input", () => {
+  // A garbage / partial expression must never hide (and thus drop) a field.
+  assert.equal(evalDetailCondition("=resolution !!! answer", { resolution: "x" }), false);
+  assert.equal(evalDetailCondition("=(unbalanced", { a: 1 }), false);
+  // An unterminated string literal must fail open too, not read the truncated
+  // remainder as a valid token.
+  assert.equal(evalDetailCondition('=resolution != "answer', { resolution: "abandon" }), false);
+  assert.equal(evalDetailCondition("=resolution = 'answer", { resolution: "answer" }), false);
+  assert.equal(evalDetailCondition("", { a: 1 }), false);
+  assert.equal(evalDetailCondition(null, { a: 1 }), false);
 });

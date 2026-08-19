@@ -213,10 +213,12 @@ function optString(obj: Record<string, unknown>, field: string): string | undefi
   return v;
 }
 
-function reqNumber(obj: Record<string, unknown>, field: string): number {
+function reqNonNegInt(obj: Record<string, unknown>, field: string): number {
   const v = obj[field];
-  if (typeof v !== "number" || !Number.isFinite(v)) {
-    throw new SessionEventShapeError(`session event field "${field}" must be a finite number, got ${String(v)}`);
+  if (typeof v !== "number" || !Number.isSafeInteger(v) || v < 0) {
+    throw new SessionEventShapeError(
+      `session event field "${field}" must be a non-negative safe integer, got ${String(v)}`,
+    );
   }
   return v;
 }
@@ -292,13 +294,20 @@ export function parseSessionEvent(value: unknown): SessionEvent {
         throw new SessionEventShapeError(`compaction "reason" must be "compaction" or "truncation", got ${String(reason)}`);
       }
       const summary = optString(value, "summary");
+      const replacesFrom = reqNonNegInt(value, "replacesFrom");
+      const replacesTo = reqNonNegInt(value, "replacesTo");
+      if (replacesTo < replacesFrom) {
+        throw new SessionEventShapeError(
+          `compaction "replacesTo" (${replacesTo}) must be >= "replacesFrom" (${replacesFrom})`,
+        );
+      }
       return {
         type,
         id,
         parentId: parent,
         reason,
-        replacesFrom: reqNumber(value, "replacesFrom"),
-        replacesTo: reqNumber(value, "replacesTo"),
+        replacesFrom,
+        replacesTo,
         ...(summary !== undefined ? { summary } : {}),
       };
     }
@@ -308,15 +317,15 @@ export function parseSessionEvent(value: unknown): SessionEvent {
         type,
         id,
         parentId: parent,
-        inputTokens: reqNumber(value, "inputTokens"),
-        outputTokens: reqNumber(value, "outputTokens"),
+        inputTokens: reqNonNegInt(value, "inputTokens"),
+        outputTokens: reqNonNegInt(value, "outputTokens"),
         ...(model !== undefined ? { model } : {}),
       };
     }
     case "turn-start":
-      return { type, id, parentId: parent, turn: reqNumber(value, "turn") };
+      return { type, id, parentId: parent, turn: reqNonNegInt(value, "turn") };
     case "turn-end":
-      return { type, id, parentId: parent, turn: reqNumber(value, "turn") };
+      return { type, id, parentId: parent, turn: reqNonNegInt(value, "turn") };
     default:
       throw new SessionEventShapeError(`unknown session event type: ${JSON.stringify(type)}`);
   }

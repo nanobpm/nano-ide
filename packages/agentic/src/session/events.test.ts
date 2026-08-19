@@ -71,3 +71,55 @@ test("parseSessionEvent rejects a compaction with an invalid reason", () => {
 test("parseSessionEvent rejects a non-object", () => {
   assert.throws(() => parseSessionEvent(fromJson("42")), SessionEventShapeError);
 });
+
+test("parseSessionEvent rejects a negative or non-integer turn index", () => {
+  assert.throws(
+    () => parseSessionEvent(fromJson('{"type":"turn-start","id":"t","parentId":null,"turn":-1}')),
+    SessionEventShapeError,
+  );
+  assert.throws(
+    () => parseSessionEvent(fromJson('{"type":"turn-end","id":"t","parentId":null,"turn":1.5}')),
+    SessionEventShapeError,
+  );
+});
+
+test("parseSessionEvent rejects negative or fractional token counts", () => {
+  assert.throws(
+    () =>
+      parseSessionEvent(
+        fromJson('{"type":"usage","id":"u","parentId":null,"inputTokens":-1,"outputTokens":2}'),
+      ),
+    SessionEventShapeError,
+  );
+  assert.throws(
+    () =>
+      parseSessionEvent(
+        fromJson('{"type":"usage","id":"u","parentId":null,"inputTokens":1,"outputTokens":2.5}'),
+      ),
+    SessionEventShapeError,
+  );
+});
+
+test("parseSessionEvent rejects a compaction with a negative or inverted offset range", () => {
+  assert.throws(
+    () =>
+      parseSessionEvent(
+        fromJson('{"type":"compaction","id":"c","parentId":null,"reason":"compaction","replacesFrom":-1,"replacesTo":3}'),
+      ),
+    SessionEventShapeError,
+  );
+  assert.throws(
+    () =>
+      parseSessionEvent(
+        fromJson('{"type":"compaction","id":"c","parentId":null,"reason":"compaction","replacesFrom":5,"replacesTo":3}'),
+      ),
+    SessionEventShapeError,
+  );
+  assert.throws(
+    () =>
+      parseSessionEvent(
+        fromJson('{"type":"compaction","id":"c","parentId":null,"reason":"compaction","replacesFrom":0,"replacesTo":2.5}'),
+      ),
+    SessionEventShapeError,
+  );
+});

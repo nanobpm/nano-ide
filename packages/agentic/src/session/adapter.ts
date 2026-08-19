@@ -20,9 +20,10 @@ import type { AppendedSessionEvent, SessionEvent } from "./events.ts";
  * `(processInstanceKey, elementId)` shares one causal log and one fence, so a
  * re-lease resumes the same session rather than starting a new one.
  *
- * The authoritative log is keyed `(processInstanceKey, elementId, incarnation)`
- * (ADR 0062): this pair identifies the activation, and the per-event
- * `incarnation` stamp records which generation wrote each row.
+ * The authoritative log is keyed `(processInstanceKey, elementId)` (ADR 0062):
+ * this pair identifies the activation and shares one fence. The current
+ * `incarnation` is stored as the fence token, and each appended event carries an
+ * `incarnation` stamp recording which generation wrote that row.
  */
 export interface ActivationKey {
   readonly processInstanceKey: string;

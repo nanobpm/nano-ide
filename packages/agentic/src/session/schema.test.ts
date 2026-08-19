@@ -51,8 +51,8 @@ test("the migration takes prefix 005, after 004_urban_lineage", () => {
   assert.match(migrationPath, /\/005_agentic_session\.sql$/);
 });
 
-test("ensureSchema creates all three session tables idempotently", () => {
-  const db = openTestDb();
+test("ensureSchema creates all three session tables idempotently", (t) => {
+  const db = openTestDb(t);
   const log = new SqliteSessionLog(db);
   log.ensureSchema();
   log.ensureSchema();
@@ -63,5 +63,22 @@ test("ensureSchema creates all three session tables idempotently", () => {
     )
     .map((r) => r.name);
   assert.deepEqual(tables, [SESSION_CHECKPOINT_TABLE, SESSION_EVENT_TABLE, SESSION_LOG_TABLE].sort());
-  db.close();
+});
+
+test("the production build excludes the test-only sqlite helper (it is never published)", () => {
+  // Guards the failure-mode class the `test-db.ts` header documents: a test-only
+  // helper must not leak into the emitted `dist`. The comment claims exclusion via
+  // `tsconfig.build.json`; this asserts the config actually honours it.
+  const buildTsconfigPath = fileURLToPath(new URL("../../tsconfig.build.json", import.meta.url));
+  const buildTsconfig: unknown = JSON.parse(readFileSync(buildTsconfigPath, "utf8"));
+  assert.ok(
+    buildTsconfig !== null && typeof buildTsconfig === "object" && "exclude" in buildTsconfig,
+    "tsconfig.build.json must declare an exclude list",
+  );
+  const exclude = buildTsconfig.exclude;
+  assert.ok(Array.isArray(exclude), "tsconfig.build.json exclude must be an array");
+  assert.ok(
+    exclude.includes("**/test-db.ts"),
+    "tsconfig.build.json must exclude **/test-db.ts so the test-only helper is not shipped",
+  );
 });

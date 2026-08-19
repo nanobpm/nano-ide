@@ -2,9 +2,10 @@
  * Test-only helper: a {@link SqliteDb} backed by an in-memory `node:sqlite`
  * database, mirroring the Node host adapter's `wrapNodeSqlite` (and the identical
  * helper in @nanobpm/agentic's presence/transcript families). Kept out of the
- * published build — it exists solely so the durable-log tests exercise the store
- * against a real SQLite engine, not a mock.
+ * published build (see `tsconfig.build.json` exclude) — it exists solely so the
+ * durable-log tests exercise the store against a real SQLite engine, not a mock.
  */
+import type { TestContext } from "node:test";
 import { DatabaseSync } from "node:sqlite";
 import type { SqliteDb } from "./log.ts";
 
@@ -23,8 +24,21 @@ function toParams(params: unknown[]): (string | number | bigint | null | Uint8Ar
   });
 }
 
-export function openTestDb(): TestDb {
+/**
+ * Open an in-memory test database. Pass the test's {@link TestContext} to make
+ * the DB close automatically when the test finishes (`t.after`) — the single
+ * canonical cleanup path, so no test can leak an open SQLite handle by forgetting
+ * to call `close()`. `close()` is idempotent, so an explicit call is still safe.
+ */
+export function openTestDb(t?: TestContext): TestDb {
   const db = new DatabaseSync(":memory:");
+  let closed = false;
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    db.close();
+  };
+  t?.after(close);
   return {
     exec: (sql) => db.exec(sql),
     run: (sql, params = []) => {
@@ -37,6 +51,6 @@ export function openTestDb(): TestDb {
       // biome-ignore lint/plugin: Node sqlite returns untyped row objects; SqliteDb.all<T> is the host adapter boundary.
       return stmt.all(...toParams(params)) as T[];
     },
-    close: () => db.close(),
+    close,
   };
 }

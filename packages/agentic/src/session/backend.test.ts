@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { TestContext } from "node:test";
 import { type ActivationKey, StaleIncarnationError } from "./adapter.ts";
 import type { SessionEvent } from "./events.ts";
 import { InMemorySessionLog, type SessionLog, SqliteSessionLog } from "./log.ts";
@@ -20,16 +21,19 @@ function msg(id: string, parentId: string | null, text: string): SessionEvent {
 
 interface Harness {
   readonly name: string;
-  /** A fresh shared log (persists across incarnations of the same activation). */
-  makeLog(): SessionLog;
+  /**
+   * A fresh shared log (persists across incarnations of the same activation).
+   * Pass the test context so any backing SQLite DB is closed on test teardown.
+   */
+  makeLog(t: TestContext): SessionLog;
 }
 
 const HARNESSES: readonly Harness[] = [
-  { name: "in-memory", makeLog: () => new InMemorySessionLog() },
+  { name: "in-memory", makeLog: (_t: TestContext) => new InMemorySessionLog() },
   {
     name: "sqlite",
-    makeLog: () => {
-      const log = new SqliteSessionLog(openTestDb());
+    makeLog: (t: TestContext) => {
+      const log = new SqliteSessionLog(openTestDb(t));
       log.ensureSchema();
       return log;
     },
@@ -37,8 +41,8 @@ const HARNESSES: readonly Harness[] = [
 ];
 
 for (const h of HARNESSES) {
-  test(`[${h.name}] emit* → checkpoint → restore reproduces the seed at the checkpoint offset`, () => {
-    const log = h.makeLog();
+  test(`[${h.name}] emit* → checkpoint → restore reproduces the seed at the checkpoint offset`, (t) => {
+    const log = h.makeLog(t);
     const backend = new SessionBackend(log, KEY, 1, { newCheckpointId: seqIds("cp") });
 
     const e0 = backend.emit(msg("e0", null, "a"));
@@ -60,8 +64,8 @@ for (const h of HARNESSES) {
     assert.deepEqual(seed.events, [e0, e1, e2], "seed is exactly the log up to the checkpoint offset");
   });
 
-  test(`[${h.name}] restore repositions the cursor so a resume overwrites the uncommitted tail`, () => {
-    const log = h.makeLog();
+  test(`[${h.name}] restore repositions the cursor so a resume overwrites the uncommitted tail`, (t) => {
+    const log = h.makeLog(t);
     const backend = new SessionBackend(log, KEY, 1, { newCheckpointId: seqIds("cp") });
     backend.emit(msg("e0", null, "a"));
     backend.emit(msg("e1", "e0", "b"));
@@ -78,16 +82,16 @@ for (const h of HARNESSES) {
     assert.equal(log.nextOffset(KEY), 3);
   });
 
-  test(`[${h.name}] restore of a session with no checkpoint yields a fresh seed`, () => {
-    const log = h.makeLog();
+  test(`[${h.name}] restore of a session with no checkpoint yields a fresh seed`, (t) => {
+    const log = h.makeLog(t);
     const backend = new SessionBackend(log, KEY, 1);
     backend.emit(msg("e0", null, "a"));
     const seed = backend.restore();
     assert.deepEqual(seed, { checkpoint: null, events: [], nextOffset: 0 });
   });
 
-  test(`[${h.name}] restore(id) resolves a specific earlier checkpoint`, () => {
-    const log = h.makeLog();
+  test(`[${h.name}] restore(id) resolves a specific earlier checkpoint`, (t) => {
+    const log = h.makeLog(t);
     const backend = new SessionBackend(log, KEY, 1, { newCheckpointId: seqIds("cp") });
     backend.emit(msg("e0", null, "a"));
     const cp0 = backend.checkpoint("sha0", LEDGER); // offset 1
@@ -99,8 +103,8 @@ for (const h of HARNESSES) {
     assert.equal(backend.restore(cp0.id).events.length, 1);
   });
 
-  test(`[${h.name}] restore(unknown id) falls back to the latest checkpoint`, () => {
-    const log = h.makeLog();
+  test(`[${h.name}] restore(unknown id) falls back to the latest checkpoint`, (t) => {
+    const log = h.makeLog(t);
     const backend = new SessionBackend(log, KEY, 1, { newCheckpointId: seqIds("cp") });
     backend.emit(msg("e0", null, "a"));
     backend.checkpoint("sha0", LEDGER); // offset 1
@@ -112,8 +116,8 @@ for (const h of HARNESSES) {
     assert.equal(backend.restore("does-not-exist").nextOffset, latest.offset);
   });
 
-  test(`[${h.name}] the incarnation fence rejects a stale writer`, () => {
-    const log = h.makeLog();
+  test(`[${h.name}] the incarnation fence rejects a stale writer`, (t) => {
+    const log = h.makeLog(t);
     const inc1 = new SessionBackend(log, KEY, 1);
     inc1.emit(msg("e0", null, "a"));
 
@@ -127,15 +131,15 @@ for (const h of HARNESSES) {
     assert.equal(ok.incarnation, 2);
   });
 
-  test(`[${h.name}] constructing a stale incarnation throws at lease time`, () => {
-    const log = h.makeLog();
+  test(`[${h.name}] constructing a stale incarnation throws at lease time`, (t) => {
+    const log = h.makeLog(t);
     void new SessionBackend(log, KEY, 5);
     assert.throws(() => new SessionBackend(log, KEY, 3), StaleIncarnationError);
   });
 }
 
-test("[sqlite] the fence high-water is durable across a fresh store (restart)", () => {
-  const db = openTestDb();
+test("[sqlite] the fence high-water is durable across a fresh store (restart)", (t) => {
+  const db = openTestDb(t);
   const first = new SqliteSessionLog(db);
   first.ensureSchema();
   const inc1 = new SessionBackend(first, KEY, 1);
@@ -148,11 +152,10 @@ test("[sqlite] the fence high-water is durable across a fresh store (restart)", 
 
   // The original in-process writer is now fenced by the persisted high-water.
   assert.throws(() => inc1.emit(msg("zombie", "e0", "z")), StaleIncarnationError);
-  db.close();
 });
 
-test("[sqlite] a resumed incarnation replays the durable seed across a restart", () => {
-  const db = openTestDb();
+test("[sqlite] a resumed incarnation replays the durable seed across a restart", (t) => {
+  const db = openTestDb(t);
   const first = new SqliteSessionLog(db);
   first.ensureSchema();
   const inc1 = new SessionBackend(first, KEY, 1, { newCheckpointId: seqIds("cp") });

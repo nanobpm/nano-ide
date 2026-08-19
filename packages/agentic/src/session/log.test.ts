@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import type { TestContext } from "node:test";
 import type { ActivationKey } from "./adapter.ts";
 import type { SessionEvent } from "./events.ts";
 import { StaleIncarnationError } from "./adapter.ts";
@@ -42,18 +43,18 @@ test("replay honours from/to bounds", () => {
 });
 
 for (const make of [
-  { name: "in-memory", open: () => new InMemorySessionLog() },
+  { name: "in-memory", open: (_t: TestContext) => new InMemorySessionLog() },
   {
     name: "sqlite",
-    open: () => {
-      const log = new SqliteSessionLog(openTestDb());
+    open: (t: TestContext) => {
+      const log = new SqliteSessionLog(openTestDb(t));
       log.ensureSchema();
       return log;
     },
   },
 ]) {
-  test(`[${make.name}] replay rejects an invalid 'to' bound just like 'from'`, () => {
-    const log = make.open();
+  test(`[${make.name}] replay rejects an invalid 'to' bound just like 'from'`, (t) => {
+    const log = make.open(t);
     log.lease(KEY, 1);
     for (let i = 0; i < 3; i++) log.append(KEY, 1, i, ev(`e${i}`, i));
     assert.throws(() => log.replay(KEY, 0, -1), RangeError, "negative to");
@@ -73,8 +74,8 @@ test("latestCheckpoint returns the highest-offset checkpoint", () => {
   assert.equal(log.getCheckpoint(KEY, "c2")?.offset, 2);
 });
 
-test("[sqlite] the offset window (first/next) tracks stored events", () => {
-  const db = openTestDb();
+test("[sqlite] the offset window (first/next) tracks stored events", (t) => {
+  const db = openTestDb(t);
   const log = new SqliteSessionLog(db);
   log.ensureSchema();
   log.lease(KEY, 1);
@@ -88,11 +89,10 @@ test("[sqlite] the offset window (first/next) tracks stored events", () => {
   )[0];
   assert.equal(row?.first_offset, 0);
   assert.equal(row?.next_offset, 2);
-  db.close();
 });
 
-test("[sqlite] a durable checkpoint round-trips its effect ledger", () => {
-  const db = openTestDb();
+test("[sqlite] a durable checkpoint round-trips its effect ledger", (t) => {
+  const db = openTestDb(t);
   const log = new SqliteSessionLog(db);
   log.ensureSchema();
   log.lease(KEY, 1);
@@ -106,11 +106,10 @@ test("[sqlite] a durable checkpoint round-trips its effect ledger", () => {
     at: new Date(0).toISOString(),
   });
   assert.deepEqual(log.getCheckpoint(KEY, "c0")?.effectLedger, ledger);
-  db.close();
 });
 
-test("[sqlite] a corrupt effect ledger fails fast on read", () => {
-  const db = openTestDb();
+test("[sqlite] a corrupt effect ledger fails fast on read", (t) => {
+  const db = openTestDb(t);
   const log = new SqliteSessionLog(db);
   log.ensureSchema();
   log.lease(KEY, 1);
@@ -121,11 +120,10 @@ test("[sqlite] a corrupt effect ledger fails fast on read", () => {
     [KEY.processInstanceKey, KEY.elementId, "bad", 0, 1, "sha", '{"not":"an-array"}', new Date(0).toISOString()],
   );
   assert.throws(() => log.getCheckpoint(KEY, "bad"), SessionLogCorruptionError);
-  db.close();
 });
 
-test("[sqlite] resuming into the log deletes the superseded tail rows", () => {
-  const db = openTestDb();
+test("[sqlite] resuming into the log deletes the superseded tail rows", (t) => {
+  const db = openTestDb(t);
   const log = new SqliteSessionLog(db);
   log.ensureSchema();
   log.lease(KEY, 1);
@@ -139,14 +137,13 @@ test("[sqlite] resuming into the log deletes the superseded tail rows", () => {
   )[0];
   assert.equal(rows?.n, 3, "offsets 0,1,2 remain; the old 2 and 3 were dropped");
   assert.equal(log.nextOffset(KEY), 3);
-  db.close();
 });
 
-test("[sqlite] a concurrent first-lease race fences out the stale writer", () => {
+test("[sqlite] a concurrent first-lease race fences out the stale writer", (t) => {
   // Simulate the TOCTOU window: a competing writer commits the activation row at a
   // higher incarnation just before our INSERT lands. A plain ON CONFLICT DO NOTHING
   // would let the stale lease proceed unfenced; #admit must reject it instead.
-  const base = openTestDb();
+  const base = openTestDb(t);
   new SqliteSessionLog(base).ensureSchema();
   const winner = new SqliteSessionLog(base);
   let raced = false;
@@ -164,28 +161,27 @@ test("[sqlite] a concurrent first-lease race fences out the stale writer", () =>
   const stale = new SqliteSessionLog(racingDb);
   assert.throws(() => stale.lease(KEY, 3), StaleIncarnationError);
   assert.equal(new SqliteSessionLog(base).currentIncarnation(KEY), 5);
-  base.close();
 });
 
 for (const make of [
-  { name: "in-memory", open: () => new InMemorySessionLog() },
+  { name: "in-memory", open: (_t: TestContext) => new InMemorySessionLog() },
   {
     name: "sqlite",
-    open: () => {
-      const log = new SqliteSessionLog(openTestDb());
+    open: (t: TestContext) => {
+      const log = new SqliteSessionLog(openTestDb(t));
       log.ensureSchema();
       return log;
     },
   },
 ]) {
-  test(`[${make.name}] putCheckpoint rejects a checkpoint whose incarnation differs from the lease`, () => {
-    const log = make.open();
+  test(`[${make.name}] putCheckpoint rejects a checkpoint whose incarnation differs from the lease`, (t) => {
+    const log = make.open(t);
     log.lease(KEY, 2);
     assert.throws(() => log.putCheckpoint(KEY, 2, checkpoint({ incarnation: 1 })), RangeError);
   });
 
-  test(`[${make.name}] putCheckpoint is idempotent on checkpoint id (first-wins)`, () => {
-    const log = make.open();
+  test(`[${make.name}] putCheckpoint is idempotent on checkpoint id (first-wins)`, (t) => {
+    const log = make.open(t);
     log.lease(KEY, 1);
     log.putCheckpoint(KEY, 1, checkpoint({ id: "c0", offset: 1 }));
     log.putCheckpoint(KEY, 1, checkpoint({ id: "c0", offset: 2 }));

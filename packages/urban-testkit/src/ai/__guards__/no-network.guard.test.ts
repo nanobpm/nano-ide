@@ -25,7 +25,6 @@ import { isRealAiEnabled } from "../adapters/real/env.ts";
 
 interface NetworkSpy {
   touched: () => boolean;
-  restore: () => void;
 }
 
 /** Installs a `fetch` spy that records + throws, restoring the exact prior shape after. */
@@ -62,7 +61,7 @@ async function installNetConnectSpy(record: () => void): Promise<() => void> {
     const proto = net.Socket?.prototype;
     if (proto !== undefined && typeof proto.connect === "function") {
       const originalConnect = proto.connect;
-      const spy = function connect(this: unknown, ...args: readonly unknown[]): unknown {
+      const spy = function connect(this: unknown, ..._args: readonly unknown[]): unknown {
         record();
         throw new Error("network access (socket connect) is blocked in the no-network guard");
       };
@@ -88,7 +87,7 @@ async function withNetworkBlocked(body: (spy: NetworkSpy) => Promise<void>): Pro
   };
   const restoreFetch = installFetchSpy(record);
   const restoreNet = await installNetConnectSpy(record);
-  const spy: NetworkSpy = { touched: () => touched, restore: () => {} };
+  const spy: NetworkSpy = { touched: () => touched };
   try {
     await body(spy);
   } finally {

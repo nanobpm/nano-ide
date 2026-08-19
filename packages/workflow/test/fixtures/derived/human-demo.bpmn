@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" xmlns:nano="https://nanobpm.io/schema/shapes/1.0" id="Definitions_human-demo" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="human-demo" name="human-demo" isExecutable="true">
+    <bpmn:startEvent id="Start"><bpmn:outgoing>g_f_0</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:userTask id="review-form-only" name="review-form-only">
+      <bpmn:extensionElements>
+        <zeebe:formDefinition formId="review-form" />
+        <zeebe:userTask />
+      </bpmn:extensionElements>
+      <bpmn:incoming>g_f_0</bpmn:incoming>
+      <bpmn:outgoing>g_f_1</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="assign-only" name="assign-only">
+      <bpmn:extensionElements>
+        <zeebe:formDefinition formId="assign-form" />
+        <zeebe:userTask />
+        <zeebe:assignmentDefinition assignee="=owner" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>g_f_1</bpmn:incoming>
+      <bpmn:outgoing>g_f_2</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="group-only" name="group-only">
+      <bpmn:extensionElements>
+        <zeebe:formDefinition formId="group-form" />
+        <zeebe:userTask />
+        <zeebe:assignmentDefinition candidateGroups="reviewers" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>g_f_2</bpmn:incoming>
+      <bpmn:outgoing>g_f_3</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="assign-and-group" name="assign-and-group">
+      <bpmn:extensionElements>
+        <zeebe:formDefinition formId="ag-form" />
+        <zeebe:userTask />
+        <zeebe:assignmentDefinition assignee="=escalationAssignee" candidateGroups="operators" />
+      </bpmn:extensionElements>
+      <bpmn:incoming>g_f_3</bpmn:incoming>
+      <bpmn:outgoing>g_f_4</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:userTask id="with-io" name="with-io">
+      <bpmn:extensionElements>
+        <zeebe:formDefinition formId="io-form" />
+        <zeebe:userTask />
+        <zeebe:ioMapping>
+          <zeebe:input source="=caseId" target="case" />
+          <zeebe:output source="=decision" target="result" />
+        </zeebe:ioMapping>
+      </bpmn:extensionElements>
+      <bpmn:incoming>g_f_4</bpmn:incoming>
+      <bpmn:outgoing>g_f_5</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:endEvent id="End"><bpmn:incoming>g_f_5</bpmn:incoming></bpmn:endEvent>
+    <bpmn:sequenceFlow id="f_0" sourceRef="Start" targetRef="review-form-only" />
+    <bpmn:sequenceFlow id="f_1" sourceRef="review-form-only" targetRef="assign-only" />
+    <bpmn:sequenceFlow id="f_2" sourceRef="assign-only" targetRef="group-only" />
+    <bpmn:sequenceFlow id="f_3" sourceRef="group-only" targetRef="assign-and-group" />
+    <bpmn:sequenceFlow id="f_4" sourceRef="assign-and-group" targetRef="with-io" />
+    <bpmn:sequenceFlow id="f_5" sourceRef="with-io" targetRef="End" />
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="g_Di" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"><bpmndi:BPMNPlane id="g_Plane" bpmnElement="g_human-demo"><bpmndi:BPMNShape id="g_S1" bpmnElement="g_review-form-only"/></bpmndi:BPMNPlane></bpmndi:BPMNDiagram>
+</bpmn:definitions>

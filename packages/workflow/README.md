@@ -36,13 +36,24 @@ Both compile to the same engine durability; pick per workflow.
 **The recommended surface.** Describe the flow as a **tree of nodes**: `w.run` (a
 locally-hosted service task), `w.task` (an external-worker service task — job
 type `${flowId}:${name}` by default, or pass `w.task(name, { jobType })` to
-target an existing worker pool, e.g. a `senior:pr-review` agent token), and
+target an existing worker pool, e.g. a `senior:pr-review` agent token),
 `w.signal` (a durable message catch that resumes via a correlated message — the
-human-in-the-loop path), composed with control-flow combinators:
+human-in-the-loop path), and `w.human` (a BPMN **user task** — a human-in-the-loop
+approval gate rendered on a task list), composed with control-flow combinators:
 
 - `w.switch(subject, cases)` — a multi-way exclusive choice; each case key routes
   when `subject = value`; an optional `default` case is the fallback.
 - `w.branch(condition, { then, else? })` — a two-way choice on a FEEL boolean.
+- `w.human(name, { form, assignee?, candidateGroups?, io? })` — a durable **user
+  task** (`<bpmn:userTask>` with the Zeebe user-task marker). `form` binds a
+  `zeebe:formDefinition` (the form id shown to the assignee). Add an assignment
+  with `assignee` (a static user id or a FEEL expression like
+  `=escalationAssignee`) and/or `candidateGroups` (who may claim it) — supply
+  either or both. `io` adds a `zeebe:ioMapping` of `{ input?, output? }` entries
+  (`{ source, target }`: a FEEL `source` copied to/from the process variable
+  `target`), e.g. to stamp the reviewer's decision back onto a variable on
+  completion. The token waits durably until the task is completed from a task
+  list / the Zeebe user-task API.
 - `w.loop(body)` — a durable loop (back-edge to the loop head).
 - `w.break()` / `w.continue()` — exit the enclosing loop, or jump back to its head.
 - `w.parallel([blockA, blockB, …])` — a static fork/join: every block runs
@@ -87,6 +98,25 @@ const { processInstanceKey } = await client.start(onboarding, {});
 // ... later, when a human approves:
 await client.signal(onboarding, "approved", userId, { by: "alice" });
 ```
+
+A human-in-the-loop **approval gate** with a form, an assignment, and an output
+mapping that stamps the decision back onto a process variable:
+
+```ts
+const review = defineFlow("plan-review", (w) => {
+  w.human("plan-review-decision", {
+    form: "plan-review-decision",         // zeebe:formDefinition formId
+    assignee: "=escalationAssignee",       // a FEEL expression (or a static user id)
+    candidateGroups: "operators",          // who may claim it
+    io: { output: [{ source: "=verdict", target: "planVerdict" }] },
+  });
+  w.switch("planVerdict", {
+    approve: (c) => c.run("apply", applyPlan),
+    default: (c) => c.run("revise", revisePlan),
+  });
+});
+```
+
 
 A durable convergence loop (the shape `urban-pr-review` uses) — a loop wrapping a
 status switch with a nested guard:

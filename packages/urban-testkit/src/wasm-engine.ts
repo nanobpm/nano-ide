@@ -416,23 +416,11 @@ export class WasmEngineClient implements EngineClient {
     } catch {
       return null;
     }
-    // `getFormByKey` returns JSON `null` for an unknown key; only an object carries a form.
-    if (body === null || typeof body !== "object") return null;
-    // The read model serializes the form-js schema as a JSON string (the REST wire shape);
-    // tolerate an already-parsed object too. A form with no valid schema is treated as absent.
-    const schema = parseFormSchema(body.schema);
-    if (!schema) return null;
-    // Type-aware presence (mirrors the shared form contract's `buildFormSchema`): a `formKey`
-    // counts only when a string/number, a `formId` only when a string — so a non-string value
-    // can never coerce into a garbage `"[object Object]"` identifier.
-    const formKey = presentKey(body.formKey);
-    const formId = presentString(body.formId);
-    return {
-      ...(formKey ? { formKey } : {}),
-      ...(formId ? { formId } : {}),
-      ...(typeof body.version === "number" ? { version: body.version } : {}),
-      schema,
-    };
+    // Build the typed result through the shared `parseForm` boundary guard (single source of
+    // truth): `getFormByKey` returns JSON `null` for an unknown key, and the `FormResult` DTO
+    // annotation is only a shape *claim*, so `parseForm` guards the body (excluding arrays) and a
+    // missing/invalid schema, treating either as "no such form" (`null`).
+    return parseForm(body);
   }
 
   async completeUserTask(
@@ -913,4 +901,28 @@ function parseFormSchema(raw: unknown): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+/** Build the typed `getForm` result from an untyped read-model body (the `getFormByKey` JSON
+ *  boundary). The `FormResult` DTO annotation on a `JSON.parse`d body is a shape *claim*, not a
+ *  runtime guarantee, so guard the body with `isRecord` — which, unlike `typeof === "object"`,
+ *  also excludes arrays — before reading its fields. A missing/invalid schema is treated as "no
+ *  such form" (`null`). Identifier presence is type-aware (mirrors the shared form contract's
+ *  `buildFormSchema`): a `formKey` counts only when a string/number, a `formId` only when a string,
+ *  so a non-string value can never coerce into a garbage `"[object Object]"` identifier. The single
+ *  source of truth `getForm` extracts through, so the boundary's tolerance cannot drift. */
+export function parseForm(
+  body: FormResult | null,
+): { formKey?: string; formId?: string; version?: number; schema: Record<string, unknown> } | null {
+  if (!isRecord(body)) return null;
+  const schema = parseFormSchema(body.schema);
+  if (!schema) return null;
+  const formKey = presentKey(body.formKey);
+  const formId = presentString(body.formId);
+  return {
+    ...(formKey ? { formKey } : {}),
+    ...(formId ? { formId } : {}),
+    ...(typeof body.version === "number" ? { version: body.version } : {}),
+    schema,
+  };
 }

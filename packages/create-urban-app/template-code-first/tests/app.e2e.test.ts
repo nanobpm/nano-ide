@@ -65,8 +65,8 @@ describe("app e2e (urban-testkit)", () => {
       coverage: true,
       // Stand in for the write the code-first `w.run` worker (hosted in main.ts) performs — see
       // the file header. Persisting it here lets `assertThatDb` read a real row.
-      seed: (db) => {
-        db.table("greetings", "id").insert({
+      seed: async (db) => {
+        await db.table("greetings", "id").insert({
           who: "Ada",
           message: "Hello, Ada!",
           createdAt: new Date().toISOString(),

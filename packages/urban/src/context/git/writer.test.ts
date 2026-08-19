@@ -12,6 +12,7 @@ import { promisify } from "node:util";
 import { PiiGuardError } from "../pii/index.ts";
 import type { MemoryRecord } from "../schema/index.ts";
 import { LAYOUT_ROOT } from "./layout.ts";
+import { type CommitAuthor, GitWriteSubstrate, type WriteSubstrate } from "./substrate.ts";
 import { ContextWriter, GovernanceError } from "./writer.ts";
 
 const execFileAsync = promisify(execFile);
@@ -70,6 +71,62 @@ async function exists(path: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * A minimal in-memory {@link WriteSubstrate} that fails at a chosen step, used to
+ * prove the writer restores the shared working tree to its resolved base after a
+ * mid-operation failure (without needing to force a real git failure).
+ */
+class FailingSubstrate implements WriteSubstrate {
+  readonly rootPath = "/virtual/substrate";
+  readonly restored: string[] = [];
+  #current = "main";
+  readonly #failAt: "stageAndCommit";
+
+  constructor(failAt: "stageAndCommit") {
+    this.#failAt = failAt;
+  }
+
+  get current(): string {
+    return this.#current;
+  }
+
+  async writeRecordFile(_relPath: string, _content: string): Promise<void> {}
+  async readFileAtRef(_ref: string, _relPath: string): Promise<string> {
+    return "{}";
+  }
+  async diffPaths(_baseRef: string, _branch: string): Promise<readonly string[]> {
+    return [];
+  }
+  async currentBranch(): Promise<string> {
+    return this.#current;
+  }
+  async createBranch(name: string, _from: string): Promise<void> {
+    this.#current = name;
+  }
+  async checkout(ref: string): Promise<void> {
+    this.#current = ref;
+  }
+  async stageAndCommit(_message: string, _author: CommitAuthor): Promise<string> {
+    if (this.#failAt === "stageAndCommit") {
+      throw new Error("simulated commit failure");
+    }
+    return "commit-sha";
+  }
+  async mergeBranch(_branch: string, _message: string, _author: CommitAuthor): Promise<string> {
+    return "merge-sha";
+  }
+  async branchExists(_name: string): Promise<boolean> {
+    return true;
+  }
+  async isMerged(_commit: string, _ref: string): Promise<boolean> {
+    return false;
+  }
+  async restoreClean(ref: string, _pathspec: string): Promise<void> {
+    this.#current = ref;
+    this.restored.push(ref);
   }
 }
 
@@ -406,4 +463,106 @@ test("concurrent proposals use separate branches without clobbering", async () =
   // Both records survived the concurrent writes + merges.
   assert.ok(await exists(join(dir, p1.path)));
   assert.ok(await exists(join(dir, p2.path)));
+});
+
+test("ratify derives the merge message from the guarded record id, not the caller-controlled proposalId", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-msg", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // A caller mutates the plain-object handle to smuggle PII (and a newline) into
+  // the field ratify previously interpolated into the merge commit message — a
+  // bypass of the mandatory PII guard, which only inspects record CONTENT.
+  const tainted = { ...proposal, proposalId: "inject\nleak jane.doe@example.com" };
+
+  const ratified = await writer.ratify(tainted);
+
+  // The merge message is derived from the guarded record.id, so the injected
+  // content never reaches the commit trailer.
+  const message = await git(dir, "log", "-1", "--format=%B", ratified.mergeCommit);
+  assert.ok(message.includes("retro-msg"), "message must carry the guarded record id");
+  assert.ok(
+    !message.includes("jane.doe@example.com"),
+    "injected PII must not reach the merge message",
+  );
+  assert.ok(!message.includes("inject"), "injected proposalId content must not reach the message");
+});
+
+test("isRatified REFUSES a proposal whose baseBranch was retargeted off the writer's resolved base", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-isr", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // The proposal is UNratified onto main, but its commit is an ancestor of its own
+  // branch. A caller mutates the handle to claim that branch as the base, which —
+  // without the base-binding guard — would make the untrusted-base ancestry check
+  // report the hypothesis as ratified.
+  await git(dir, "branch", "rogue-base", proposal.branch);
+
+  await assert.rejects(
+    () => writer.isRatified({ ...proposal, baseBranch: "rogue-base" }),
+    GovernanceError,
+  );
+  // The honest query still reports the truth: not ratified onto the resolved base.
+  assert.equal(await writer.isRatified(proposal), false);
+});
+
+test("appendRecord restores the working tree to base after a mid-operation failure", async () => {
+  const substrate = new FailingSubstrate("stageAndCommit");
+  const writer = new ContextWriter({ localPath: "/virtual", ref: "main" }, { substrate });
+
+  await assert.rejects(
+    () => writer.appendRecord(record({ id: "midfail" })),
+    /simulated commit failure/,
+  );
+
+  // The `finally` cleanup returned the shared working tree to the resolved base, so
+  // the next serialised operation does not inherit the aborted write's branch.
+  assert.equal(substrate.current, "main");
+  assert.deepEqual(substrate.restored, ["main"]);
+});
+
+test("proposePrior restores the working tree to base after a mid-operation failure", async () => {
+  const substrate = new FailingSubstrate("stageAndCommit");
+  const writer = new ContextWriter({ localPath: "/virtual", ref: "main" }, { substrate });
+
+  await assert.rejects(
+    () =>
+      writer.proposePrior(
+        record({ id: "midfail", provenance: "agent-retro", authority: "hypothesis" }),
+      ),
+    /simulated commit failure/,
+  );
+
+  assert.equal(substrate.current, "main");
+  assert.deepEqual(substrate.restored, ["main"]);
+});
+
+test("restoreClean discards untracked record residue and returns to the base branch", async () => {
+  const dir = await makeSubstrate();
+  const substrate = new GitWriteSubstrate(dir);
+
+  // Simulate a failed write: parked on a stray branch with an untracked record file
+  // left behind under the layout root.
+  await git(dir, "checkout", "-b", "stray");
+  const residue = `${LAYOUT_ROOT}/epic/issue-303/residue.json`;
+  await substrate.writeRecordFile(residue, "{}\n");
+  assert.ok(await exists(join(dir, residue)), "residue should exist before cleanup");
+
+  await substrate.restoreClean("main", LAYOUT_ROOT);
+
+  assert.equal(await git(dir, "rev-parse", "--abbrev-ref", "HEAD"), "main");
+  assert.ok(
+    !(await exists(join(dir, residue))),
+    "untracked residue under the layout root must be cleaned",
+  );
+  assert.equal(await git(dir, "status", "--porcelain"), "");
+  // Unrelated tracked files are untouched.
+  assert.ok(await exists(join(dir, "README.md")));
 });

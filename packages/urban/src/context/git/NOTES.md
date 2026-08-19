@@ -35,13 +35,19 @@ const writer = new ContextWriter(resolvedHandle); // no wiring needed
   re-runs the mandatory PII guard** against that record; and (5) asserts its
   on-disk path is the record's canonical layout path. Only then is it merged — so
   a PII-carrying, invalid, mislocated, smuggled, or misdirected record can never be
-  ratified.
+  ratified. The ratifying merge's commit message is derived from the **guarded**
+  `record.id` (re-read and re-guarded above), never the caller-controlled
+  `proposalId`, so a mutated handle can't inject unguarded content (PII, newlines)
+  into the commit trail.
   It accepts the hypothesis onto the authoritative line; it never upgrades an
   `agent-retro` record to `authoritative` (the S2 schema forbids that), so an
   unratified — or even a ratified — prior can never present as a
   measured/authoritative fact.
-- `isRatified(proposal)` — `true` iff the proposal's commit is an ancestor of
-  the base branch.
+- `isRatified(proposal)` — `true` iff the proposal's commit is an ancestor of the
+  writer's **own resolved base**. Like `ratify`, it rejects a proposal whose
+  `baseBranch` was mutated off that resolved base rather than trusting the
+  plain-object handle, so a retargeted handle can't report an unmerged hypothesis
+  as ratified.
 
 Concurrency: **within a single `ContextWriter`** operations are serialised on the
 shared working tree (one working tree) and each write still lands on its own
@@ -49,7 +55,10 @@ uniquely-named branch, so interleaved calls never clobber each other and disjoin
 records merge cleanly. This is a **per-instance** guarantee: two `ContextWriter`
 instances (or separate processes) over the **same** working copy are uncoordinated
 and can corrupt each other — use a separate clone (or external locking) per
-concurrent writer.
+concurrent writer. Each mutating op also restores the working tree to the resolved
+base in a `finally` (a force-checkout plus a layout-scoped clean), so a
+mid-operation failure never strands the shared tree on a transient write/proposal
+branch — with a half-written record — for the next serialised call to inherit.
 
 ## PII enforcement BY CONSTRUCTION
 

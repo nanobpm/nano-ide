@@ -37,7 +37,7 @@ import {
   type MemoryRecord,
 } from "../schema/index.ts";
 import { PreCommitGuardRegistry } from "./guard-registry.ts";
-import { recordRelativePath } from "./layout.ts";
+import { LAYOUT_ROOT, recordRelativePath } from "./layout.ts";
 import {
   type CommitAuthor,
   GitWriteSubstrate,
@@ -195,21 +195,29 @@ export class ContextWriter {
       const relPath = recordRelativePath(record);
       const writeBranch = this.#branchName("append", record.id);
 
-      await this.#substrate.createBranch(writeBranch, base);
-      await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
-      const commit = await this.#substrate.stageAndCommit(
-        `context(append): ${record.provenance}/${record.scope} ${record.id}`,
-        this.#author,
-      );
+      // A mid-operation failure (createBranch/write/commit/merge) must never leave
+      // the SHARED working tree parked on a transient write branch with a
+      // half-written record for the next serialised call to inherit; the `finally`
+      // best-effort restores the resolved base and discards any residue.
+      try {
+        await this.#substrate.createBranch(writeBranch, base);
+        await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
+        const commit = await this.#substrate.stageAndCommit(
+          `context(append): ${record.provenance}/${record.scope} ${record.id}`,
+          this.#author,
+        );
 
-      await this.#substrate.checkout(base);
-      const mergeCommit = await this.#substrate.mergeBranch(
-        writeBranch,
-        `context(append): land ${record.id} onto ${base}`,
-        this.#author,
-      );
+        await this.#substrate.checkout(base);
+        const mergeCommit = await this.#substrate.mergeBranch(
+          writeBranch,
+          `context(append): land ${record.id} onto ${base}`,
+          this.#author,
+        );
 
-      return { path: relPath, commit, mergeCommit, branch: base, ratified: true };
+        return { path: relPath, commit, mergeCommit, branch: base, ratified: true };
+      } finally {
+        await this.#restoreBase(base);
+      }
     });
   }
 
@@ -234,24 +242,32 @@ export class ContextWriter {
       const proposalId = `${sanitizeRef(record.id)}-${randomUUID().slice(0, 8)}`;
       const proposalBranch = `${PROPOSAL_BRANCH_PREFIX}${proposalId}`;
 
-      await this.#substrate.createBranch(proposalBranch, base);
-      await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
-      const commit = await this.#substrate.stageAndCommit(
-        `context(propose): ${record.provenance}/${record.scope} ${record.id} [hypothesis]`,
-        this.#botAuthor,
-      );
+      // As with `appendRecord`, a mid-operation failure must not strand the shared
+      // working tree on the proposal branch; the `finally` restores the base. The
+      // proposal COMMIT is preserved on its own branch (a hypothesis until
+      // ratified) — restoring the base only moves the working tree off it, it does
+      // not discard the committed proposal.
+      try {
+        await this.#substrate.createBranch(proposalBranch, base);
+        await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
+        const commit = await this.#substrate.stageAndCommit(
+          `context(propose): ${record.provenance}/${record.scope} ${record.id} [hypothesis]`,
+          this.#botAuthor,
+        );
 
-      // Leave the proposal branch UNMERGED — it is a hypothesis until ratified.
-      await this.#substrate.checkout(base);
-
-      return {
-        path: relPath,
-        commit,
-        branch: proposalBranch,
-        baseBranch: base,
-        proposalId,
-        ratified: false,
-      };
+        return {
+          path: relPath,
+          commit,
+          branch: proposalBranch,
+          baseBranch: base,
+          proposalId,
+          ratified: false,
+        };
+      } finally {
+        // Leave the proposal branch UNMERGED — restoring the base only checks the
+        // working tree back onto it; the proposal stays an unratified hypothesis.
+        await this.#restoreBase(base);
+      }
     });
   }
 
@@ -327,9 +343,15 @@ export class ContextWriter {
       }
 
       await this.#substrate.checkout(base);
+      // The merge commit message is derived from the GUARDED, schema-validated
+      // `record.id` (re-read and re-guarded above), never the caller-controlled
+      // `proposal.proposalId` on the plain-object handle. Interpolating the latter
+      // would let a consumer inject unguarded content (PII, newlines) into the
+      // commit message and bypass the mandatory PII guard, which only inspects
+      // record content.
       const mergeCommit = await this.#substrate.mergeBranch(
         proposal.branch,
-        `context(ratify): merge proposal ${proposal.proposalId} onto ${base}`,
+        `context(ratify): merge record ${record.id} onto ${base}`,
         this.#botAuthor,
       );
       return { mergeCommit, baseBranch: base };
@@ -342,9 +364,21 @@ export class ContextWriter {
    * prior can never masquerade as a ratified one.
    */
   isRatified(proposal: ProposalResult): Promise<boolean> {
-    return this.#serialise(() =>
-      this.#substrate.isMerged(proposal.commit, proposal.baseBranch),
-    );
+    return this.#serialise(async () => {
+      // Bind the ancestry check to the writer's OWN resolved base, never the
+      // caller-supplied `proposal.baseBranch`. That field is a plain-object handle
+      // a consumer can mutate to any ref where `proposal.commit` happens to be an
+      // ancestor, which would report an UNratified hypothesis as ratified. Reject a
+      // retargeted proposal outright (same trust boundary as ratify's DEFENCE 2).
+      const base = await this.#resolveBaseBranch();
+      if (proposal.baseBranch !== base) {
+        throw new GovernanceError(
+          `cannot check ratification: proposal targets base ${proposal.baseBranch}, ` +
+            `but this writer is bound to ${base}.`,
+        );
+      }
+      return this.#substrate.isMerged(proposal.commit, base);
+    });
   }
 
   #assertDirectlyAppendable(provenance: MemoryProvenance): void {
@@ -358,6 +392,18 @@ export class ContextWriter {
 
   async #resolveBaseBranch(): Promise<string> {
     return this.#baseBranchOverride ?? (await this.#substrate.currentBranch());
+  }
+
+  // Best-effort return of the shared working tree to `base`, discarding any
+  // uncommitted/untracked residue under the record layout. Runs in the `finally`
+  // of each mutating op so a failure never strands the tree on a transient branch;
+  // swallows its own error so it can never mask the original operation's failure.
+  async #restoreBase(base: string): Promise<void> {
+    try {
+      await this.#substrate.restoreClean(base, LAYOUT_ROOT);
+    } catch {
+      // best-effort only — never mask the original operation's error.
+    }
   }
 
   #branchName(kind: string, id: string): string {

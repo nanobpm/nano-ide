@@ -73,6 +73,13 @@ export interface WriteSubstrate {
   createBranch(name: string, from: string): Promise<void>;
   /** Check out an existing branch/ref. */
   checkout(ref: string): Promise<void>;
+  /**
+   * Force `ref` back into the working tree and discard any uncommitted changes and
+   * untracked files UNDER `pathspec`, returning the tree to a pristine state at
+   * `ref`. Lets a caller recover the shared working copy after a failed write
+   * without disturbing untracked files outside `pathspec`.
+   */
+  restoreClean(ref: string, pathspec: string): Promise<void>;
   /** Stage all changes and commit them as `author`; returns the new commit sha. */
   stageAndCommit(message: string, author: CommitAuthor): Promise<string>;
   /** Merge `branch` into the current branch as `author`; returns the merge sha. */
@@ -155,6 +162,16 @@ export class GitWriteSubstrate implements WriteSubstrate {
 
   async checkout(ref: string): Promise<void> {
     await this.#git(["checkout", "--end-of-options", ref], this.rootPath);
+  }
+
+  async restoreClean(ref: string, pathspec: string): Promise<void> {
+    // `checkout --force` discards modifications to TRACKED files and switches to
+    // `ref`; `clean -fd` then removes leftover UNTRACKED files/dirs. Scoping the
+    // clean to `pathspec` (the record layout root) keeps it from touching untracked
+    // files elsewhere in the working copy. `--` ends option parsing before the
+    // pathspec so a path that looks like a flag is never misread as one.
+    await this.#git(["checkout", "--force", "--end-of-options", ref], this.rootPath);
+    await this.#git(["clean", "-fd", "--", pathspec], this.rootPath);
   }
 
   async stageAndCommit(message: string, author: CommitAuthor): Promise<string> {

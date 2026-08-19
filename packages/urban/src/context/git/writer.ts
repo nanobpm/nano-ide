@@ -386,6 +386,12 @@ export class ContextWriter {
    * `true` iff the proposal has been ratified (its proposal branch has been merged
    * onto the base branch). A never-ratified proposal reads back as `false`, so an
    * unmerged prior can never masquerade as a ratified one.
+   *
+   * The check requires the proposal branch to STILL EXIST under the proposal
+   * namespace (that existence is a deliberate part of the non-forgeability guard —
+   * see below). A proposal whose branch was merged and then DELETED therefore reads
+   * back `false`: this is a governance status query over live proposal branches, not
+   * a historical "was this commit ever merged" audit.
    */
   isRatified(proposal: ProposalResult): Promise<boolean> {
     return this.#serialise(async () => {
@@ -504,11 +510,18 @@ function commitLine(value: string): string {
 
 /** Reduce an id to a git-ref-safe branch segment (no `..`, spaces, or `~^:?*[`). */
 function sanitizeRef(id: string): string {
-  const cleaned = id
+  let cleaned = id
     .trim()
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/\.\.+/g, "-")
     .replace(/^[-.]+|[-.]+$/g, "")
     .slice(0, 60);
+  // A git ref component may not END in `.lock` (git reserves that suffix for its
+  // own lock files), so an id like `foo.lock` would otherwise yield a segment git
+  // rejects. Strip a trailing `.lock` and re-trim; loop so a pathological
+  // `foo.lock.lock` can't sneak one past a single pass.
+  while (/\.lock$/.test(cleaned)) {
+    cleaned = cleaned.replace(/\.lock$/, "").replace(/[-.]+$/g, "");
+  }
   return cleaned === "" || cleaned === "." || cleaned === ".." ? "record" : cleaned;
 }

@@ -307,6 +307,30 @@ test("proposePrior writes an UNMERGED bot proposal; ratify merges it", async () 
   assert.equal(parsed.authority, "hypothesis");
 });
 
+test("proposePrior builds a git-ref-valid branch for an id git would otherwise reject (e.g. a `.lock` suffix)", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  // A schema-valid (non-empty-string) id whose sanitized segment would end in
+  // `.lock` — a suffix git reserves for its lock files and rejects in a refname.
+  // sanitizeRef must normalise it so the proposal branch is a name git accepts.
+  const proposal = await writer.proposePrior(
+    record({ id: "foo.lock", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  assert.ok(proposal.branch.startsWith("context/proposal/"));
+  // git itself must accept the generated branch name.
+  await git(dir, "check-ref-format", "--branch", proposal.branch);
+  // No path component of the ref ends in `.lock`.
+  assert.ok(
+    !proposal.branch.split("/").some((seg) => seg.endsWith(".lock")),
+    "no ref component may end in `.lock`",
+  );
+  // The proposal still round-trips through ratify onto the base branch.
+  await writer.ratify(proposal);
+  assert.ok(await exists(join(dir, proposal.path)), "ratified `.lock`-id record must be on main");
+});
+
 test("DEFAULT write path rejects a PII-carrying record (guard active by construction)", async () => {
   const dir = await makeSubstrate();
   // NO special guard wiring — the mandatory S6 guard must be active by default.

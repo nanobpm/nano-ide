@@ -1314,6 +1314,44 @@ test("child grids reuse the same per-row More toggle for hidden columns (#268)",
   assert.match(js, /if \(chasHidden\) ctr\.append\(mobileMoreCell\(ctr\)\);/);
 });
 
+test("child grids support per-row detail expansion, collapsed by default (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // A child grid opts into per-row expansion with a `detail` (alias `expandable`)
+  // block that reuses the top-level grid's detailPanel() — so a nested table (e.g.
+  // a Convergence "Rounds" child) can render each row as an expandable, collapsed
+  // affordance instead of dumping the whole history flat.
+  assert.match(js, /const cdetail = cg\.detail \|\| cg\.expandable \|\| null;/);
+  assert.match(js, /const chasExpand = cdetail != null;/);
+  // The expander shares the top-level detail look: a pc-chevron button in a
+  // pc-row-actions cell, revealing detailPanel(cr, cdetail) in a following row.
+  assert.match(js, /class: "pc-btn pc-btn-sm pc-chevron" \}, collapsed \? "▸" : "▾"/);
+  assert.match(js, /cells\.push\(el\("td", \{ class: "pc-row-actions" \}, ctoggle\)\);/);
+  assert.match(js, /cdtr\.firstChild\.append\(detailPanel\(cr, cdetail\)\)/);
+  // Rows are collapsed by default; detail.defaultCollapsed/detail.collapsed (both
+  // defaulting to true) seed the initial state.
+  assert.match(js, /cdetail\.defaultCollapsed != null/);
+  assert.match(js, /cdetail\.collapsed != null/);
+  // detailPanel is now config-parametrised so the top-level grid and child grids
+  // share one implementation (link + fields + nested children + form).
+  assert.match(js, /function detailPanel\(row, cfg\)/);
+  assert.match(js, /const d = cfg \|\| detail;/);
+});
+
+test("child-grid per-row collapse state is persisted across the refresh poll (#332)", async () => {
+  const res = await dispatch("GET", "/app/runtime.js");
+  const js = res.body ?? "";
+  // The top-level grid rebuilds each child grid on every refreshMs poll, so an
+  // open row would collapse on the next tick without durable state. Per-row
+  // collapse is persisted in localStorage — keyed by page + node + parent rowKey
+  // + child rowKey — via the same readCollapsed/writeCollapsed helpers groupBy
+  // group-collapse uses, so it survives both the poll and a full reload.
+  assert.match(js, /const cskey = crk != null \? ckeyBase \+ crk : null;/);
+  assert.match(js, /readCollapsed\(cskey, cdefaultCollapsed\)/);
+  assert.match(js, /if \(cskey\) writeCollapsed\(cskey, !open\);/);
+  assert.match(js, /"pc:collapsed:" \+ CURRENT \+ ":" \+ cnodeId \+ ":" \+ cchildId/);
+});
+
 test("the renderer honours an optional Tier-2 page-level mobile layout variant (#268)", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";

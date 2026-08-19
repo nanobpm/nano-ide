@@ -1631,10 +1631,11 @@ function renderDataGrid(node) {
   }
 
   /** @param {Record<string, any>} row
+   * @param {any} [formCfg] explicit form config (child grids pass their own detail.form); omit to use the top-level grid's detail.form
    * @returns {HTMLElement|null}
    */
-  function detailForm(row) {
-    const f = detail.form;
+  function detailForm(row, formCfg) {
+    const f = formCfg !== undefined ? formCfg : (detail && detail.form);
     if (!f || !row[f.showWhenField]) return null;
     const box = el("div", { class: "pc-subform" });
     if (f.title) box.append(el("div", { class: "pc-subform-title" }, f.title));
@@ -1673,10 +1674,42 @@ function renderDataGrid(node) {
     const ccols = cg.columns || [];
     const croles = classifyColumns(ccols);
     const chasHidden = croles.indexOf("hidden") >= 0;
+    // Per-row expansion for child grids: a `detail` (alias `expandable`) block
+    // gives each child row a chevron that reveals the same detailPanel() content
+    // the top-level grid uses (link + fields + nested child grids + form). Rows are
+    // collapsed by default; `detail.defaultCollapsed`/`detail.collapsed` (default
+    // true) seeds the initial state, and — when the child grid declares a `rowKey`
+    // — the per-row collapse is persisted in localStorage keyed by page + node +
+    // parent rowKey + child rowKey, so it survives the top-level grid's refresh
+    // poll (which rebuilds this whole subtree) and a full reload, mirroring how
+    // groupBy group-collapse is persisted. Absent a `detail` block the child grid
+    // is byte-for-byte unchanged (backward compatible).
+    const cdetail = cg.detail || cg.expandable || null;
+    const chasExpand = cdetail != null;
+    const cextra = (cg.lazyField ? 1 : 0) + (chasExpand ? 1 : 0);
+    const cdefaultCollapsed = chasExpand
+      ? (cdetail.defaultCollapsed != null
+        ? !!cdetail.defaultCollapsed
+        : cdetail.collapsed != null
+          ? !!cdetail.collapsed
+          : true)
+      : true;
+    const cnodeId = node.id || p.title || "grid";
+    const cchildId = cg.node || cg.table || cg.title || "child";
+    const cparentKey = rowKeyOf(row);
+    const ckeyBase = "pc:collapsed:" + CURRENT + ":" + cnodeId + ":" + cchildId + ":"
+      + (cparentKey == null ? "_" : cparentKey) + ":r:";
+    /** @param {Record<string, any>} cr @returns {string|null} */
+    const crowKeyOf = (cr) => {
+      if (!cg.rowKey) return null;
+      const v = cr[cg.rowKey];
+      return v == null ? null : String(v);
+    };
     const cbody = el("tbody", {});
-    const ccolgroup = buildColgroup(ccols, cg.lazyField ? 1 : 0);
+    const ccolgroup = buildColgroup(ccols, cextra);
     const cthead = el("thead", {}, el("tr", {}, ...ccols.map((c) => el("th", {}, c.header || c.field)),
-      ...(cg.lazyField ? [el("th", {}, "")] : [])));
+      ...(cg.lazyField ? [el("th", {}, "")] : []),
+      ...(chasExpand ? [el("th", {}, "")] : [])));
     const ctable = ccolgroup
       ? el("table", { class: "pc-grid" }, ccolgroup, cthead, cbody)
       : el("table", { class: "pc-grid" }, cthead, cbody);
@@ -1687,7 +1720,7 @@ function renderDataGrid(node) {
       /** @type {{ rows: Array<Record<string, any>> }} */
       const { rows } = await getJSON(dataUrl(cg.source || "app", cg.table,
         [{ field: cg.childField, eq: row[cg.parentField] }], cg.orderBy));
-      cspan = String((ccols.length || 1) + (cg.lazyField ? 1 : 0));
+      cspan = String((ccols.length || 1) + cextra);
       if (!rows.length) {
         cbody.append(el("tr", {}, el("td", { colspan: cspan }, "None")));
       }
@@ -1709,6 +1742,33 @@ function renderDataGrid(node) {
           }
           cells.push(cell);
         }
+        // Per-row expander cell (trailing, after any lazyField cell): a chevron
+        // that reveals this row's detailPanel in a following full-width row. The
+        // panel is built lazily on first open (and eagerly when the row starts
+        // expanded), matching the top-level grid.
+        /** @type {any} */
+        let cdtr = null;
+        if (chasExpand) {
+          const crk = crowKeyOf(cr);
+          const cskey = crk != null ? ckeyBase + crk : null;
+          const collapsed = cskey ? readCollapsed(cskey, cdefaultCollapsed) : cdefaultCollapsed;
+          const ctoggle = el("button", { class: "pc-btn pc-btn-sm pc-chevron" }, collapsed ? "▸" : "▾");
+          cells.push(el("td", { class: "pc-row-actions" }, ctoggle));
+          cdtr = el("tr", { hidden: collapsed ? "" : null }, el("td", { colspan: cspan }));
+          let built = false;
+          const build = () => {
+            if (!built) { built = true; cdtr.firstChild.append(detailPanel(cr, cdetail)); }
+          };
+          if (!collapsed) build();
+          ctoggle.addEventListener("click", /** @param {MouseEvent} ev */ (ev) => {
+            ev.stopPropagation();
+            const open = cdtr.hidden;
+            cdtr.hidden = !open;
+            ctoggle.textContent = open ? "▾" : "▸";
+            if (open) build();
+            if (cskey) writeCollapsed(cskey, !open);
+          });
+        }
         // Child grids classify columns into the same mobile roles (including
         // "hidden") as the top-level grid, so they need the same per-row "More"
         // toggle — without it a mobile:{priority:"hidden"} child column would be
@@ -1716,6 +1776,7 @@ function renderDataGrid(node) {
         const ctr = el("tr", {}, ...cells);
         if (chasHidden) ctr.append(mobileMoreCell(ctr));
         cbody.append(ctr);
+        if (cdtr) cbody.append(cdtr);
       }
     } catch (e) {
       cbody.append(el("tr", {}, el("td", { colspan: cspan }, String(e.message || e))));
@@ -1723,11 +1784,18 @@ function renderDataGrid(node) {
     return wrap;
   }
 
-  /** @param {Record<string, any>} row */
-  function detailPanel(row) {
+  /** Build an expandable-row detail panel. Used by the top-level grid (with the
+   * closure `detail` config) and by child grids (which pass their own `cg.detail`
+   * as `cfg`) so both share one look/behaviour — link, fields, nested child grids
+   * and an optional escalation form.
+   * @param {Record<string, any>} row
+   * @param {any} [cfg] detail config; defaults to the top-level grid's `detail`
+   */
+  function detailPanel(row, cfg) {
+    const d = cfg || detail;
     const box = el("div", { class: "pc-detail" });
-    if (detail.linkField && row[detail.linkField]) {
-      const href = String(row[detail.linkField]);
+    if (d.linkField && row[d.linkField]) {
+      const href = String(row[d.linkField]);
       // Render as a link only for http(s); anything else (e.g. a javascript: URL
       // smuggled through row data) is shown as inert text. External links get
       // rel="noopener noreferrer" so the opened page can't reach window.opener.
@@ -1737,17 +1805,17 @@ function renderDataGrid(node) {
         box.append(el("span", { class: "pc-link" }, href));
       }
     }
-    for (const df of detail.fields || []) {
+    for (const df of d.fields || []) {
       box.append(el("div", { class: "pc-detail-field" },
         el("span", { class: "pc-detail-label" }, df.label || df.field),
         el("span", {}, row[df.field] == null ? "" : String(row[df.field]))));
     }
-    for (const cg of detail.children || []) {
+    for (const cg of d.children || []) {
       const holder = el("div", {});
       box.append(holder);
       childGrid(cg, row).then((w) => holder.replaceChildren(w));
     }
-    const form = detailForm(row);
+    const form = detailForm(row, d.form);
     if (form) box.append(form);
     return box;
   }

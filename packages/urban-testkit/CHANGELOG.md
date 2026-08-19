@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.9.0...@nanobpm/urban-testkit-0.10.0) (2026-08-19)
+
+
+### Features
+
+* **urban-testkit:** add AI-judge & semantic-similarity assertions (opt-in, deterministic-by-default) ([#369](https://github.com/nanobpm/nano-ide/issues/369)) ([1670b43](https://github.com/nanobpm/nano-ide/commit/1670b43fc53b7e4471dfcec6443125b30f8e897a))
+
 ## [0.9.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.8.8...@nanobpm/urban-testkit-0.9.0) (2026-08-19)
 
 

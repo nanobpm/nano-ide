@@ -139,6 +139,30 @@ test("[sqlite] resuming into the log deletes the superseded tail rows", (t) => {
   assert.equal(log.nextOffset(KEY), 3);
 });
 
+test("[sqlite] the offset window stays exact across a rewinding resume", (t) => {
+  const db = openTestDb(t);
+  const log = new SqliteSessionLog(db);
+  log.ensureSchema();
+  const window = () => {
+    const row = db.all<{ first_offset: number | null; next_offset: number }>(
+      `SELECT first_offset, next_offset FROM ${SESSION_LOG_TABLE} WHERE process_instance_key = ? AND element_id = ?`,
+      [KEY.processInstanceKey, KEY.elementId],
+    )[0];
+    return { first_offset: row?.first_offset ?? null, next_offset: row?.next_offset ?? null };
+  };
+  log.lease(KEY, 1);
+  for (let i = 0; i < 4; i++) log.append(KEY, 1, i, ev(`e${i}`, i));
+  assert.deepEqual(window(), { first_offset: 0, next_offset: 4 }, "grows to [0,4)");
+  // Resume above the floor: the tail is rewritten but the min is untouched.
+  log.lease(KEY, 2);
+  log.append(KEY, 2, 2, ev("e2b", 2));
+  assert.deepEqual(window(), { first_offset: 0, next_offset: 3 }, "min 0 kept; next follows the new tail");
+  // Resume at the floor: every prior event is dropped, so the min rewinds too.
+  log.lease(KEY, 3);
+  log.append(KEY, 3, 0, ev("e0b", 0));
+  assert.deepEqual(window(), { first_offset: 0, next_offset: 1 }, "min rewinds to the new sole event");
+});
+
 test("[sqlite] a concurrent first-lease race fences out the stale writer", (t) => {
   // Simulate the TOCTOU window: a competing writer commits the activation row at a
   // higher incarnation just before our INSERT lands. A plain ON CONFLICT DO NOTHING

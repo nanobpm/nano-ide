@@ -398,7 +398,7 @@ export class SqliteSessionLog implements SessionLog {
           new Date(this.#clock.now()).toISOString(),
         ],
       );
-      this.#refreshWindow(key);
+      this.#advanceWindow(key, offset);
       return appended;
     });
   }
@@ -480,20 +480,22 @@ export class SqliteSessionLog implements SessionLog {
       });
   }
 
-  /** Recompute a stream's `first_offset`/`next_offset` window from stored events. */
-  #refreshWindow(key: ActivationKey): void {
-    const agg = this.#db.all<{ mn: number | null; mx: number | null }>(
-      `SELECT MIN(event_offset) AS mn, MAX(event_offset) AS mx FROM ${SESSION_EVENT_TABLE}
-       WHERE process_instance_key = ? AND element_id = ?`,
-      [key.processInstanceKey, key.elementId],
-    )[0];
-    const minOffset = agg?.mn ?? null;
-    const maxOffset = agg?.mx ?? null;
-    const next = maxOffset === null ? 0 : maxOffset + 1;
+  /**
+   * Advance an activation's retained offset window (`first_offset`/`next_offset`,
+   * keyed by ActivationKey) to include the offset just appended. `append` always
+   * truncates the tail (`event_offset >= offset`) before inserting at `offset`, so
+   * the freshly stored offset is necessarily the new maximum (`next_offset =
+   * offset + 1`) and the minimum can only move down. Updating incrementally from
+   * the appended offset therefore keeps the window exact in O(1) — a full MIN/MAX
+   * scan of the event table on every append would be O(n) and make appends O(n²)
+   * as the log grows.
+   */
+  #advanceWindow(key: ActivationKey, offset: number): void {
     this.#db.run(
-      `UPDATE ${SESSION_LOG_TABLE} SET first_offset = ?, next_offset = ?
+      `UPDATE ${SESSION_LOG_TABLE}
+         SET first_offset = MIN(COALESCE(first_offset, ?), ?), next_offset = ?
        WHERE process_instance_key = ? AND element_id = ?`,
-      [minOffset, next, key.processInstanceKey, key.elementId],
+      [offset, offset, offset + 1, key.processInstanceKey, key.elementId],
     );
   }
 

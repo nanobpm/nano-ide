@@ -11,7 +11,7 @@
 
 import { homedir, tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";
-import { type ContextBinding, parseContextBinding } from "./descriptor.ts";
+import { parseContextBinding } from "./descriptor.ts";
 import { resolveContextIdentity } from "./identity.ts";
 import { GitSubstrateBackend } from "./git-backend.ts";
 import type { ResolvedContextHandle, SubstrateBackend } from "./backend.ts";
@@ -102,7 +102,7 @@ export class ContextResolver {
    * resolver; distinct names return distinct handles.
    */
   async resolve(
-    binding: ContextBinding | unknown,
+    binding: unknown,
     options: ResolveOptions = {},
   ): Promise<ResolvedContextHandle> {
     const parsed = parseContextBinding(binding);
@@ -151,7 +151,7 @@ export class ContextResolver {
  * memoised across calls.
  */
 export function resolveContextBinding(
-  binding: ContextBinding | unknown,
+  binding: unknown,
   options: ContextResolverOptions & ResolveOptions = {},
 ): Promise<ResolvedContextHandle> {
   const { cacheRoot, backend, ...resolveOptions } = options;

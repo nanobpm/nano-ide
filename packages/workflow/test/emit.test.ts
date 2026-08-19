@@ -12,6 +12,7 @@ import {
   declarativeToLayoutedBpmn,
   layoutBpmn,
   externalJobTypes,
+  walkNodes,
   replayOnce,
   Worker,
   WorkflowClient,
@@ -29,6 +30,16 @@ test("imperative emit: single looped orchestrator with derived job type", () => 
   assert.match(xml, /<bpmn:exclusiveGateway id="Gw" default="f_loop">/);
   assert.match(xml, /<bpmn:conditionExpression>=wfDone<\/bpmn:conditionExpression>/);
   assert.match(xml, /<bpmn:sequenceFlow id="f_loop" sourceRef="Gw" targetRef="Orchestrate" \/>/);
+});
+
+test("walkNodes: fails fast on an unregistered flow-node kind instead of silently skipping recursion", () => {
+  // A runtime-invalid node whose `kind` was never registered (JSON.parse yields
+  // an untyped value — no `as` cast). Silently skipping it (the old
+  // `nodeKind(n.kind)?.walk?.` form) would hide the missing registration and
+  // could drop nested nodes; consumers like WorkflowClient.signal() must see a
+  // clear error, matching the emitter's requireNodeKind fail-fast.
+  const bogus = JSON.parse('[{"kind":"__never_registered__","name":"x"}]');
+  assert.throws(() => walkNodes(bogus, () => {}), /no handler registered for flow-node kind "__never_registered__"/);
 });
 
 test("declarative emit: service tasks + derived types + message/subscription", () => {
@@ -141,6 +152,34 @@ test("timer validation: rejects zero or both of after/at, and bad ISO", () => {
   // A timeDate is an absolute instant: a bare local datetime (no Z/offset) is ambiguous and rejected.
   assert.throws(() => defineFlow("x", (w) => w.timer("t", { at: "2026-01-01T09:00:00" })), /ISO-8601 instant/);
   assert.doesNotThrow(() => defineFlow("ok", (w) => { w.timer("t", { at: "2026-01-01T09:00:00+02:00" }); w.task("a"); }));
+  // A null/non-object opts (e.g. a JSON-derived config) must still yield the
+  // helpful "needs exactly one of …" error, not a raw `Cannot use 'in' operator
+  // … in null` TypeError. JSON.parse() returns `any` — a runtime-invalid input
+  // with no `as`-cast.
+  assert.throws(
+    () => defineFlow("x", (w) => w.timer("t", JSON.parse("null"))),
+    /exactly one of \{ after \}.*\{ at \}/,
+  );
+});
+
+test("declarative builder: null-prototype method table — inherited names are never registered methods", () => {
+  // The builder's method table is assembled on a NULL prototype so its
+  // duplicate-detection own-property check (and every `w.<method>` lookup) can
+  // never mistake an inherited `Object.prototype` name (`toString`,
+  // `constructor`, `hasOwnProperty`, …) for a contributed builder method, and
+  // so a `__proto__` method name cannot mutate the prototype. Both footguns
+  // derive from an `Object.prototype` chain — pinning the null prototype guards
+  // the whole class.
+  let builder: object | undefined;
+  defineFlow("proto", (w) => {
+    builder = w;
+    w.task("a");
+  });
+  if (!builder) throw new Error("build callback did not receive the assembled builder");
+  assert.strictEqual(Object.getPrototypeOf(builder), null);
+  for (const inherited of ["toString", "constructor", "hasOwnProperty", "__proto__"]) {
+    assert.ok(!(inherited in builder), `inherited "${inherited}" must not appear on the builder`);
+  }
 });
 
 test("startOn validation: cycle format, once-only, first-statement, top-level", () => {
@@ -533,6 +572,21 @@ test("switch: requires at least one non-default case", () => {
   );
 });
 
+test("switch: a runtime-invalid default arm is rejected with a helpful error", () => {
+  assert.throws(
+    () =>
+      defineFlow("f", (w) => {
+        w.run("a", async () => ({}));
+        // A JS/JSON-derived config could pass a non-function default; it must
+        // fail with the builder's own message, not an opaque TypeError.
+        const bogus = JSON.parse('{"default":"not a block"}');
+        bogus.active = (c) => c.run("b", async () => ({}));
+        w.switch("x", bogus);
+      }),
+    /switch\("x"\) default must be a block/,
+  );
+});
+
 test("branch: then is guarded by the condition, else is the gateway default", () => {
   const flow = defineFlow("guard", (w) => {
     w.run("check", async () => ({}));
@@ -546,6 +600,20 @@ test("branch: then is guarded by the condition, else is the gateway default", ()
   assert.match(xml, /<bpmn:conditionExpression>=count &gt;= 3<\/bpmn:conditionExpression>/);
   assert.match(xml, /<bpmn:serviceTask id="tooMany"/);
   assert.match(xml, /<bpmn:serviceTask id="again"/);
+});
+
+test("branch: a runtime-invalid else arm is rejected with a helpful error", () => {
+  assert.throws(
+    () =>
+      defineFlow("f", (w) => {
+        w.run("a", async () => ({}));
+        const bogus = JSON.parse('{"then":null,"else":"not a block"}');
+        // then must still be caught first; make it a real block so we exercise else.
+        bogus.then = (g) => g.run("t", async () => ({}));
+        w.branch("count >= 3", bogus);
+      }),
+    /branch\("count >= 3"\) else arm must be a block/,
+  );
 });
 
 test("loop: the body falls through back to the loop head; break exits to End", () => {

@@ -112,16 +112,27 @@ registerNodeKind("race", {
         event = { kind: "signal", name, correlationKey, payload: api.contracts[name]?.in };
       } else {
         const timer = spec.timer;
-        const hasAfter = "after" in timer && typeof timer.after === "string";
-        const hasAt = "at" in timer && typeof timer.at === "string";
-        if (hasAfter === hasAt) {
+        // Enforce exactly-one on KEY PRESENCE, not string-ness: a runtime-invalid
+        // arm that supplies both keys where only one is a string (e.g.
+        // `{ after: 1, at: "…" }`) must be rejected here, not silently dispatched
+        // into `after.trim()` — which would throw an opaque TypeError. Once the
+        // branch is chosen, validate the value is a string before trimming.
+        const hasAfterKey = "after" in timer;
+        const hasAtKey = "at" in timer;
+        if (hasAfterKey === hasAtKey) {
           throw new Error(`race() arm "${name}" timer needs exactly one of { after } (a delay) or { at } (an instant)`);
         }
         if ("after" in timer) {
+          if (typeof timer.after !== "string") {
+            throw new Error(`race() arm "${name}" timer { after } must be a string duration`);
+          }
           const after = timer.after.trim();
           assertTimerDuration(`race() arm "${name}" timer after`, after);
           event = { kind: "timer", name, after };
         } else {
+          if (typeof timer.at !== "string") {
+            throw new Error(`race() arm "${name}" timer { at } must be a string instant`);
+          }
           const at = timer.at.trim();
           assertTimerDate(`race() arm "${name}" timer at`, at);
           event = { kind: "timer", name, at };

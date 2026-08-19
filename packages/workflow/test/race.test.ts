@@ -229,3 +229,24 @@ test("race rejects a timer arm with both { after } and { at } (or neither)", () 
     /exactly one of \{ after \}/,
   );
 });
+
+test("race rejects a runtime-invalid timer arm with a non-string { after } instead of throwing a TypeError", () => {
+  // A runtime-invalid arm supplies BOTH keys where only `at` is a string. The
+  // exactly-one check must reject on KEY PRESENCE — not silently dispatch into
+  // `after.trim()` and blow up with an opaque `TypeError: after.trim is not a
+  // function`. Built via JSON.parse so the input is genuinely `any` at runtime
+  // (no `as` cast), then the non-serializable `do` blocks are attached.
+  const bothKeys = JSON.parse(
+    '{"a":{"timer":{"after":1,"at":"2027-01-01T00:00:00Z"}},"b":{"signal":{"correlationKey":"k"}}}',
+  );
+  bothKeys.a.do = () => {};
+  bothKeys.b.do = () => {};
+  assert.throws(() => defineFlow("bad", (w) => w.race(bothKeys)), /exactly one of \{ after \}/);
+
+  // Only a non-string `after` present: must reject with a clear validation error,
+  // not a TypeError from calling `.trim()` on a number.
+  const nonStringAfter = JSON.parse('{"a":{"timer":{"after":1}},"b":{"signal":{"correlationKey":"k"}}}');
+  nonStringAfter.a.do = () => {};
+  nonStringAfter.b.do = () => {};
+  assert.throws(() => defineFlow("bad", (w) => w.race(nonStringAfter)), /timer \{ after \} must be a string/);
+});

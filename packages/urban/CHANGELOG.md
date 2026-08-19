@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.60.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.59.0...@nanobpm/urban-0.60.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** collapsible per-row expansion for dataGrid child grids ([#332](https://github.com/nanobpm/nano-ide/issues/332)) ([#335](https://github.com/nanobpm/nano-ide/issues/335)) ([6b2a37a](https://github.com/nanobpm/nano-ide/commit/6b2a37ac0f6e33269cbf20e9f0604ac2346c668e))
+
 ## [0.59.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.58.0...@nanobpm/urban-0.59.0) (2026-08-19)
 
 

@@ -3,8 +3,8 @@
 // is S3); this only materialises a working copy pinned to the requested ref.
 
 import { execFile } from "node:child_process";
-import { lstat, mkdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { lstat, mkdir, readFile } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import type { ContextIdentity } from "./identity.ts";
 import type {
@@ -96,6 +96,55 @@ async function isSymlink(path: string): Promise<boolean> {
 }
 
 /**
+ * True iff `path` exists and is a real directory (inspected with `lstat`, so a
+ * symlink to a directory does not count). A missing entry (`ENOENT`/`ENOTDIR`)
+ * is not a directory; any other error is re-thrown rather than silently
+ * swallowed, so an unreadable path is never mistaken for "not a directory".
+ */
+async function isDirectory(path: string): Promise<boolean> {
+  try {
+    return (await lstat(path)).isDirectory();
+  } catch (cause) {
+    if (isNodeErrno(cause, "ENOENT") || isNodeErrno(cause, "ENOTDIR")) {
+      return false;
+    }
+    throw new SubstrateResolveError(`substrate path is not accessible: ${path}`, { cause });
+  }
+}
+
+/** True iff `child` is `root` itself or nested within it (no `..`/absolute escape). */
+function isWithin(root: string, child: string): boolean {
+  const rel = relative(root, child);
+  return rel === "" || (!rel.startsWith(`..${sep}`) && rel !== ".." && !isAbsolute(rel));
+}
+
+/**
+ * A `.git` *file* (git worktree/submodule marker) points at the real gitdir via
+ * a `gitdir: <path>` line rather than being a `.git` directory. Trusting such a
+ * working copy as "already cloned" is only safe when that gitdir stays inside
+ * the cache root: a marker whose `gitdir:` resolves OUTSIDE the cache root would
+ * make every subsequent `git fetch`/`checkout` operate on an out-of-cache
+ * repository — a cache escape of the same class as a `.git` symlink. Returns
+ * true iff the marker is well-formed AND its resolved gitdir is within
+ * `cacheRoot`; a malformed marker (no `gitdir:` line) is not trusted.
+ */
+async function gitFileTargetWithinRoot(
+  gitFile: string,
+  localPath: string,
+  cacheRoot: string,
+): Promise<boolean> {
+  const content = await readFile(gitFile, "utf8");
+  const match = content.match(/^gitdir:[ \t]*(.+?)[ \t]*$/m);
+  if (match === null) {
+    return false;
+  }
+  // A relative `gitdir:` is interpreted by git relative to the working copy, so
+  // resolve it against `localPath` before checking cache-root containment.
+  const target = resolve(localPath, match[1]);
+  return isWithin(cacheRoot, target);
+}
+
+/**
  * The default, git-only substrate backend. Clones the substrate on first use
  * and, on subsequent resolutions, fetches and re-pins the working copy to the
  * requested ref (branch tip, tag, or SHA) without clobbering unrelated state.
@@ -133,7 +182,23 @@ export class GitSubstrateBackend implements SubstrateBackend {
         `substrate .git is a symlink and would escape the cache root: ${gitDir}`,
       );
     }
-    const alreadyCloned = await pathExists(gitDir);
+    // A genuine clone's `.git` is a *directory*. A `.git` that exists as
+    // anything else is a git worktree/submodule marker *file* pointing at a real
+    // gitdir elsewhere: trust it as "already cloned" only when that gitdir stays
+    // inside the cache root, otherwise fetch/pin would run against an
+    // out-of-cache repository — a cache escape of the same class as the
+    // `.git`-symlink case above.
+    let alreadyCloned = await isDirectory(gitDir);
+    if (!alreadyCloned && (await pathExists(gitDir))) {
+      const cacheRoot = dirname(localPath);
+      if (await gitFileTargetWithinRoot(gitDir, localPath, cacheRoot)) {
+        alreadyCloned = true;
+      } else {
+        throw new SubstrateResolveError(
+          `substrate .git points outside the cache root and would escape it: ${gitDir}`,
+        );
+      }
+    }
 
     if (!alreadyCloned) {
       // A pre-existing entry at `localPath` that is not a git working copy — a

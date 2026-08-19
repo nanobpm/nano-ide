@@ -252,6 +252,35 @@ test("git backend rejects a real directory whose .git is a symlink escaping the 
   }
 });
 
+test("git backend rejects a real directory whose .git is a file (worktree/submodule marker) pointing outside the cache root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-gitfile-"));
+  try {
+    const cacheRoot = join(root, "cache");
+    const binding = { repo: join(root, "origin"), ref: "main" };
+    const identity = resolveContextIdentity(binding);
+    // `localPath` is a genuine directory (passing the symlink-at-localPath and
+    // `.git`-symlink guards), but its `.git` is a *file* — a git worktree /
+    // submodule `gitdir:` marker whose target points at a foreign gitdir OUTSIDE
+    // the cache root. `.git` merely *existing* must not be trusted as "already
+    // cloned": doing so would run fetch/pin against that out-of-cache
+    // repository, a cache escape. The backend must parse the `gitdir:` target
+    // and reject it because it escapes the cache root.
+    const foreignGit = join(root, "foreign-git");
+    await mkdir(foreignGit, { recursive: true });
+    const localPath = join(cacheRoot, identity.slug);
+    await mkdir(localPath, { recursive: true });
+    await writeFile(join(localPath, ".git"), `gitdir: ${foreignGit}\n`);
+
+    const resolver = new ContextResolver({ cacheRoot });
+    await assert.rejects(
+      resolver.resolve(binding),
+      /\.git points outside the cache root and would escape it/,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("git backend surfaces a non-ENOENT lstat error (unreadable path) instead of treating it as missing", async () => {
   if (typeof process.getuid === "function" && process.getuid() === 0) {
     return; // root bypasses permission bits, so EACCES can't be provoked
@@ -358,7 +387,7 @@ test("git backend clones on first use and re-pins on refresh; cross-instance sha
   }
 });
 
-test("git backend treats a `.git` file (worktree/submodule marker) as already cloned", async () => {
+test("git backend treats a `.git` file (worktree/submodule marker) whose gitdir stays in the cache root as already cloned", async () => {
   const root = await mkdtemp(join(tmpdir(), "urban-ctx-worktree-"));
   try {
     const cacheRoot = join(root, "cache");
@@ -366,14 +395,18 @@ test("git backend treats a `.git` file (worktree/submodule marker) as already cl
     const identity = resolveContextIdentity(binding);
     // A worktree/submodule marks its working copy with a `.git` *file* pointing
     // at the real gitdir, not a `.git` *directory*. The backend must recognise
-    // it as a valid clone rather than treating it as an un-cloned/non-git path.
+    // it as a valid clone rather than treating it as an un-cloned/non-git path —
+    // BUT only when the gitdir target stays within the cache root (an
+    // out-of-cache gitdir is a cache escape, guarded by the next test).
     const localPath = join(cacheRoot, identity.slug);
     await mkdir(localPath, { recursive: true });
-    await writeFile(join(localPath, ".git"), "gitdir: /somewhere/else/.git/worktrees/x\n");
+    const inCacheGitdir = join(cacheRoot, ".git", "worktrees", "x");
+    await mkdir(inCacheGitdir, { recursive: true });
+    await writeFile(join(localPath, ".git"), `gitdir: ${inCacheGitdir}\n`);
 
     const resolver = new ContextResolver({ cacheRoot });
     // refresh:false so no git runs; the point is it must NOT throw "not a git
-    // working copy" — the `.git` file already proves it is a working copy.
+    // working copy" — the in-cache `.git` file already proves it is a working copy.
     const handle = await resolver.resolve(binding, { refresh: false });
     assert.equal(handle.localPath, localPath);
   } finally {

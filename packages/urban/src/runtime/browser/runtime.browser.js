@@ -1631,11 +1631,13 @@ function renderDataGrid(node) {
   }
 
   /** @param {Record<string, any>} row
-   * @param {any} [formCfg] explicit form config (child grids pass their own detail.form); omit to use the top-level grid's detail.form
+   * @param {any} formCfg the panel's own form config (top-level or child grid); a
+   *   missing/undefined form means this panel has no form — it must NOT fall back to
+   *   the top-level grid's form, or a child panel would render the parent's form.
    * @returns {HTMLElement|null}
    */
   function detailForm(row, formCfg) {
-    const f = formCfg !== undefined ? formCfg : (detail && detail.form);
+    const f = formCfg;
     if (!f || !row[f.showWhenField]) return null;
     const box = el("div", { class: "pc-subform" });
     if (f.title) box.append(el("div", { class: "pc-subform-title" }, f.title));
@@ -1696,9 +1698,16 @@ function renderDataGrid(node) {
       : true;
     const cnodeId = node.id || p.title || "grid";
     const cchildId = cg.node || cg.table || cg.title || "child";
-    const cparentKey = rowKeyOf(row);
-    const ckeyBase = "pc:collapsed:" + CURRENT + ":" + cnodeId + ":" + cchildId + ":"
-      + (cparentKey == null ? "_" : cparentKey) + ":r:";
+    // The parent-row discriminator is the value this child grid is queried by
+    // (row[cg.parentField]) — NOT the top-level grid's rowKey. That keeps per-row
+    // collapse state unique per parent row even when the parent grid declares no
+    // rowKey (rowKeyOf(row) would then be null and every parent row would collide
+    // under the literal "_"). When no parent discriminator is available there is no
+    // safe key, so persistence is disabled (ckeyBase null) instead of colliding.
+    const cparentKey = cg.parentField != null && row[cg.parentField] != null
+      ? String(row[cg.parentField]) : null;
+    const ckeyBase = cparentKey == null ? null
+      : "pc:collapsed:" + CURRENT + ":" + cnodeId + ":" + cchildId + ":" + cparentKey + ":r:";
     /** @param {Record<string, any>} cr @returns {string|null} */
     const crowKeyOf = (cr) => {
       if (!cg.rowKey) return null;
@@ -1714,13 +1723,14 @@ function renderDataGrid(node) {
       ? el("table", { class: "pc-grid" }, ccolgroup, cthead, cbody)
       : el("table", { class: "pc-grid" }, cthead, cbody);
     wrap.append(ctable);
-    /** @type {any} */
-    var cspan;
+    // Compute the colspan eagerly (before the fetch) so BOTH the success path and
+    // the catch's error row have a valid, table-spanning colspan — if getJSON()
+    // throws, a lazily-assigned cspan would still be undefined here.
+    const cspan = String((ccols.length || 1) + cextra);
     try {
       /** @type {{ rows: Array<Record<string, any>> }} */
       const { rows } = await getJSON(dataUrl(cg.source || "app", cg.table,
         [{ field: cg.childField, eq: row[cg.parentField] }], cg.orderBy));
-      cspan = String((ccols.length || 1) + cextra);
       if (!rows.length) {
         cbody.append(el("tr", {}, el("td", { colspan: cspan }, "None")));
       }
@@ -1750,7 +1760,7 @@ function renderDataGrid(node) {
         let cdtr = null;
         if (chasExpand) {
           const crk = crowKeyOf(cr);
-          const cskey = crk != null ? ckeyBase + crk : null;
+          const cskey = ckeyBase && crk != null ? ckeyBase + crk : null;
           const collapsed = cskey ? readCollapsed(cskey, cdefaultCollapsed) : cdefaultCollapsed;
           const ctoggle = el("button", { class: "pc-btn pc-btn-sm pc-chevron" }, collapsed ? "▸" : "▾");
           cells.push(el("td", { class: "pc-row-actions" }, ctoggle));

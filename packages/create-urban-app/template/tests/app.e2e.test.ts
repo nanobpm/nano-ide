@@ -10,6 +10,11 @@
 //   POST /greetings (createGreeting) ─▶ engine.publishMessage ─▶ greet.bpmn
 //     ─▶ workers/greet.ts inserts a row ─▶ GET /greetings (listGreetings) shows it.
 //
+// The assertions use the fluent `assertThat*` DSL: `assertThatResponse` reads the
+// HTTP responses, `assertThatInstance` reads the engine's process state, and
+// `assertThatDb` reads the app's SQLite — three windows onto the same run, each
+// throwing an intent-revealing error on mismatch.
+//
 // Then it asserts the S4 coverage gate: every OpenAPI operation and every declared
 // worker was exercised. Add your own operations/workers and this gate fails until a
 // test drives them — turning "we forgot to test X" into a build failure.
@@ -22,7 +27,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { bootTestApp, type TestApp } from "@nanobpm/urban-testkit";
+import {
+  assertThatDb,
+  assertThatInstance,
+  assertThatResponse,
+  bootTestApp,
+  byProcessId,
+  type TestApp,
+} from "@nanobpm/urban-testkit";
 
 // The app root is this repo's root (one level up from `tests/`).
 const APP_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -64,24 +76,38 @@ describe("app e2e (urban-testkit)", () => {
     assert.ok(api);
 
     // POST /greetings — publishes the greet message (returns 202 Accepted; the work is async).
+    // `assertThatResponse` fluently checks the status AND the JSON body (a subset match — extra
+    // keys are ignored) in one chain.
     const created = await api.call<{ accepted: boolean; who: string }>("createGreeting", {
       body: { who: "Ada" },
     });
-    assert.equal(created.status, 202, "createGreeting returns 202 Accepted");
-    assert.equal(created.body.who, "Ada");
+    assertThatResponse(created).hasStatus(202).hasJson({ accepted: true, who: "Ada" });
 
     // Drive the app to a quiescent fixpoint: the message starts greet.bpmn, whose service task
     // dispatches to workers/greet.ts, which inserts the row — all at the current virtual instant.
     await app.settle();
 
-    // GET /greetings — the greeting the worker recorded is now visible.
+    // Assert directly on the ENGINE: the `greet` instance ran to completion and exercised every
+    // element of the pipeline — the message start event, the `Greet` service task, and the end
+    // event. `byProcessId` selects the single instance of the deployed `greet` process.
+    assertThatInstance(app, byProcessId("greet"))
+      .hasCompleted()
+      .hasCompletedElements("StartGreet", "Greet", "EndGreet")
+      .hasNoIncident();
+
+    // Assert directly on the DATABASE: the worker persisted exactly one greeting row holding the
+    // composed message. `hasRow` is a subset match (the `id`/`createdAt` columns are ignored);
+    // each matcher awaits a fresh read of the table.
+    await assertThatDb(app).table("greetings").rowCount(1);
+    await assertThatDb(app).table("greetings").hasRow({ who: "Ada", message: "Hello, Ada!" });
+
+    // GET /greetings — the greeting the worker recorded is now visible over the API.
     const list = await api.call<{ greetings: Array<{ who: string; message: string }> }>(
       "listGreetings",
     );
-    assert.equal(list.status, 200, "listGreetings returns 200 OK");
-    assert.equal(list.body.greetings.length, 1, "exactly one greeting was recorded");
-    assert.equal(list.body.greetings[0].who, "Ada");
-    assert.equal(list.body.greetings[0].message, "Hello, Ada!", "the worker composed the message");
+    assertThatResponse(list)
+      .hasStatus(200)
+      .hasJson({ greetings: [{ who: "Ada", message: "Hello, Ada!" }] });
 
     // Coverage gate (S4): now that the pipeline has driven every surface, assert nothing was
     // left un-exercised. This fails — naming the un-exercised ids — the moment you add an

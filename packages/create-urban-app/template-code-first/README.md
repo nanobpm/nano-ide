@@ -64,10 +64,26 @@ npm run greet -- Adam
 
 ## Test it
 
-A starter e2e test ships in `tests/`, powered by
+Two tests ship in `tests/` (an e2e app test and an engine-contract test), powered by
 [`@nanobpm/urban-testkit`](https://www.npmjs.com/package/@nanobpm/urban-testkit) (a
-devDependency). It drives the app against an in-process WASM build of the engine — no
+devDependency). They drive the app against an in-process WASM build of the engine — no
 server, no wall-clock waits, CI-friendly.
+
+- **`app.e2e.test.ts`** — the flagship test. It boots the app with
+  `bootTestApp(root, { coverage: true })` — which deploys the process derived from your
+  `defineFlow` — starts a `greet` instance through the in-process engine, and asserts the
+  result with the fluent **`assertThat*` DSL**:
+  `assertThatInstance(app, byProcessId("greet")).hasCompleted()...` reads the engine's
+  process state and `assertThatDb(app).table("greetings").hasRow(...)` reads the app's
+  SQLite. (A code-first app has no OpenAPI `api` binding, so there is no HTTP response to
+  `assertThatResponse` over; add one and that matcher slots in the same way.) `bootTestApp`
+  hosts the app's *manifest* surface but not the code-first `w.run` worker (that lives in
+  `main.ts`), so the test stands that worker in with `app.mockWorker("greet:hello")`. At the
+  end it asserts the **coverage gate** (`app.coverage.assertFullCoverage()`) — it fails if any
+  declared worker was never exercised, so the suite grows a hole the moment you add a service
+  task without a test.
+- **`engine-contract.test.ts`** — a minimal smoke test of the engine seam
+  (`runEngineClientContract`).
 
 ```bash
 npm test

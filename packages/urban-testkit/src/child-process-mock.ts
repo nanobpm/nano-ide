@@ -7,10 +7,11 @@
 // decide how the parent's call activity to `processId` resolves.
 //
 // ## Reuse, not duplication (AGENTS.md "Derivation Over Duplication")
-// The outcome model is the SAME one the job-worker slice landed: this module imports
-// {@link MockOutcome} + {@link applyOutcome} from `./worker-mock.ts` rather than re-deriving a
-// second copy. A child-process mock is just a call-activity job resolved through the one canonical
-// outcome applier — see `WasmEngineClient.drain`.
+// The outcome model is the SAME one the job-worker slice landed: this module imports the
+// {@link MockOutcome} type from `./worker-mock.ts` rather than re-deriving a second copy, and the
+// one canonical outcome applier (`applyOutcome`) is invoked in `WasmEngineClient` (see
+// `WasmEngineClient.drain`). A child-process mock is just a call-activity job resolved through that
+// same applier.
 //
 // ## Why the seam is a deploy-time rewrite (see `WasmEngineClient.deployResources`)
 // The WASM `TestEngine` treats a BPMN call activity as an immediate pass-through: it never

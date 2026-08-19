@@ -664,16 +664,18 @@ export class WasmEngineClient implements EngineClient {
   /** The job types to activate on a drain pass: every registered worker, every mock-only type
    *  that actually carries at least one clause (an empty/reset mock induces no dispatch), plus
    *  every synthetic child-process type (always dispatched — resolved via a mock or completed
-   *  through to mirror the native call-activity pass-through). */
+   *  through to mirror the native call-activity pass-through). De-duplicated so a type that lands
+   *  in more than one source (e.g. a worker mock mistakenly registered for a synthetic
+   *  child-process jobType) is only activated once per drain pass. */
   #dispatchableJobTypes(): string[] {
-    const types: string[] = [...this.#workers.keys()];
+    const types = new Set<string>(this.#workers.keys());
     for (const [jobType, mock] of this.#workerMocks) {
-      if (!this.#workers.has(jobType) && mock.hasClauses) types.push(jobType);
+      if (!this.#workers.has(jobType) && mock.hasClauses) types.add(jobType);
     }
     for (const jobType of this.#childProcessJobTypes) {
-      if (!this.#workers.has(jobType)) types.push(jobType);
+      if (!this.#workers.has(jobType)) types.add(jobType);
     }
-    return types;
+    return [...types];
   }
 
   /**

@@ -633,6 +633,39 @@ function pageHashHref(page, key) {
   return "#/" + encodeURIComponent(page) + "/" + encodeURIComponent(keyStr);
 }
 
+// SINGLE source of truth for a console process-explorer link. The grid link cell
+// (link kind "processExplorer") and the pipeline locus link (issue #347) both
+// route here so they can't drift on the href or the embedded-vs-standalone
+// navigation. The console path is constructed HERE (never taken from row data)
+// and the trimmed key URL-encoded, so row data can't smuggle a path/scheme.
+// Returns null for a blank key (after trimming) so the caller keeps the node
+// plain. Standalone the anchor opens a new tab (hardened rel); embedded in the
+// console a plain primary click instead routes the host's explorer in place via
+// the nano-navigate bridge (a non-primary/modified click keeps the new-tab
+// behavior).
+/** @param {any} label
+ * @param {any} key
+ * @param {string} cls
+ * @returns {any}
+ */
+function explorerAnchor(label, key, cls) {
+  const keyStr = key == null ? "" : String(key).trim();
+  if (keyStr === "") return null;
+  const href = "/console/explorer?instance=" + encodeURIComponent(keyStr);
+  return el("a", {
+    class: cls,
+    href,
+    target: "_blank",
+    rel: "noopener noreferrer",
+    /** @param {MouseEvent} ev */
+    onclick: (ev) => {
+      if (ev.button !== 0) return;
+      if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+      if (hostNavigate("processExplorer", { instance: keyStr })) ev.preventDefault();
+    },
+  }, label);
+}
+
 // Coerce a not-in-path value (issue #265) into a Set of stage keys. Accepts an
 // array of keys or a comma/whitespace-separated string; null/undefined → empty
 // set. Used to mark the stages a given row skips (dashed/omitted).
@@ -746,27 +779,13 @@ function gridCell(col, row, role) {
     }
   }
   if (primary === text && col.link && col.link.kind === "processExplorer" && col.link.keyField) {
-    const key = row[col.link.keyField];
-    const keyStr = key == null ? "" : String(key).trim();
-    if (text !== "" && keyStr !== "") {
-      const href = "/console/explorer?instance=" + encodeURIComponent(keyStr);
-      primary = el("a", {
-        class: "pc-link",
-        href,
-        target: "_blank",
-        rel: "noopener noreferrer",
-        // Embedded in the console a plain primary click routes the host's
-        // explorer in place (via the nano-navigate bridge) instead of opening
-        // a new window. A non-primary button (middle/right = new-tab/context
-        // intent), a modified click (⌘/ctrl/shift/alt = new-tab intent) and
-        // any standalone run fall through to the native anchor above.
-        /** @param {MouseEvent} ev */
-        onclick: (ev) => {
-          if (ev.button !== 0) return;
-          if (ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-          if (hostNavigate("processExplorer", { instance: keyStr })) ev.preventDefault();
-        },
-      }, text);
+    // Route through the shared explorerAnchor builder (single source of truth) so
+    // this cell and the pipeline locus link can't drift on the href or the
+    // embedded-in-place / standalone-new-tab navigation. A blank key → null →
+    // the cell stays plain text.
+    const a = explorerAnchor(text, row[col.link.keyField], "pc-link");
+    if (text !== "" && a) {
+      primary = a;
     }
   }
   return cellTd(primary, text, subText, truncate, mob);
@@ -924,13 +943,28 @@ function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
   const badgeText = col.badgeField != null && row[col.badgeField] != null ? String(row[col.badgeField]) : "";
   const badgeTone = state === "failed" || state === "blocked" ? "danger" : "warn";
   // Optional locus out-link: the relevant stage (default the active one, or
-  // locus.stage by key) becomes an in-app page link when the row's locus key is
-  // non-empty. Href comes from the shared pageHashHref builder (safePageId guard,
-  // encodeURIComponent) — a blank key yields "" so the stage stays plain.
+  // locus.stage by key) becomes a link when the row's locus key is non-empty.
+  // Two link kinds are supported, mirroring the grid link cell and built via the
+  // SAME single-source builders so the two can't drift: `page` → an in-app
+  // #/<page>/<key> hash route (pageHashHref, safePageId guard + encodeURIComponent);
+  // `processExplorer` → the console explorer for the row's process instance
+  // (explorerAnchor, embedded-in-place / standalone-new-tab). An unknown kind or
+  // blank key yields no link, so the stage stays plain.
   const locus = col.locus;
   const locusKey = locus && locus.field != null && row[locus.field] != null ? String(row[locus.field]) : "";
-  const locusHref =
-    locus && locus.link && locus.link.kind === "page" && locus.link.page ? pageHashHref(locus.link.page, locusKey) : "";
+  /** @param {any} label
+   * @returns {any} an anchor node for the locus stage, or null (→ plain label). */
+  const locusLabelNode = (label) => {
+    if (!locus || !locus.link || locusKey === "") return null;
+    if (locus.link.kind === "page" && locus.link.page) {
+      const href = pageHashHref(locus.link.page, locusKey);
+      return href === "" ? null : el("a", { class: "pc-link pc-pipe-label", href }, label);
+    }
+    if (locus.link.kind === "processExplorer") {
+      return explorerAnchor(label, locusKey, "pc-link pc-pipe-label");
+    }
+    return null;
+  };
   const track = el("div", {
     class: "pc-pipe",
     role: "list",
@@ -968,11 +1002,10 @@ function pipelineCell(col, row, text, subText, truncate, tdAttrs) {
     } else {
       cls = "pc-pipe-upcoming"; word = "upcoming";
     }
-    const isLocus = locusHref !== "" && (locus.stage != null ? String(s.key) === String(locus.stage) : i === activeIdx);
+    const atLocus = locus != null && (locus.stage != null ? String(s.key) === String(locus.stage) : i === activeIdx);
     const label = labelOf(s);
-    const labelNode = isLocus
-      ? el("a", { class: "pc-link pc-pipe-label", href: locusHref }, label)
-      : el("span", { class: "pc-pipe-label" }, label);
+    const locusNode = atLocus ? locusLabelNode(label) : null;
+    const labelNode = locusNode != null ? locusNode : el("span", { class: "pc-pipe-label" }, label);
     /** @type {Record<string, any>} */
     const attrs = { class: "pc-pipe-stage " + cls, role: "listitem", "aria-label": label + " \u2014 " + word };
     if (current) attrs["aria-current"] = "step";

@@ -59,6 +59,8 @@ test("parseXml: rejects malformed documents instead of silently accepting them",
   assert.throws(() => parseXml("<a><b></b>"), /unclosed tag/);
   // Stray end tag with nothing open.
   assert.throws(() => parseXml("</a>"), /unbalanced end tag/);
+  // Multiple top-level roots: a well-formed document has exactly one root.
+  assert.throws(() => parseXml("<a/><b/>"), /multiple root elements/);
   // A well-formed document still parses.
   const el = parseXml("<a><b/></a>");
   assert.equal(el.name, "a");

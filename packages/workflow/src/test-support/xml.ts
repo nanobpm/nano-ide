@@ -63,8 +63,9 @@ function appendText(el: XmlElement, chunk: string): void {
 }
 
 /** Parse an XML document into its root element. Throws on a malformed document
- *  (unbalanced tags, no root). Comments, CDATA, the `<?xml?>` prolog and other
- *  processing instructions are handled; CDATA content contributes to `text`. */
+ *  (unbalanced tags, no root, or more than one top-level element). Comments,
+ *  CDATA, the `<?xml?>` prolog and other processing instructions are handled;
+ *  CDATA content contributes to `text`. */
 export function parseXml(xml: string): XmlElement {
   const root: XmlElement = { name: "#root", attrs: {}, children: [], text: "" };
   const stack: XmlElement[] = [root];
@@ -125,5 +126,9 @@ export function parseXml(xml: string): XmlElement {
     throw new Error(`parseXml: unclosed tag(s): ${unclosed}`);
   }
   if (root.children.length === 0) throw new Error("parseXml: no root element");
+  if (root.children.length > 1) {
+    const roots = root.children.map((el) => `<${el.name}>`).join(", ");
+    throw new Error(`parseXml: multiple root elements (${roots}) — a well-formed document has exactly one`);
+  }
   return root.children[0];
 }

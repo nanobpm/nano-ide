@@ -12,6 +12,7 @@ import {
   declarativeToLayoutedBpmn,
   layoutBpmn,
   externalJobTypes,
+  walkNodes,
   replayOnce,
   Worker,
   WorkflowClient,
@@ -29,6 +30,16 @@ test("imperative emit: single looped orchestrator with derived job type", () => 
   assert.match(xml, /<bpmn:exclusiveGateway id="Gw" default="f_loop">/);
   assert.match(xml, /<bpmn:conditionExpression>=wfDone<\/bpmn:conditionExpression>/);
   assert.match(xml, /<bpmn:sequenceFlow id="f_loop" sourceRef="Gw" targetRef="Orchestrate" \/>/);
+});
+
+test("walkNodes: fails fast on an unregistered flow-node kind instead of silently skipping recursion", () => {
+  // A runtime-invalid node whose `kind` was never registered (JSON.parse yields
+  // an untyped value — no `as` cast). Silently skipping it (the old
+  // `nodeKind(n.kind)?.walk?.` form) would hide the missing registration and
+  // could drop nested nodes; consumers like WorkflowClient.signal() must see a
+  // clear error, matching the emitter's requireNodeKind fail-fast.
+  const bogus = JSON.parse('[{"kind":"__never_registered__","name":"x"}]');
+  assert.throws(() => walkNodes(bogus, () => {}), /no handler registered for flow-node kind "__never_registered__"/);
 });
 
 test("declarative emit: service tasks + derived types + message/subscription", () => {

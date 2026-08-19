@@ -49,7 +49,7 @@ import type {
 } from "./types.js";
 import type { Envelope, EnvelopeField } from "./envelope.js";
 import { assertIdent, assertTimerCycle, assertTimerDate, assertTimerDuration, escapeXml, jobType, messageName } from "./xml.js";
-import { eachNodeKind, nodeKind, requireNodeKind } from "./nodes/registry.js";
+import { eachNodeKind, requireNodeKind } from "./nodes/registry.js";
 // Import the generated barrel purely for its registration side effects: every
 // built-in (and slice-added) kind module registers its FlowNode variant, builder
 // method, and walk/emit handlers at import time. MUST run before `makeBuilder`
@@ -454,11 +454,15 @@ export function defineFlow(
 
 /** Depth-first visit of every node in a flow tree. Recursion into a kind's
  *  nested bodies is DISPATCHED through the registry (each kind's `walk` handler),
- *  so a slice's structural combinator recurses without editing a central switch. */
+ *  so a slice's structural combinator recurses without editing a central switch.
+ *  Fails fast (via `requireNodeKind`) on an unregistered kind — matching the
+ *  emitter — so a tree-shaken/missing registration surfaces as a clear error
+ *  rather than silently skipping recursion into that node's nested bodies. A
+ *  registered leaf kind with no `walk` handler is fine (nothing to recurse). */
 export function walkNodes(nodes: FlowNode[], visit: (n: FlowNode) => void): void {
   for (const n of nodes) {
     visit(n);
-    nodeKind(n.kind)?.walk?.(n, (body) => walkNodes(body, visit));
+    requireNodeKind(n.kind).walk?.(n, (body) => walkNodes(body, visit));
   }
 }
 

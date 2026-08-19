@@ -17,6 +17,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./test-support": {
+      "types": "./dist/test-support/index.d.ts",
+      "default": "./dist/test-support/index.js"
+    },
     "./source": "./src/index.ts"
   },
   "files": [
@@ -26,13 +30,17 @@
   "engines": {
     "node": ">=22.6"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/nodes/*.js",
+    "./src/nodes/*.ts"
+  ],
   "dependencies": {
     "@nanobpm/nano-sdk": "^1.2.5"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.types.json",
+    "gen:nodes": "node scripts/gen-node-registry.mjs",
+    "build": "npm run gen:nodes && tsc -p tsconfig.json",
+    "typecheck": "npm run gen:nodes && tsc -p tsconfig.json --noEmit && tsc -p tsconfig.types.json",
     "test": "npm run build && npm run test:ci",
     "test:ci": "node --experimental-strip-types --test test/*.test.ts",
     "test:integration": "node --experimental-strip-types --test test/integration.test.ts",

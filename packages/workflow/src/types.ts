@@ -52,36 +52,26 @@ export type StepHandler<
   bivarianceHack(job: Job<V>): Promise<R | void> | R | void;
 }["bivarianceHack"];
 
-/** A node in a declarative flow tree. Leaf activities carry optional data
- *  envelopes (lifted to `nano:shape` + `dataEnvelope` in the model); structural
- *  combinators carry nested `FlowNode[]` bodies. */
-export type FlowNode =
-  | { kind: "run"; name: string; envelopes?: NodeEnvelopes }
-  | { kind: "task"; name: string; envelopes?: NodeEnvelopes; jobType?: string }
-  | { kind: "signal"; name: string; correlationKey: string; payload?: Envelope }
-  | ({ kind: "timer"; name: string } & TimerAt)
-  | { kind: "switch"; subject: string; cases: SwitchCase[]; default?: FlowNode[] }
-  | { kind: "branch"; condition: string; then: FlowNode[]; else?: FlowNode[] }
-  | { kind: "loop"; body: FlowNode[] }
-  | { kind: "break" }
-  | { kind: "continue" }
-  | { kind: "parallel"; branches: FlowNode[][] }
-  | {
-      kind: "forEach";
-      /** FEEL expression evaluating to the list to fan out over. */
-      collection: string;
-      /** Variable each item is bound to in the child's scope (`inputElement`). */
-      itemVar: string;
-      body: FlowNode[];
-      /** Run children one at a time (sequential MI) instead of all at once. */
-      sequential?: boolean;
-      /** List variable that each child's `outputElement` is collected into. */
-      outputCollection?: string;
-      /** FEEL expression producing each child's contribution to `outputCollection`. */
-      outputElement?: string;
-      /** FEEL boolean that, once true, completes the body early. */
-      completionCondition?: string;
-    };
+/** The OPEN registry of flow-node kinds — the single extension seam for the
+ *  `FlowNode` union (epic #314, S0/#315). Each kind module under `src/nodes/`
+ *  declaration-merges ONE property into this interface (`kindName: NodeShape`),
+ *  so `FlowNode` grows without editing a central union here. The built-in kinds
+ *  register `run`/`task`/`signal`/`timer`/`switch`/`branch`/`loop`/`break`/
+ *  `continue`/`parallel`/`forEach` from their own modules through this same
+ *  mechanism — see `src/nodes/README.md`.
+ *
+ *  Invariant: every value type MUST be an object with a `kind` discriminant
+ *  equal to its key, so `FlowNode` stays a discriminated union.
+ *
+ *  This interface is intentionally empty here: it is the augmentation target the
+ *  per-kind modules declaration-merge their variant into. */
+export interface FlowNodeRegistry {}
+
+/** A node in a declarative flow tree, derived from the {@link FlowNodeRegistry}.
+ *  Leaf activities carry optional data envelopes (lifted to `nano:shape` +
+ *  `dataEnvelope` in the model); structural combinators carry nested
+ *  `FlowNode[]` bodies. */
+export type FlowNode = FlowNodeRegistry[keyof FlowNodeRegistry];
 
 /** A timer intermediate-catch definition: exactly one of `after` (an ISO-8601
  *  delay or FEEL expression) or `at` (an absolute instant or FEEL expression).

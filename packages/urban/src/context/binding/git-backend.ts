@@ -26,6 +26,17 @@ export class SubstrateResolveError extends Error {
   }
 }
 
+/**
+ * Redact URL userinfo (`scheme://user:pass@host` → `scheme://***@host`) from a
+ * single git argv token. A manifest-supplied remote URL can embed credentials
+ * (e.g. `https://x-access-token:TOKEN@github.com/owner/repo`); scrubbing them
+ * before the argv is placed in an error message keeps secrets out of logs,
+ * telemetry, and user-facing errors. The raw, unredacted args stay on the
+ * error's `cause` for local debugging only.
+ */
+export const redactUrlUserinfo = (arg: string): string =>
+  arg.replace(/(\/\/)[^/@\s]+@/g, "$1***@");
+
 const defaultGitRunner: GitRunner = async (args, cwd) => {
   try {
     const { stdout } = await execFileAsync("git", [...args], {
@@ -34,7 +45,7 @@ const defaultGitRunner: GitRunner = async (args, cwd) => {
     });
     return stdout;
   } catch (cause) {
-    const label = `git ${args.join(" ")}`;
+    const label = `git ${args.map(redactUrlUserinfo).join(" ")}`;
     throw new SubstrateResolveError(`substrate git command failed: ${label}`, { cause });
   }
 };

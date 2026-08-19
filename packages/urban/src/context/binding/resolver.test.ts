@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, dirname, resolve as resolvePath } from "node:path";
 import { promisify } from "node:util";
 import { ContextResolver, defaultContextCacheRoot } from "./resolver.ts";
-import { GitSubstrateBackend } from "./git-backend.ts";
+import { GitSubstrateBackend, redactUrlUserinfo } from "./git-backend.ts";
 import type { GitRunner } from "./git-backend.ts";
 import type {
   ResolvedContextHandle,
@@ -298,6 +298,20 @@ test("git backend passes --end-of-options to rev-parse so an option-like ref can
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("defaultGitRunner redaction scrubs credentialed URLs from error labels", () => {
+  assert.equal(
+    redactUrlUserinfo("https://x-access-token:SECRET@github.com/o/r.git"),
+    "https://***@github.com/o/r.git",
+  );
+  assert.equal(
+    redactUrlUserinfo("ssh://user:pw@host/o/r"),
+    "ssh://***@host/o/r",
+  );
+  // A URL without userinfo, and scp-style `git@host:path` (no `//`), are untouched.
+  assert.equal(redactUrlUserinfo("https://github.com/o/r.git"), "https://github.com/o/r.git");
+  assert.equal(redactUrlUserinfo("git@github.com:o/r.git"), "git@github.com:o/r.git");
 });
 
 async function git(cwd: string, ...args: string[]): Promise<string> {

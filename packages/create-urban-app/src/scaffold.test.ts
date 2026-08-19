@@ -304,27 +304,95 @@ test("scaffold wires @nanobpm/urban-testkit as a devDependency with a runnable s
     const res = await scaffold({ name: "Kit App", dir, style });
 
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
-    assert.ok(
+    // The testkit ships the `assertThat*` DSL from 0.11.0 (which pulls engine-wasm ^0.7.0 in
+    // transitively); pin to that release so scaffolded apps are born using the DSL.
+    assert.equal(
       pkg.devDependencies?.["@nanobpm/urban-testkit"],
-      `${style}: testkit is a devDependency`,
+      "^0.11.0",
+      `${style}: testkit is pinned to the assertThat* release`,
     );
     assert.equal(
       pkg.dependencies?.["@nanobpm/urban-testkit"],
       undefined,
       `${style}: testkit is NOT a runtime dependency`,
     );
+    // engine-wasm must stay a transitive dep of the testkit — never pinned directly in the app.
+    assert.equal(
+      pkg.dependencies?.["@nanobpm/engine-wasm"],
+      undefined,
+      `${style}: engine-wasm is not a direct dependency`,
+    );
+    assert.equal(
+      pkg.devDependencies?.["@nanobpm/engine-wasm"],
+      undefined,
+      `${style}: engine-wasm is not a direct devDependency`,
+    );
+    assert.equal(pkg.dependencies?.["@nanobpm/urban"], "^0.69.0", `${style}: urban pin is current`);
     assert.match(pkg.scripts.test, /node --test/, `${style}: has a test script`);
 
     assert.ok(
       res.files.includes("tests/engine-contract.test.ts"),
-      `${style}: starter test is scaffolded`,
+      `${style}: engine-contract starter test is scaffolded`,
     );
     const starter = await readFile(join(dir, "tests/engine-contract.test.ts"), "utf8");
     assert.match(
       starter,
       /@nanobpm\/urban-testkit/,
-      `${style}: starter test imports the kit`,
+      `${style}: engine-contract test imports the kit`,
     );
+    assert.match(
+      starter,
+      /runEngineClientContract/,
+      `${style}: engine-contract test still runs the engine contract`,
+    );
+
+    // The e2e starter now demonstrates the fluent assertThat* DSL alongside bootTestApp.
+    assert.ok(
+      res.files.includes("tests/app.e2e.test.ts"),
+      `${style}: e2e starter test is scaffolded`,
+    );
+    const e2e = await readFile(join(dir, "tests/app.e2e.test.ts"), "utf8");
+    assert.match(e2e, /bootTestApp/, `${style}: e2e boots the app in-process`);
+    assert.match(e2e, /assertThatInstance/, `${style}: e2e uses assertThatInstance`);
+    assert.match(e2e, /assertThatDb/, `${style}: e2e uses assertThatDb`);
+    assert.match(e2e, /coverage\.assertFullCoverage\(\)/, `${style}: e2e keeps the S4 coverage gate`);
+  }
+});
+
+test("the model template's e2e exercises the HTTP response DSL, the code-first one drives the flow", async () => {
+  const modelDir = await mkdtemp(join(tmpdir(), "urban-e2e-model-"));
+  await scaffold({ name: "Kit App", dir: modelDir, style: "model" });
+  const modelE2e = await readFile(join(modelDir, "tests/app.e2e.test.ts"), "utf8");
+  // The model template exposes an OpenAPI `api` binding, so its e2e asserts over HTTP responses.
+  assert.match(modelE2e, /assertThatResponse/, "model e2e asserts over the HTTP response");
+
+  const codeDir = await mkdtemp(join(tmpdir(), "urban-e2e-code-"));
+  await scaffold({ name: "Kit App", dir: codeDir, style: "code" });
+  const codeE2e = await readFile(join(codeDir, "tests/app.e2e.test.ts"), "utf8");
+  // The code-first template has no `api` binding, so it drives the process via createInstance.
+  assert.match(codeE2e, /createInstance/, "code-first e2e starts an instance directly");
+});
+
+test("no stale testkit/urban pins remain in either scaffolded template", async () => {
+  for (const [style, deno] of [
+    ["model", false],
+    ["model", true],
+    ["code", false],
+    ["code", true],
+  ] as const) {
+    const dir = await mkdtemp(join(tmpdir(), `urban-pins-${style}-`));
+    await scaffold({ name: "Pin App", dir, style, deno });
+    for (const file of ["package.json", ...(deno ? ["deno.json"] : [])]) {
+      const raw = await readFile(join(dir, file), "utf8");
+      assert.ok(
+        !/@nanobpm\/urban-testkit@?["']?\^?0\.4\.0/.test(raw),
+        `${style} (deno=${deno}) ${file}: no stale ^0.4.0 testkit pin`,
+      );
+      assert.ok(
+        !/@nanobpm\/urban@?["']?\^?0\.42\.0/.test(raw),
+        `${style} (deno=${deno}) ${file}: no stale ^0.42.0 urban pin`,
+      );
+    }
   }
 });
 

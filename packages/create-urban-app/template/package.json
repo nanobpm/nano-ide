@@ -19,11 +19,11 @@
 		"test": "node --test --experimental-strip-types \"tests/**/*.test.ts\""
 	},
 	"dependencies": {
-		"@nanobpm/urban": "^0.42.0"
+		"@nanobpm/urban": "^0.69.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.7",
-		"@nanobpm/urban-testkit": "^0.4.0",
+		"@nanobpm/urban-testkit": "^0.11.0",
 		"@types/node": "^22.0.0",
 		"typescript": "^5.6.0"
 	}

@@ -17,5 +17,8 @@
 		"enabled": true,
 		"rules": { "recommended": false }
 	},
-	"plugins": ["./plugins/no-unsafe-type-assertion.grit"]
+	"plugins": [
+		"./plugins/no-unsafe-type-assertion.grit",
+		"./plugins/no-ts-parameter-properties.grit"
+	]
 }

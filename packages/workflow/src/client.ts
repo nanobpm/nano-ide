@@ -189,12 +189,13 @@ export type WorkflowClientOptions =
     });
 
 export class WorkflowError extends Error {
-  constructor(
-    message: string,
-    readonly status?: number,
-    readonly body?: string,
-  ) {
+  readonly status?: number;
+  readonly body?: string;
+
+  constructor(message: string, status?: number, body?: string) {
     super(message);
+    this.status = status;
+    this.body = body;
     this.name = "WorkflowError";
   }
 }

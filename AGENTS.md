@@ -32,6 +32,30 @@ All BPMN Models need DI for rendering for humans.
 
 Type assertions (`as T`) bypass the type system and are banned across the authored TypeScript source. This is enforced in CI by a Biome GritQL plugin (`plugins/no-unsafe-type-assertion.grit`, wired via `biome.json`; run `npm run lint`). Use a type guard, declaration-site annotation, narrowing, or `satisfies` instead. Exceptions: `as const` and `import`/`export` renames are allowed. If a cast is genuinely unavoidable (e.g. an untyped host/runtime boundary), add a `// biome-ignore lint/plugin: <reason>` comment with a concrete justification.
 
+## No TS Constructor Parameter Properties
+
+TypeScript constructor parameter properties (`constructor(private readonly x: T) {}`)
+are banned across the authored TypeScript source. Tests run under
+`node --test --experimental-strip-types`, whose type-stripping loader **rejects**
+parameter properties with `ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX` because they require a
+transform, not just erasure. Deno's loader accepts them, so a parameter property
+passes `npm run test:deno` while `npm test` (and CI's Node lane) fails — a green/red
+split that hides the defect until the Node lane runs. This is enforced in CI by a
+Biome GritQL plugin (`plugins/no-ts-parameter-properties.grit`, wired via
+`biome.json`; run `npm run lint`). Declare the field explicitly and assign it in the
+constructor body instead:
+
+```ts
+// banned — fails the Node strip-types lane
+constructor(private readonly x: number) {}
+
+// use instead
+private readonly x: number;
+constructor(x: number) {
+  this.x = x;
+}
+```
+
 ## Releasing (never bump versions by hand)
 
 Releases are **derived**, not declared. Do **not** edit a `package.json`

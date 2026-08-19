@@ -1,0 +1,10 @@
+engine biome(1.0)
+language js(typescript)
+
+TsPropertyParameter() as $param where {
+    register_diagnostic(
+        span = $param,
+        message = "TS constructor parameter properties (`constructor(private x)`) are banned: `node --test --experimental-strip-types` rejects them with ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX (Deno accepts them, so `npm test` fails while `npm run test:deno` stays green). Declare the field explicitly and assign it in the constructor body instead.",
+        severity = "error"
+    )
+}

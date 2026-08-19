@@ -100,4 +100,5 @@ append over it. The write path is already abstracted over the substrate
 binding layer does not assume "public git only", so a future opt-in
 PII/mutable backend can slot in behind that seam and offer erasure semantics
 **without** touching the record schema, the layout, or this guard. That backend
-is intentionally **not built** in the MVP — only its seam is documented here.
+is intentionally **not built** in the MVP — only its seam is documented here, and
+the deferred implementation is tracked in nano-ide#393.

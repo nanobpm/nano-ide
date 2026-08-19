@@ -210,6 +210,23 @@ export class GitSubstrateBackend implements SubstrateBackend {
     this.#git = gitRunner;
   }
 
+  /**
+   * Materialise the working copy at `options.localPath`: clone on first use,
+   * fetch + re-pin thereafter.
+   *
+   * Known limitation (deferred past slice S1): materialisation is NOT guarded by
+   * an inter-process lock. The resolver's single-flight coalescing only
+   * serialises resolves *within one process*, so two Nano instances that share a
+   * `cacheRoot` and resolve the same context concurrently can race the
+   * first-use `mkdir → clone → pin` (or `fetch → pin`) sequence for the same
+   * `localPath` — one process may observe the path as absent or
+   * partially-initialised while the other is still cloning, surfacing a spurious
+   * "not a git working copy" error or (worse) a half-written working copy.
+   * Cross-process sharing is therefore reliable only once the substrate is
+   * already materialised; the concurrent *first-use* case is a documented gap. A
+   * follow-up slice will add a per-`localPath` inter-process lock (bounded retry
+   * + stale-lock reclamation) to close it. See PR #309 / nano-ide binding notes.
+   */
   async materialise(
     identity: ContextIdentity,
     options: SubstrateResolveOptions,

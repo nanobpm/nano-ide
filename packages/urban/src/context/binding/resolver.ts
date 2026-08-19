@@ -8,6 +8,11 @@
 //  2. Across processes/instances: the on-disk location is derived
 //     deterministically from the identity slug under a shared cache root, so two
 //     Nano instances naming the same context share one working copy on disk.
+//     Known first-use limitation (deferred past slice S1): the single-flight in
+//     (1) is in-process only, so concurrent *first* resolves of the same context
+//     across instances can race materialisation (clone/pin). Sharing is reliable
+//     once the substrate exists; a follow-up slice adds an inter-process lock to
+//     make concurrent first-use safe too — see GitSubstrateBackend.materialise.
 
 import { homedir, tmpdir } from "node:os";
 import { join, resolve as resolvePath } from "node:path";

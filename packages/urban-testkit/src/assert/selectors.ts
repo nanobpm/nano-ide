@@ -8,6 +8,7 @@
 // snapshot synchronously and never touches a wall-clock or entropy source.
 
 import type { TestApp } from "../boot-app.ts";
+import { wasmStateToProcessInstanceState } from "../wasm-engine.ts";
 import { failAssertion, formatValue } from "./format.ts";
 
 /** Select an instance by its exact process-instance key. */
@@ -97,7 +98,11 @@ export function resolveFromInstances(
   selectorOrKey?: string | InstanceSelector,
 ): string {
   if (selectorOrKey === undefined) {
-    const active = instances.filter((i) => i.state === "ACTIVE");
+    // The wasm snapshot spells the lifecycle state mixed-case (e.g. "Active"),
+    // so normalise through the canonical mapping rather than comparing against
+    // the literal "ACTIVE" — a raw `=== "ACTIVE"` would find nothing in a real
+    // snapshot even when there is exactly one active instance.
+    const active = instances.filter((i) => wasmStateToProcessInstanceState(i.state) === "ACTIVE");
     if (active.length === 0) {
       throwResolution("no ACTIVE instance to default to — pass a key or selector", instances);
     }

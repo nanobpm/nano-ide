@@ -166,42 +166,14 @@ function describeIncidents(incidents: IncidentRow[]): string {
 
 /** Resolve `keyOrSelector` to a concrete process-instance key.
  *
- *  For a string key or a `byKey`/`byProcessId` selector we delegate to the shared
- *  `resolveInstanceKey`. The "no selector → the single ACTIVE instance"
- *  convenience is resolved HERE instead: the shared resolver compares the raw
- *  snapshot `state` against the literal `"ACTIVE"`, but the engine snapshot spells
- *  it `"Active"` — so we normalise through `wasmStateToProcessInstanceState`
- *  (the same mapping the REST projection uses) rather than editing the
- *  scaffold-owned `selectors.ts`. */
+ *  A bare string key, a `byKey`/`byProcessId` selector, and the "no selector →
+ *  the single ACTIVE instance" convenience are all delegated to the shared
+ *  {@link resolveInstanceKey} — the single source of truth for selector
+ *  resolution — which normalises the mixed-case wasm snapshot `state` (e.g.
+ *  "Active") through the canonical mapping. Kept as a thin alias so this slice's
+ *  matchers read against one resolver. */
 function resolveKey(app: TestApp, keyOrSelector?: string | InstanceSelector): string {
-  if (keyOrSelector !== undefined) return resolveInstanceKey(app, keyOrSelector);
-
-  const rows = readInstances(app.snapshot());
-  const active = rows.filter((r) => wasmStateToProcessInstanceState(r.state) === "ACTIVE");
-  const describe = (): string =>
-    rows.length === 0
-      ? "no instances in the snapshot"
-      : `instances: [${rows
-          .map(
-            (r) =>
-              `{ key: ${formatValue(r.key)}, state: ${formatValue(r.state)}, processId: ${formatValue(r.processId)} }`,
-          )
-          .join(", ")}]`;
-  if (active.length === 0) {
-    failAssertion({
-      message: `Could not resolve a process instance: no ACTIVE instance to default to — pass a key or selector. Actual ${describe()}.`,
-      operator: "assertThatInstance",
-      diff: false,
-    });
-  }
-  if (active.length > 1) {
-    failAssertion({
-      message: `Could not resolve a process instance: ${active.length} ACTIVE instances — ambiguous; pass byKey(...) or byProcessId(...). Actual ${describe()}.`,
-      operator: "assertThatInstance",
-      diff: false,
-    });
-  }
-  return active[0].key;
+  return resolveInstanceKey(app, keyOrSelector);
 }
 
 /** Assert over a single process instance, resolved from `keyOrSelector`

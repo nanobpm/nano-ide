@@ -54,6 +54,18 @@ test("resolveFromInstances defaults to the single ACTIVE instance", () => {
   assert.equal(resolveFromInstances(single), "pi-1");
 });
 
+test("resolveFromInstances defaults over the mixed-case wasm snapshot state", () => {
+  // The real wasm snapshot spells the lifecycle state mixed-case ("Active" /
+  // "Completed"), so the default-ACTIVE path must normalise casing rather than
+  // compare against the literal "ACTIVE" — otherwise it finds nothing even when
+  // exactly one instance is active.
+  const single: InstanceRow[] = [
+    { key: "pi-1", state: "Active", processId: "order" },
+    { key: "pi-2", state: "Completed", processId: "order" },
+  ];
+  assert.equal(resolveFromInstances(single), "pi-1");
+});
+
 test("resolveFromInstances throws naming the actual instances on ambiguity", () => {
   assert.throws(
     () => resolveFromInstances(rows),

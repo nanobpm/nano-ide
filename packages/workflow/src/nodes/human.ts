@@ -146,6 +146,9 @@ registerNodeKind("human", {
     if (opts.candidateGroups !== undefined && typeof opts.candidateGroups !== "string") {
       throw new Error(`human("${name}") { candidateGroups } must be a string`);
     }
+    if (opts.io !== undefined && (opts.io === null || typeof opts.io !== "object" || Array.isArray(opts.io))) {
+      throw new Error(`human("${name}") { io } must be an object { input?, output? }`);
+    }
     validateEntries(name, "input", opts.io?.input);
     validateEntries(name, "output", opts.io?.output);
     api.out.push({

@@ -31,6 +31,20 @@ export {
   type SurfaceReport,
 } from "./coverage.ts";
 export {
+  applyOutcome,
+  type JobPredicate,
+  type MockOutcome,
+  MockWorkerBuilder,
+  type OutcomeEngine,
+} from "./worker-mock.ts";
+export {
+  childProcessJobType,
+  childProcessIdFromJobType,
+  isChildProcessJobType,
+  MockChildProcessBuilder,
+  rewriteCallActivities,
+} from "./child-process-mock.ts";
+export {
   type ApiCallOptions,
   type ApiDriver,
   type ApiOperation,

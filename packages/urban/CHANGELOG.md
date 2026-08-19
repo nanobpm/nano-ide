@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.68.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.67.0...@nanobpm/urban-0.68.0) (2026-08-19)
+
+
+### Features
+
+* **urban:** schema-derived multi-field / choice detail.form ([#375](https://github.com/nanobpm/nano-ide/issues/375)) ([be43540](https://github.com/nanobpm/nano-ide/commit/be43540c9e6d96df11b01e8ba586355245ea5182))
+
 ## [0.67.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.66.2...@nanobpm/urban-0.67.0) (2026-08-19)
 
 

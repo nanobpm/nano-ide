@@ -104,7 +104,7 @@ packages use — copy it rather than inventing a variant:
 
 ## Editing CI Workflows (push over SSH, not the OAuth HTTPS remote)
 
-Any PR that **adds or edits a `.github/workflows/*.yml` file** cannot be pushed
+Any PR that **adds or edits a `.github/workflows/*.{yml,yaml}` file** cannot be pushed
 over the default HTTPS remote when the pusher is an OAuth App / bot token: the
 push is rejected with *"refusing to allow an OAuth App to create or update
 workflow `…` without `workflow` scope"* — and it fails at `git push`, before any

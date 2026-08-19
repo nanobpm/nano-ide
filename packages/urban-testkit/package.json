@@ -30,7 +30,12 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./source": "./src/index.ts"
+    "./source": "./src/index.ts",
+    "./ai": {
+      "types": "./dist/ai/index.d.ts",
+      "default": "./dist/ai/index.js"
+    },
+    "./source/ai": "./src/ai/index.ts"
   },
   "files": [
     "dist",
@@ -49,7 +54,17 @@
     "yaml": "^2.9.0"
   },
   "peerDependencies": {
-    "@nanobpm/urban": ">=0.50.0"
+    "@nanobpm/urban": ">=0.50.0",
+    "@xenova/transformers": "^2.17.2",
+    "openai": "^4.67.3"
+  },
+  "peerDependenciesMeta": {
+    "@xenova/transformers": {
+      "optional": true
+    },
+    "openai": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@nanobpm/urban": ">=0.67.0",

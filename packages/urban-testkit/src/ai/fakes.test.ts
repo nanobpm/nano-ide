@@ -2,22 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { FakeChatModelAdapter, FakeEmbeddingModelAdapter } from "./fakes.ts";
 import type { ImagePart } from "./seams.ts";
+import { cosineSimilarity } from "./similarity/cosine.ts";
 import { parseVerdict } from "./verdict.ts";
-
-function cosine(a: number[], b: number[]): number {
-  let dot = 0;
-  let na = 0;
-  let nb = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i];
-    na += a[i] * a[i];
-    nb += b[i] * b[i];
-  }
-  if (na === 0 || nb === 0) {
-    return 0;
-  }
-  return dot / (Math.sqrt(na) * Math.sqrt(nb));
-}
 
 test("fake embedding: same input yields the same vector (deterministic)", async () => {
   const fake = new FakeEmbeddingModelAdapter();
@@ -32,8 +18,8 @@ test("fake embedding: cosine is 1 for identical, order-independent, and low for 
   const hello = await fake.embed("hello world");
   const helloReordered = await fake.embed("world hello");
   const disjoint = await fake.embed("quantum turbine");
-  assert.ok(Math.abs(cosine(hello, helloReordered) - 1) < 1e-9, "identical bag → cosine 1");
-  assert.ok(cosine(hello, disjoint) < 0.5, "disjoint tokens → low cosine");
+  assert.ok(Math.abs(cosineSimilarity(hello, helloReordered) - 1) < 1e-9, "identical bag → cosine 1");
+  assert.ok(cosineSimilarity(hello, disjoint) < 0.5, "disjoint tokens → low cosine");
 });
 
 test("fake embedding: rejects a non-positive dimension", () => {

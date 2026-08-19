@@ -134,7 +134,9 @@ export function deepEqual(a: unknown, b: unknown): boolean {
 
 /** Deep SUBSET match: every key/value in `subset` is present and deep-equal in
  *  `actual` (extra keys in `actual` are ignored). Shared by the `hasVariables` /
- *  `hasJson` / `hasRow` subset matchers. */
+ *  `hasJson` / `hasRow` subset matchers. Note the subset relaxation applies to
+ *  object keys only: arrays are matched by exact length and positional deep-equal
+ *  (a shorter `subset` array is NOT treated as a prefix/subsequence of `actual`). */
 export function deepSubset(actual: unknown, subset: unknown): boolean {
   if (isRecord(subset)) {
     if (!isRecord(actual)) return false;

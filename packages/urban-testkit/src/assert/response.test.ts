@@ -6,7 +6,7 @@
 // app and asserts on a genuinely-driven operation response (JSON body + headers).
 
 import { test } from "node:test";
-import assert from "node:assert";
+import assert from "node:assert/strict";
 import { AssertionError } from "node:assert";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

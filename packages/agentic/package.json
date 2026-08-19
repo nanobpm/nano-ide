@@ -74,6 +74,11 @@
       "default": "./dist/session/acp/index.js"
     },
     "./source/session/acp": "./src/session/acp/index.ts",
+    "./session/normalizer": {
+      "types": "./dist/session/normalizer/index.d.ts",
+      "default": "./dist/session/normalizer/index.js"
+    },
+    "./source/session/normalizer": "./src/session/normalizer/index.ts",
     "./transcript": {
       "types": "./dist/transcript/index.d.ts",
       "default": "./dist/transcript/index.js"

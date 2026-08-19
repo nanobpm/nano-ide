@@ -38,6 +38,13 @@ import { defaultScheduler, MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./sche
 /** Default poll interval when a binding does not set `pollMs`. */
 export const DEFAULT_INSTANCE_TRACKING_POLL_MS = 15_000;
 
+/** Max in-flight `openUserTasks` probes per reconcile pass. The wait-on-human edge probes the
+ *  engine once per active, non-terminated key; probing them sequentially makes a pass O(N) network
+ *  round-trips and can make a single pass take longer than `pollMs` under a large active backlog.
+ *  Probing in bounded-parallel batches makes wall-clock time scale with max latency rather than
+ *  N×latency, while the cap keeps in-flight load on the engine bounded. */
+export const WAITING_HUMAN_PROBE_CONCURRENCY = 8;
+
 export interface InstanceTrackingHandle extends Mounted {
   /** `table.keyField` labels of the armed bindings, for `inspect()`. */
   readonly bindings: string[];
@@ -101,8 +108,15 @@ export async function reconcileWaitingHumanKey(
     const onWaitingHuman = binding.onWaitingHuman;
     if (!onWaitingHuman) continue;
     const table = api.data.table<Row>(binding.table, binding.keyField);
-    const current = await table.get(key);
-    if (current && patchAlreadyApplied(current, onWaitingHuman.set)) continue;
+    // Quiet-idempotence must consider EVERY row sharing this key, not just one. `keyField` need not
+    // be a unique column (e.g. a read model keyed on a non-PK `process_key`), and `table.update`
+    // patches ALL matching rows — so a `get()` (LIMIT 1) that happens to hit one already-patched row
+    // would skip the write and leave the OTHER matching rows unreconciled. Skip only when every
+    // matching row already carries the patch; otherwise fall through and re-patch them all.
+    const current = await table.find({ [binding.keyField]: key });
+    if (current.length > 0 && current.every((row) => patchAlreadyApplied(row, onWaitingHuman.set))) {
+      continue;
+    }
     const changed = await table.update(key, onWaitingHuman.set);
     if (changed > 0) {
       reconciled += changed;
@@ -195,13 +209,20 @@ async function reconcileOnce(
   // untouched, so a worker-owned transient status (running / converging / merging) survives and a
   // stale `awaiting_operator` is not re-latched. Because the condition is derived every tick, a
   // re-escalation after an answer re-flips to `awaiting_operator` on the next poll by construction
-  // (issue #355 "instance A").
+  // (issue #355 "instance A"). Probe in bounded-parallel batches (`WAITING_HUMAN_PROBE_CONCURRENCY`)
+  // so a pass over a large active backlog scales with max latency rather than N×latency.
   if (binding.onWaitingHuman) {
-    for (const key of keys) {
-      if (terminatedKeys.has(key)) continue; // terminated already reconciled; it wins
-      const openTasks = await api.engine.openUserTasks({ processInstanceKey: key });
-      if (openTasks.length === 0) continue; // not parked on a human ⇒ leave the transient status
-      reconciled += await reconcileWaitingHumanKey(api, [binding], key);
+    const humanKeys = keys.filter((key) => !terminatedKeys.has(key)); // terminated already won
+    for (let i = 0; i < humanKeys.length; i += WAITING_HUMAN_PROBE_CONCURRENCY) {
+      const batch = humanKeys.slice(i, i + WAITING_HUMAN_PROBE_CONCURRENCY);
+      const perKey = await Promise.all(
+        batch.map(async (key): Promise<number> => {
+          const openTasks = await api.engine.openUserTasks({ processInstanceKey: key });
+          if (openTasks.length === 0) return 0; // not parked on a human ⇒ leave the transient status
+          return reconcileWaitingHumanKey(api, [binding], key);
+        }),
+      );
+      for (const n of perKey) reconciled += n;
     }
   }
   return { scanned: keys.length, reconciled };

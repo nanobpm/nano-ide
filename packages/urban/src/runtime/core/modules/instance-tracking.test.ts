@@ -14,6 +14,7 @@ import type { InstanceTracking } from "../manifest.ts";
 import {
   DEFAULT_INSTANCE_TRACKING_POLL_MS,
   mountInstanceTracking,
+  WAITING_HUMAN_PROBE_CONCURRENCY,
 } from "./instance-tracking.ts";
 import { MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
 
@@ -557,6 +558,58 @@ test("a binding without onWaitingHuman never probes open user tasks (edge is opt
   await sched.advance(1000);
   assert.deepEqual(userTaskQueries, []); // never probed
   assert.equal((await h.table.get("pi1"))?.status, "dispatched"); // untouched
+  await handle.stop();
+  await h.close();
+});
+
+test("reconciles EVERY row sharing a non-unique key, even when one is already patched (multi-row)", async () => {
+  // `keyField` (process_key) is NOT unique here, and table.update patches ALL matching rows. The
+  // quiet-idempotence check must consider every matching row, not a single get() (LIMIT 1): with two
+  // rows on the same process_key — one already awaiting_operator, one still converging — a LIMIT-1
+  // probe that hits the patched row would skip the write and strand the other. Both must converge.
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "awaiting_operator", note: null });
+    await t.insert({ plan_key: "p2", process_key: "pi1", status: "converging", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  const rows = await h.table.find({ process_key: "pi1" });
+  assert.deepEqual(
+    rows.map((r) => r.status).sort(),
+    ["awaiting_operator", "awaiting_operator"],
+  );
+  await handle.stop();
+  await h.close();
+});
+
+test("reconciles every parked key across multiple probe batches (bounded-parallel probing)", async () => {
+  // More active keys than WAITING_HUMAN_PROBE_CONCURRENCY forces multiple probe batches. Every key
+  // with an open user task must still be probed and reconciled — the batching must not drop keys.
+  const total = WAITING_HUMAN_PROBE_CONCURRENCY * 2 + 3; // spans three batches
+  const states: Record<string, ProcessInstanceSnapshot["state"]> = {};
+  const openTasks: Record<string, number> = {};
+  for (let i = 0; i < total; i++) {
+    states[`pi${i}`] = "ACTIVE";
+    openTasks[`pi${i}`] = i % 2; // half parked on a human, half not
+  }
+  const { engine, userTaskQueries } = fakeEngine(states, openTasks);
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    for (let i = 0; i < total; i++) {
+      await t.insert({ plan_key: `p${i}`, process_key: `pi${i}`, status: "converging", note: null });
+    }
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  // Every active key was probed exactly once.
+  assert.equal(userTaskQueries.length, total);
+  assert.deepEqual([...userTaskQueries].sort(), Object.keys(states).sort());
+  for (let i = 0; i < total; i++) {
+    const expected = i % 2 === 1 ? "awaiting_operator" : "converging";
+    assert.equal((await h.table.get(`pi${i}`))?.status, expected, `pi${i}`);
+  }
   await handle.stop();
   await h.close();
 });

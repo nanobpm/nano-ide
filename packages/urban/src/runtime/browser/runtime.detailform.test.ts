@@ -131,6 +131,10 @@ test("#333: the answer form is screen-reader accessible — textarea has an aria
   const msg = created.find((n) => n.tagName === "P" && n.className.includes("pc-msg"));
   assert.equal(msg?.getAttribute("role"), "status", "status message is a live region role");
   assert.equal(msg?.getAttribute("aria-live"), "polite", "status transitions are announced politely");
+  // Explicit type="button" so the submit control can never trigger an unintended
+  // submit/navigation if the form is ever nested inside a real <form>.
+  const button = created.find((n) => n.tagName === "BUTTON");
+  assert.equal(button?.getAttribute("type"), "button", "submit control is an explicit type=button");
 });
 
 test("#333: the answer form's aria-label falls back to inputKey when inputLabel is absent", (t) => {

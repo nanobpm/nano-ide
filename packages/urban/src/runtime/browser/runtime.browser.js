@@ -1563,7 +1563,7 @@ function buildDetailForm(f, row, onSuccess) {
   // role=status + aria-live so the "Sending…"/success/error transitions are
   // announced to screen readers instead of silently changing text.
   const msg = el("p", { class: "pc-msg", role: "status", "aria-live": "polite" });
-  const btn = el("button", { class: "pc-btn pc-btn-sm" }, f.submitLabel || "Submit");
+  const btn = el("button", { class: "pc-btn pc-btn-sm", type: "button" }, f.submitLabel || "Submit");
   btn.addEventListener("click", async () => {
     btn.disabled = true; msg.className = "pc-msg"; msg.textContent = "Sending…";
     try {

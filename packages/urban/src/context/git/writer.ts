@@ -257,6 +257,17 @@ export class ContextWriter {
           `cannot ratify: proposal branch ${proposal.branch} does not exist.`,
         );
       }
+      // The pre-commit guard is a NON-OPTIONAL step on EVERY write path (S6), and
+      // a ratifying merge is a write onto the authoritative line. The proposal
+      // branch may have been created or amended outside `proposePrior`, so its
+      // content is untrusted here: re-read (at the ref, without mutating the
+      // working tree), re-validate against the S2 schema, and re-run the mandatory
+      // PII guard BEFORE merging, so a PII-carrying (or otherwise invalid) record
+      // can never be ratified onto the base branch.
+      const proposed = await this.#substrate.readFileAtRef(proposal.branch, proposal.path);
+      const record = assertMemoryRecord(parseRecordJson(proposed, proposal.path));
+      this.#guards.assertAll(record);
+
       await this.#substrate.checkout(proposal.baseBranch);
       const mergeCommit = await this.#substrate.mergeBranch(
         proposal.branch,
@@ -311,6 +322,19 @@ export class ContextWriter {
 /** Serialise a record to deterministic, pretty-printed JSON with a trailing LF. */
 export function serialiseRecord(record: MemoryRecord): string {
   return `${JSON.stringify(record, null, 2)}\n`;
+}
+
+/** Parse proposal-branch JSON, surfacing malformed content as a GovernanceError. */
+function parseRecordJson(content: string, path: string): unknown {
+  try {
+    return JSON.parse(content);
+  } catch (cause) {
+    throw new GovernanceError(
+      `cannot ratify: proposed record at ${path} is not valid JSON: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+  }
 }
 
 /** Reduce an id to a git-ref-safe branch segment (no `..`, spaces, or `~^:?*[`). */

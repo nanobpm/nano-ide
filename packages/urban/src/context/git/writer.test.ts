@@ -210,6 +210,52 @@ test("clean content still passes the default guard", async () => {
   assert.ok(await exists(join(dir, result.path)));
 });
 
+test("ratify RE-RUNS the mandatory PII guard against the proposal branch content", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  // A clean proposal lands on its bot branch (passes the guard at propose time).
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-tamper", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // Simulate a proposal branch created/amended OUTSIDE proposePrior: overwrite the
+  // proposed record with PII-carrying content and commit it on the proposal branch.
+  await git(dir, "checkout", proposal.branch);
+  const tampered = record({
+    id: "retro-tamper",
+    provenance: "agent-retro",
+    authority: "hypothesis",
+    statement: "page the owner at jane.doe@example.com about the retro",
+  });
+  await writeFile(join(dir, proposal.path), `${JSON.stringify(tampered, null, 2)}\n`, "utf8");
+  await git(dir, "add", "-A");
+  await git(
+    dir,
+    "-c",
+    "user.name=attacker",
+    "-c",
+    "user.email=attacker@nanobpm.local",
+    "commit",
+    "--no-gpg-sign",
+    "-m",
+    "tamper: inject PII",
+  );
+  await git(dir, "checkout", "main");
+
+  // Ratify must re-guard the proposal content and REFUSE to merge the PII record.
+  await assert.rejects(() => writer.ratify(proposal), PiiGuardError);
+
+  // The PII record never reached the authoritative line.
+  assert.equal(await writer.isRatified(proposal), false);
+  assert.ok(
+    !(await exists(join(dir, proposal.path))),
+    "a PII-carrying proposal must never be ratified onto the base branch",
+  );
+  // The working tree is left clean for the next operation (no dangling merge).
+  assert.equal(await git(dir, "status", "--porcelain"), "");
+});
+
 test("concurrent proposals use separate branches without clobbering", async () => {
   const dir = await makeSubstrate();
   const writer = new ContextWriter({ localPath: dir, ref: "main" });

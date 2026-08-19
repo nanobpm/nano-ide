@@ -23,10 +23,14 @@ const writer = new ContextWriter(resolvedHandle); // no wiring needed
   prior* on a `context/proposal/<id>-<rand>` bot branch, left **unmerged**. This
   is the git-only stand-in for a bot PR. Mandatory for `agent-retro`.
 - `ratify(proposal)` — **merges** the bot branch onto the base branch. Merge ==
-  ratification. It accepts the hypothesis onto the authoritative line; it never
-  upgrades an `agent-retro` record to `authoritative` (the S2 schema forbids
-  that), so an unratified — or even a ratified — prior can never present as a
-  measured/authoritative fact.
+  ratification. Because the proposal branch may have been created or amended
+  outside `proposePrior`, its content is untrusted: `ratify` **re-reads,
+  re-validates (S2 schema) and re-runs the mandatory PII guard** against the
+  proposed record *before* merging, so a PII-carrying or invalid record can never
+  be ratified onto the base branch. It accepts the hypothesis onto the
+  authoritative line; it never upgrades an `agent-retro` record to
+  `authoritative` (the S2 schema forbids that), so an unratified — or even a
+  ratified — prior can never present as a measured/authoritative fact.
 - `isRatified(proposal)` — `true` iff the proposal's commit is an ancestor of
   the base branch.
 
@@ -40,7 +44,9 @@ serialised within a single `ContextWriter` (one working tree).
 `preCommitPiiGuard` as its first, non-removable member and has no removal API.
 The writer runs `assertAll` before **every** commit, so a PII-carrying write is
 rejected before it is committed — on the default code path, with no caller
-opt-in. Additional guards can only be added (stricter), never subtracted.
+opt-in. `ratify` (a merge onto the authoritative line) is a write path too, so it
+re-runs `assertAll` against the proposal's content before merging. Additional
+guards can only be added (stricter), never subtracted.
 
 ## Path / namespace partitioning (read by S4 & S6-CI)
 

@@ -58,6 +58,8 @@ export interface WriteSubstrate {
   readonly rootPath: string;
   /** Write `content` to `relPath` (relative to {@link rootPath}), creating dirs. */
   writeRecordFile(relPath: string, content: string): Promise<void>;
+  /** Read the file at `relPath` as it exists on `ref`, without touching the tree. */
+  readFileAtRef(ref: string, relPath: string): Promise<string>;
   /** The name of the currently checked-out branch. */
   currentBranch(): Promise<string>;
   /** Create (or reset) branch `name` at `from` and check it out. */
@@ -94,15 +96,31 @@ export class GitWriteSubstrate implements WriteSubstrate {
   }
 
   async writeRecordFile(relPath: string, content: string): Promise<void> {
+    const target = this.#resolveWithinRoot(relPath);
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(target, content, "utf8");
+  }
+
+  async readFileAtRef(ref: string, relPath: string): Promise<string> {
+    // Read the blob at `ref:relPath` via `git show` — a pure read that never
+    // mutates the working tree (no checkout), so a failed read/guard cannot leave
+    // the shared working copy on the wrong branch. `#resolveWithinRoot` still
+    // rejects any traversal path before it reaches git.
+    this.#resolveWithinRoot(relPath);
+    return this.#git(["show", "--end-of-options", `${ref}:${relPath}`], this.rootPath);
+  }
+
+  // Resolve a caller-supplied substrate-relative path to an absolute path,
+  // refusing anything that escapes the substrate root. Defence in depth: the
+  // layout helper already produces traversal-safe paths, but no read/write may
+  // ever leave the substrate root regardless of the relPath handed in.
+  #resolveWithinRoot(relPath: string): string {
     const target = resolve(this.rootPath, relPath);
-    // Defence in depth: the layout helper already produces traversal-safe paths,
-    // but never let a caller-supplied relPath escape the substrate root.
     const rel = relative(this.rootPath, target);
     if (rel === "" || rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute(rel)) {
       throw new SubstrateWriteError(`record path escapes the substrate root: ${relPath}`);
     }
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, content, "utf8");
+    return target;
   }
 
   async currentBranch(): Promise<string> {
@@ -142,22 +160,30 @@ export class GitWriteSubstrate implements WriteSubstrate {
   async mergeBranch(branch: string, message: string, author: CommitAuthor): Promise<string> {
     // `--no-ff` always records a merge commit, so ratification (a merge) is a
     // distinct, auditable event even when the branch could fast-forward.
-    await this.#git(
-      [
-        "-c",
-        `user.name=${author.name}`,
-        "-c",
-        `user.email=${author.email}`,
-        "merge",
-        "--no-ff",
-        "--no-gpg-sign",
-        "-m",
-        message,
-        "--end-of-options",
-        branch,
-      ],
-      this.rootPath,
-    );
+    try {
+      await this.#git(
+        [
+          "-c",
+          `user.name=${author.name}`,
+          "-c",
+          `user.email=${author.email}`,
+          "merge",
+          "--no-ff",
+          "--no-gpg-sign",
+          "-m",
+          message,
+          "--end-of-options",
+          branch,
+        ],
+        this.rootPath,
+      );
+    } catch (cause) {
+      // A failed merge (e.g. a content conflict) leaves the working tree in a
+      // conflicted MERGE_HEAD state. Abort it best-effort so the shared working
+      // copy is clean for the next serialised operation, then surface the cause.
+      await this.#git(["merge", "--abort"], this.rootPath).catch(() => {});
+      throw cause;
+    }
     return this.#revParse("HEAD");
   }
 

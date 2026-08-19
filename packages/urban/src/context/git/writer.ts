@@ -17,8 +17,13 @@
 //    merged) agent-retro record can never present as a measured/authoritative
 //    fact — governance decides only whether the *hypothesis* is accepted onto the
 //    authoritative line, never whether it becomes a fact.
-//  - CONCURRENCY: every write happens on its own uniquely-named branch, so
-//    concurrent writers never clobber each other; disjoint records merge cleanly.
+//  - CONCURRENCY: within a SINGLE ContextWriter instance, writes are serialised
+//    on the shared working tree (see #queue) and each still lands on its own
+//    uniquely-named branch, so interleaved calls never clobber each other and
+//    disjoint records merge cleanly. This guarantee is PER-INSTANCE: two
+//    ContextWriter instances (or separate processes) pointing at the SAME working
+//    copy are not coordinated and can interleave checkouts/commits and corrupt the
+//    tree — use a separate clone (or external locking) per concurrent writer.
 //  - PII BY CONSTRUCTION: the mandatory S6 guard is pre-registered in the guard
 //    registry and run before EVERY commit on the default code path. A caller that
 //    supplies no special wiring still gets it, so a PII-carrying write is rejected
@@ -58,6 +63,13 @@ export const DEFAULT_BOT_AUTHOR: CommitAuthor = {
   name: "nano-context-bot",
   email: "context-bot@nanobpm.local",
 };
+
+/**
+ * The single source of truth for the proposal (bot "PR") branch namespace.
+ * `proposePrior` creates branches under it and `ratify` refuses to merge anything
+ * outside it, so an arbitrary caller-named branch can never be ratified.
+ */
+export const PROPOSAL_BRANCH_PREFIX = "context/proposal/" as const;
 
 /** The minimal resolved-handle shape the writer consumes (from S1). */
 export interface ResolvedSubstrateHandle {
@@ -220,7 +232,7 @@ export class ContextWriter {
       const base = await this.#resolveBaseBranch();
       const relPath = recordRelativePath(record);
       const proposalId = `${sanitizeRef(record.id)}-${randomUUID().slice(0, 8)}`;
-      const proposalBranch = `context/proposal/${proposalId}`;
+      const proposalBranch = `${PROPOSAL_BRANCH_PREFIX}${proposalId}`;
 
       await this.#substrate.createBranch(proposalBranch, base);
       await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
@@ -257,16 +269,47 @@ export class ContextWriter {
           `cannot ratify: proposal branch ${proposal.branch} does not exist.`,
         );
       }
+      // DEFENCE 1 — only a branch in the proposal namespace may be ratified, so a
+      // caller cannot merge an arbitrary local branch onto the authoritative line.
+      if (!proposal.branch.startsWith(PROPOSAL_BRANCH_PREFIX)) {
+        throw new GovernanceError(
+          `cannot ratify: ${proposal.branch} is not a proposal branch ` +
+            `(expected a ${PROPOSAL_BRANCH_PREFIX}* branch).`,
+        );
+      }
+      // DEFENCE 2 — the merge must introduce EXACTLY the one proposed record file
+      // and nothing else. A proposal branch created/amended outside `proposePrior`
+      // could carry extra files (more records, or content outside the record
+      // layout) that a single-file re-read would never see; merging it would land
+      // that content UNGUARDED. Bounding the diff to `[proposal.path]` makes the
+      // file we re-guard below provably the ONLY candidate content being merged.
+      const changed = await this.#substrate.diffPaths(proposal.baseBranch, proposal.branch);
+      if (changed.length !== 1 || changed[0] !== proposal.path) {
+        throw new GovernanceError(
+          `cannot ratify: proposal branch ${proposal.branch} changes ` +
+            `${JSON.stringify(changed)}, expected exactly ["${proposal.path}"]. ` +
+            "A ratifying merge may introduce only its single proposed record file.",
+        );
+      }
       // The pre-commit guard is a NON-OPTIONAL step on EVERY write path (S6), and
       // a ratifying merge is a write onto the authoritative line. The proposal
-      // branch may have been created or amended outside `proposePrior`, so its
-      // content is untrusted here: re-read (at the ref, without mutating the
+      // branch content is untrusted here: re-read (at the ref, without mutating the
       // working tree), re-validate against the S2 schema, and re-run the mandatory
       // PII guard BEFORE merging, so a PII-carrying (or otherwise invalid) record
       // can never be ratified onto the base branch.
       const proposed = await this.#substrate.readFileAtRef(proposal.branch, proposal.path);
       const record = assertMemoryRecord(parseRecordJson(proposed, proposal.path));
       this.#guards.assertAll(record);
+      // DEFENCE 3 — the on-disk path must be the record's canonical layout path, so
+      // a record can never be ratified under a path that mismatches its validated
+      // scope/scopeRef/id (which would make it invisible to layout-based retrieval).
+      const canonical = recordRelativePath(record);
+      if (proposal.path !== canonical) {
+        throw new GovernanceError(
+          `cannot ratify: proposal path ${proposal.path} does not match the ` +
+            `record's canonical layout ${canonical}.`,
+        );
+      }
 
       await this.#substrate.checkout(proposal.baseBranch);
       const mergeCommit = await this.#substrate.mergeBranch(

@@ -60,6 +60,13 @@ export interface WriteSubstrate {
   writeRecordFile(relPath: string, content: string): Promise<void>;
   /** Read the file at `relPath` as it exists on `ref`, without touching the tree. */
   readFileAtRef(ref: string, relPath: string): Promise<string>;
+  /**
+   * The substrate-relative paths changed on `branch` relative to its merge-base
+   * with `baseRef` — i.e. exactly the set of files a `baseRef`-into-`branch` merge
+   * would introduce/modify. Lets a caller assert a merge is limited to expected
+   * files before performing it.
+   */
+  diffPaths(baseRef: string, branch: string): Promise<readonly string[]>;
   /** The name of the currently checked-out branch. */
   currentBranch(): Promise<string>;
   /** Create (or reset) branch `name` at `from` and check it out. */
@@ -108,6 +115,18 @@ export class GitWriteSubstrate implements WriteSubstrate {
     // rejects any traversal path before it reaches git.
     this.#resolveWithinRoot(relPath);
     return this.#git(["show", "--end-of-options", `${ref}:${relPath}`], this.rootPath);
+  }
+
+  async diffPaths(baseRef: string, branch: string): Promise<readonly string[]> {
+    // `base...branch` (symmetric-difference range) lists files changed on `branch`
+    // since it forked from `baseRef` — precisely what a merge of `branch` would
+    // bring onto `baseRef`. `-z` NUL-delimits paths so unusual names never split
+    // wrong; `--end-of-options` stops a ref that looks like a flag being parsed.
+    const out = await this.#git(
+      ["diff", "--name-only", "-z", "--end-of-options", `${baseRef}...${branch}`],
+      this.rootPath,
+    );
+    return out.split("\0").filter((p) => p.length > 0);
   }
 
   // Resolve a caller-supplied substrate-relative path to an absolute path,

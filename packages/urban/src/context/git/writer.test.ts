@@ -256,6 +256,107 @@ test("ratify RE-RUNS the mandatory PII guard against the proposal branch content
   assert.equal(await git(dir, "status", "--porcelain"), "");
 });
 
+test("ratify REJECTS a proposal branch that smuggles extra changes past the single-file guard", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-smuggle", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // Amend the proposal branch to ALSO add an unrelated, PII-carrying record that a
+  // single-file re-guard of `proposal.path` would never inspect — the merge would
+  // otherwise land it on the authoritative line UNGUARDED.
+  await git(dir, "checkout", proposal.branch);
+  const smuggled = record({
+    id: "smuggled",
+    provenance: "agent-retro",
+    authority: "hypothesis",
+    statement: "page the owner at jane.doe@example.com now",
+  });
+  const smuggledPath = `${LAYOUT_ROOT}/epic/issue-303/smuggled.json`;
+  await writeFile(join(dir, smuggledPath), `${JSON.stringify(smuggled, null, 2)}\n`, "utf8");
+  await git(dir, "add", "-A");
+  await git(
+    dir,
+    "-c",
+    "user.name=attacker",
+    "-c",
+    "user.email=attacker@nanobpm.local",
+    "commit",
+    "--no-gpg-sign",
+    "-m",
+    "smuggle: add extra unguarded record",
+  );
+  await git(dir, "checkout", "main");
+
+  // ratify must refuse: the branch↔base diff is not limited to the one proposed file.
+  await assert.rejects(() => writer.ratify(proposal), GovernanceError);
+
+  // Neither the proposed nor the smuggled record reached the authoritative line.
+  assert.equal(await writer.isRatified(proposal), false);
+  assert.ok(
+    !(await exists(join(dir, smuggledPath))),
+    "a smuggled extra file must never be ratified onto the base branch",
+  );
+  assert.ok(!(await exists(join(dir, proposal.path))));
+  assert.equal(await git(dir, "status", "--porcelain"), "");
+});
+
+test("ratify REJECTS a proposal whose on-disk path mismatches the record's canonical layout", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-path", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // Amend the record at the SAME path but with a different id, so its canonical
+  // layout path (recordRelativePath) no longer matches `proposal.path`. The content
+  // is clean (passes the PII guard), isolating the canonical-path defence.
+  await git(dir, "checkout", proposal.branch);
+  const moved = record({
+    id: "different-id",
+    provenance: "agent-retro",
+    authority: "hypothesis",
+  });
+  await writeFile(join(dir, proposal.path), `${JSON.stringify(moved, null, 2)}\n`, "utf8");
+  await git(dir, "add", "-A");
+  await git(
+    dir,
+    "-c",
+    "user.name=x",
+    "-c",
+    "user.email=x@nanobpm.local",
+    "commit",
+    "--no-gpg-sign",
+    "-m",
+    "swap id under the same path",
+  );
+  await git(dir, "checkout", "main");
+
+  await assert.rejects(() => writer.ratify(proposal), GovernanceError);
+  assert.equal(await writer.isRatified(proposal), false);
+  assert.equal(await git(dir, "status", "--porcelain"), "");
+});
+
+test("ratify REFUSES a branch outside the proposal namespace", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({ id: "retro-ns", provenance: "agent-retro", authority: "hypothesis" }),
+  );
+
+  // Re-point the proposal handle at an arbitrary, non-proposal branch.
+  await git(dir, "branch", "rogue", proposal.branch);
+  await assert.rejects(
+    () => writer.ratify({ ...proposal, branch: "rogue" }),
+    GovernanceError,
+  );
+  assert.equal(await git(dir, "status", "--porcelain"), "");
+});
+
 test("concurrent proposals use separate branches without clobbering", async () => {
   const dir = await makeSubstrate();
   const writer = new ContextWriter({ localPath: dir, ref: "main" });

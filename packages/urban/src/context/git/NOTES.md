@@ -24,19 +24,28 @@ const writer = new ContextWriter(resolvedHandle); // no wiring needed
   is the git-only stand-in for a bot PR. Mandatory for `agent-retro`.
 - `ratify(proposal)` — **merges** the bot branch onto the base branch. Merge ==
   ratification. Because the proposal branch may have been created or amended
-  outside `proposePrior`, its content is untrusted: `ratify` **re-reads,
-  re-validates (S2 schema) and re-runs the mandatory PII guard** against the
-  proposed record *before* merging, so a PII-carrying or invalid record can never
-  be ratified onto the base branch. It accepts the hypothesis onto the
-  authoritative line; it never upgrades an `agent-retro` record to
-  `authoritative` (the S2 schema forbids that), so an unratified — or even a
-  ratified — prior can never present as a measured/authoritative fact.
+  outside `proposePrior`, the branch is untrusted, so before merging `ratify`:
+  (1) refuses any branch outside the `context/proposal/` namespace; (2) bounds the
+  branch↔base diff to **exactly** the one proposed record file, so no extra file
+  (another record, or content outside the record layout) can ride onto the
+  authoritative line **unguarded**; (3) **re-reads, re-validates (S2 schema) and
+  re-runs the mandatory PII guard** against that record; and (4) asserts its
+  on-disk path is the record's canonical layout path. Only then is it merged — so
+  a PII-carrying, invalid, mislocated, or smuggled record can never be ratified.
+  It accepts the hypothesis onto the authoritative line; it never upgrades an
+  `agent-retro` record to `authoritative` (the S2 schema forbids that), so an
+  unratified — or even a ratified — prior can never present as a
+  measured/authoritative fact.
 - `isRatified(proposal)` — `true` iff the proposal's commit is an ancestor of
   the base branch.
 
-Concurrency: every write lands on its own uniquely-named branch, so concurrent
-writers never clobber each other; disjoint records merge cleanly. Operations are
-serialised within a single `ContextWriter` (one working tree).
+Concurrency: **within a single `ContextWriter`** operations are serialised on the
+shared working tree (one working tree) and each write still lands on its own
+uniquely-named branch, so interleaved calls never clobber each other and disjoint
+records merge cleanly. This is a **per-instance** guarantee: two `ContextWriter`
+instances (or separate processes) over the **same** working copy are uncoordinated
+and can corrupt each other — use a separate clone (or external locking) per
+concurrent writer.
 
 ## PII enforcement BY CONSTRUCTION
 

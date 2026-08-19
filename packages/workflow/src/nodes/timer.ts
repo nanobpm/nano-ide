@@ -15,6 +15,9 @@ declare module "../types.js" {
 registerNodeKind("timer", {
   build: (api) => (name: string, opts: { after: string } | { at: string }) => {
     api.claim(name);
+    if (!opts || typeof opts !== "object") {
+      throw new Error(`timer("${name}") needs exactly one of { after } (a delay) or { at } (an instant)`);
+    }
     const hasAfter = "after" in opts && typeof opts.after === "string";
     const hasAt = "at" in opts && typeof opts.at === "string";
     if (hasAfter === hasAt) {

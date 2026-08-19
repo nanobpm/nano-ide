@@ -152,6 +152,34 @@ test("timer validation: rejects zero or both of after/at, and bad ISO", () => {
   // A timeDate is an absolute instant: a bare local datetime (no Z/offset) is ambiguous and rejected.
   assert.throws(() => defineFlow("x", (w) => w.timer("t", { at: "2026-01-01T09:00:00" })), /ISO-8601 instant/);
   assert.doesNotThrow(() => defineFlow("ok", (w) => { w.timer("t", { at: "2026-01-01T09:00:00+02:00" }); w.task("a"); }));
+  // A null/non-object opts (e.g. a JSON-derived config) must still yield the
+  // helpful "needs exactly one of …" error, not a raw `Cannot use 'in' operator
+  // … in null` TypeError. JSON.parse() returns `any` — a runtime-invalid input
+  // with no `as`-cast.
+  assert.throws(
+    () => defineFlow("x", (w) => w.timer("t", JSON.parse("null"))),
+    /exactly one of \{ after \}.*\{ at \}/,
+  );
+});
+
+test("declarative builder: null-prototype method table — inherited names are never registered methods", () => {
+  // The builder's method table is assembled on a NULL prototype so its
+  // duplicate-detection own-property check (and every `w.<method>` lookup) can
+  // never mistake an inherited `Object.prototype` name (`toString`,
+  // `constructor`, `hasOwnProperty`, …) for a contributed builder method, and
+  // so a `__proto__` method name cannot mutate the prototype. Both footguns
+  // derive from an `Object.prototype` chain — pinning the null prototype guards
+  // the whole class.
+  let builder: object | undefined;
+  defineFlow("proto", (w) => {
+    builder = w;
+    w.task("a");
+  });
+  if (!builder) throw new Error("build callback did not receive the assembled builder");
+  assert.strictEqual(Object.getPrototypeOf(builder), null);
+  for (const inherited of ["toString", "constructor", "hasOwnProperty", "__proto__"]) {
+    assert.ok(!(inherited in builder), `inherited "${inherited}" must not appear on the builder`);
+  }
 });
 
 test("startOn validation: cycle format, once-only, first-statement, top-level", () => {

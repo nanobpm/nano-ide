@@ -353,11 +353,18 @@ function makeBuilder<C extends object>(
   // `startOn` is not a node KIND — it lifts a timer onto the start event and
   // emits no `FlowNode` — so it is installed centrally. Every actual node kind's
   // builder method is contributed by its own module through the registry.
-  const methods: Record<string, BuilderMethod> = { startOn: startOnMethod(api) };
+  // A NULL-PROTOTYPE table: collision detection below is an OWN-property check,
+  // and building on `Object.prototype` would make both `in`/`Object.hasOwn`
+  // spuriously see inherited names (`toString`, `constructor`, …) as registered
+  // methods — so a kind whose builder method is legitimately named `toString`
+  // would be rejected as a "duplicate" — and would turn a `__proto__` method
+  // name into a prototype-mutating footgun. A null prototype removes both.
+  const methods: Record<string, BuilderMethod> = Object.create(null);
+  methods.startOn = startOnMethod(api);
   for (const [kind, handlers] of eachNodeKind()) {
     if (!handlers.build) continue;
     const method = handlers.builderMethod ?? kind;
-    if (method in methods) {
+    if (Object.hasOwn(methods, method)) {
       throw new Error(`two flow-node kinds both contribute the builder method "${method}"`);
     }
     methods[method] = handlers.build(api);

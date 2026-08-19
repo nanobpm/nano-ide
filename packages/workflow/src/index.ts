@@ -46,6 +46,7 @@ export type { FlowBuilder } from "./declarative.js";
 // The `.boundary(...)` option type (its builder method augments FlowBuilder from
 // the boundary kind module — S2/#317).
 export type { BoundaryOptions } from "./nodes/boundary.js";
+export type { HumanOptions, HumanIoMapping, HumanIoEntry } from "./nodes/human.js";
 export { layoutBpmn, declarativeToLayoutedBpmn } from "./layout.js";
 export { envelope } from "./envelope.js";
 export type {

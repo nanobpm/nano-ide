@@ -11,6 +11,7 @@ import "./branch.js";
 import "./break.js";
 import "./continue.js";
 import "./forEach.js";
+import "./human.js";
 import "./loop.js";
 import "./parallel.js";
 import "./race.js";

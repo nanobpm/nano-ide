@@ -9,6 +9,7 @@ import {
   PiiGuardError,
   type PiiGuard,
 } from "./guard.ts";
+import type { PiiFinding } from "./classifier.ts";
 import { MEMORY_RECORD_SCHEMA_VERSION, type MemoryRecord } from "../schema/index.ts";
 
 function record(overrides: Partial<MemoryRecord> = {}): MemoryRecord {
@@ -86,4 +87,15 @@ test("custom classifier override is still enforced as default-DENY", () => {
   });
   assert.throws(() => guard.assert("this is secret"), PiiGuardError);
   assert.doesNotThrow(() => guard.assert("this is fine"));
+});
+
+test("PiiGuardError defensively snapshots findings — caller mutation can't corrupt it", () => {
+  const findings: PiiFinding[] = [
+    { kind: "email", path: "", index: 0, excerpt: "***", reason: "x" },
+  ];
+  const err = new PiiGuardError(findings);
+  findings.pop();
+  findings.push({ kind: "ssn", path: "y", index: 1, excerpt: "###", reason: "z" });
+  assert.equal(err.findings.length, 1);
+  assert.equal(err.findings[0].kind, "email");
 });

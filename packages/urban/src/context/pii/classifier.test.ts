@@ -101,6 +101,36 @@ test("scans string-array fields (evidence[]) with an indexed path", () => {
   }
 });
 
+test("walks nested objects (no shallow false-negative through the guard)", () => {
+  const result = classifyPii({ meta: { contact: { email: "alice@example.com" } } });
+  assert.equal(result.clean, false);
+  if (!result.clean) {
+    const finding = result.findings.find((f) => f.kind === "email");
+    assert.equal(finding?.path, "meta.contact.email");
+  }
+});
+
+test("walks arrays of nested objects with a fully indexed path", () => {
+  const result = classifyPii({ items: [{ note: "ok" }, { note: "ssn 123-45-6789" }] });
+  assert.equal(result.clean, false);
+  if (!result.clean) {
+    const finding = result.findings.find((f) => f.kind === "ssn");
+    assert.equal(finding?.path, "items.1.note");
+  }
+});
+
+test("obfuscated-email finding index maps back to the original text offset", () => {
+  const text = "reach alice (at) example dot com now";
+  const result = classifyPii(text);
+  assert.equal(result.clean, false);
+  if (!result.clean) {
+    const finding = result.findings.find((f) => f.reason === "obfuscated email address");
+    assert.ok(finding);
+    // Must locate the value in the ORIGINAL text, not the shorter normalised copy.
+    assert.equal(finding?.index, text.indexOf("alice"));
+  }
+});
+
 test("findings are located and redacted, never re-leaking the value", () => {
   const result = classifyPii("email alice@example.com");
   assert.equal(result.clean, false);

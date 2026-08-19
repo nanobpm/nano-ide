@@ -59,9 +59,10 @@ export type PiiClassification =
 /**
  * Anything the classifier can inspect: a bare string, a {@link MemoryRecord}, or
  * any plain object whose string / string-array properties should be scanned.
- * Non-string leaf values (numbers, booleans, nested objects) are ignored, so a
- * record's numeric `schemaVersion` or an ISO `createdAt` timestamp never trips a
- * false positive.
+ * Nested objects and arrays are walked recursively, so PII buried in a
+ * sub-object is still found; non-string leaf values (numbers, booleans, `null`)
+ * are ignored, so a record's numeric `schemaVersion` or an ISO `createdAt`
+ * timestamp never trips a false positive.
  */
 export type PiiCandidate = string | MemoryRecord | Readonly<Record<string, unknown>>;
 
@@ -156,17 +157,42 @@ const DETECTORS: readonly Detector[] = [
 // plain email detector; a hit is reported at the original field. Because the
 // MVP is no-PII by construction we accept the (safe) risk of flagging a benign
 // "X at Y dot Z" phrase — a false positive is a rejected write, never a leak.
-const OBFUSCATION_REPLACEMENTS: readonly (readonly [RegExp, string])[] = [
-  [/\s*[([{]?\s*(?:at|@)\s*[)\]}]?\s*/gi, "@"],
-  [/\s*[([{]?\s*(?:dot|\.)\s*[)\]}]?\s*/gi, "."],
-];
+//
+// The two obfuscation spellings are matched in ONE left-to-right pass (the `at`
+// alternation first, then `dot`) so a normalised offset can be mapped straight
+// back to the original text — a normalising `.replace()` chain would shift every
+// offset after a rewritten run and mis-locate the finding.
+const OBFUSCATION_TOKEN =
+  /(\s*[([{]?\s*(?:at|@)\s*[)\]}]?\s*)|(\s*[([{]?\s*(?:dot|\.)\s*[)\]}]?\s*)/gi;
 
-function deobfuscate(text: string): string {
-  let out = text;
-  for (const [pattern, replacement] of OBFUSCATION_REPLACEMENTS) {
-    out = out.replace(pattern, replacement);
+/**
+ * Normalise obfuscated `@`/`.` spellings back to their canonical characters.
+ * Returns the normalised text plus a `map` where `map[i]` is the index in the
+ * ORIGINAL text that normalised character `i` originated from, so a match found
+ * in the normalised copy can be reported at its true original offset.
+ */
+function deobfuscate(text: string): { text: string; map: number[] } {
+  let out = "";
+  const map: number[] = [];
+  let last = 0;
+  OBFUSCATION_TOKEN.lastIndex = 0;
+  let m: RegExpExecArray | null = OBFUSCATION_TOKEN.exec(text);
+  while (m !== null) {
+    for (let i = last; i < m.index; i++) {
+      out += text[i];
+      map.push(i);
+    }
+    out += m[1] !== undefined ? "@" : ".";
+    map.push(m.index);
+    last = m.index + m[0].length;
+    if (m.index === OBFUSCATION_TOKEN.lastIndex) OBFUSCATION_TOKEN.lastIndex++;
+    m = OBFUSCATION_TOKEN.exec(text);
   }
-  return out;
+  for (let i = last; i < text.length; i++) {
+    out += text[i];
+    map.push(i);
+  }
+  return { text: out, map };
 }
 
 function redact(match: string): string {
@@ -198,7 +224,7 @@ function scanText(path: string, text: string): PiiFinding[] {
   }
 
   // Obfuscated email pass — only add hits the plain pass did not already report.
-  const normalised = deobfuscate(text);
+  const { text: normalised, map } = deobfuscate(text);
   if (normalised !== text) {
     const emailDetector = DETECTORS.find((d) => d.kind === "email");
     if (emailDetector) {
@@ -210,7 +236,9 @@ function scanText(path: string, text: string): PiiFinding[] {
           findings.push({
             kind: "email",
             path,
-            index: em.index,
+            // Map the offset in the normalised copy back to the original text so
+            // the finding is located where the obfuscated value actually is.
+            index: map[em.index] ?? em.index,
             excerpt: redact(em[0]),
             reason: "obfuscated email address",
           });
@@ -226,20 +254,34 @@ function scanText(path: string, text: string): PiiFinding[] {
 
 /**
  * Flatten a candidate into the `(path, text)` fields the detectors scan. String
- * leaves are scanned; string arrays are scanned per-element with an indexed
- * path; every other leaf type is ignored.
+ * leaves are scanned; every object / array is walked RECURSIVELY so PII nested
+ * inside sub-objects or arrays of objects cannot slip past the default-deny
+ * guard as a false negative. Non-string, non-container leaves (numbers,
+ * booleans, `null`) are ignored. A `WeakSet` breaks any accidental reference
+ * cycle so a self-referential candidate cannot loop forever.
  */
 function collectFields(candidate: PiiCandidate): Array<{ path: string; text: string }> {
   if (typeof candidate === "string") return [{ path: "", text: candidate }];
   const fields: Array<{ path: string; text: string }> = [];
-  for (const [key, value] of Object.entries(candidate)) {
+  const seen = new WeakSet<object>();
+  const walk = (value: unknown, path: string): void => {
     if (typeof value === "string") {
-      fields.push({ path: key, text: value });
-    } else if (Array.isArray(value)) {
-      value.forEach((entry, i) => {
-        if (typeof entry === "string") fields.push({ path: `${key}.${i}`, text: entry });
-      });
+      fields.push({ path, text: value });
+      return;
     }
+    if (value === null || typeof value !== "object") return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    if (Array.isArray(value)) {
+      value.forEach((entry, i) => walk(entry, path === "" ? `${i}` : `${path}.${i}`));
+      return;
+    }
+    for (const [key, v] of Object.entries(value)) {
+      walk(v, path === "" ? key : `${path}.${key}`);
+    }
+  };
+  for (const [key, value] of Object.entries(candidate)) {
+    walk(value, key);
   }
   return fields;
 }

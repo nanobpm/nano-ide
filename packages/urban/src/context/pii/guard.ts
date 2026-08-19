@@ -40,7 +40,9 @@ export class PiiGuardError extends Error {
       .join(", ");
     super(`PII pre-commit guard rejected the write: ${summary}`);
     this.name = "PiiGuardError";
-    this.findings = findings;
+    // Defensively snapshot: a caller mutating the array it passed in must never
+    // retroactively change what this error reports it rejected.
+    this.findings = Object.freeze([...findings]);
   }
 }
 

@@ -72,6 +72,49 @@ test("parseSessionEvent rejects a non-object", () => {
   assert.throws(() => parseSessionEvent(fromJson("42")), SessionEventShapeError);
 });
 
+test("parseSessionEvent normalises an omitted opaque tool-call `args` to null (JSON-stable)", () => {
+  // A dialect that omits args (e.g. `obj.arguments ?? obj.args`, both absent)
+  // yields `undefined`, which `JSON.stringify` drops from the object — the
+  // persisted event would then no longer round-trip to the same shape on replay.
+  // The boundary must coerce the absence to the JSON "no value" (`null`).
+  const event = parseSessionEvent({
+    type: "tool-call",
+    id: "tc",
+    parentId: null,
+    callId: "c1",
+    name: "read",
+    args: undefined,
+  });
+  assert.equal(event.type, "tool-call");
+  if (event.type !== "tool-call") return;
+  assert.equal(event.args, null);
+  assert.deepEqual(parseSessionEvent(fromJson(JSON.stringify(event))), event, "must survive a JSON round-trip unchanged");
+});
+
+test("parseSessionEvent normalises an omitted opaque tool-result `result` to null (JSON-stable)", () => {
+  const event = parseSessionEvent({
+    type: "tool-result",
+    id: "tr",
+    parentId: null,
+    callId: "c1",
+    ok: false,
+    result: undefined,
+  });
+  assert.equal(event.type, "tool-result");
+  if (event.type !== "tool-result") return;
+  assert.equal(event.result, null);
+  assert.deepEqual(parseSessionEvent(fromJson(JSON.stringify(event))), event, "must survive a JSON round-trip unchanged");
+});
+
+test("parseSessionEvent preserves a falsy-but-present opaque payload (0 / false / null are not undefined)", () => {
+  for (const payload of [0, false, null, ""]) {
+    const call = parseSessionEvent({ type: "tool-call", id: "tc", parentId: null, callId: "c", name: "n", args: payload });
+    assert.equal(call.type, "tool-call");
+    if (call.type !== "tool-call") return;
+    assert.equal(call.args, payload, `present args ${JSON.stringify(payload)} must be preserved, not coerced`);
+  }
+});
+
 test("parseSessionEvent rejects a negative or non-integer turn index", () => {
   assert.throws(
     () => parseSessionEvent(fromJson('{"type":"turn-start","id":"t","parentId":null,"turn":-1}')),

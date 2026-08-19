@@ -239,6 +239,21 @@ function parentId(obj: Record<string, unknown>): string | null {
 }
 
 /**
+ * Coerce a required opaque payload (a tool-call `args` / tool-result `result`) to
+ * a JSON-serialisable value. These fields are documented as opaque *JSON-
+ * serialisable* values, but a dialect can legitimately omit them (e.g. a tool
+ * call with no arguments surfaces as `obj.arguments ?? obj.args === undefined`).
+ * `undefined` is not JSON-serialisable — `JSON.stringify` drops the key — so an
+ * un-normalised `undefined` would persist an event that no longer round-trips to
+ * the same shape on replay. We normalise the absence to the canonical JSON "no
+ * value" (`null`) here, at the single boundary every dialect flows through, so
+ * they all get the same replay-stable guarantee (derivation over duplication).
+ */
+function opaquePayload(value: unknown): unknown {
+  return value === undefined ? null : value;
+}
+
+/**
  * Parse and validate an untyped value (e.g. `JSON.parse` of a stored row) into a
  * {@link SessionEvent}, reconstructing the exact union member for its `type`.
  * Throws {@link SessionEventShapeError} on any malformed field. This is the
@@ -277,7 +292,7 @@ export function parseSessionEvent(value: unknown): SessionEvent {
         parentId: parent,
         callId: reqString(value, "callId"),
         name: reqString(value, "name"),
-        args: value.args,
+        args: opaquePayload(value.args),
       };
     case "tool-result":
       return {
@@ -286,7 +301,7 @@ export function parseSessionEvent(value: unknown): SessionEvent {
         parentId: parent,
         callId: reqString(value, "callId"),
         ok: reqBool(value, "ok"),
-        result: value.result,
+        result: opaquePayload(value.result),
       };
     case "compaction": {
       const reason = value.reason;

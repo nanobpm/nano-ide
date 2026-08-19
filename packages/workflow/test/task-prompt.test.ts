@@ -115,6 +115,21 @@ test("task prompt: rejects a non-object prompt with a helpful message (not a Typ
   }
 });
 
+test("task prompt: trims surrounding whitespace on resourceId/bindingType/append before emitting", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.task("agent", {
+      jobType: "senior:x",
+      prompt: { resourceId: "  x.md  ", bindingType: "  deployment  ", append: "  =ctx  " },
+    });
+  });
+  const el = serviceTask(toBpmn(flow), "agent");
+  assert.match(
+    el,
+    /<zeebe:linkedResource resourceId="x\.md" bindingType="deployment" resourceType="GenericScript" linkName="prompt" \/>/,
+  );
+  assert.match(el, /<zeebe:input source="=ctx" target="appendPrompt" \/>/);
+});
+
 test("task prompt: rejects an empty bindingType / append override", () => {
   assert.throws(
     () => defineFlow("x", (w) => w.task("a", { prompt: { resourceId: "r.md", bindingType: "" } })),

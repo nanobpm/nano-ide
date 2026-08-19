@@ -63,7 +63,10 @@ declare module "../declarative.js" {
 }
 
 /** Normalize + validate a prompt binding at authoring time, applying the
- *  `bindingType` default. Returns a fully-resolved binding stored on the node. */
+ *  `bindingType` default. Emitted string fields are trimmed before storing (in
+ *  parity with how `timer` normalizes `{ after }`/`{ at }`), so a value like
+ *  `resourceId: " retro.md "` passes validation AND is emitted without stray
+ *  surrounding whitespace. Returns a fully-resolved binding stored on the node. */
 function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
   if (typeof prompt !== "object" || prompt === null) {
     throw new Error(`task("${name}") prompt must be an object with a non-empty resourceId`);
@@ -76,12 +79,12 @@ function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
   if (typeof bindingType !== "string" || bindingType.trim() === "") {
     throw new Error(`task("${name}") prompt.bindingType must be a non-empty string`);
   }
-  const resolved: PromptBinding = { resourceId, bindingType };
+  const resolved: PromptBinding = { resourceId: resourceId.trim(), bindingType: bindingType.trim() };
   if (prompt.append !== undefined) {
     if (typeof prompt.append !== "string" || prompt.append.trim() === "") {
       throw new Error(`task("${name}") prompt.append must be a non-empty string when provided`);
     }
-    resolved.append = prompt.append;
+    resolved.append = prompt.append.trim();
   }
   return resolved;
 }

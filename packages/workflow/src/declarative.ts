@@ -986,7 +986,10 @@ export function declarativeToBpmn(flow: DeclarativeFlow): string {
 
 // --- small XML / FEEL helpers ------------------------------------------------
 
-const envelopeProp = (dir: "in" | "out", value: string): string =>
+/** A `<zeebe:property>` line lifting a data envelope reference. Exported as the
+ *  single source of truth so slice-contributed emitters (e.g. the agent
+ *  prompt-task in `nodes/task.ts`) serialize envelope properties identically. */
+export const envelopeProp = (dir: "in" | "out", value: string): string =>
   `          <zeebe:property name="io.nanobpm.dataEnvelope.${dir}" value="${escapeXml(value)}" />`;
 
 /** Wrap a raw FEEL expression as a Zeebe condition body (leading `=`). Exported

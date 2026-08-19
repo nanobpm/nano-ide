@@ -12,7 +12,7 @@
 // `walkNodes`/`emitNode` dispatch, or the generated barrel.
 
 import type { NodeEnvelopes } from "../types.js";
-import { incomingOutgoing } from "../declarative.js";
+import { envelopeProp, incomingOutgoing } from "../declarative.js";
 import { assertJobType, escapeXml, jobType } from "../xml.js";
 import { registerNodeKind } from "./registry.js";
 
@@ -64,31 +64,30 @@ declare module "../declarative.js" {
 }
 
 /** Normalize + validate a prompt binding at authoring time, applying the
- *  `bindingType` default. Returns a fully-resolved binding stored on the node. */
+ *  `bindingType` default and trimming surrounding whitespace so stored values
+ *  match what validation checked (e.g. `"retro.md "` won't emit a trailing-space
+ *  attribute that breaks engine resource resolution). Returns a fully-resolved
+ *  binding stored on the node. */
 function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
-  const resourceId = prompt.resourceId;
-  if (typeof resourceId !== "string" || resourceId.trim() === "") {
+  const resourceId = typeof prompt.resourceId === "string" ? prompt.resourceId.trim() : prompt.resourceId;
+  if (typeof resourceId !== "string" || resourceId === "") {
     throw new Error(`task("${name}") prompt.resourceId must be a non-empty string`);
   }
-  const bindingType = prompt.bindingType ?? "latest";
-  if (typeof bindingType !== "string" || bindingType.trim() === "") {
+  const rawBindingType = prompt.bindingType ?? "latest";
+  const bindingType = typeof rawBindingType === "string" ? rawBindingType.trim() : rawBindingType;
+  if (typeof bindingType !== "string" || bindingType === "") {
     throw new Error(`task("${name}") prompt.bindingType must be a non-empty string`);
   }
   const resolved: PromptBinding = { resourceId, bindingType };
   if (prompt.append !== undefined) {
-    if (typeof prompt.append !== "string" || prompt.append === "") {
+    const append = typeof prompt.append === "string" ? prompt.append.trim() : prompt.append;
+    if (typeof append !== "string" || append === "") {
       throw new Error(`task("${name}") prompt.append must be a non-empty string when provided`);
     }
-    resolved.append = prompt.append;
+    resolved.append = append;
   }
   return resolved;
 }
-
-/** A `<zeebe:property>` line lifting a data envelope reference (kept in sync with
- *  the built-in service-task emitter's envelope properties, so a prompt task's
- *  envelopes serialize identically). */
-const envelopeProp = (dir: "in" | "out", value: string): string =>
-  `          <zeebe:property name="io.nanobpm.dataEnvelope.${dir}" value="${escapeXml(value)}" />`;
 
 /** Render a prompt-carrying `<bpmn:serviceTask>`: the standard task-definition
  *  and envelope properties, PLUS the `zeebe:linkedResources` prompt binding and

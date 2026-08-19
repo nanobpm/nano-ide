@@ -133,9 +133,11 @@ const orders = defineFlow(
 An **agent service task** is a `w.task` that additionally binds an LLM **prompt
 resource** to the worker that services it. Pass a `prompt` alongside the
 `jobType` capability token and the emitter adds a
-`<zeebe:linkedResource … resourceType="GenericScript" linkName="prompt">` to the
-task's `zeebe:taskDefinition` — the shape the nano-workforce agent tasks use to
-attach a prompt script to the (e.g. `senior:retro`) agent pool that runs the job:
+`<zeebe:linkedResource … resourceType="GenericScript" linkName="prompt">` in a
+`zeebe:linkedResources` block alongside the task's `zeebe:taskDefinition` (both
+within the service task's `<bpmn:extensionElements>`) — the shape the
+nano-workforce agent tasks use to attach a prompt script to the (e.g.
+`senior:retro`) agent pool that runs the job:
 
 ```ts
 w.task("synthesize", {

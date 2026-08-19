@@ -110,6 +110,34 @@ test("task prompt: rejects an empty bindingType / append override", () => {
     () => defineFlow("x", (w) => w.task("a", { prompt: { resourceId: "r.md", append: "" } })),
     /prompt\.append must be a non-empty string/,
   );
+  // Whitespace-only values validate against the trimmed form, so they're rejected too.
+  assert.throws(
+    () => defineFlow("x", (w) => w.task("a", { prompt: { resourceId: "  " } })),
+    /prompt\.resourceId must be a non-empty string/,
+  );
+  assert.throws(
+    () => defineFlow("x", (w) => w.task("a", { prompt: { resourceId: "r.md", bindingType: "  " } })),
+    /prompt\.bindingType must be a non-empty string/,
+  );
+  assert.throws(
+    () => defineFlow("x", (w) => w.task("a", { prompt: { resourceId: "r.md", append: "  " } })),
+    /prompt\.append must be a non-empty string/,
+  );
+});
+
+test("task prompt: trims surrounding whitespace before emitting resource attributes", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.task("agent", {
+      jobType: "senior:x",
+      prompt: { resourceId: "retro.md ", bindingType: " latest ", append: " =ctx " },
+    });
+  });
+  const el = serviceTask(toBpmn(flow), "agent");
+  assert.match(
+    el,
+    /<zeebe:linkedResource resourceId="retro\.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" \/>/,
+  );
+  assert.match(el, /<zeebe:input source="=ctx" target="appendPrompt" \/>/);
 });
 
 // ── Derivation parity against the hand-authored golden ───────────────────────

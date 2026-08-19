@@ -32,10 +32,15 @@ interface NetworkSpy {
 function installFetchSpy(record: () => void): () => void {
   const hadFetch = Reflect.has(globalThis, "fetch");
   const original = Reflect.get(globalThis, "fetch");
-  Reflect.set(globalThis, "fetch", (..._args: readonly unknown[]) => {
+  const stubInstalled = Reflect.set(globalThis, "fetch", (..._args: readonly unknown[]) => {
     record();
     throw new Error("network access (fetch) is blocked in the no-network guard");
   });
+  assert.equal(
+    stubInstalled,
+    true,
+    "fetch stub must install so stray network access stays detectable",
+  );
   return () => {
     if (!hadFetch) {
       Reflect.deleteProperty(globalThis, "fetch");

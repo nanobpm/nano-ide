@@ -874,3 +874,25 @@ test("isMerged passes `--end-of-options` so an option-style ref is never parsed 
     "--end-of-options must come before the commitish/ref operands",
   );
 });
+
+test("appendRecord gives a whitespace-only id a placeholder so the commit subject is never empty", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  // The schema validates `id` only as a NON-EMPTY string (`length > 0`), so a
+  // whitespace-only id passes. Collapsing+trimming it yields the empty string,
+  // which would leave `context(append): prov/scope ` with a MISSING id. The
+  // placeholder keeps every subject auditable and log-correlatable.
+  const result = await writer.appendRecord(record({ id: " \t \n " }));
+
+  const commitMsg = await git(dir, "log", "-1", "--format=%s", result.commit);
+  const mergeMsg = await git(dir, "log", "-1", "--format=%s", result.mergeCommit);
+  for (const [label, subject] of [
+    ["commit", commitMsg],
+    ["merge", mergeMsg],
+  ] as const) {
+    assert.ok(subject.includes("<empty>"), `${label} subject must carry the placeholder id`);
+    // No trailing whitespace where the id would have been — the id token is present.
+    assert.equal(subject, subject.trimEnd(), `${label} subject must not end in blank id`);
+  }
+});

@@ -507,10 +507,18 @@ function parseRecordJson(content: string, path: string): unknown {
  * `sanitizeSegment`). This is the categorical guard for both defect classes at
  * every commit/merge interpolation site; distinct from `sanitizeRef`, which builds
  * git-ref-safe branch segments.
+ *
+ * The schema validates `id` as a NON-EMPTY string (`length > 0`), which admits a
+ * whitespace-only id (e.g. `"   "`). Collapsing then trimming that yields the empty
+ * string, which would leave a commit/merge subject with a MISSING id — degrading
+ * auditability and log correlation. Fall back to an explicit placeholder so every
+ * subject carries an unambiguous, non-empty token in that case.
  */
 const MAX_COMMIT_LINE = 120;
+const EMPTY_COMMIT_LINE = "<empty>";
 function commitLine(value: string): string {
   const collapsed = value.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return EMPTY_COMMIT_LINE;
   return collapsed.length > MAX_COMMIT_LINE
     ? `${collapsed.slice(0, MAX_COMMIT_LINE - 1)}…`
     : collapsed;

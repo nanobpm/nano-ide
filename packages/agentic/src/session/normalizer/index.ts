@@ -25,13 +25,6 @@ export type {
 export { capabilityProbe, NormalizerDialectError } from "./types.ts";
 export type { LinkOptions } from "./link.ts";
 export { linkDrafts, normalizeSession } from "./link.ts";
-export { copilotNormalizer } from "./copilot.ts";
-export { claudeNormalizer } from "./claude.ts";
-export { qwenNormalizer } from "./qwen.ts";
-export { kimiNormalizer } from "./kimi.ts";
-export { piNormalizer } from "./pi.ts";
-export { deepseekNormalizer } from "./deepseek.ts";
-
 import { claudeNormalizer } from "./claude.ts";
 import { copilotNormalizer } from "./copilot.ts";
 import { deepseekNormalizer } from "./deepseek.ts";
@@ -39,6 +32,8 @@ import { kimiNormalizer } from "./kimi.ts";
 import { piNormalizer } from "./pi.ts";
 import { qwenNormalizer } from "./qwen.ts";
 import { type CapabilityAdvertisement, capabilityProbe, type HarnessNormalizer } from "./types.ts";
+
+export { claudeNormalizer, copilotNormalizer, deepseekNormalizer, kimiNormalizer, piNormalizer, qwenNormalizer };
 
 /** Every fallback normalizer in the current fleet, in reference-dialect order. */
 export const FLEET_NORMALIZERS: readonly HarnessNormalizer[] = [

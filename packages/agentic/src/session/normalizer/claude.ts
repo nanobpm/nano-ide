@@ -115,8 +115,10 @@ function toDrafts(record: unknown): readonly DraftEvent[] {
       return drafts;
     }
     case "result":
-      // Terminal accounting frame: fold its top-level usage in if the assistant
-      // frames did not already carry it.
+      // Terminal accounting frame: fold its top-level usage in whenever present.
+      // Like every other frame's usage (and every other normalizer), this maps to
+      // its own canonical `usage` event — assistant frames emit their own
+      // per-message usage and the linker never dedupes; consumers aggregate.
       return usageDrafts(obj.usage, optString(HARNESS, obj, "model"));
     default:
       return [];

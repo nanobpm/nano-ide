@@ -201,6 +201,21 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           message: "missing onTerminated.set patch (a non-empty column → value map)",
         });
       }
+      // `onWaitingHuman` (issue #355) is the optional wait-on-human edge — the twin of
+      // `onTerminated`. It is optional (a binding may reconcile only the terminal edge), but when
+      // present its `set` must be a non-empty column → value patch for the same reason
+      // `onTerminated.set` must be: a reconciler with nothing to write is inert and almost
+      // certainly a mistake.
+      if (b?.onWaitingHuman !== undefined) {
+        const onWaitingHuman = isRecord(b.onWaitingHuman) ? b.onWaitingHuman : undefined;
+        const waitingSet = isRecord(onWaitingHuman?.set) ? onWaitingHuman.set : undefined;
+        if (!waitingSet || Object.keys(waitingSet).length === 0) {
+          issues.push({
+            path: `instanceTracking[${i}].onWaitingHuman.set`,
+            message: "missing onWaitingHuman.set patch (a non-empty column → value map)",
+          });
+        }
+      }
       // `activeStatuses` (fail-closed allow-list) and `terminalStatuses` (fail-open exclusion) are
       // both consumed as arrays of status strings. A malformed value — a bare string, or an array
       // holding a non-string/empty entry — would misbehave at runtime (`new Set("abandoned")`

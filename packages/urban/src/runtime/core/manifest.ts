@@ -39,7 +39,8 @@ export type {
 } from "@nanobpm/nano-app-schema";
 
 /**
- * `instanceTracking` binding, bridged to add the fail-open `terminalStatuses` selector.
+ * `instanceTracking` binding, bridged to add the fail-open `terminalStatuses` selector and the
+ * `onWaitingHuman` wait-on-human edge (issue #355).
  *
  * `terminalStatuses` is landing in the canonical schema (`@nanobpm/nano-app-schema`,
  * Magikcraft/nano-bpm#769): an exclusion list — the runtime polls every row whose
@@ -53,6 +54,26 @@ export type InstanceTracking = SchemaInstanceTracking & {
   /** Values of `statusField` considered finished. When set, every row NOT in one of these
    *  is polled (fail-open). Requires `statusField`; mutually exclusive with `activeStatuses`. */
   readonly terminalStatuses?: readonly string[];
+  /**
+   * The reconciliation applied to a row whose instance is **parked waiting on a human** — the
+   * wait-state twin of {@link SchemaInstanceTracking.onTerminated} (issue #355). An instance is
+   * waiting on a human *iff* it has an open user task, so the runtime derives this edge from
+   * engine truth (`openUserTasks`) rather than from a written column: on each poll, an active,
+   * non-terminated row whose instance has any open user task has this patch applied (typically
+   * `status = "awaiting_operator"`). Terminated wins over waiting-human (the {@link
+   * SchemaInstanceTracking.onTerminated} edge is applied first and excludes the key from this
+   * pass); a row with neither a terminated instance nor an open user task is left untouched, so
+   * the worker-owned transient status (running / converging / merging) survives.
+   *
+   * Optional and, like `terminalStatuses`, bridged locally until the canonical schema
+   * (`@nanobpm/nano-app-schema`) folds it in; drop this augmentation and re-export once the dep
+   * bump lands (No Drift Surfaces).
+   */
+  readonly onWaitingHuman?: {
+    /** Column → literal value patch written to a row whose instance has an open user task
+     *  (e.g. set the status to a "waiting on human" value). */
+    readonly set: { readonly [k: string]: string | number | boolean | null };
+  };
 };
 
 /**

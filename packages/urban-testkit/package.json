@@ -50,7 +50,7 @@
     "test:deno": "deno test -A --no-check src/"
   },
   "dependencies": {
-    "@nanobpm/engine-wasm": "^0.5.0",
+    "@nanobpm/engine-wasm": "^0.7.0",
     "yaml": "^2.9.0"
   },
   "peerDependencies": {

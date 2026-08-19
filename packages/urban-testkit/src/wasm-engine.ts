@@ -12,6 +12,16 @@
 // deterministically and with no wall-clock waits.
 
 import type { TestEngine } from "@nanobpm/engine-wasm/readmodel";
+// The engine's derived read-model DTO types — the single source of truth for the
+// shapes its REST read channel returns (`searchUserTasks` / `searchProcessInstances` /
+// `getFormByKey`). Generated from the Camunda-parity OpenAPI in engine-wasm (#881), so
+// this adapter reads those results through the *derived* types instead of hand-mirroring
+// their fields — No Drift Surfaces (AGENTS.md). Type-only, so nothing is pulled at runtime.
+import type {
+  FormResult,
+  ProcessInstanceSearchQueryResult,
+  UserTaskSearchQueryResult,
+} from "@nanobpm/engine-wasm/readmodel-types";
 import {
   applyAmbientLineage,
   type EngineClient,
@@ -307,12 +317,15 @@ export class WasmEngineClient implements EngineClient {
     // Delegate to the engine's real REST read channel (`POST /user-tasks/search`) instead of
     // scraping the primary-state snapshot. The read model honours the `{ state? }` filter
     // (e.g. `"CREATED"`) itself, so pass it through rather than re-implementing state matching.
-    const body = this.#parseObj(
+    // Parse the result through the engine's DERIVED `UserTaskSearchQueryResult` DTO
+    // (`@nanobpm/engine-wasm/readmodel-types`) — the single source of truth for the row shape —
+    // so `items` is a typed `UserTaskResult[]` rather than a hand-scraped `Record` bag.
+    const body: UserTaskSearchQueryResult = JSON.parse(
       this.#engine.searchUserTasks(
         JSON.stringify(filter?.state ? { state: filter.state } : {}),
       ),
     );
-    return records(body.items)
+    return (Array.isArray(body.items) ? body.items : [])
       // The read model does not yet honour the non-lifecycle selectors
       // (`processInstanceKey`/`assignee`/`candidateGroup` — the write/index side is
       // Magikcraft/nano-bpm#815's follow-up), so apply them client-side here. This mirrors the
@@ -322,17 +335,16 @@ export class WasmEngineClient implements EngineClient {
         filter?.processInstanceKey === undefined ||
         str(t.processInstanceKey) === filter.processInstanceKey
       )
-      .filter((t) => filter?.assignee === undefined || str(t.assignee) === filter.assignee)
+      .filter((t) => filter?.assignee === undefined || t.assignee === filter.assignee)
       .filter((t) =>
         filter?.candidateGroup === undefined ||
-        strings(t.candidateGroups).includes(filter.candidateGroup)
+        (t.candidateGroups ?? []).includes(filter.candidateGroup)
       )
       .flatMap((t) => {
-        // The REST read model spells the task's identity as `userTaskKey`; keep the snapshot's
-        // `key` as a defensive fallback. A keyless row cannot be acted on — drop it (parity with
-        // `SdkEngineClient`, which logs and skips such a row).
-        const userTaskKey = t.userTaskKey ?? t.key;
-        if (userTaskKey == null || userTaskKey === "") return [];
+        // A keyless row cannot be acted on — drop it (parity with `SdkEngineClient`, which logs
+        // and skips such a row). `presentKey` also normalises a numeric key to a trimmed string.
+        const userTaskKey = presentKey(t.userTaskKey);
+        if (userTaskKey === undefined) return [];
         // The read model already resolves a `<zeebe:formDefinition formId="X" />` linkage to the
         // latest deployed form's key server-side, so `formKey`/`externalFormReference` arrive
         // resolved on the row — no client-side id→key map (the deleted `#formKeyById` shadow).
@@ -342,14 +354,8 @@ export class WasmEngineClient implements EngineClient {
         const formKey = presentKey(t.formKey);
         const externalFormReference = presentString(t.externalFormReference);
         return [{
-          userTaskKey: str(userTaskKey),
+          userTaskKey,
           elementId: typeof t.elementId === "string" ? t.elementId : undefined,
-          // Surface task variables when the read model provides them as a record, mirroring
-          // `SdkEngineClient.searchUserTasks` (which projects `variables` when the engine includes
-          // them). The gateway's user-task search does not currently project them (only the REST
-          // variable channel does), so in practice this stays `undefined` — but keeping the same
-          // projection avoids an adapter-specific behaviour gap should the read model start to.
-          ...(isRecord(t.variables) ? { variables: t.variables } : {}),
           ...(formKey ? { formKey } : {}),
           ...(externalFormReference ? { externalFormReference } : {}),
         }];
@@ -387,15 +393,17 @@ export class WasmEngineClient implements EngineClient {
     if (key == null) return null;
     // The engine addresses a form by a numeric deploy key and *throws* on a malformed key (e.g. an
     // authored id passed through as the fallback). Mirror `SdkEngineClient.getForm`, which treats a
-    // failed fetch as "no such form" and returns null rather than propagating.
-    let body: unknown;
+    // failed fetch as "no such form" and returns null rather than propagating. Parse through the
+    // engine's DERIVED `FormResult` DTO (`@nanobpm/engine-wasm/readmodel-types`) — its `schema`
+    // (JSON string), `formKey`, `formId`, and `version` fields are the single source of truth.
+    let body: FormResult | null;
     try {
-      body = this.#parseValue(this.#engine.getFormByKey(key));
+      body = JSON.parse(this.#engine.getFormByKey(key));
     } catch {
       return null;
     }
     // `getFormByKey` returns JSON `null` for an unknown key; only an object carries a form.
-    if (!isRecord(body)) return null;
+    if (body === null || typeof body !== "object") return null;
     // The read model serializes the form-js schema as a JSON string (the REST wire shape);
     // tolerate an already-parsed object too. A form with no valid schema is treated as absent.
     const schema = parseFormSchema(body.schema);
@@ -433,14 +441,18 @@ export class WasmEngineClient implements EngineClient {
     // filter/sort/page fields server-side (it returns every instance — the write/index side is
     // Magikcraft/nano-bpm#815's follow-up), so apply the key/state selectors client-side. This
     // mirrors the *effective* behaviour of the gateway-backed `SdkEngineClient`, which gets them
-    // honoured server-side; only the filtering site differs.
-    const body = this.#parseObj(this.#engine.searchProcessInstances("{}"));
+    // honoured server-side; only the filtering site differs. Parse through the engine's DERIVED
+    // `ProcessInstanceSearchQueryResult` DTO (`@nanobpm/engine-wasm/readmodel-types`) so each
+    // row is a typed `ProcessInstanceResult` rather than a hand-scraped `Record` bag.
+    const body: ProcessInstanceSearchQueryResult = JSON.parse(
+      this.#engine.searchProcessInstances("{}"),
+    );
     const out: ProcessInstanceSnapshot[] = [];
-    for (const inst of records(body.items)) {
-      const key = str(inst.processInstanceKey);
+    for (const inst of Array.isArray(body.items) ? body.items : []) {
+      const key = presentKey(inst.processInstanceKey);
       // Skip keyless items so a missing/null key can't leak in as "" (matches
       // the live SDK adapter, which drops instances with no key).
-      if (key === "") continue;
+      if (key === undefined) continue;
       if (wanted && !wanted.has(key)) continue;
       const state = wasmStateToProcessInstanceState(inst.state);
       if (state === undefined) continue;
@@ -814,13 +826,6 @@ export class WasmEngineClient implements EngineClient {
     return isRecord(v) ? v : {};
   }
 
-  /** Parse an engine read-method JSON string to its raw value, preserving `null` (a form-by-key
-   *  miss serializes as JSON `null`, which the caller must distinguish from a
-   *  present object — unlike {@link #parseObj}, which coerces a non-object to `{}`). */
-  #parseValue(json: string): unknown {
-    return JSON.parse(json);
-  }
-
   #parseArray(json: string): Record<string, unknown>[] {
     const v: unknown = JSON.parse(json);
     return records(v);
@@ -842,11 +847,6 @@ function requireCreated(created: unknown): string {
 /** The `Record<string, unknown>` elements of an unknown value (non-records dropped). */
 function records(v: unknown): Record<string, unknown>[] {
   return Array.isArray(v) ? v.filter(isRecord) : [];
-}
-
-/** The `string` elements of an unknown value (non-strings dropped). */
-function strings(v: unknown): string[] {
-  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 }
 
 function str(v: unknown): string {

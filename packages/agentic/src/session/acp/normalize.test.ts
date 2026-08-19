@@ -93,6 +93,16 @@ test("an intermediate tool_call_update (in_progress) is ignored", () => {
   assert.equal(result.kind, "ignored");
 });
 
+test("inherited Object.prototype keys are not treated as chunk types (no prototype pollution)", () => {
+  // `sessionUpdate in CHUNK_ROLE` must be an own-property check: a wire value like
+  // "toString"/"constructor"/"hasOwnProperty" is an inherited Object.prototype key,
+  // not an ACP chunk type, and must never classify a chunk with a bogus role.
+  for (const proto of ["toString", "constructor", "hasOwnProperty", "valueOf", "__proto__"]) {
+    const result = classifyUpdate({ sessionUpdate: proto, content: { type: "text", text: "x" } });
+    assert.equal(result.kind, "ignored", `"${proto}" must be ignored, not classified as a chunk`);
+  }
+});
+
 test("non-canonical updates (plan, unknown, malformed) are ignored without throwing", () => {
   for (const value of [
     { sessionUpdate: "plan", plan: { entries: [] } },

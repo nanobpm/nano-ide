@@ -50,11 +50,18 @@ export type AcpClassifiedUpdate =
   | { readonly kind: "tool-result"; readonly callId: string; readonly ok: boolean; readonly result: unknown }
   | { readonly kind: "ignored"; readonly sessionUpdate: string; readonly reason: string };
 
-const CHUNK_ROLE: Readonly<Record<string, "assistant" | "reasoning" | "user">> = {
-  agent_message_chunk: "assistant",
-  agent_thought_chunk: "reasoning",
-  user_message_chunk: "user",
-};
+// A null-prototype map so `sessionUpdate in CHUNK_ROLE` and `CHUNK_ROLE[sessionUpdate]`
+// only ever see the three explicit chunk types — a wire `sessionUpdate` like
+// "toString" or "constructor" must not match an inherited Object.prototype key and
+// classify a chunk with a bogus (function-valued) role.
+const CHUNK_ROLE: Readonly<Record<string, "assistant" | "reasoning" | "user">> = Object.assign(
+  Object.create(null),
+  {
+    agent_message_chunk: "assistant",
+    agent_thought_chunk: "reasoning",
+    user_message_chunk: "user",
+  },
+);
 
 function ignored(sessionUpdate: string, reason: string): AcpClassifiedUpdate {
   return { kind: "ignored", sessionUpdate, reason };

@@ -11,15 +11,17 @@
  * against the slice-1 boundary ({@link parseSessionEvent}) so a dialect can never
  * emit a shape that is not a canonical {@link SessionEvent}.
  */
+import { randomUUID } from "node:crypto";
 import { parseSessionEvent, type SessionEvent } from "../events.ts";
 import type { DraftEvent, HarnessNormalizer } from "./types.ts";
 
 export interface LinkOptions {
   /**
-   * Id generator for drafts that do not carry a native id. Default is a
-   * deterministic `evt-<n>` counter so a test gets stable ids without an
-   * injected clock; pass `crypto.randomUUID` (or any unique source) in
-   * production. It is only consulted when a draft omits `id`.
+   * Id generator for drafts that do not carry a native id. Default is
+   * `crypto.randomUUID`, which is unique-safe across repeated
+   * `normalizeSession()` calls for one session (e.g. per chunk / per resume
+   * leg); inject a deterministic generator in tests when stable ids are needed.
+   * It is only consulted when a draft omits `id`.
    */
   newId?: () => string;
   /**
@@ -31,11 +33,6 @@ export interface LinkOptions {
   parentId?: string | null;
 }
 
-function defaultIdSource(): () => string {
-  let n = 0;
-  return () => `evt-${n++}`;
-}
-
 /**
  * Thread a flat list of {@link DraftEvent}s into a causal chain of canonical
  * {@link SessionEvent}s: each event's `id` is its native id when it supplied one
@@ -45,7 +42,7 @@ function defaultIdSource(): () => string {
  * causality (`parentId`), which survives compaction.
  */
 export function linkDrafts(drafts: readonly DraftEvent[], options: LinkOptions = {}): SessionEvent[] {
-  const newId = options.newId ?? defaultIdSource();
+  const newId = options.newId ?? randomUUID;
   let parentId: string | null = options.parentId ?? null;
   const linked: SessionEvent[] = [];
   for (const draft of drafts) {

@@ -212,7 +212,10 @@ export class GitSubstrateBackend implements SubstrateBackend {
 
   /**
    * Materialise the working copy at `options.localPath`: clone on first use,
-   * fetch + re-pin thereafter.
+   * fetch + re-pin thereafter. `refresh: false` reuses an already-present
+   * working copy as-is — no fetch, no re-pin, no git invocation — so the
+   * returned handle's `ref` records the intended pin rather than a re-validated
+   * checkout (see {@link SubstrateResolveOptions.refresh}).
    *
    * Known limitation (deferred past slice S1): materialisation is NOT guarded by
    * an inter-process lock. The resolver's single-flight coalescing only
@@ -299,6 +302,10 @@ export class GitSubstrateBackend implements SubstrateBackend {
       await this.#pin(localPath, identity.ref);
     }
 
+    // On the `alreadyCloned && !refresh` path neither branch above ran, so the
+    // existing working copy is returned untouched (no fetch/pin). `ref` here is
+    // therefore the *requested* pin, not a re-verified checkout — the documented
+    // `refresh: false` contract (trust the existing working copy as-is).
     return { identity, localPath, repo: identity.repo, ref: identity.ref };
   }
 

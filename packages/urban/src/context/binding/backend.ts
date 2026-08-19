@@ -27,7 +27,14 @@ export interface ResolvedContextHandle {
   readonly localPath: string;
   /** The concrete substrate repo URL/path that was cloned. */
   readonly repo: string;
-  /** The ref the working copy is pinned to. */
+  /**
+   * The ref the working copy is pinned to. This records the *intended* pin
+   * (`identity.ref`). It is a re-verified fact only when the working copy was
+   * just cloned or refreshed; on the `refresh: false` reuse path the existing
+   * working copy is trusted as-is and NOT re-pinned, so `ref` reflects the
+   * requested pin rather than a freshly-validated checkout (see
+   * {@link SubstrateResolveOptions.refresh}).
+   */
   readonly ref: string;
 }
 
@@ -42,7 +49,10 @@ export interface SubstrateResolveOptions {
   /**
    * When `true`, refresh an already-present working copy (fetch + re-pin to
    * `ref`). When `false`, an existing working copy is reused as-is without
-   * touching the network. Defaults to `true`.
+   * touching the network AND without running git at all — it is trusted as the
+   * requested substrate; no fetch, pin, or checkout validation is enforced, so
+   * the returned handle's `ref` reflects the intended pin rather than a
+   * re-verified checkout. Defaults to `true`.
    */
   readonly refresh?: boolean;
 }
@@ -56,7 +66,9 @@ export interface SubstrateBackend {
   /**
    * Materialise (clone on first use, refresh thereafter) the substrate for
    * `identity` at `options.localPath`, pinned to `identity.ref`, and return the
-   * resolved handle.
+   * resolved handle. The pin is enforced on the clone and `refresh: true` paths;
+   * `refresh: false` reuses an existing working copy as-is without re-pinning
+   * (see {@link SubstrateResolveOptions.refresh}).
    */
   materialise(
     identity: ContextIdentity,

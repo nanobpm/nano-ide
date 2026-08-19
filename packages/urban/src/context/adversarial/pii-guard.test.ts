@@ -58,7 +58,7 @@ test("PII hidden in a NESTED field (evidence array) is still blocked", async () 
         rec({
           id: "pii-nested",
           statement: "clean summary",
-          evidence: ["run-1", "leaked key AKIAIOSFODNN7EXAMPLE in logs"],
+          evidence: ["run-1", "leaked contact alice@example.com in logs"],
         }),
       ),
     PiiGuardError,

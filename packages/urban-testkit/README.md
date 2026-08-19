@@ -69,6 +69,41 @@ matcher-registration seam, and the derived seam inventory. The `matchesSemantica
 (S2) and `satisfiesJudge` (S3) matchers and the real opt-in adapters (S4) land in later
 slices.
 
+### Real AI adapters
+
+Behind the two seams live **real** backends that are OFF by default. Each seam has both a
+**hosted-provider** adapter (`HostedEmbeddingAdapter` / `HostedChatModelAdapter`, over an
+OpenAI-compatible service — the chat adapter also serves the optional image part for vision
+judging) and a **local / on-device** adapter (`LocalEmbeddingAdapter` /
+`LocalChatModelAdapter`, over Transformers.js). Their heavy SDKs are declared as
+**optional peer dependencies** (`peerDependencies` + `peerDependenciesMeta.optional`), so a
+plain install never pulls them in, and they are never imported at module load — the barrel
+stays import-safe even when they are not installed.
+
+`seamInventory()` reports `hasReal: true` with a `docRef` for both seams **unconditionally**
+(a static existence fact registered at import — no opt-in, no network). This is decoupled
+from **live activation**: constructing a real adapter loads its optional dependency and
+performs network/model I/O, and is gated behind an explicit opt-in — set
+**`URBAN_TESTKIT_AI_REAL=1`**. Without it, every construction factory throws
+`real AI adapter requires explicit opt-in` before touching a dependency or the network, so
+the default CI path can never reach a live model.
+
+```ts
+import {
+  Cassette,
+  createRealAdapters,
+  createRecordingChatModelAdapter,
+} from "@nanobpm/urban-testkit/ai";
+
+// Throws unless URBAN_TESTKIT_AI_REAL is set (default CI is network-free):
+const { embedding, chat } = await createRealAdapters({ provider: "hosted" });
+
+// Regenerate a cassette from a live backend, injected as the record/replay capture source.
+// Start a fresh cassette (or `await Cassette.load(path)` to append to an existing one):
+const cassette = new Cassette("packages/urban-testkit/src/ai/__cassettes__/judge.json");
+const recorder = await createRecordingChatModelAdapter({ cassette, real: { provider: "local" } });
+```
+
 ## Booting a whole app (S2 + S3)
 
 **`bootTestApp(root, opts?)`** boots a real Urban app in-process against the WASM engine

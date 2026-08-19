@@ -39,8 +39,8 @@ export interface RetrievalQuery {
   readonly subject?: OneOrMany<string>;
   /**
    * Free-text search across the record body — case-insensitive substring match
-   * over `statement` (and `subject`, when present). This is the "text search
-   * across record bodies" clause; it composes with the structured filters.
+   * over `statement`, `subject` (when present), and `id`. This is the "text
+   * search across record bodies" clause; it composes with the structured filters.
    */
   readonly text?: string;
   /** Cap the number of results returned (applied after ordering). */

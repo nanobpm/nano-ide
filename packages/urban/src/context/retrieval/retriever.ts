@@ -141,9 +141,11 @@ export class ContextRetriever {
   }
 
   /**
-   * The candidate set to filter: when a query pins exactly one namespace
-   * partition we read only that partition (cheap path-scoped read, cold-cache
-   * friendly); otherwise we read the whole (cached) store.
+   * The candidate set to filter: when a query pins exactly one scope we read
+   * only that scope's subtree (cheap path-scoped read, cold-cache friendly) —
+   * pinning a single scopeRef narrows it further to that one namespace
+   * partition, otherwise the whole scope subtree (spanning its refs) is read;
+   * when no single scope is pinned we read the whole (cached) store.
    */
   async #candidates(query: CompiledQuery): Promise<readonly StoredRecord[]> {
     const selector = singleNamespace(query);

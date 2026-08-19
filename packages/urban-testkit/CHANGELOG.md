@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.8.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.7.2...@nanobpm/urban-testkit-0.8.0) (2026-08-19)
+
+
+### Features
+
+* **urban-testkit:** guard the fake against the full EngineClient surface ([#343](https://github.com/nanobpm/nano-ide/issues/343)) ([a2e57e9](https://github.com/nanobpm/nano-ide/commit/a2e57e92ac0db07f670e96ca8966bd6ea2e4342d))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @nanobpm/urban bumped from >=0.61.0 to >=0.62.0
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.50.0 to >=0.62.0
+
 ## [0.7.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.7.1...@nanobpm/urban-testkit-0.7.2) (2026-08-19)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.8.8...@nanobpm/urban-testkit-0.9.0) (2026-08-19)
+
+
+### Features
+
+* **urban-testkit:** first-class worker & child-process mocking ([#368](https://github.com/nanobpm/nano-ide/issues/368)) ([7d92083](https://github.com/nanobpm/nano-ide/commit/7d92083ab82116d360e039f02601b4bbd5166d05))
+
 ## [0.8.8](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.8.7...@nanobpm/urban-testkit-0.8.8) (2026-08-19)
 
 

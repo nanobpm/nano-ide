@@ -102,6 +102,30 @@ packages use — copy it rather than inventing a variant:
   with `Cannot find module @nanobpm/workflow` until root `npm run build` has emitted
   the dependency's `dist/`. Working order: **build → typecheck → test → lint**.
 
+## urban-testkit mocks: `failWith` retries and the virtual clock
+
+Two independent slices of the worker/child-process mocking epic (nano-ide#296) hit
+the **same** non-obvious boundary, so it's worth stating up front for anyone
+extending `@nanobpm/urban-testkit` mocks (`mockWorker` / `mockChildProcess`):
+
+- **`failWith({ retries: N > 0 })` driven through `drain()` never quiesces.** The
+  mock re-applies a *fixed* retry budget on every redelivery and the WASM
+  `TestEngine` re-activates the failed job with **no backoff** under the virtual
+  clock, so `drain()` loops until it hits `MAX_DRAIN_ITERATIONS` and throws
+  (~4s wasted). For a terminal, deterministically-drivable failure use
+  **`retries: 0`** (which surfaces as an incident). Assert positive-retry budgets
+  at the **`resolve()`** level (drain-free), not by driving the drain.
+- **Call activities have no runtime job seam.** The WASM engine treats a BPMN
+  `callActivity` as an immediate pass-through no-op — no child instance, no job,
+  no wait — so `mockChildProcess` works by rewriting each `callActivity` into a
+  synthetic service-task job at **deploy time** and resolving it in `drain()`.
+  Its `failWith` is **incident-only** for the same non-quiescence reason above.
+
+The outcome model itself is single-source: import `MockOutcome` + `applyOutcome`
+from `worker-mock.ts` — do not duplicate it. A CI guard already fails the build if
+a new engine completion method lacks a `MockOutcome` kind, builder method, and
+test (nano-ide#325).
+
 ## Database Migrations
 
 Migrations live in `db/migrations/NNN_description.sql`, are forward-only and

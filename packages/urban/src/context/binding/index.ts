@@ -34,6 +34,7 @@ export {
   type GitRunner,
   GIT_SAFETY_CONFIG,
   hardenedGitArgs,
+  redactUrlUserinfo,
   SubstrateResolveError,
 } from "./git-backend.ts";
 

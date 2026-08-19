@@ -102,6 +102,19 @@ test("task prompt: rejects an empty/missing resourceId with a helpful message", 
   );
 });
 
+test("task prompt: rejects a non-object prompt with a helpful message (not a TypeError)", () => {
+  // A runtime-invalid flow passing `prompt: null` (or another non-object) must
+  // fail authoring validation with a helpful message rather than throwing an
+  // opaque TypeError from reading `prompt.resourceId` off a non-object.
+  for (const bad of ["null", "42", '"review.md"', "[]"]) {
+    assert.throws(
+      () => defineFlow("x", (w) => w.task("a", { prompt: JSON.parse(bad) })),
+      /prompt must be an object with a non-empty resourceId|prompt\.resourceId must be a non-empty string/,
+      `prompt: ${bad} should throw a helpful validation error`,
+    );
+  }
+});
+
 test("task prompt: rejects an empty bindingType / append override", () => {
   assert.throws(
     () => defineFlow("x", (w) => w.task("a", { prompt: { resourceId: "r.md", bindingType: "" } })),

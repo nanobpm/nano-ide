@@ -116,13 +116,13 @@ registerNodeKind("forEach", {
     // A single service-task body carries the MI characteristics directly; a
     // multi-step body is wrapped in an embedded MI sub-process (its own token
     // scope, with its own start/end). A prompt-carrying `task` is deliberately
-    // EXCLUDED from this fast path: `addServiceTask` renders only the plain
-    // task-definition, so lifting it here would silently drop the task's
-    // `zeebe:linkedResources`/`appendPrompt` binding. It falls through to the
-    // sub-process path, where the `task` kind's own emitter renders the agent
-    // service task (prompt intact) inside the MI scope.
+    // EXCLUDED from this fast path: computing its `zeebe:linkedResources`/
+    // `appendPrompt` delta lives in the `task` kind's own emitter, so lifting it
+    // here would silently drop that binding. It falls through to the sub-process
+    // path, where the `task` emitter renders the agent service task (prompt
+    // intact) inside the MI scope.
     if (only && (only.kind === "run" || (only.kind === "task" && only.prompt === undefined))) {
-      api.addServiceTask(only, mi);
+      api.addServiceTask(only, { mi });
       api.connect(incoming, only.name);
       return [api.newEdge(only.name)];
     }

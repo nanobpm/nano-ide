@@ -622,8 +622,14 @@ export interface EmitApi {
   /** Place a fully custom BPMN element (a slice's own render closure). */
   addNode(node: RenderNode): void;
   /** Place a `<bpmn:serviceTask>` with the standard taskDefinition/envelope
-   *  extension elements (optionally with multi-instance characteristics). */
-  addServiceTask(node: { name: string; envelopes?: NodeEnvelopes; jobType?: string }, mi?: string): void;
+   *  extension elements. `opts.mi` adds multi-instance characteristics; `opts.extraExt`
+   *  injects additional `<bpmn:extensionElements>` content (e.g. a
+   *  `zeebe:linkedResources` prompt binding) after the taskDefinition/properties,
+   *  so a variant task only supplies its delta rather than re-rendering the shell. */
+  addServiceTask(
+    node: { name: string; envelopes?: NodeEnvelopes; jobType?: string },
+    opts?: { mi?: string; extraExt?: string },
+  ): void;
   /** Place a `<bpmn:intermediateCatchEvent>` with a message event definition. */
   addCatchEvent(node: { name: string }): void;
   /** Place a `<bpmn:intermediateCatchEvent>` with a timer event definition. */
@@ -674,7 +680,7 @@ class Compiler {
       addNode: (node) => {
         this.nodes.push({ ...node, scope: node.scope ?? this.currentScope() });
       },
-      addServiceTask: (node, mi) => this.addServiceTask(node, mi),
+      addServiceTask: (node, opts) => this.addServiceTask(node, opts),
       addCatchEvent: (node) => this.addCatchEvent(node),
       addTimerCatchEvent: (node) => this.addTimerCatchEvent(node),
       addGateway: (id, name) => this.addGateway(id, name),
@@ -727,7 +733,11 @@ class Compiler {
     this.envelopes.set(env.name, env.fields);
   }
 
-  private addServiceTask(node: { name: string; envelopes?: NodeEnvelopes; jobType?: string }, mi = ""): void {
+  private addServiceTask(
+    node: { name: string; envelopes?: NodeEnvelopes; jobType?: string },
+    opts: { mi?: string; extraExt?: string } = {},
+  ): void {
+    const { mi = "", extraExt = "" } = opts;
     const type = node.jobType ?? jobType(this.flow.id, node.name);
     this.recordEnvelope(node.envelopes?.in);
     this.recordEnvelope(node.envelopes?.out);
@@ -738,6 +748,7 @@ class Compiler {
       `      <bpmn:extensionElements>\n` +
       `        <zeebe:taskDefinition type="${escapeXml(type)}" />\n` +
       (props.length ? `        <zeebe:properties>\n${props.join("\n")}\n        </zeebe:properties>\n` : "") +
+      extraExt +
       `      </bpmn:extensionElements>`;
     const id = node.name;
     this.nodes.push({

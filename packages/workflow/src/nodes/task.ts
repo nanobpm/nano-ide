@@ -12,8 +12,7 @@
 // `walkNodes`/`emitNode` dispatch, or the generated barrel.
 
 import type { NodeEnvelopes } from "../types.js";
-import { incomingOutgoing } from "../declarative.js";
-import { assertJobType, escapeXml, jobType } from "../xml.js";
+import { assertJobType, escapeXml } from "../xml.js";
 import { registerNodeKind } from "./registry.js";
 
 /** Binds an LLM prompt resource to an agent service task. Emits, alongside the
@@ -66,6 +65,9 @@ declare module "../declarative.js" {
 /** Normalize + validate a prompt binding at authoring time, applying the
  *  `bindingType` default. Returns a fully-resolved binding stored on the node. */
 function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
+  if (typeof prompt !== "object" || prompt === null) {
+    throw new Error(`task("${name}") prompt must be an object with a non-empty resourceId`);
+  }
   const resourceId = prompt.resourceId;
   if (typeof resourceId !== "string" || resourceId.trim() === "") {
     throw new Error(`task("${name}") prompt.resourceId must be a non-empty string`);
@@ -84,27 +86,14 @@ function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
   return resolved;
 }
 
-/** A `<zeebe:property>` line lifting a data envelope reference (kept in sync with
- *  the built-in service-task emitter's envelope properties, so a prompt task's
- *  envelopes serialize identically). */
-const envelopeProp = (dir: "in" | "out", value: string): string =>
-  `          <zeebe:property name="io.nanobpm.dataEnvelope.${dir}" value="${escapeXml(value)}" />`;
-
-/** Render a prompt-carrying `<bpmn:serviceTask>`: the standard task-definition
- *  and envelope properties, PLUS the `zeebe:linkedResources` prompt binding and
- *  (optionally) a `zeebe:ioMapping` `appendPrompt` input. */
-function renderPromptTask(
-  flowId: string,
-  node: { name: string; envelopes?: NodeEnvelopes; jobType?: string; prompt: PromptBinding },
-  inc: string[],
-  outg: string[],
-): string {
-  const id = node.name;
-  const type = node.jobType ?? jobType(flowId, node.name);
-  const props: string[] = [];
-  if (node.envelopes?.in) props.push(envelopeProp("in", node.envelopes.in.name));
-  if (node.envelopes?.out) props.push(envelopeProp("out", node.envelopes.out.name));
-  const { resourceId, bindingType, append } = node.prompt;
+/** Build the prompt-specific `<bpmn:extensionElements>` delta appended to the
+ *  shared service-task emission: the `zeebe:linkedResources` prompt binding and
+ *  (optionally) a `zeebe:ioMapping` `appendPrompt` input. The task shell
+ *  (taskDefinition + envelope properties) is rendered by the built-in
+ *  `EmitApi.addServiceTask`, so this variant only contributes its delta and the
+ *  envelope serialization can never drift from the plain service task. */
+function promptExtensions(prompt: PromptBinding): string {
+  const { resourceId, bindingType, append } = prompt;
   const linked =
     `        <zeebe:linkedResources>\n` +
     `          <zeebe:linkedResource resourceId="${escapeXml(resourceId)}" ` +
@@ -116,20 +105,7 @@ function renderPromptTask(
         `          <zeebe:input source="${escapeXml(append)}" target="appendPrompt" />\n` +
         `        </zeebe:ioMapping>\n`
       : "";
-  const ext =
-    `      <bpmn:extensionElements>\n` +
-    `        <zeebe:taskDefinition type="${escapeXml(type)}" />\n` +
-    (props.length ? `        <zeebe:properties>\n${props.join("\n")}\n        </zeebe:properties>\n` : "") +
-    linked +
-    io +
-    `      </bpmn:extensionElements>`;
-  return (
-    `    <bpmn:serviceTask id="${escapeXml(id)}" name="${escapeXml(id)}">\n` +
-    ext +
-    "\n" +
-    incomingOutgoing(inc, outg) +
-    `    </bpmn:serviceTask>`
-  );
+  return linked + io;
 }
 
 registerNodeKind("task", {
@@ -155,15 +131,12 @@ registerNodeKind("task", {
       api.connect(incoming, node.name);
       return [api.newEdge(node.name)];
     }
-    // Prompt binding present → render the agent service task with its
-    // `zeebe:linkedResource` (and optional `appendPrompt` ioMapping input).
-    api.recordEnvelope(node.envelopes?.in);
-    api.recordEnvelope(node.envelopes?.out);
+    // Prompt binding present → the shared `addServiceTask` renders the task
+    // shell (taskDefinition + envelope properties, recording envelopes); we only
+    // supply the `zeebe:linkedResource` (and optional `appendPrompt` ioMapping)
+    // delta, so the envelope/taskDefinition serialization has a single source.
     const prompt = node.prompt;
-    api.addNode({
-      id: node.name,
-      render: (inc, outg) => renderPromptTask(api.flowId, { ...node, prompt }, inc, outg),
-    });
+    api.addServiceTask(node, { extraExt: promptExtensions(prompt) });
     api.connect(incoming, node.name);
     return [api.newEdge(node.name)];
   },

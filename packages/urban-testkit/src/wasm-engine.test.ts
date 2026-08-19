@@ -3,8 +3,10 @@ import assert from "node:assert/strict";
 import { runEngineClientContract } from "./contract.ts";
 import {
   createWasmEngineClient,
+  parseForm,
   presentKey,
   presentString,
+  searchRows,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
 import { BpmnError, readLineage } from "@nanobpm/urban/runtime";
@@ -21,6 +23,58 @@ test("wasm: Terminating projects as TERMINATED (REST parity)", () => {
   assert.equal(wasmStateToProcessInstanceState("Completed"), "COMPLETED");
   assert.equal(wasmStateToProcessInstanceState("bogus"), undefined);
   assert.equal(wasmStateToProcessInstanceState(42), undefined);
+});
+
+// Guards the untyped read-model JSON boundary defect class. `searchUserTasks` /
+// `searchProcessInstances` annotate their `JSON.parse`d body with a derived DTO, but that is a
+// shape *claim*, not a runtime guarantee — a malformed/changed engine response (a non-object body,
+// a non-array `items`, or `null`/non-object rows) must not throw downstream. Both methods extract
+// through `searchRows`, so testing it once secures the whole surface. Runtime-invalid fixtures are
+// built via `JSON.parse` (which returns `any`), never an `as` cast.
+test("searchRows: drops a non-object body, non-array items, and non-object rows (untyped JSON defence)", () => {
+  // A non-object body — engine returned `null`, a primitive, or an array — yields no rows.
+  assert.deepEqual(searchRows(JSON.parse("null")), []);
+  assert.deepEqual(searchRows(JSON.parse("42")), []);
+  assert.deepEqual(searchRows(JSON.parse('"nope"')), []);
+  assert.deepEqual(searchRows(JSON.parse("[]")), []);
+  // An object body whose `items` is missing or not an array yields no rows.
+  assert.deepEqual(searchRows(JSON.parse("{}")), []);
+  assert.deepEqual(searchRows(JSON.parse('{"items":null}')), []);
+  assert.deepEqual(searchRows(JSON.parse('{"items":"x"}')), []);
+  assert.deepEqual(searchRows(JSON.parse('{"items":{}}')), []);
+  // Non-object rows (`null`, primitives, arrays) are filtered out; object rows survive.
+  assert.deepEqual(
+    searchRows(JSON.parse('{"items":[null,1,"s",[],{"userTaskKey":"7"}]}')),
+    [{ userTaskKey: "7" }],
+  );
+});
+
+// Guards the same untyped read-model JSON boundary defect class for the `getForm` read path.
+// `getFormByKey` returns a JSON string annotated with the `FormResult` DTO — a shape *claim*, not a
+// runtime guarantee — so `getForm` extracts through `parseForm`, which must treat a non-object body
+// (`null`, a primitive, or crucially an *array*, which `typeof === "object"` would have let through)
+// and a missing/invalid schema as "no such form" (`null`) rather than throwing. Runtime-invalid
+// fixtures are built via `JSON.parse` (which returns `any`), never an `as` cast.
+test("parseForm: rejects a non-object body (incl. arrays) and an invalid schema (untyped JSON defence)", () => {
+  // A non-object body — `null`, a primitive, or an array — is "no such form".
+  assert.equal(parseForm(JSON.parse("null")), null);
+  assert.equal(parseForm(JSON.parse("42")), null);
+  assert.equal(parseForm(JSON.parse('"nope"')), null);
+  assert.equal(parseForm(JSON.parse("[]")), null);
+  // An object body with a missing or non-parseable schema is absent.
+  assert.equal(parseForm(JSON.parse("{}")), null);
+  assert.equal(parseForm(JSON.parse('{"schema":42}')), null);
+  assert.equal(parseForm(JSON.parse('{"schema":"not json"}')), null);
+  // A valid object schema (or a JSON-string schema) yields the typed form; non-string identifiers
+  // and a non-number version are dropped rather than coerced.
+  assert.deepEqual(
+    parseForm(JSON.parse('{"schema":{"type":"default"},"formKey":7,"formId":{},"version":"x"}')),
+    { formKey: "7", schema: { type: "default" } },
+  );
+  assert.deepEqual(
+    parseForm(JSON.parse('{"schema":"{\\"type\\":\\"default\\"}","formId":"f1","version":3}')),
+    { formId: "f1", version: 3, schema: { type: "default" } },
+  );
 });
 
 // Guards the form-identifier coercion defect class (matches urban's shared form contract): a

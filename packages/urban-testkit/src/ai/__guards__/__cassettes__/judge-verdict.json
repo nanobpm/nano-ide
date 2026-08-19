@@ -1,0 +1,7 @@
+{
+  "entries": {
+    "chat\n{\"prompt\":\"Is this greeting friendly?\",\"system\":null,\"image\":null}": {
+      "text": "{\"pass\":true,\"rationale\":\"the greeting is warm and friendly\"}"
+    }
+  }
+}

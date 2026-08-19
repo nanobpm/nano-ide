@@ -378,10 +378,12 @@ test("renderer interpolates a column's per-cell template into DOM text (#214)", 
   // resolving to prototype cruft — guard the own-property gate explicitly.
   assert.match(js, /Object\.prototype\.hasOwnProperty\.call\(row, key\) \? row\[key\] : null/);
   assert.match(js, /return v == null \? "" : String\(v\);/);
-  // gridCell keeps the raw single-field value separate (drives the badge gate)
-  // and lets a string template win for the rendered text.
+  // gridCell keeps the raw single-field value separate (drives the badge gate),
+  // applies an opt-in col.format to the field text (#327), and lets a string
+  // template win for the rendered text over that formatted/raw field value.
   assert.match(js, /const rawText = row\[col\.field\] == null \? "" : String\(row\[col\.field\]\);/);
-  assert.match(js, /const text = typeof col\.template === "string" \? interpTemplate\(col\.template, row\) : rawText;/);
+  assert.match(js, /const fieldText = col\.format \? fmtCellValue\(col\.format, rawText\) : rawText;/);
+  assert.match(js, /const text = typeof col\.template === "string" \? interpTemplate\(col\.template, row\) : fieldText;/);
 });
 
 test("renderer renders a column's subtitle as a muted second line, never an href (#257)", async () => {

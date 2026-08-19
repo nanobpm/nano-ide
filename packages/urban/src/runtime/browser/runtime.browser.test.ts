@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
-import { RENDERERS, renderText } from "./runtime.browser.js";
+import { RENDERERS, renderText, fmtCellValue, gridCell } from "./runtime.browser.js";
 
 // ── Minimal fake DOM ────────────────────────────────────────────────────────
 // Just enough of the Element/Document surface that el()/renderText touch:
@@ -115,4 +115,46 @@ test("#291: renderText degrades to empty text (never throws) on a missing text p
   const node = renderText({ type: "text", props: {} });
   assert.equal(node.tagName, "P");
   assert.equal(node.textContent, "");
+});
+
+test('#327: fmtCellValue "datetime" renders an ISO timestamp in the viewer\'s local time as "h:mmam Mon D"', () => {
+  const iso = "2026-08-18T23:42:47.788Z";
+  const out = fmtCellValue("datetime", iso);
+  // Shape: h:mm + lowercase am/pm (no separating space), then short-month day.
+  assert.match(out, /^\d{1,2}:\d{2}(am|pm) [A-Z][a-z]{2} \d{1,2}$/, `unexpected shape: ${out}`);
+  // Local, not UTC: the hour/minute/am-pm/day track the runner's local zone, so
+  // the assertion is timezone-independent (derives the expectation from the same
+  // Date in local time) yet still proves the value isn't rendered as raw UTC.
+  const d = new Date(iso);
+  let h = d.getHours() % 12;
+  if (h === 0) h = 12;
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ampm = d.getHours() < 12 ? "am" : "pm";
+  assert.ok(out.startsWith(`${h}:${mm}${ampm} `), `local time prefix wrong: ${out}`);
+  assert.ok(out.endsWith(` ${d.getDate()}`), `local day suffix wrong: ${out}`);
+});
+
+test("#327: fmtCellValue passes through empty, unparseable, and unknown-format values verbatim (never blank/throw)", () => {
+  assert.equal(fmtCellValue("datetime", ""), "");
+  assert.equal(fmtCellValue("datetime", "not-a-date"), "not-a-date");
+  // An unknown format is a no-op — a mis-set column shows its raw value, not blank.
+  assert.equal(fmtCellValue("nope", "2026-08-18T23:42:47.788Z"), "2026-08-18T23:42:47.788Z");
+});
+
+test("#327: gridCell applies col.format to the cell text, leaving an unformatted column verbatim", (t) => {
+  t.after(installFakeDom());
+  const iso = "2026-08-18T23:42:47.788Z";
+  const formatted = gridCell(
+    { field: "updated_at", header: "Updated", format: "datetime" },
+    { updated_at: iso },
+    "secondary",
+  );
+  assert.match(
+    formatted.textContent,
+    /^\d{1,2}:\d{2}(am|pm) [A-Z][a-z]{2} \d{1,2}$/,
+    `cell not local-formatted: ${formatted.textContent}`,
+  );
+  // No `format` → the field value renders exactly as stored (backward compatible).
+  const plain = gridCell({ field: "updated_at", header: "Updated" }, { updated_at: iso }, "secondary");
+  assert.equal(plain.textContent, iso);
 });

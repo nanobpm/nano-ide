@@ -128,6 +128,46 @@ const orders = defineFlow(
 );
 ```
 
+#### Agent tasks — bind an LLM prompt to a worker (`w.task(name, { prompt })`)
+
+An **agent service task** is a `w.task` that additionally binds an LLM **prompt
+resource** to the worker that services it. Pass a `prompt` alongside the
+`jobType` capability token and the emitter adds a
+`<zeebe:linkedResource … resourceType="GenericScript" linkName="prompt">` to the
+task's `zeebe:taskDefinition` — the shape the nano-workforce agent tasks use to
+attach a prompt script to the (e.g. `senior:retro`) agent pool that runs the job:
+
+```ts
+w.task("synthesize", {
+  jobType: "senior:retro",              // the agent capability token
+  prompt: {
+    resourceId: "retro.md",             // the GenericScript resource bound as the prompt
+    bindingType: "latest",              // optional — how the version resolves (default "latest")
+    append: "=retroDigest",             // optional — FEEL fed to a zeebe:ioMapping `appendPrompt` input
+  },
+});
+```
+
+derives:
+
+```xml
+<bpmn:serviceTask id="synthesize" name="synthesize">
+  <bpmn:extensionElements>
+    <zeebe:taskDefinition type="senior:retro" />
+    <zeebe:linkedResources>
+      <zeebe:linkedResource resourceId="retro.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" />
+    </zeebe:linkedResources>
+    <zeebe:ioMapping>
+      <zeebe:input source="=retroDigest" target="appendPrompt" />
+    </zeebe:ioMapping>
+  </bpmn:extensionElements>
+</bpmn:serviceTask>
+```
+
+Only `resourceId` is required; omit `append` and no `ioMapping` is emitted. A
+`w.task` **without** a `prompt` is unchanged — it emits no `linkedResources`.
+Data envelopes (via contracts) still lift alongside the prompt binding.
+
 ### Imperative (Temporal-style, engine-replayed) — experimental/internal
 
 Write the orchestration as a function. `ctx.run(name, fn)` is a durable step: its

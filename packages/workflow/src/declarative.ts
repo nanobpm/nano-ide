@@ -619,6 +619,18 @@ export interface EmitApi {
   recordEnvelope(env?: Envelope): void;
   /** Emit a sequence of nodes, threading danglers; used to emit nested bodies. */
   emitList(list: FlowNode[], incoming: Edge[], loop: LoopCtx | null): Edge[];
+  /** Emit a single body node through its OWN registered emit handler while
+   *  attaching `mi` multi-instance characteristics to the service task it
+   *  renders. A container (e.g. `forEach`) lifting MI onto a single leaf body
+   *  MUST use this instead of calling `addServiceTask` directly: bypassing the
+   *  node's emit handler silently drops any extension elements that handler
+   *  renders (e.g. a `task`'s prompt `zeebe:linkedResources`). The node's
+   *  handler folds the pending characteristics in via {@link takeMi}. */
+  emitWithMi(node: FlowNode, incoming: Edge[], mi: string): Edge[];
+  /** Consume the multi-instance characteristics pending from {@link emitWithMi}
+   *  (the empty string when none), for a service-task-rendering handler to fold
+   *  into the `<bpmn:serviceTask>` it emits. */
+  takeMi(): string;
   /** Place a fully custom BPMN element (a slice's own render closure). */
   addNode(node: RenderNode): void;
   /** Place a `<bpmn:serviceTask>` with the standard taskDefinition/envelope
@@ -661,6 +673,9 @@ class Compiler {
   private live: Edge[] = [];
   private seq = 0;
   private gw = 0;
+  /** Multi-instance characteristics a container lifted onto the next single-body
+   *  node via `emitWithMi`, consumed by that node's handler through `takeMi`. */
+  private pendingMi = "";
   /** The emit surface handed to each kind's registered `emit` handler. */
   private readonly emitApi: EmitApi;
 
@@ -671,6 +686,8 @@ class Compiler {
       connect: (incoming, toId) => this.connect(incoming, toId),
       recordEnvelope: (env) => this.recordEnvelope(env),
       emitList: (list, incoming, loop) => this.emitList(list, incoming, loop),
+      emitWithMi: (node, incoming, mi) => this.emitWithMi(node, incoming, mi),
+      takeMi: () => this.takeMi(),
       addNode: (node) => {
         this.nodes.push({ ...node, scope: node.scope ?? this.currentScope() });
       },
@@ -858,6 +875,25 @@ class Compiler {
    *  switch on `node.kind`. A slice's kind is emitted by its own module. */
   private emitNode(node: FlowNode, incoming: Edge[], loop: LoopCtx | null): Edge[] {
     return requireNodeKind(node.kind).emit(node, incoming, loop, this.emitApi);
+  }
+
+  /** Emit `node` through its own handler with `mi` characteristics pending, so
+   *  the handler lifts them onto the service task it renders (via `takeMi`)
+   *  instead of the container re-implementing how the node renders. */
+  private emitWithMi(node: FlowNode, incoming: Edge[], mi: string): Edge[] {
+    this.pendingMi = mi;
+    try {
+      return this.emitNode(node, incoming, null);
+    } finally {
+      this.pendingMi = "";
+    }
+  }
+
+  /** Take (and clear) the pending multi-instance characteristics. */
+  private takeMi(): string {
+    const mi = this.pendingMi;
+    this.pendingMi = "";
+    return mi;
   }
 
   /** Render every node + sequence flow that belongs to `scope` (undefined = the

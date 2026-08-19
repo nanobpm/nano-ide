@@ -63,12 +63,22 @@ declare module "../declarative.js" {
   }
 }
 
+/** Narrowing guard: a non-null object we can read authoring fields off without
+ *  a cast, so a runtime-invalid `prompt` (e.g. `JSON.parse("null")` slipped past
+ *  the types) fails with a helpful message instead of a raw `TypeError`. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 /** Normalize + validate a prompt binding at authoring time, applying the
  *  `bindingType` default and trimming surrounding whitespace so stored values
  *  match what validation checked (e.g. `"retro.md "` won't emit a trailing-space
  *  attribute that breaks engine resource resolution). Returns a fully-resolved
  *  binding stored on the node. */
-function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
+function resolvePrompt(name: string, prompt: unknown): PromptBinding {
+  if (!isRecord(prompt)) {
+    throw new Error(`task("${name}") prompt must be an object with a resourceId`);
+  }
   const resourceId = typeof prompt.resourceId === "string" ? prompt.resourceId.trim() : prompt.resourceId;
   if (typeof resourceId !== "string" || resourceId === "") {
     throw new Error(`task("${name}") prompt.resourceId must be a non-empty string`);
@@ -91,12 +101,15 @@ function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
 
 /** Render a prompt-carrying `<bpmn:serviceTask>`: the standard task-definition
  *  and envelope properties, PLUS the `zeebe:linkedResources` prompt binding and
- *  (optionally) a `zeebe:ioMapping` `appendPrompt` input. */
+ *  (optionally) a `zeebe:ioMapping` `appendPrompt` input. `mi` carries any
+ *  multi-instance characteristics a container (e.g. `forEach`) lifted onto this
+ *  task, folded in just like `addServiceTask` does for a plain task. */
 function renderPromptTask(
   flowId: string,
   node: { name: string; envelopes?: NodeEnvelopes; jobType?: string; prompt: PromptBinding },
   inc: string[],
   outg: string[],
+  mi: string,
 ): string {
   const id = node.name;
   const type = node.jobType ?? jobType(flowId, node.name);
@@ -127,6 +140,7 @@ function renderPromptTask(
     ext +
     "\n" +
     incomingOutgoing(inc, outg) +
+    mi +
     `    </bpmn:serviceTask>`
   );
 }
@@ -147,10 +161,13 @@ registerNodeKind("task", {
     return api.self();
   },
   emit: (node, incoming, _loop, api) => {
+    // Any MI characteristics a container (e.g. `forEach`) lifted onto this single
+    // task, to fold into the emitted service task in either branch below.
+    const mi = api.takeMi();
     // No prompt → the standard service-task emission is preserved unchanged (no
     // `linkedResources` are emitted).
     if (node.prompt === undefined) {
-      api.addServiceTask(node);
+      api.addServiceTask(node, mi);
       api.connect(incoming, node.name);
       return [api.newEdge(node.name)];
     }
@@ -161,7 +178,7 @@ registerNodeKind("task", {
     const prompt = node.prompt;
     api.addNode({
       id: node.name,
-      render: (inc, outg) => renderPromptTask(api.flowId, { ...node, prompt }, inc, outg),
+      render: (inc, outg) => renderPromptTask(api.flowId, { ...node, prompt }, inc, outg, mi),
     });
     api.connect(incoming, node.name);
     return [api.newEdge(node.name)];

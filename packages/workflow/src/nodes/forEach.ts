@@ -115,11 +115,12 @@ registerNodeKind("forEach", {
     const only = node.body.length === 1 ? node.body[0] : undefined;
     // A single service-task body carries the MI characteristics directly; a
     // multi-step body is wrapped in an embedded MI sub-process (its own token
-    // scope, with its own start/end).
+    // scope, with its own start/end). Lift the MI THROUGH the body node's own
+    // emit handler (`emitWithMi`) rather than re-emitting it here, so whatever
+    // extension elements that handler renders (e.g. a `task`'s prompt
+    // `zeebe:linkedResources`) are preserved instead of silently dropped.
     if (only && (only.kind === "run" || only.kind === "task")) {
-      api.addServiceTask(only, mi);
-      api.connect(incoming, only.name);
-      return [api.newEdge(only.name)];
+      return api.emitWithMi(only, incoming, mi);
     }
     const subId = `Sub_${api.nextGw()}`;
     api.addSubProcess(subId, mi);

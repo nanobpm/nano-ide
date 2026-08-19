@@ -22,7 +22,7 @@ registerNodeKind("run", {
     return api.self();
   },
   emit: (node, incoming, _loop, api) => {
-    api.addServiceTask(node);
+    api.addServiceTask(node, api.takeMi());
     api.connect(incoming, node.name);
     return [api.newEdge(node.name)];
   },

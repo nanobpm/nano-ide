@@ -22,6 +22,7 @@ function serviceTask(xml: string, id: string): string {
   const start = xml.indexOf(`<bpmn:serviceTask id="${id}"`);
   assert.notEqual(start, -1, `serviceTask id="${id}" not found`);
   const end = xml.indexOf("</bpmn:serviceTask>", start);
+  assert.notEqual(end, -1, `serviceTask id="${id}" has no closing tag`);
   return xml.slice(start, end + "</bpmn:serviceTask>".length);
 }
 
@@ -101,6 +102,19 @@ test("task prompt: rejects an empty/missing resourceId with a helpful message", 
   );
 });
 
+test("task prompt: a null / non-object prompt fails with a helpful Error, not a TypeError", () => {
+  // A caller bypassing the types (e.g. `JSON.parse("null")`) must not blow up
+  // dereferencing `prompt.resourceId`; it gets the authoring error instead.
+  assert.throws(
+    () => defineFlow("x", (w) => w.task("a", { prompt: JSON.parse("null") })),
+    /prompt must be an object with a resourceId/,
+  );
+  assert.throws(
+    () => defineFlow("x", (w) => w.task("a", { prompt: JSON.parse("42") })),
+    /prompt must be an object with a resourceId/,
+  );
+});
+
 test("task prompt: rejects an empty bindingType / append override", () => {
   assert.throws(
     () => defineFlow("x", (w) => w.task("a", { prompt: { resourceId: "r.md", bindingType: "" } })),
@@ -138,6 +152,28 @@ test("task prompt: trims surrounding whitespace before emitting resource attribu
     /<zeebe:linkedResource resourceId="retro\.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" \/>/,
   );
   assert.match(el, /<zeebe:input source="=ctx" target="appendPrompt" \/>/);
+});
+
+test("task prompt: survives as the single MI body of forEach (linkedResources + MI on one serviceTask)", () => {
+  // forEach's single-service-task fast-path must lift the MI characteristics
+  // THROUGH the task's own emit handler, so a prompt-bound agent task fanned out
+  // over a collection keeps its `zeebe:linkedResources` instead of silently
+  // dropping it (the shape nano-workforce uses for a per-item agent task).
+  const flow = defineFlow("agent-demo", (w) => {
+    w.forEach("plan.items", "item", (b) =>
+      b.task("agent", { jobType: "senior:review", prompt: { resourceId: "review.md", append: "=item" } }),
+    );
+  });
+  const el = serviceTask(toBpmn(flow), "agent");
+  assert.match(
+    el,
+    /<zeebe:linkedResource resourceId="review\.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" \/>/,
+  );
+  assert.match(el, /<zeebe:input source="=item" target="appendPrompt" \/>/);
+  // MI is lifted directly onto the same serviceTask (the flat fast-path shape,
+  // not an embedded sub-process).
+  assert.match(el, /<bpmn:multiInstanceLoopCharacteristics isSequential="false">/);
+  assert.match(el, /inputCollection="=plan\.items" inputElement="item"/);
 });
 
 // ── Derivation parity against the hand-authored golden ───────────────────────

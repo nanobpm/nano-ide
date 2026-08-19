@@ -65,6 +65,17 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** Defensively narrow an untyped read-model search response to its object rows. The DTO
+ *  annotation on a `JSON.parse`d body is a shape *claim*, not a runtime guarantee, so guard
+ *  the body, its `items` array, and each row: a malformed/changed engine response (a non-object
+ *  body, a non-array `items`, or `null`/non-object rows) yields `[]`/drops the bad row instead
+ *  of throwing downstream. Keeps the caller's DTO row type — the single source of truth both
+ *  `searchUserTasks` and `searchProcessInstances` extract through, so they cannot drift. */
+export function searchRows<T>(body: { items: T[] }): T[] {
+  if (!isRecord(body) || !Array.isArray(body.items)) return [];
+  return body.items.filter(isRecord);
+}
+
 /** Whether a deploy resource is an executable engine model (BPMN or DMN) the WASM engine can parse.
  *  BPMN/DMN are XML (`text/xml`); forms (`application/json`) and other assets are not engine models.
  *  Falls back to the file extension when a contentType is absent. */
@@ -325,7 +336,10 @@ export class WasmEngineClient implements EngineClient {
         JSON.stringify(filter?.state ? { state: filter.state } : {}),
       ),
     );
-    return (Array.isArray(body.items) ? body.items : [])
+    // `body`/`items` come straight from an untyped `JSON.parse` boundary, so the DTO annotation
+    // is a shape *claim*, not a runtime guarantee. `searchRows` guards the body and drops
+    // non-object rows so a malformed/changed engine response can't throw downstream.
+    return searchRows(body)
       // The read model does not yet honour the non-lifecycle selectors
       // (`processInstanceKey`/`assignee`/`candidateGroup` — the write/index side is
       // Magikcraft/nano-bpm#815's follow-up), so apply them client-side here. This mirrors the
@@ -338,7 +352,7 @@ export class WasmEngineClient implements EngineClient {
       .filter((t) => filter?.assignee === undefined || t.assignee === filter.assignee)
       .filter((t) =>
         filter?.candidateGroup === undefined ||
-        (t.candidateGroups ?? []).includes(filter.candidateGroup)
+        (Array.isArray(t.candidateGroups) && t.candidateGroups.includes(filter.candidateGroup))
       )
       .flatMap((t) => {
         // A keyless row cannot be acted on — drop it (parity with `SdkEngineClient`, which logs
@@ -448,7 +462,10 @@ export class WasmEngineClient implements EngineClient {
       this.#engine.searchProcessInstances("{}"),
     );
     const out: ProcessInstanceSnapshot[] = [];
-    for (const inst of Array.isArray(body.items) ? body.items : []) {
+    // Same untyped-JSON defence as `searchUserTasks`: `searchRows` guards the body and drops
+    // non-object rows so a malformed/changed engine response can't throw while reading
+    // `inst.processInstanceKey`.
+    for (const inst of searchRows(body)) {
       const key = presentKey(inst.processInstanceKey);
       // Skip keyless items so a missing/null key can't leak in as "" (matches
       // the live SDK adapter, which drops instances with no key).

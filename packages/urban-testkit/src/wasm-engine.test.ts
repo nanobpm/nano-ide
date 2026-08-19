@@ -5,6 +5,7 @@ import {
   createWasmEngineClient,
   presentKey,
   presentString,
+  searchRows,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
 import { BpmnError, readLineage } from "@nanobpm/urban/runtime";
@@ -21,6 +22,30 @@ test("wasm: Terminating projects as TERMINATED (REST parity)", () => {
   assert.equal(wasmStateToProcessInstanceState("Completed"), "COMPLETED");
   assert.equal(wasmStateToProcessInstanceState("bogus"), undefined);
   assert.equal(wasmStateToProcessInstanceState(42), undefined);
+});
+
+// Guards the untyped read-model JSON boundary defect class. `searchUserTasks` /
+// `searchProcessInstances` annotate their `JSON.parse`d body with a derived DTO, but that is a
+// shape *claim*, not a runtime guarantee — a malformed/changed engine response (a non-object body,
+// a non-array `items`, or `null`/non-object rows) must not throw downstream. Both methods extract
+// through `searchRows`, so testing it once secures the whole surface. Runtime-invalid fixtures are
+// built via `JSON.parse` (which returns `any`), never an `as` cast.
+test("searchRows: drops a non-object body, non-array items, and non-object rows (untyped JSON defence)", () => {
+  // A non-object body — engine returned `null`, a primitive, or an array — yields no rows.
+  assert.deepEqual(searchRows(JSON.parse("null")), []);
+  assert.deepEqual(searchRows(JSON.parse("42")), []);
+  assert.deepEqual(searchRows(JSON.parse('"nope"')), []);
+  assert.deepEqual(searchRows(JSON.parse("[]")), []);
+  // An object body whose `items` is missing or not an array yields no rows.
+  assert.deepEqual(searchRows(JSON.parse("{}")), []);
+  assert.deepEqual(searchRows(JSON.parse('{"items":null}')), []);
+  assert.deepEqual(searchRows(JSON.parse('{"items":"x"}')), []);
+  assert.deepEqual(searchRows(JSON.parse('{"items":{}}')), []);
+  // Non-object rows (`null`, primitives, arrays) are filtered out; object rows survive.
+  assert.deepEqual(
+    searchRows(JSON.parse('{"items":[null,1,"s",[],{"userTaskKey":"7"}]}')),
+    [{ userTaskKey: "7" }],
+  );
 });
 
 // Guards the form-identifier coercion defect class (matches urban's shared form contract): a

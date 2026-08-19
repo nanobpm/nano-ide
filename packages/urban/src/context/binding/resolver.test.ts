@@ -381,6 +381,71 @@ test("git backend passes --end-of-options to rev-parse so an option-like ref can
   }
 });
 
+test("git backend re-points origin at the manifest repo before each refresh fetch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-origin-"));
+  try {
+    const origin = join(root, "origin");
+    const cacheRoot = join(root, "cache");
+    await execFileAsync("git", ["init", "-b", "main", origin]);
+    await git(origin, "config", "user.email", "t@example.com");
+    await git(origin, "config", "user.name", "Test");
+    await writeFile(join(origin, "a.txt"), "x\n");
+    await git(origin, "add", "a.txt");
+    await git(origin, "commit", "-m", "c1");
+
+    const binding = { repo: origin, ref: "main" };
+    const resolver = new ContextResolver({ cacheRoot });
+    const handle = await resolver.resolve(binding);
+
+    // Tamper with the cached clone's `origin`, the way a poisoned cache entry
+    // (or a stale entry left by an equivalent repo spelling with different auth)
+    // would: point it at an attacker-chosen remote that must never be fetched.
+    await git(handle.localPath, "remote", "set-url", "origin", join(root, "evil"));
+
+    // Refresh: the backend must reset `origin` back to the manifest repo, so the
+    // fetch operates on the expected remote rather than the tampered one.
+    await resolver.resolve(binding, { refresh: true });
+    assert.equal(
+      await git(handle.localPath, "remote", "get-url", "origin"),
+      origin,
+      "refresh re-points origin at the manifest repo before fetching",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("git backend sets origin from the manifest repo before fetch (set-url precedes fetch)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "urban-ctx-originorder-"));
+  try {
+    const calls: string[][] = [];
+    const runner: GitRunner = async (args) => {
+      calls.push([...args]);
+      return "";
+    };
+    const backend = new GitSubstrateBackend(runner);
+    const identity = resolveContextIdentity({ repo: join(root, "origin"), ref: "main" });
+    // Pre-create a `.git` directory so materialise treats the path as cloned and
+    // takes the fetch/refresh branch rather than cloning.
+    const localPath = join(root, "cache", identity.slug);
+    await mkdir(join(localPath, ".git"), { recursive: true });
+    await backend.materialise(identity, { localPath, refresh: true });
+
+    const setUrlIdx = calls.findIndex((a) => a[0] === "remote" && a[1] === "set-url");
+    const fetchIdx = calls.findIndex((a) => a[0] === "fetch");
+    assert.ok(setUrlIdx >= 0, "origin URL is reset from the manifest repo on refresh");
+    assert.deepEqual(
+      calls[setUrlIdx],
+      ["remote", "set-url", "origin", "--", identity.repo],
+      "origin is re-pointed at the manifest repo with a `--` operand guard",
+    );
+    assert.ok(fetchIdx >= 0, "refresh fetches from origin");
+    assert.ok(setUrlIdx < fetchIdx, "origin is reset BEFORE the fetch runs");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("defaultGitRunner redaction scrubs credentialed URLs from error labels", () => {
   assert.equal(
     redactUrlUserinfo("https://x-access-token:SECRET@github.com/o/r.git"),

@@ -286,6 +286,15 @@ export class GitSubstrateBackend implements SubstrateBackend {
       await this.#git(["clone", "--", identity.repo, localPath]);
       await this.#pin(localPath, identity.ref);
     } else if (refresh) {
+      // Cache reuse must NOT trust the recorded `origin`: an equivalent repo
+      // spelling with different auth (e.g. SSH vs HTTPS/token) won't take effect
+      // once the entry exists, and a tampered cache entry could point `origin`
+      // at an attacker-chosen remote that the resolver would then fetch from.
+      // Re-point `origin` at the manifest's `identity.repo` before every fetch
+      // so refreshes always operate on the expected remote. `--` separates
+      // options from the operand so a `repo` starting with `-` (untrusted
+      // manifest input) can't be parsed as a git option.
+      await this.#git(["remote", "set-url", "origin", "--", identity.repo], localPath);
       await this.#git(["fetch", "--tags", "--prune", "--force", "origin"], localPath);
       await this.#pin(localPath, identity.ref);
     }

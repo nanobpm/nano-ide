@@ -566,3 +566,73 @@ test("restoreClean discards untracked record residue and returns to the base bra
   // Unrelated tracked files are untouched.
   assert.ok(await exists(join(dir, "README.md")));
 });
+
+test("appendRecord sanitises a newline-bearing id so it cannot inject commit-message lines", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  // `id` is schema-validated only as a non-empty string, so a newline passes. A
+  // raw interpolation would split the subject and inject a forged trailer into
+  // both the append commit and its merge.
+  const result = await writer.appendRecord(
+    record({ id: "good-id\nInjected-Trailer: malicious-value" }),
+  );
+
+  const commitMsg = await git(dir, "log", "-1", "--format=%B", result.commit);
+  const mergeMsg = await git(dir, "log", "-1", "--format=%B", result.mergeCommit);
+  for (const [label, msg] of [
+    ["commit", commitMsg],
+    ["merge", mergeMsg],
+  ] as const) {
+    assert.ok(msg.includes("good-id"), `${label} message must carry the id`);
+    assert.ok(
+      !msg.split("\n").some((l) => l.trimStart().startsWith("Injected-Trailer:")),
+      `${label} message must not carry the injected content as a standalone trailer`,
+    );
+    // The whole subject collapsed to a single line — no injected extra lines.
+    assert.equal(
+      msg.split("\n").filter((l) => l.trim() !== "").length,
+      1,
+      `${label} message must be a single non-empty line`,
+    );
+  }
+});
+
+test("proposePrior sanitises a newline-bearing id in the hypothesis commit message", async () => {
+  const dir = await makeSubstrate();
+  const writer = new ContextWriter({ localPath: dir, ref: "main" });
+
+  const proposal = await writer.proposePrior(
+    record({
+      id: "retro-nl\nInjected-Trailer: malicious-value",
+      provenance: "agent-retro",
+      authority: "hypothesis",
+    }),
+  );
+
+  const commitMsg = await git(dir, "log", "-1", "--format=%B", proposal.branch);
+  assert.ok(commitMsg.includes("retro-nl"), "propose message must carry the id");
+  assert.ok(
+    !commitMsg.split("\n").some((l) => l.trimStart().startsWith("Injected-Trailer:")),
+    "propose message must not carry the injected content as a standalone trailer",
+  );
+  assert.equal(
+    commitMsg.split("\n").filter((l) => l.trim() !== "").length,
+    1,
+    "propose message must be a single non-empty line",
+  );
+
+  // Ratify re-reads the guarded record; its merge subject must sanitise the id too.
+  const ratified = await writer.ratify(proposal);
+  const mergeMsg = await git(dir, "log", "-1", "--format=%B", ratified.mergeCommit);
+  assert.ok(mergeMsg.includes("retro-nl"), "ratify merge must carry the id");
+  assert.ok(
+    !mergeMsg.split("\n").some((l) => l.trimStart().startsWith("Injected-Trailer:")),
+    "ratify merge must not carry the injected content as a standalone trailer",
+  );
+  assert.equal(
+    mergeMsg.split("\n").filter((l) => l.trim() !== "").length,
+    1,
+    "ratify merge message must be a single non-empty line",
+  );
+});

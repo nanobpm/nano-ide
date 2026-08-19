@@ -199,18 +199,24 @@ export class ContextWriter {
       // the SHARED working tree parked on a transient write branch with a
       // half-written record for the next serialised call to inherit; the `finally`
       // best-effort restores the resolved base and discards any residue.
+      // Reduce the schema-validated (non-empty-string only) `id` to a single
+      // commit-message line before interpolation, so a newline in `id` can never
+      // inject extra commit-message lines or a forged trailer. Derived once and
+      // reused for both the append commit and its merge subject.
+      const idLine = commitLine(record.id);
+
       try {
         await this.#substrate.createBranch(writeBranch, base);
         await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
         const commit = await this.#substrate.stageAndCommit(
-          `context(append): ${record.provenance}/${record.scope} ${record.id}`,
+          `context(append): ${record.provenance}/${record.scope} ${idLine}`,
           this.#author,
         );
 
         await this.#substrate.checkout(base);
         const mergeCommit = await this.#substrate.mergeBranch(
           writeBranch,
-          `context(append): land ${record.id} onto ${base}`,
+          `context(append): land ${idLine} onto ${base}`,
           this.#author,
         );
 
@@ -251,7 +257,7 @@ export class ContextWriter {
         await this.#substrate.createBranch(proposalBranch, base);
         await this.#substrate.writeRecordFile(relPath, serialiseRecord(record));
         const commit = await this.#substrate.stageAndCommit(
-          `context(propose): ${record.provenance}/${record.scope} ${record.id} [hypothesis]`,
+          `context(propose): ${record.provenance}/${record.scope} ${commitLine(record.id)} [hypothesis]`,
           this.#botAuthor,
         );
 
@@ -348,10 +354,11 @@ export class ContextWriter {
       // `proposal.proposalId` on the plain-object handle. Interpolating the latter
       // would let a consumer inject unguarded content (PII, newlines) into the
       // commit message and bypass the mandatory PII guard, which only inspects
-      // record content.
+      // record content. `commitLine` additionally collapses the id to a single
+      // line so even a guarded-but-newline-bearing id cannot inject a trailer.
       const mergeCommit = await this.#substrate.mergeBranch(
         proposal.branch,
-        `context(ratify): merge record ${record.id} onto ${base}`,
+        `context(ratify): merge record ${commitLine(record.id)} onto ${base}`,
         this.#botAuthor,
       );
       return { mergeCommit, baseBranch: base };
@@ -439,6 +446,19 @@ function parseRecordJson(content: string, path: string): unknown {
       }`,
     );
   }
+}
+
+/**
+ * Reduce a value to a single commit-message line: collapse every whitespace run
+ * (spaces, tabs, and crucially CR/LF) to one space and trim. The record `id` is
+ * schema-validated only as a NON-EMPTY string, so without this a newline in `id`
+ * would split the commit subject and inject extra message lines or a forged
+ * trailer (e.g. a fake `Signed-off-by:`). This is the categorical guard for that
+ * defect class at every commit/merge interpolation site; distinct from
+ * `sanitizeRef`, which builds git-ref-safe branch segments.
+ */
+function commitLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 /** Reduce an id to a git-ref-safe branch segment (no `..`, spaces, or `~^:?*[`). */

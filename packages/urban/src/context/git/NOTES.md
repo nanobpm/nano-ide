@@ -38,7 +38,10 @@ const writer = new ContextWriter(resolvedHandle); // no wiring needed
   ratified. The ratifying merge's commit message is derived from the **guarded**
   `record.id` (re-read and re-guarded above), never the caller-controlled
   `proposalId`, so a mutated handle can't inject unguarded content (PII, newlines)
-  into the commit trail.
+  into the commit trail. Every commit/merge subject additionally passes `record.id`
+  through `commitLine` (collapses CR/LF and whitespace to a single line), so even a
+  guarded id can't split the subject to inject extra message lines or a forged
+  trailer — `id` is schema-validated only as a non-empty string.
   It accepts the hypothesis onto the authoritative line; it never upgrades an
   `agent-retro` record to `authoritative` (the S2 schema forbids that), so an
   unratified — or even a ratified — prior can never present as a

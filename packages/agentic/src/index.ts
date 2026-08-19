@@ -12,6 +12,7 @@ export * as presence from "./presence/index.ts";
 export * as vocab from "./vocab/index.ts";
 export * as demand from "./demand/index.ts";
 export * as relay from "./relay/index.ts";
+export * as session from "./session/index.ts";
 export * as transcript from "./transcript/index.ts";
 export * as blackboard from "./blackboard/index.ts";
 export * as cockpit from "./cockpit/index.ts";

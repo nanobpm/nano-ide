@@ -9,11 +9,12 @@ import { makeGateway } from "./gateway.ts";
 import type { Table } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import type { AppApi } from "../context.ts";
-import type { EngineClient, ProcessInstanceSnapshot } from "../host.ts";
+import type { EngineClient, ProcessInstanceSnapshot, UserTaskFilter, UserTaskSummary } from "../host.ts";
 import type { InstanceTracking } from "../manifest.ts";
 import {
   DEFAULT_INSTANCE_TRACKING_POLL_MS,
   mountInstanceTracking,
+  WAITING_HUMAN_PROBE_CONCURRENCY,
 } from "./instance-tracking.ts";
 import { MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
 
@@ -63,13 +64,21 @@ function fakeScheduler(): SchedulerDeps & { advance: (ms: number) => Promise<voi
   };
 }
 
-/** An EngineClient whose only live method is searchProcessInstances, driven by a fixed map of
- *  processInstanceKey → state. Records the keys asked for on each call. */
-function fakeEngine(states: Record<string, ProcessInstanceSnapshot["state"]>): {
+/** An EngineClient driven by a fixed map of processInstanceKey → state (for searchProcessInstances)
+ *  and an optional map of processInstanceKey → number-of-open-user-tasks (for openUserTasks, the
+ *  wait-on-human edge). Records the keys asked for on each call. `openUserTasks` models the engine
+ *  truth the reconciler derives `awaiting_operator` from — only *open* (CREATED) tasks count, so a
+ *  key absent from `openTasks` (or mapped to 0) reports no parked human. */
+function fakeEngine(
+  states: Record<string, ProcessInstanceSnapshot["state"]>,
+  openTasks: Record<string, number> = {},
+): {
   engine: EngineClient;
   queries: string[][];
+  userTaskQueries: (string | undefined)[];
 } {
   const queries: string[][] = [];
+  const userTaskQueries: (string | undefined)[] = [];
   const notUsed = (m: string) => (): never => {
     throw new Error(`fakeEngine.${m} is not exercised by this test`);
   };
@@ -91,18 +100,25 @@ function fakeEngine(states: Record<string, ProcessInstanceSnapshot["state"]>): {
       }
       return out;
     },
+    async openUserTasks(filter?: UserTaskFilter): Promise<UserTaskSummary[]> {
+      const key = filter?.processInstanceKey;
+      userTaskQueries.push(key);
+      const n = key ? (openTasks[key] ?? 0) : 0;
+      return Array.from({ length: n }, (_unused, i): UserTaskSummary => ({
+        userTaskKey: `${key}-t${i}`,
+      }));
+    },
     deployResources: notUsed("deployResources"),
     createInstance: notUsed("createInstance"),
     cancelInstance: notUsed("cancelInstance"),
     publishMessage: notUsed("publishMessage"),
     searchUserTasks: notUsed("searchUserTasks"),
-    openUserTasks: notUsed("openUserTasks"),
     getForm: notUsed("getForm"),
     completeUserTask: notUsed("completeUserTask"),
     registerWorker: notUsed("registerWorker"),
     close: notUsed("close"),
   };
-  return { engine, queries };
+  return { engine, queries, userTaskQueries };
 }
 
 interface Harness {
@@ -427,6 +443,176 @@ for (const bad of [0, -1000, Number.NaN]) {
   });
 }
 
+
+// ── Wait-on-human edge (onWaitingHuman, issue #355) ────────────────────────────────────────────
+
+// A binding that reconciles both engine-truth edges: terminal (onTerminated) and wait-on-human
+// (onWaitingHuman). terminalStatuses (fail-open) keeps every non-abandoned row polled so a stale
+// worker-written transient status (converging/merging/running) is still reconciled to awaiting.
+const waitingBinding = (over: Partial<InstanceTracking> = {}): InstanceTracking => ({
+  table: "plans",
+  keyField: "process_key",
+  statusField: "status",
+  terminalStatuses: ["abandoned"],
+  onTerminated: { set: { status: "abandoned", note: null } },
+  onWaitingHuman: { set: { status: "awaiting_operator" } },
+  pollMs: 1000,
+  ...over,
+});
+
+test("derives awaiting_operator for a row whose instance has an open user task (forward)", async () => {
+  // The row carries a STALE worker-written transient status; the instance is parked at a user task.
+  // One reconcile pass must read it back as awaiting_operator — derived, not written.
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "converging", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  assert.equal((await h.table.get("pi1"))?.status, "awaiting_operator");
+  await handle.stop();
+  await h.close();
+});
+
+test("leaves the worker-owned transient status when the instance has NO open user task (backward)", async () => {
+  // No open user task and not terminated ⇒ the reconciler must not force awaiting_operator; the
+  // worker-owned transient status survives. This is the "must not remain awaiting_operator once the
+  // task completes" leg: a just-answered instance (task completed, worker wrote converging) is not
+  // re-latched to awaiting_operator.
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 0 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "converging", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  assert.equal((await h.table.get("pi1"))?.status, "converging");
+  await handle.stop();
+  await h.close();
+});
+
+test("re-escalation after an answer re-flips to awaiting_operator on the next poll (instance A)", async () => {
+  // The re-escalation-after-answer defect (nano-workforce#318): the row sits at converging after an
+  // answer; a re-escalation opens a NEW user task. Because the status is DERIVED every tick, the
+  // next poll re-flips it to awaiting_operator by construction — no bespoke poller, no stuck state.
+  const openTasks: Record<string, number> = { pi1: 0 }; // answered: task completed, none open
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, openTasks);
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "converging", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  assert.equal((await h.table.get("pi1"))?.status, "converging"); // still converging: no open task
+  openTasks.pi1 = 1; // re-escalation: a new user task opens
+  await sched.advance(1000);
+  assert.equal((await h.table.get("pi1"))?.status, "awaiting_operator"); // re-flipped
+  await handle.stop();
+  await h.close();
+});
+
+test("terminated wins over an open user task (precedence)", async () => {
+  // A terminated instance that also (transiently) reports an open user task must reconcile to the
+  // terminal patch, never awaiting_operator — onTerminated has precedence.
+  const { engine, userTaskQueries } = fakeEngine({ pi1: "TERMINATED" }, { pi1: 1 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "converging", note: "x" });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  const row = await h.table.get("pi1");
+  assert.equal(row?.status, "abandoned");
+  assert.equal(row?.note, null);
+  assert.deepEqual(userTaskQueries, []); // terminated key was excluded before the openUserTasks probe
+  await handle.stop();
+  await h.close();
+});
+
+test("does not re-write or re-log a row already at awaiting_operator (quiet-idempotent)", async () => {
+  // A long-parked instance is re-polled every tick. The wait-on-human writer must be a no-op when
+  // the row already carries the patch, so it does not re-log on every poll.
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "awaiting_operator", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  await sched.advance(1000);
+  assert.equal((await h.table.get("pi1"))?.status, "awaiting_operator");
+  const awaitingLogs = h.logs.filter((l) => l.msg.includes("awaiting operator"));
+  assert.equal(awaitingLogs.length, 0); // no-op patch never logged
+  await handle.stop();
+  await h.close();
+});
+
+test("a binding without onWaitingHuman never probes open user tasks (edge is opt-in)", async () => {
+  const { engine, userTaskQueries } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched); // planBinding has no onWaitingHuman
+  await sched.advance(1000);
+  assert.deepEqual(userTaskQueries, []); // never probed
+  assert.equal((await h.table.get("pi1"))?.status, "dispatched"); // untouched
+  await handle.stop();
+  await h.close();
+});
+
+test("reconciles EVERY row sharing a non-unique key, even when one is already patched (multi-row)", async () => {
+  // `keyField` (process_key) is NOT unique here, and table.update patches ALL matching rows. The
+  // quiet-idempotence check must consider every matching row, not a single get() (LIMIT 1): with two
+  // rows on the same process_key — one already awaiting_operator, one still converging — a LIMIT-1
+  // probe that hits the patched row would skip the write and strand the other. Both must converge.
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "awaiting_operator", note: null });
+    await t.insert({ plan_key: "p2", process_key: "pi1", status: "converging", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  const rows = await h.table.find({ process_key: "pi1" });
+  assert.deepEqual(
+    rows.map((r) => r.status).sort(),
+    ["awaiting_operator", "awaiting_operator"],
+  );
+  await handle.stop();
+  await h.close();
+});
+
+test("reconciles every parked key across multiple probe batches (bounded-parallel probing)", async () => {
+  // More active keys than WAITING_HUMAN_PROBE_CONCURRENCY forces multiple probe batches. Every key
+  // with an open user task must still be probed and reconciled — the batching must not drop keys.
+  const total = WAITING_HUMAN_PROBE_CONCURRENCY * 2 + 3; // spans three batches
+  const states: Record<string, ProcessInstanceSnapshot["state"]> = {};
+  const openTasks: Record<string, number> = {};
+  for (let i = 0; i < total; i++) {
+    states[`pi${i}`] = "ACTIVE";
+    openTasks[`pi${i}`] = i % 2; // half parked on a human, half not
+  }
+  const { engine, userTaskQueries } = fakeEngine(states, openTasks);
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    for (let i = 0; i < total; i++) {
+      await t.insert({ plan_key: `p${i}`, process_key: `pi${i}`, status: "converging", note: null });
+    }
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  // Every active key was probed exactly once.
+  assert.equal(userTaskQueries.length, total);
+  assert.deepEqual([...userTaskQueries].sort(), Object.keys(states).sort());
+  for (let i = 0; i < total; i++) {
+    const expected = i % 2 === 1 ? "awaiting_operator" : "converging";
+    assert.equal((await h.table.get(`pi${i}`))?.status, expected, `pi${i}`);
+  }
+  await handle.stop();
+  await h.close();
+});
 
 function mount(h: Harness, bindings: InstanceTracking[], sched: SchedulerDeps) {
   h.api.manifest.instanceTracking = bindings;

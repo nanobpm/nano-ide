@@ -166,6 +166,52 @@ test("an instanceTracking binding missing table/keyField/onTerminated.set is fla
   assert.ok(issues.some((i) => i.path === "instanceTracking[0].onTerminated.set"));
 });
 
+test("an instanceTracking binding with a well-formed onWaitingHuman.set has no issues", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        terminalStatuses: ["abandoned"],
+        onTerminated: { set: { status: "abandoned" } },
+        onWaitingHuman: { set: { status: "awaiting_operator" } },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("an instanceTracking onWaitingHuman with an empty set patch is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        onTerminated: { set: { status: "abandoned" } },
+        onWaitingHuman: { set: {} },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].onWaitingHuman.set"));
+});
+
+test("an instanceTracking binding omitting onWaitingHuman is valid (the edge is opt-in)", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
 test("instanceTracking activeStatuses without statusField is flagged", () => {
   const issues = collectManifestIssues({
     ...valid,

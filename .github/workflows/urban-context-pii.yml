@@ -28,9 +28,12 @@ jobs:
 
       # Build + typecheck + test the package so the gate runs against a
       # green tree (and so a regression in the S6-core classifier / S3 layout
-      # this gate reuses fails here too).
-      - name: Build @nanobpm/urban
-        run: npm run build --workspace @nanobpm/urban
+      # this gate reuses fails here too). Build the whole workspace (topological)
+      # rather than just @nanobpm/urban: the package imports other workspaces
+      # (@nanobpm/workflow, create-urban-app) and needs their emitted dist/ to
+      # typecheck/build — same reason the urban-deno job builds the full tree.
+      - name: Build workspace (emits @nanobpm/urban deps' dist)
+        run: npm run build
       - name: Typecheck @nanobpm/urban
         run: npm run typecheck --workspace @nanobpm/urban
       - name: Test @nanobpm/urban

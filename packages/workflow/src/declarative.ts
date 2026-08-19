@@ -375,14 +375,22 @@ function makeBuilder<C extends object>(
   return methods;
 }
 
-/** The built-in authoring surface every assembled `FlowBuilder` must expose:
- *  `startOn` (installed centrally by {@link startOnMethod}) plus every core
- *  method a built-in node-kind module under `src/nodes/` contributes. Listed
- *  once here as the single source of truth for the guard below, and pinned to
- *  the `FlowBuilder` interface at compile time by the `satisfies` (each name
- *  must be a real method) and the exhaustiveness check that follows (every
- *  interface method must be listed) — so the runtime guard cannot drift behind
- *  the interface. */
+/** The STABLE built-in authoring surface every assembled `FlowBuilder` must
+ *  expose: `startOn` (installed centrally by {@link startOnMethod}) plus every
+ *  core method a wave-0 built-in node-kind module under `src/nodes/`
+ *  contributes. The runtime guard below fails fast if any of these is missing
+ *  (e.g. a built-in module was tree-shaken away).
+ *
+ *  `satisfies readonly (keyof FlowBuilder)[]` pins each listed name to a real
+ *  `FlowBuilder` method — a typo or a renamed built-in is caught at compile
+ *  time. This is deliberately a ONE-DIRECTIONAL pin: it does NOT assert the
+ *  list mirrors *every* `FlowBuilder` key. `FlowBuilder<C>` is an OPEN,
+ *  declaration-merged interface — the whole point of the `src/nodes/` seam is
+ *  that a feature slice adds a builder method by merging into `FlowBuilder`
+ *  from its own module with NO central edit (see `src/nodes/README.md`). An
+ *  exhaustiveness check here would force every such slice to also edit this
+ *  central list, defeating that seam; a slice's own method is instead installed
+ *  and exercised through its `registerNodeKind` registration and tests. */
 const BUILTIN_BUILDER_METHODS = [
   "startOn",
   "run",
@@ -397,14 +405,6 @@ const BUILTIN_BUILDER_METHODS = [
   "break",
   "continue",
 ] as const satisfies readonly (keyof FlowBuilder)[];
-
-// Compile-time completeness: if a method is added to `FlowBuilder` but not
-// listed above, `UnlistedBuilderMethod` stops being `never` and this assignment
-// fails to type-check — forcing the list (and thus the runtime guard) to stay in
-// lockstep with the interface rather than silently drifting behind it.
-type UnlistedBuilderMethod = Exclude<keyof FlowBuilder, (typeof BUILTIN_BUILDER_METHODS)[number]>;
-const _builtinBuilderMethodsAreComplete: UnlistedBuilderMethod extends never ? true : UnlistedBuilderMethod = true;
-void _builtinBuilderMethodsAreComplete;
 
 /** A dynamically-assembled builder satisfies `FlowBuilder<C>` once every core
  *  built-in method is installed. The check is a runtime type guard (not an `as`

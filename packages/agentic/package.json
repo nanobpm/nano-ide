@@ -69,6 +69,11 @@
       "default": "./dist/session/index.js"
     },
     "./source/session": "./src/session/index.ts",
+    "./session/acp": {
+      "types": "./dist/session/acp/index.d.ts",
+      "default": "./dist/session/acp/index.js"
+    },
+    "./source/session/acp": "./src/session/acp/index.ts",
     "./transcript": {
       "types": "./dist/transcript/index.d.ts",
       "default": "./dist/transcript/index.js"

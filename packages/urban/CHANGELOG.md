@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.72.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.71.1...@nanobpm/urban-0.72.0) (2026-08-20)
+
+
+### Features
+
+* **urban:** thread virtual-clock scheduler into mountWorkers + expose an app clock/wait seam ([#409](https://github.com/nanobpm/nano-ide/issues/409)) ([c41b066](https://github.com/nanobpm/nano-ide/commit/c41b066493b18179e00772d8c7861628a3b2448e))
+
 ## [0.71.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.71.0...@nanobpm/urban-0.71.1) (2026-08-20)
 
 

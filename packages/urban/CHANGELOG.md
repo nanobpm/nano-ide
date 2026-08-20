@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.71.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.71.0...@nanobpm/urban-0.71.1) (2026-08-20)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @nanobpm/workflow bumped from ^0.12.0 to ^0.13.0
+
 ## [0.71.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.70.0...@nanobpm/urban-0.71.0) (2026-08-19)
 
 

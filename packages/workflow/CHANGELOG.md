@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.12.0...@nanobpm/workflow-0.13.0) (2026-08-20)
+
+
+### Features
+
+* **workflow:** support a general service-task ioMapping in defineFlow (task/run io) ([#406](https://github.com/nanobpm/nano-ide/issues/406)) ([9e92165](https://github.com/nanobpm/nano-ide/commit/9e9216542a16c77bc49fea4e8a0ef1620825eabc))
+* **workflow:** support a general service-task ioMapping on task/run ([9e92165](https://github.com/nanobpm/nano-ide/commit/9e9216542a16c77bc49fea4e8a0ef1620825eabc)), closes [#405](https://github.com/nanobpm/nano-ide/issues/405)
+
 ## [0.12.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.11.0...@nanobpm/workflow-0.12.0) (2026-08-19)
 
 

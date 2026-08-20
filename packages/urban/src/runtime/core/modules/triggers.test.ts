@@ -6,7 +6,8 @@ import type { EngineClient, HostContext, HttpRequest } from "../host.ts";
 import type { Trigger } from "../manifest.ts";
 import { makeRouter } from "../router.ts";
 import { DataLayer } from "./datasource.ts";
-import { evalCorrelation, mountTriggers, runTriggerAction, type SchedulerDeps } from "./triggers.ts";
+import { evalCorrelation, mountTriggers, runTriggerAction } from "./triggers.ts";
+import { fakeScheduler } from "./scheduler.test-utils.ts";
 
 interface EngineCall {
   kind: "start" | "message";
@@ -49,6 +50,8 @@ function fakeApp(): { app: AppApi; calls: EngineCall[]; logs: Array<{ level: str
     data: new DataLayer(new Map(), undefined, {}),
     engine,
     env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger((level: string, msg: string) => {
       logs.push({ level, msg });
     }),
@@ -79,50 +82,6 @@ function fakeCtx(triggers: Trigger[]): { ctx: RuntimeContext; hostLogs: Array<{ 
     host,
   };
   return { ctx, hostLogs };
-}
-
-/** A deterministic scheduler: timers fire only when the clock is advanced past their deadline. */
-function fakeScheduler(startMs: number): SchedulerDeps & { advance: (ms: number) => Promise<void>; pending: () => number } {
-  let clock = startMs;
-  let seq = 0;
-  const timers = new Map<number, { at: number; fn: () => void }>();
-  return {
-    now: () => clock,
-    setTimer: (fn, delayMs) => {
-      const id = ++seq;
-      timers.set(id, { at: clock + delayMs, fn });
-      return id;
-    },
-    clearTimer: (h) => {
-      if (typeof h === "number") timers.delete(h);
-    },
-    pending: () => timers.size,
-    // Advance the clock, firing every timer whose deadline has passed (in order), letting
-    // microtasks (the async action) drain between fires.
-    advance: async (ms) => {
-      const target = clock + ms;
-      // Fire due timers one at a time; a timer's callback may schedule a new one.
-      // deno-lint-ignore no-constant-condition
-      while (true) {
-        let nextId = -1;
-        let nextAt = Infinity;
-        for (const [id, t] of timers) {
-          if (t.at <= target && t.at < nextAt) {
-            nextAt = t.at;
-            nextId = id;
-          }
-        }
-        if (nextId < 0) break;
-        const t = timers.get(nextId)!;
-        timers.delete(nextId);
-        clock = t.at;
-        t.fn();
-        await Promise.resolve();
-        await Promise.resolve();
-      }
-      clock = target;
-    },
-  };
 }
 
 test("evalCorrelation resolves literals and = body paths", () => {

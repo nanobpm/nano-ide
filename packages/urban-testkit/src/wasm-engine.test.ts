@@ -582,3 +582,117 @@ test("wasm: an explicit caller-supplied lineage envelope is preserved (override 
     await engine.close();
   }
 });
+
+// Regression (PR #409 review): `drain()` must reach a fixpoint at the current virtual instant even
+// when a previously-dispatched, still-in-flight handler settles *during* a later drain iteration's
+// `#quiesce()` (rather than during the pass that dispatched it) and its `completeJob` enqueues fresh
+// engine work. A single `drain()` used to return as soon as an iteration activated nothing new
+// (`activatedAny === false`), so that just-enqueued follow-on job was left undrained until a later
+// `settle()`/`drain()`. Here work1's handler is deliberately slow (spans past the pass that
+// dispatched it), so work1 completes in a later pass; the drain must still go on to serve work2 and
+// complete the instance in the same `createInstance` call.
+test("wasm: drain reaches a fixpoint when a slow handler completes mid-quiesce and enqueues follow-on work", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  const macrotask = () => new Promise<void>((r) => realSetTimeout(r, 0));
+  try {
+    let work2Ran = 0;
+    // Slow enough to survive the quiesce of the pass that dispatched it (one macrotask), then settle
+    // during the *next* pass's quiesce — the pass in which `activatedAny` is false. Its completion
+    // enqueues the work2 job, which the drain must still pick up before returning.
+    await engine.registerWorker("work1", async () => {
+      await macrotask();
+      await macrotask();
+      return {};
+    });
+    await engine.registerWorker("work2", () => {
+      work2Ran++;
+      return {};
+    });
+    await engine.deployResources([
+      {
+        name: "chain.bpmn",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="chain" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f1" sourceRef="s" targetRef="w1"/>
+    <serviceTask id="w1"><extensionElements><zeebe:taskDefinition type="work1"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="w1" targetRef="w2"/>
+    <serviceTask id="w2"><extensionElements><zeebe:taskDefinition type="work2"/></extensionElements></serviceTask>
+    <sequenceFlow id="f3" sourceRef="w2" targetRef="e"/><endEvent id="e"/>
+  </process>
+</definitions>`,
+        contentType: "application/bpmn+xml",
+      },
+    ]);
+
+    // A single createInstance → one drain(): both tasks must be served and the instance completed,
+    // with no extra settle() needed to pick up the follow-on job work1's completion enqueued.
+    const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "chain" });
+    assert.equal(work2Ran, 1, "the follow-on worker must run within the same drain, not be stranded");
+    const [inst] = await engine.searchProcessInstances({
+      processInstanceKeys: [processInstanceKey],
+    });
+    assert.equal(inst?.state, "COMPLETED", "the instance must complete once drain reaches its fixpoint");
+  } finally {
+    await engine.close();
+  }
+});
+
+// Regression (PR #409 review, suppressed advisory wasm-engine.ts:717): fire-and-forget dispatch lets
+// a handler stay in-flight past the drain that dispatched it (here parked on a gate the test
+// controls). If its engine-completion mapping then throws *after* that drain returned, the failure is
+// captured in #inflightError with no later drain/#quiesce to rethrow it — close() used to free the
+// engine and silently swallow it. close() must flush and surface that late worker failure fail-loud.
+test("wasm: close() surfaces a worker failure captured after the dispatching drain returned", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  const macrotask = () => new Promise<void>((r) => realSetTimeout(r, 0));
+  let releaseGate = () => {};
+  const gate = new Promise<void>((r) => {
+    releaseGate = r;
+  });
+  await engine.registerWorker("late", async () => {
+    await gate; // park past the drain that dispatches this handler
+    // Throw a value whose String()/message coercion itself throws, so the engine-completion mapping
+    // (#failFromError) rethrows and the tracked handler promise rejects — the "engine completion call
+    // itself" failure the advisory describes, now landing after drain() has already returned.
+    throw {
+      [Symbol.toPrimitive]() {
+        throw new Error("late-completion-boom");
+      },
+    };
+  });
+  await engine.deployResources([
+    {
+      name: "late.bpmn",
+      content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="late" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f" sourceRef="s" targetRef="t"/>
+    <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="late"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
+  </process>
+</definitions>`,
+      contentType: "application/bpmn+xml",
+    },
+  ]);
+
+  // createInstance drains; the handler parks on `gate`, so the drain returns with it in-flight.
+  await engine.createInstance({ processDefinitionId: "late" });
+  // Release the parked handler and let its rejection settle into #inflightError — all *after* the
+  // drain that dispatched it returned, with no further drain to rethrow it.
+  releaseGate();
+  await macrotask();
+  await macrotask();
+
+  await assert.rejects(
+    engine.close(),
+    /late-completion-boom/,
+    "close() must surface the late in-flight worker failure, not swallow it at teardown",
+  );
+});

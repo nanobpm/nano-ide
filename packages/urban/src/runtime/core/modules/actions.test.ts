@@ -45,6 +45,8 @@ function appFixture(over: Partial<AppApi> = {}): AppApi {
     data,
     engine,
     env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger(() => {}),
     ...over,
   };

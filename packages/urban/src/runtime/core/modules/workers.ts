@@ -11,6 +11,7 @@ import { runInJobContext } from "../execContext.ts";
 import type { JobExecContext } from "../execContext.ts";
 import { readLineage } from "../lineage.ts";
 import { LineageStore } from "./lineage-store.ts";
+import { defaultScheduler, schedulerClock, type SchedulerDeps } from "./scheduler.ts";
 
 /** The subset of the engine SDK the LLM decision-rails need: evaluate a DMN decision,
  *  whose `output` comes back as a JSON string (the orchestration-cluster contract). */
@@ -168,10 +169,23 @@ export interface WorkersHandle extends Mounted {
 }
 
 /** Load handler modules and register a push worker per declared worker. */
-export async function mountWorkers(ctx: RuntimeContext, app: AppApi): Promise<WorkersHandle> {
+export async function mountWorkers(
+  ctx: RuntimeContext,
+  app: AppApi,
+  sched: SchedulerDeps = defaultScheduler(),
+): Promise<WorkersHandle> {
   const decls = ctx.manifest.workers ?? [];
   const subs: WorkerSubscription[] = [];
   const jobTypes: string[] = [];
+
+  // Bind the app clock/`wait` seam to the injected scheduler, so a handler's time-bounded
+  // work (poll loops, backoff, budgets) sources `now`/`wait` from the same clock that drives
+  // the engine's timers and the other background loops. Under the test kit that is the
+  // virtual clock, so `advanceTime()` bounds the loop instead of it burning real wall-time;
+  // in production it is the live scheduler (real timers) — no behavior change. Mirrors how
+  // `mountTriggers`/`mountInstanceTracking` receive the same seam.
+  const clock = schedulerClock(sched);
+  const clockedApp: AppApi = { ...app, now: clock.now, wait: clock.wait };
 
   // The framework lineage projection (issue #254): each activated job records the `_urban.lineage`
   // edge its instance carries, so intent→progress lineage materialises for free. Absent when the
@@ -246,7 +260,7 @@ export async function mountWorkers(ctx: RuntimeContext, app: AppApi): Promise<Wo
       if (lineageStore) recordJobLineage(lineageStore, job, ctx.host.log);
       return runInJobContext(
         jobExecContext(job, jobType),
-        () => handler(job, withJobLog(app, job)),
+        () => handler(job, withJobLog(clockedApp, job)),
       );
     };
     const sub = await ctx.engine.registerWorker(jobType, wrapped, {

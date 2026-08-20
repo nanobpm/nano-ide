@@ -39,7 +39,7 @@ const engine: EngineClient = {
 const data = new DataLayer(new Map(), undefined, {});
 
 function appFixture(): AppApi {
-  return { manifest: { schemaVersion: 1, id: "t", name: "T" }, data, engine, env: () => undefined, log: createLogger(() => {}) };
+  return { manifest: { schemaVersion: 1, id: "t", name: "T" }, data, engine, env: () => undefined, now: () => 0, wait: () => Promise.resolve(), log: createLogger(() => {}) };
 }
 
 const spec = JSON.stringify({
@@ -148,6 +148,8 @@ test("a delegate's app.log is bound to the request's correlation context", async
     data,
     engine,
     env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger((level, msg, fields) => {
       captured.push({ level, msg, fields });
     }),

@@ -122,6 +122,13 @@ const DEFAULT_MAX_JOBS = 32;
  *  (a modelling bug) surfaces as a thrown error instead of hanging the test. */
 const MAX_DRAIN_ITERATIONS = 100_000;
 
+/** A real-timer macrotask yield: runs after every currently-queued microtask, so awaiting it
+ *  lets a just-dispatched worker handler's async chain drain to the point it either completes
+ *  or parks on a virtual-clock `app.wait` timer. Uses the real `setTimeout` captured up front so
+ *  it is immune to a handler (or test) swapping `globalThis.setTimeout`. */
+const realSetTimeout: typeof setTimeout = globalThis.setTimeout;
+const flushMacrotask = (): Promise<void> => new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+
 /** A registered worker's dispatch parameters. */
 interface RegisteredWorker {
   readonly handler: JobHandler;
@@ -219,6 +226,28 @@ export class WasmEngineClient implements EngineClient {
    *  second argument reports whether the dispatch was satisfied by a mock (epic #296, S4),
    *  so a mocked-but-exercised type is recorded as covered AND flagged as mocked. */
   #onJob: ((jobType: string, mocked: boolean) => void) | undefined;
+
+  /** Worker handlers that have been dispatched but not yet resolved — a real push worker runs
+   *  autonomously, so a handler doing time-bounded work (`app.wait` on the virtual clock) must
+   *  NOT block {@link drain}: it is dispatched fire-and-forget and tracked here, then driven to
+   *  completion as virtual time advances (`advanceTime` fires its waits). {@link drain} quiesces
+   *  these each iteration — awaiting the ones that finish (or park on a *future* wait) — so a
+   *  quick handler's effects stay visible after `settle()` exactly as before, while a parked one
+   *  is simply left in-flight instead of deadlocking the drain on a clock that only moves later. */
+  readonly #inflight = new Set<Promise<void>>();
+  /** Job keys whose handler is currently in-flight (dispatched, not yet settled). Advancing virtual
+   *  time past a job's activation lock makes the engine re-offer a still-running job; this set lets
+   *  {@link drain} skip spawning a duplicate handler for one the in-flight instance already owns. */
+  readonly #inflightJobKeys = new Set<string>();
+  /** The first error a tracked in-flight handler surfaced from its engine-completion call, held so
+   *  {@link drain} can rethrow it at the next quiesce point (preserving fail-loud), then cleared. */
+  #inflightError: unknown;
+  /** Monotonic count of tracked handlers that have *settled* (completed or failed and left
+   *  {@link #inflight}) — never incremented by a handler still parked on a future virtual wait.
+   *  {@link drain} samples it around {@link #quiesce} to detect a handler that finished mid-quiesce
+   *  and may have enqueued fresh engine work, so it loops for another activation pass instead of
+   *  returning early on `!activatedAny` and leaving that work undrained until a later `settle`. */
+  #completions = 0;
 
   private constructor(engine: TestEngine) {
     this.#engine = engine;
@@ -471,11 +500,20 @@ export class WasmEngineClient implements EngineClient {
   }
 
   async close(): Promise<void> {
-    this.#workers.clear();
-    this.#workerMocks.clear();
-    this.#childProcessMocks.clear();
-    this.#childProcessJobTypes.clear();
-    this.#engine.free();
+    try {
+      // Fire-and-forget dispatch (see #track/drain) means a drain can return with a handler still
+      // in-flight, so an engine-completion failure it captures *after* that drain returned lands in
+      // #inflightError with no later #quiesce to rethrow it. Flush and surface it fail-loud at
+      // teardown — rather than free the engine and silently swallow a late worker failure. #quiesce
+      // clears #inflightError, so an error already rethrown by a prior drain is not raised twice.
+      await this.#quiesce();
+    } finally {
+      this.#workers.clear();
+      this.#workerMocks.clear();
+      this.#childProcessMocks.clear();
+      this.#childProcessJobTypes.clear();
+      this.#engine.free();
+    }
   }
 
   // --- Extras beyond EngineClient (used by the settle loop + assertions) ---
@@ -644,19 +682,82 @@ export class WasmEngineClient implements EngineClient {
           ),
         );
         for (const raw of jobs) {
-          activatedAny = true;
           if (isChildProcess) {
+            activatedAny = true;
             this.#runChildProcessJob(jobType, raw);
-          } else {
-            await this.#runJob(worker, realWorker !== undefined, raw);
+            continue;
           }
+          // Advancing virtual time can expire a still-running job's activation lock, so the engine
+          // re-offers a job whose handler is already in-flight (parked on a future `app.wait`). Don't
+          // spawn a duplicate handler for it, and don't count it as progress — the in-flight instance
+          // owns its single completion (a second `completeJob` would hit "not in a state that can be
+          // acted on").
+          const jobKey = str(raw.key);
+          if (jobKey !== "" && this.#inflightJobKeys.has(jobKey)) continue;
+          activatedAny = true;
+          // Fire-and-forget: a push worker runs autonomously, so dispatching must not block the
+          // drain on the handler. A quick handler is still awaited to completion by the `#quiesce`
+          // below (so its effects are visible after `settle`); a handler parked on a *future*
+          // virtual-clock `app.wait` is left in-flight for `advanceTime` to drive, instead of
+          // deadlocking the drain on a clock that only moves later.
+          this.#track(jobKey, this.#runJob(worker, realWorker !== undefined, raw));
         }
       }
-      if (!activatedAny) return;
+      // Let every handler dispatched this iteration run until it completes (its `completeJob` may
+      // enqueue fresh engine work the next iteration picks up) or parks on a future wait.
+      const completionsBefore = this.#completions;
+      await this.#quiesce();
+      // A handler that *settled* during `#quiesce` (as opposed to merely parking on a future wait)
+      // may have enqueued fresh engine work via its `completeJob`. Even when this pass activated
+      // nothing, that newly enqueued work must get an activation pass, so only reach the fixpoint —
+      // and return — once a pass both activates nothing new AND settles no in-flight handler.
+      const settledAny = this.#completions !== completionsBefore;
+      if (!activatedAny && !settledAny) return;
     }
     throw new Error(
       `drain did not quiesce after ${MAX_DRAIN_ITERATIONS} iterations (worker re-creating work?)`,
     );
+  }
+
+  /** Track a fire-and-forget worker handler promise (and its job key) until it settles. `#runJob`
+   *  maps a handler throw onto the engine's completion surface internally, so a rejection here can
+   *  only come from the engine completion call itself; capture it (deduped) so {@link drain} can
+   *  rethrow it loudly rather than let it escape as an unhandled rejection. */
+  #track(jobKey: string, p: Promise<void>): void {
+    if (jobKey !== "") this.#inflightJobKeys.add(jobKey);
+    // Assign `tracked` before the `.finally` closure can reference it: the callback only runs once
+    // the promise settles (long after this statement completes), but an explicit let/assign makes
+    // the evaluation order unambiguous rather than relying on the self-referential `const`.
+    let tracked: Promise<void>;
+    tracked = p
+      .catch((err: unknown) => {
+        if (this.#inflightError === undefined) this.#inflightError = err;
+      })
+      .finally(() => {
+        this.#completions++;
+        this.#inflight.delete(tracked);
+        if (jobKey !== "") this.#inflightJobKeys.delete(jobKey);
+      });
+    this.#inflight.add(tracked);
+  }
+
+  /** Drain in-flight worker handlers to a fixpoint at the current virtual instant: flush macrotasks
+   *  until the in-flight count stops changing. A handler that completes (or fails) leaves the set
+   *  and may enqueue engine work; a handler parked on a *future* `app.wait` timer stops consuming
+   *  microtasks, so the count stabilises and this returns with that handler still in-flight — to be
+   *  resumed by a later `advanceTime`. Rethrows the first engine-completion error a tracked handler
+   *  surfaced, preserving the fail-loud semantics the previous inline `await` had. */
+  async #quiesce(): Promise<void> {
+    let prev = -1;
+    while (this.#inflight.size !== prev) {
+      prev = this.#inflight.size;
+      await flushMacrotask();
+    }
+    if (this.#inflightError !== undefined) {
+      const err = this.#inflightError;
+      this.#inflightError = undefined;
+      throw err;
+    }
   }
 
   /** The job types to activate on a drain pass: every registered worker, every mock-only type

@@ -6,6 +6,7 @@ import type { EngineClient, EngineJob, HostContext, JobHandler, WorkerSubscripti
 import type { AppManifest } from "../manifest.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { mountWorkers, sdkDecisionEvaluator, type AppJobHandler } from "./workers.ts";
+import { fakeScheduler } from "./scheduler.test-utils.ts";
 import { makeGateway } from "./gateway.ts";
 import { LineageStore } from "./lineage-store.ts";
 import {
@@ -79,6 +80,8 @@ function makeApp(over: Partial<AppApi> = {}): AppApi {
     engine: new MiniEngine(),
     env: (n) => env[n],
     log: createLogger(() => {}),
+    now: () => Date.now(),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     ...over,
   };
 }
@@ -438,4 +441,96 @@ test("mountWorkers surfaces a configured-but-missing default source as a warn (n
   const warned = logs.find((l) => l.level === "warn" && l.msg.includes("failed to provision"));
   assert.ok(warned, "a configured-but-missing default source must warn, not silently degrade");
   assert.ok(!logs.some((l) => l.msg.includes("no default data source")), "must not claim the datasource is absent");
+});
+test("mountWorkers threads the injected scheduler: a worker's time-bounded loop is bounded by advanceTime, not real wall-time", async () => {
+  // The regression this guards (#408): before the scheduler was threaded into mountWorkers,
+  // a handler doing time-bounded work had to hardwire `Date.now()`/`setTimeout`, so under the
+  // test kit it burned the FULL real budget while virtual time had already moved on. Now the
+  // handler sources `now`/`wait` from `app`, so the loop advances only when the virtual clock
+  // does — and a whole-app `advanceTime` bounds it.
+  const BUDGET_MS = 60_000; // a real PT1M budget, like the readiness-probe symptom in the issue
+  const INTERVAL_MS = 10_000;
+  const sched = fakeScheduler(0);
+
+  let attempts = 0;
+  // A never-ready poll loop bound to the APP clock (deps-injected `now`/`wait` are the point).
+  const probe: AppJobHandler = async (_job, appApi) => {
+    const deadline = appApi.now() + BUDGET_MS;
+    while (appApi.now() < deadline) {
+      attempts += 1;
+      await appApi.wait(INTERVAL_MS); // never becomes ready; only the budget stops it
+    }
+    return { readied: false, attempts };
+  };
+
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx({ workers: [{ taskType: "probe", handler: "workers/probe.ts" }] }, engine);
+  ctx.host.importModule = async () => ({ default: probe });
+
+  const handle = await mountWorkers(ctx, makeApp(), sched);
+  assert.deepEqual(handle.jobTypes, ["probe"]);
+
+  const wallStart = Date.now();
+  // Deliver the job: the handler runs up to its first `app.wait` and parks on the virtual timer.
+  const done = engine.deliver("probe", { jobKey: "j1", jobType: "probe", processInstanceKey: "pi", variables: {} });
+
+  // Nothing has advanced the clock yet, so the loop is parked — not spinning on real time.
+  assert.equal(sched.pending(), 1, "the handler must be parked on the virtual-clock wait, not a real timer");
+
+  // Advance the virtual clock across the whole budget; this is what bounds the loop.
+  await sched.advance(BUDGET_MS);
+  const out = await done;
+
+  const wallElapsed = Date.now() - wallStart;
+  assert.deepEqual(out, { readied: false, attempts: 6 }, "the loop must run exactly over its virtual budget");
+  assert.equal(sched.pending(), 0, "no virtual timers may leak past the budget");
+  assert.ok(
+    wallElapsed < 5_000,
+    `the loop must settle in virtual time, not burn the real ${BUDGET_MS}ms budget (took ${wallElapsed}ms real)`,
+  );
+
+  await handle.stop();
+});
+
+test("mountWorkers defaults the app clock to real timers when no scheduler is injected", async () => {
+  // Production parity: with no injected scheduler the handler's `app.now()`/`app.wait()` must fall
+  // through to the default seam — `Date.now()` + `globalThis.setTimeout`. Assert that seam directly
+  // by stubbing both globals, so the test is deterministic (no real 5ms sleep, no timer-jitter/clock-
+  // resolution race) and proves the exact wiring rather than an observable side effect of it.
+  const realSetTimeout = globalThis.setTimeout;
+  const realDateNow = Date.now;
+  const armedDelays: number[] = [];
+  let clock = 1_000;
+  try {
+    Date.now = () => clock;
+    // Object.assign carries realSetTimeout's full type (incl. `__promisify__`), so the merged value
+    // stays assignable to `typeof globalThis.setTimeout` without a cast; the spy fires ASAP and
+    // advances the fake clock by the armed delay, so no real wall-time elapses.
+    globalThis.setTimeout = Object.assign((fn: () => void, ms?: number) => {
+      armedDelays.push(ms ?? 0);
+      clock += ms ?? 0;
+      return realSetTimeout(fn, 0);
+    }, realSetTimeout);
+
+    let observed = -1;
+    const handler: AppJobHandler = async (_job, appApi) => {
+      const before = appApi.now();
+      await appApi.wait(5); // must arm the default (stubbed) setTimeout with delay 5
+      observed = appApi.now() - before;
+      return { ok: true };
+    };
+    const engine = new MiniEngine();
+    const { ctx } = makeCtx({ workers: [{ taskType: "tick", handler: "workers/tick.ts" }] }, engine);
+    ctx.host.importModule = async () => ({ default: handler });
+
+    const handle = await mountWorkers(ctx, makeApp()); // no scheduler → defaultScheduler()
+    const out = await engine.deliver("tick", { jobKey: "j1", jobType: "tick", processInstanceKey: "pi", variables: {} });
+    assert.deepEqual(out, { ok: true });
+    assert.ok(armedDelays.includes(5), "app.wait(5) must arm the default globalThis.setTimeout seam with delay 5");
+    assert.equal(observed, 5, "app.now must read the default Date.now clock (advanced by the armed 5ms timer)");
+    await handle.stop();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    Date.now = realDateNow;
+  }
 });

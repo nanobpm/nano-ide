@@ -58,6 +58,8 @@ const fakeApp: Parameters<typeof mountSurfaces>[1] = {
   data: new DataLayer(new Map(), undefined, {}),
   engine: fakeEngine,
   env: () => undefined,
+  now: () => 0,
+  wait: () => Promise.resolve(),
   log: createLogger(() => {}),
 };
 
@@ -108,6 +110,8 @@ function appWith(engine: EngineClient): Parameters<typeof mountSurfaces>[1] {
     data: new DataLayer(new Map(), undefined, {}),
     engine,
     env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger(() => {}),
   };
 }

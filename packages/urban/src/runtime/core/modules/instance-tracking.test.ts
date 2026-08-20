@@ -17,52 +17,12 @@ import {
   WAITING_HUMAN_PROBE_CONCURRENCY,
 } from "./instance-tracking.ts";
 import { MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
+import { fakeScheduler } from "./scheduler.test-utils.ts";
 
 // A real-timer flush drains the entire pending microtask chain (find → engine → update)
 // each time a fake timer fires — deeper than a fixed number of `await Promise.resolve()`s.
 const realSetTimeout = globalThis.setTimeout;
 const flush = () => new Promise<void>((r) => realSetTimeout(r, 0));
-
-// A deterministic timer + clock seam (mirrors triggers.test.ts): `advance` fires every due
-// timer in order, draining microtasks between fires so the async reconcile completes.
-function fakeScheduler(): SchedulerDeps & { advance: (ms: number) => Promise<void>; pending: () => number } {
-  let clock = 0;
-  let seq = 0;
-  const timers = new Map<number, { at: number; fn: () => void }>();
-  return {
-    now: () => clock,
-    setTimer: (fn, delayMs) => {
-      const id = ++seq;
-      timers.set(id, { at: clock + delayMs, fn });
-      return id;
-    },
-    clearTimer: (h) => {
-      if (typeof h === "number") timers.delete(h);
-    },
-    pending: () => timers.size,
-    advance: async (ms) => {
-      const target = clock + ms;
-      // deno-lint-ignore no-constant-condition
-      while (true) {
-        let nextId = -1;
-        let nextAt = Infinity;
-        for (const [id, t] of timers) {
-          if (t.at <= target && t.at < nextAt) {
-            nextAt = t.at;
-            nextId = id;
-          }
-        }
-        if (nextId < 0) break;
-        const t = timers.get(nextId)!;
-        timers.delete(nextId);
-        clock = t.at;
-        t.fn();
-        await flush();
-      }
-      clock = target;
-    },
-  };
-}
 
 /** An EngineClient driven by a fixed map of processInstanceKey → state (for searchProcessInstances)
  *  and an optional map of processInstanceKey → number-of-open-user-tasks (for openUserTasks, the
@@ -167,6 +127,8 @@ async function withHarness(
     data,
     engine,
     env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger((level, msg) => {
       logs.push({ level, msg });
     }),

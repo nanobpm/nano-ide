@@ -86,6 +86,8 @@ function makeApp(env: Record<string, string> = {}): AppApi {
     data: new DataLayer(new Map(), undefined, {}),
     engine: new MiniEngine(),
     env: (n: string) => env[n],
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger(() => {}),
   };
 }

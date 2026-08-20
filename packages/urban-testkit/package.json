@@ -50,6 +50,7 @@
     "test:deno": "deno test -A --no-check src/"
   },
   "dependencies": {
+    "@nanobpm/ai-assert": "^0.1.0",
     "@nanobpm/engine-testkit": "^0.1.0",
     "@nanobpm/engine-wasm": "^0.7.0",
     "yaml": "^2.9.0"

@@ -69,6 +69,14 @@ This surface ships the full stack — seams, deterministic fakes, record/replay,
 matcher-registration seam, the derived seam inventory, the `matchesSemantically` and
 `satisfiesJudge` matchers, and the opt-in real adapters described below.
 
+> The `/ai` surface is re-exported verbatim from the standalone, engine- and
+> framework-agnostic package
+> [`@nanobpm/ai-assert`](https://www.npmjs.com/package/@nanobpm/ai-assert) — the single
+> source of truth for the AI-assertion DSL (issue
+> [Magikcraft/nano-bpm#894](https://github.com/Magikcraft/nano-bpm/issues/894), S3).
+> `@nanobpm/urban-testkit/ai` keeps the subpath as a stable alias; the two exports are
+> identical, so you may import from either.
+
 ### Real AI adapters
 
 Behind the two seams live **real** backends that are OFF by default. Each seam has both a
@@ -100,7 +108,7 @@ const { embedding, chat } = await createRealAdapters({ provider: "hosted" });
 
 // Regenerate a cassette from a live backend, injected as the record/replay capture source.
 // Start a fresh cassette (or `await Cassette.load(path)` to append to an existing one):
-const cassette = new Cassette("packages/urban-testkit/src/ai/__cassettes__/judge.json");
+const cassette = new Cassette("test/__cassettes__/judge.json");
 const recorder = await createRecordingChatModelAdapter({ cassette, real: { provider: "local" } });
 ```
 

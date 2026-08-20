@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.72.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.72.0...@nanobpm/urban-0.72.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* **connectors:** fail loud on a job with no processInstanceKey ([3ebe752](https://github.com/nanobpm/nano-ide/commit/3ebe752e61e02d3880158f082e993b047f069cf7))
+* **connectors:** fail loud on a job with no processInstanceKey instead of masking to '' ([#413](https://github.com/nanobpm/nano-ide/issues/413)) ([3ebe752](https://github.com/nanobpm/nano-ide/commit/3ebe752e61e02d3880158f082e993b047f069cf7))
+
 ## [0.72.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.71.1...@nanobpm/urban-0.72.0) (2026-08-20)
 
 

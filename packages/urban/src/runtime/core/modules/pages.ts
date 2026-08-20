@@ -686,6 +686,16 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-md-code { background:var(--nano-inset); border-radius:.3rem; padding:.05rem .3rem; font:.85em ui-monospace,SFMono-Regular,Menlo,monospace; }
 .pc-md-hr { border:0; border-top:1px solid var(--nano-edge); margin:1rem 0; }
 .pc-prose-body a { color:var(--nano-accent-strong); }
+/* Embedded App View (renderAppView, #416 / ADR 0057). An <iframe> hosting a
+   self-contained view document (e.g. the agent cockpit's embed.html) served
+   alongside the page. A plain node sizes to a comfortable default; a "fill" node
+   grows to a tall flex column so the embed (a live dashboard/terminal) gets the
+   viewport height it needs instead of a squat fixed box. */
+.pc-appview { margin:1rem 0; }
+.pc-appview-title { font-size:.8rem; font-weight:600; color:var(--nano-text-muted); text-transform:uppercase; letter-spacing:.03em; margin:0 0 .35rem; }
+.pc-appview-frame { display:block; width:100%; min-height:24rem; border:1px solid var(--nano-edge); border-radius:.6rem; background:var(--nano-inset); }
+.pc-appview-fill { display:flex; flex-direction:column; min-height:min(80vh,48rem); }
+.pc-appview-fill .pc-appview-frame { flex:1 1 auto; min-height:0; }
 /* A standalone button node + the modal it opens (e.g. a copy-pasteable prompt). */
 .pc-buttonrow { margin:1rem 0; }
 .pc-btn-ghost { background:transparent; color:var(--nano-text-muted); border:1px solid var(--nano-edge); }

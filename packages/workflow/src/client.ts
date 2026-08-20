@@ -205,12 +205,17 @@ function isPromiseLike(v: unknown): v is PromiseLike<unknown> {
 }
 
 /** The SDK's pre-bind start race is a NULL/undefined-transport dereference the SDK
- *  recovers from via its own self-start: a `TypeError` from reading a property of
- *  `null`/`undefined` (e.g. `Cannot read properties of null (reading 'subscribe')`,
- *  #415). Match it NARROWLY so a genuine start failure on the REST/manual path (or
- *  any other SDK error) is never mistaken for the race and silently masked. */
+ *  recovers from via its own self-start: a `TypeError` from reading the transport's
+ *  `subscribe` off a `null`/`undefined` transport
+ *  (`Cannot read properties of null (reading 'subscribe')`, #415). Match it NARROWLY
+ *  — the specific `subscribe` dereference signature, not any null/undefined deref —
+ *  so a genuine start failure on the REST/manual path (or an unrelated null-deref
+ *  bug during `start()`) is never mistaken for the race and silently masked. */
 function isPreBindStartRace(e: unknown): boolean {
-  return e instanceof TypeError && /Cannot read propert(?:y|ies) of (?:null|undefined)/.test(e.message);
+  return (
+    e instanceof TypeError &&
+    /Cannot read propert(?:y|ies) of (?:null|undefined) \(reading ['"]subscribe['"]\)/.test(e.message)
+  );
 }
 
 /** Handle an eager-start error NULL-SAFELY. Swallow ONLY the SDK's known pre-bind

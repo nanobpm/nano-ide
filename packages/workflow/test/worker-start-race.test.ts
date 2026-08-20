@@ -78,6 +78,55 @@ class FailingWorker {
   async stopGracefully(): Promise<void> {}
 }
 
+/** A raw worker whose `start()` fails with a NULL/undefined-dereference
+ *  `TypeError` that is NOT the SDK's pre-bind transport race — it reads a
+ *  DIFFERENT property (`config`), not `subscribe`. Models a genuine start bug
+ *  that merely happens to be a null deref: the adapter must still surface it, not
+ *  mistake it for the recoverable pre-bind `subscribe` race and swallow it. */
+class NullDerefOnOtherPropWorker {
+  mode: "sync" | "async";
+  constructor(mode: "sync" | "async") {
+    this.mode = mode;
+  }
+  start(): void | Promise<void> {
+    // A real (non-race) null deref on an UNRELATED property.
+    const err = new TypeError("Cannot read properties of null (reading 'config')");
+    if (this.mode === "sync") throw err;
+    return Promise.reject(err);
+  }
+  stop(): void {}
+  async stopGracefully(): Promise<void> {}
+}
+
+for (const mode of ["sync", "async"] as const) {
+  test(`adaptJobWorker.start() surfaces a non-race null-deref TypeError (reading a different property) instead of masking it as the pre-bind race — ${mode}`, async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRejection);
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
+    try {
+      const worker = adaptJobWorker(new NullDerefOnOtherPropWorker(mode));
+
+      assert.doesNotThrow(() => worker.start());
+      await new Promise((r) => setTimeout(r, 20));
+      assert.deepEqual(rejections, [], "a real null-deref start failure must not become an unhandled rejection");
+
+      // Only the SDK's known `subscribe` race is swallowed silently; a null deref
+      // on ANY OTHER property is a genuine failure and must be surfaced.
+      assert.equal(warnings.length, 1, "a non-`subscribe` null-deref start failure must be surfaced via console.warn");
+      const flat = warnings[0].map((a) => (a instanceof Error ? a.message : String(a))).join(" ");
+      assert.match(flat, /reading 'config'/, "the surfaced warning must carry the underlying error");
+    } finally {
+      console.warn = originalWarn;
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+}
+
 for (const mode of ["sync", "async"] as const) {
   test(`adaptJobWorker.start() surfaces a genuine (non-race) ${mode} start failure instead of masking it`, async () => {
     const rejections: unknown[] = [];

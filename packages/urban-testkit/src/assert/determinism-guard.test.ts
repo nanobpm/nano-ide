@@ -74,7 +74,7 @@ async function implementationFiles(dir: string = ASSERT_DIR, prefix = ""): Promi
   return files.sort();
 }
 
-test("the assertion DSL implementation scans clean of wall-clock / entropy APIs", async () => {
+test("urban-testkit's assertion DSL implementation (wrappers + Tier-B) scans clean of wall-clock / entropy APIs", async () => {
   const files = await implementationFiles();
   // Sanity: the scan must actually cover the shipped DSL, or a clean result is
   // meaningless. After the Tier-A matchers were lifted into

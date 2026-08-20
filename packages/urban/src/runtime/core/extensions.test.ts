@@ -27,6 +27,8 @@ function fakeApi(): AppApi {
     data: unused(),
     engine: unused(),
     env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger(() => {}),
   };
 }

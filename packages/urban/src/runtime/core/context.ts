@@ -43,6 +43,22 @@ export interface AppApi {
   sdk?: EngineSdkClient;
   env(name: string): string | undefined;
   /**
+   * App clock seam — current time in ms since epoch, sourced from the runtime's injectable
+   * scheduler (`RuntimeOptions.scheduler`). The real wall clock in production; the virtual
+   * clock under the test kit. A handler doing time-bounded work (poll loops, backoff,
+   * budgets) should read `app.now()` instead of `Date.now()` so a whole-app `advanceTime()`
+   * bounds it deterministically rather than the loop burning real wall-time. See
+   * {@link AppApi.wait}.
+   */
+  now(): number;
+  /**
+   * Sleep `ms` on the app clock, resolving once that much time has elapsed on the runtime
+   * scheduler. Real timers in production (no behavior change on the live transport); under
+   * the test kit it advances with `advanceTime()`. Prefer over a hand-rolled `setTimeout`
+   * sleep in time-bounded work so the delay shares the engine's (virtual) clock.
+   */
+  wait(ms: number): Promise<void>;
+  /**
    * Structured logger (see {@link Logger}). Callable for back-compat
    * (`log("info", msg, fields)`), but prefer the level methods and bound context:
    * `app.log.info(msg, fields)`, `app.log.child({ … })`. The runtime hands worker

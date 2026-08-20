@@ -18,7 +18,7 @@ import { mountConnectors } from "./modules/connectors.ts";
 import { mountSurfaces } from "./modules/surfaces.ts";
 import { mountTriggers } from "./modules/triggers.ts";
 import { mountInstanceTracking } from "./modules/instance-tracking.ts";
-import type { SchedulerDeps } from "./modules/scheduler.ts";
+import { defaultScheduler, schedulerClock, type SchedulerDeps } from "./modules/scheduler.ts";
 import { mountSecurity, type SecurityPolicy } from "./modules/security.ts";
 import { EventBus } from "./events.ts";
 import { createUrbanEvents, mountExtensions, type UrbanEvents, type UrbanExtension } from "./extensions.ts";
@@ -77,11 +77,13 @@ export interface CreateUrbanAppOptions {
   mount?: MountFlags;
   /**
    * Injectable timer + clock seam driving every background loop (the cron trigger loops
-   * and the instance-tracking reconciler). Defaults to the live scheduler (real timers,
-   * wall clock). The e2e test kit injects a manual scheduler so those loops advance
-   * deterministically over a virtual clock — the single seam that makes a whole-app
-   * `settle()` possible. Threaded verbatim into `mountTriggers` and `mountInstanceTracking`
-   * so one injected scheduler drives them both (no per-module wiring, no drift).
+   * and the instance-tracking reconciler) and the app clock/`wait` seam handed to worker
+   * handlers. Defaults to the live scheduler (real timers, wall clock). The e2e test kit
+   * injects a manual scheduler so those loops — and any time-bounded worker sourcing
+   * `app.now()`/`app.wait()` — advance deterministically over a virtual clock: the single
+   * seam that makes a whole-app `settle()` possible. Threaded verbatim into `mountWorkers`,
+   * `mountTriggers` and `mountInstanceTracking` so one injected scheduler drives them all
+   * (no per-module wiring, no drift).
    */
   scheduler?: SchedulerDeps;
   /**
@@ -258,6 +260,12 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
         if (flags.deploy) describe.deploy = await deployModels(ctx);
 
         data = flags.data ? await provisionData(ctx) : new DataLayer(new Map(), undefined, {});
+        // Resolve the injectable scheduler once (default: live real-timer seam) so the app
+        // clock/`wait` seam handed to handlers and every background loop share one clock —
+        // the single source the test kit swaps for a virtual clock to make `settle()` /
+        // `advanceTime()` bound the whole app (workers included).
+        const scheduler = opts.scheduler ?? defaultScheduler();
+        const clock = schedulerClock(scheduler);
         const api: AppApi = {
           manifest,
           data,
@@ -265,10 +273,12 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
           sdk: engineSdk(engine),
           env: (n) => host.env(n),
           log: appLog,
+          now: clock.now,
+          wait: clock.wait,
         };
 
         if (flags.workers) {
-          const w = await mountWorkers(ctx, api);
+          const w = await mountWorkers(ctx, api, scheduler);
           mounted.push(w);
           describe.workers = w.describe?.();
           // Connector-pack workers share the `workers` flag: same lifecycle, same
@@ -294,13 +304,13 @@ export async function createUrbanApp(opts: CreateUrbanAppOptions): Promise<Urban
           describe.surfaces = s.describe();
         }
         if (flags.triggers) {
-          const t = mountTriggers(ctx, api, opts.scheduler);
+          const t = mountTriggers(ctx, api, scheduler);
           routes.push(...t.routes);
           mounted.push(t);
           describe.triggers = t.describe?.();
         }
         if (flags.instanceTracking && (manifest.instanceTracking?.length ?? 0) > 0) {
-          const it = mountInstanceTracking(ctx, api, opts.scheduler);
+          const it = mountInstanceTracking(ctx, api, scheduler);
           mounted.push(it);
           describe.instanceTracking = it.describe?.();
         }

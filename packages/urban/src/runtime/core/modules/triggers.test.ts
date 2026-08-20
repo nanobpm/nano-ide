@@ -49,6 +49,8 @@ function fakeApp(): { app: AppApi; calls: EngineCall[]; logs: Array<{ level: str
     data: new DataLayer(new Map(), undefined, {}),
     engine,
     env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger((level: string, msg: string) => {
       logs.push({ level, msg });
     }),

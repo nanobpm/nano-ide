@@ -59,6 +59,49 @@ const MIGRATION = `CREATE TABLE orders (
   note TEXT
 );`;
 
+// A process whose single service task is served by a worker with a *real-time budget*: a poll loop
+// that sources `now`/`wait` from the app clock (issue #408). The probe never becomes ready, so only
+// the budget stops it — under the test kit that budget is the virtual clock, so `advanceTime` bounds
+// the loop instead of it burning the real `PROBE_BUDGET_MS`.
+const PROBE_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="probe" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f1" sourceRef="s" targetRef="poll"/>
+    <serviceTask id="poll">
+      <extensionElements><zeebe:taskDefinition type="probe.poll"/></extensionElements>
+    </serviceTask>
+    <sequenceFlow id="f2" sourceRef="poll" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+</definitions>`;
+
+const PROBE_HANDLERS = `export const handlers = {
+  "probe.poll": async (job, app) => {
+    // Bind the budget to the APP clock (not Date.now) and sleep on app.wait (not setTimeout), so the
+    // loop advances only as virtual time does. A never-ready probe: only the budget stops it.
+    const deadline = app.now() + 60000; // PROBE_BUDGET_MS = PT1M
+    let attempts = 0;
+    while (app.now() < deadline) {
+      attempts += 1;
+      await app.wait(10000); // PROBE_INTERVAL_MS
+    }
+    await app.data.table("probes", "process_key").insert({
+      process_key: job.processInstanceKey,
+      attempts,
+    });
+    return { readied: false, attempts };
+  },
+};`;
+
+const PROBE_MIGRATION = `CREATE TABLE probes (
+  id INTEGER PRIMARY KEY,
+  process_key TEXT,
+  attempts INTEGER
+);`;
+
 /** Build a minimal but complete Urban app on disk: two processes, a worker, a SQLite
  *  source with one migration, a webhook that starts `order`, and an instanceTracking
  *  binding that abandons a tracked row when its instance terminates. */
@@ -177,6 +220,68 @@ test("bootTestApp reconciles a terminated instance's tracking row on advanceTime
     row = await orders.findOne({ process_key: processInstanceKey });
     assert.equal(row?.status, "abandoned", "reconciler abandoned the terminated instance's row");
   } finally {
+    await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/** Build a minimal app whose one worker runs a time-bounded poll loop on the app clock (#408). */
+async function makeProbeFixture(): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), "urban-testkit-probe-"));
+  await mkdir(join(dir, "processes"), { recursive: true });
+  await mkdir(join(dir, "workers"), { recursive: true });
+  await mkdir(join(dir, "db", "migrations"), { recursive: true });
+  await writeFile(join(dir, "processes", "probe.bpmn"), PROBE_BPMN);
+  await writeFile(join(dir, "workers", "handlers.ts"), PROBE_HANDLERS);
+  await writeFile(join(dir, "db", "migrations", "001_init.sql"), PROBE_MIGRATION);
+  const manifest = {
+    schemaVersion: 1,
+    id: "testkit-probe-fixture",
+    name: "Testkit Probe Fixture",
+    models: { processes: ["processes/*.bpmn"] },
+    data: {
+      default: "app",
+      sources: { app: { driver: "sqlite", url: "file:./db/app.db", migrations: "db/migrations" } },
+    },
+    workers: [{ taskType: "probe.poll", handler: "workers/handlers.ts" }],
+  };
+  await writeFile(join(dir, "nano.app.json"), JSON.stringify(manifest, null, 2));
+  return dir;
+}
+
+test("bootTestApp bounds a time-bounded worker by advanceTime (virtual time, not real wall-time) — #408", async () => {
+  // Regression guard for #408: before the virtual-clock scheduler was threaded into mountWorkers and
+  // the app clock/`wait` seam was surfaced on AppApi, a worker with a real-time budget (poll loop,
+  // backoff) hardwired Date.now()/setTimeout, so under the test kit it burned the FULL real budget
+  // (~PT1M) while virtual time had already moved on. Now the handler sources now/wait from `app`, so
+  // the whole loop settles over the virtual clock: `advanceTime` bounds it, and it never touches the
+  // real wall clock.
+  const dir = await makeProbeFixture();
+  const app = await bootTestApp(dir);
+  const wallStart = Date.now();
+  try {
+    // Start the instance: the poll worker is dispatched and parks on its first app.wait — the drain
+    // does NOT block on it (a real push worker runs autonomously), so createInstance returns at once.
+    const { processInstanceKey } = await app.engine.createInstance({ processDefinitionId: "probe" });
+    const probes = app.db.table<{ process_key: string; attempts: number }>("probes", "process_key");
+
+    // No virtual time has passed, so the loop is still parked — it has written nothing yet.
+    await app.settle();
+    assert.equal((await probes.all()).length, 0, "the never-ready loop must not finish before its budget");
+
+    // Advance the whole PT1M budget in virtual time: this — and only this — bounds the loop.
+    await app.advanceTime(60000);
+
+    const rows = await probes.all();
+    assert.equal(rows.length, 1, "the loop settled once its virtual budget elapsed");
+    assert.equal(rows[0].attempts, 6, "exactly one poll per 10s interval across the 60s budget");
+    assert.equal(app.scheduler.pending(), 0, "no virtual timers may leak past the budget");
+  } finally {
+    const wallElapsed = Date.now() - wallStart;
+    assert.ok(
+      wallElapsed < 10_000,
+      `the worker must settle in virtual time, not burn the real 60s budget (took ${wallElapsed}ms real)`,
+    );
     await app.stop();
     await rm(dir, { recursive: true, force: true });
   }

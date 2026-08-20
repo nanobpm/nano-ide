@@ -111,6 +111,8 @@ async function withHarness(engine: EngineClient, seedStatus = "converging"): Pro
     data,
     engine,
     env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
     log: createLogger((level, msg) => {
       logs.push({ level, msg });
     }),

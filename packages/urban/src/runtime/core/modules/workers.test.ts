@@ -6,6 +6,7 @@ import type { EngineClient, EngineJob, HostContext, JobHandler, WorkerSubscripti
 import type { AppManifest } from "../manifest.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { mountWorkers, sdkDecisionEvaluator, type AppJobHandler } from "./workers.ts";
+import type { SchedulerDeps } from "./scheduler.ts";
 import { makeGateway } from "./gateway.ts";
 import { LineageStore } from "./lineage-store.ts";
 import {
@@ -79,6 +80,8 @@ function makeApp(over: Partial<AppApi> = {}): AppApi {
     engine: new MiniEngine(),
     env: (n) => env[n],
     log: createLogger(() => {}),
+    now: () => Date.now(),
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     ...over,
   };
 }
@@ -438,4 +441,122 @@ test("mountWorkers surfaces a configured-but-missing default source as a warn (n
   const warned = logs.find((l) => l.level === "warn" && l.msg.includes("failed to provision"));
   assert.ok(warned, "a configured-but-missing default source must warn, not silently degrade");
   assert.ok(!logs.some((l) => l.msg.includes("no default data source")), "must not claim the datasource is absent");
+});
+
+/** A virtual-clock `SchedulerDeps` (mirrors the canonical `fakeScheduler` in
+ *  triggers.test.ts / instance-tracking.test.ts): `advance` fires every timer due within
+ *  the interval in order, draining microtasks between fires so an async loop's follow-on
+ *  chain settles before the next fire. Lets a test bound a handler's time-bounded loop over
+ *  virtual time without touching the real wall clock. */
+function fakeScheduler(startMs = 0): SchedulerDeps & { advance: (ms: number) => Promise<void>; pending: () => number } {
+  let clock = startMs;
+  let seq = 0;
+  const timers = new Map<number, { at: number; fn: () => void }>();
+  return {
+    now: () => clock,
+    setTimer: (fn, delayMs) => {
+      const id = ++seq;
+      timers.set(id, { at: clock + (Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 0), fn });
+      return id;
+    },
+    clearTimer: (h) => {
+      if (typeof h === "number") timers.delete(h);
+    },
+    pending: () => timers.size,
+    advance: async (ms) => {
+      const target = clock + Math.max(0, ms);
+      for (;;) {
+        let nextId = -1;
+        let nextAt = Number.POSITIVE_INFINITY;
+        for (const [id, t] of timers) {
+          if (t.at <= target && t.at < nextAt) {
+            nextAt = t.at;
+            nextId = id;
+          }
+        }
+        if (nextId < 0) break;
+        const t = timers.get(nextId);
+        if (!t) break;
+        timers.delete(nextId);
+        clock = t.at;
+        t.fn();
+        await Promise.resolve();
+        await Promise.resolve();
+      }
+      clock = target;
+    },
+  };
+}
+
+test("mountWorkers threads the injected scheduler: a worker's time-bounded loop is bounded by advanceTime, not real wall-time", async () => {
+  // The regression this guards (#408): before the scheduler was threaded into mountWorkers,
+  // a handler doing time-bounded work had to hardwire `Date.now()`/`setTimeout`, so under the
+  // test kit it burned the FULL real budget while virtual time had already moved on. Now the
+  // handler sources `now`/`wait` from `app`, so the loop advances only when the virtual clock
+  // does — and a whole-app `advanceTime` bounds it.
+  const BUDGET_MS = 60_000; // a real PT1M budget, like the readiness-probe symptom in the issue
+  const INTERVAL_MS = 10_000;
+  const sched = fakeScheduler(0);
+
+  let attempts = 0;
+  // A never-ready poll loop bound to the APP clock (deps-injected `now`/`wait` are the point).
+  const probe: AppJobHandler = async (_job, appApi) => {
+    const deadline = appApi.now() + BUDGET_MS;
+    while (appApi.now() < deadline) {
+      attempts += 1;
+      await appApi.wait(INTERVAL_MS); // never becomes ready; only the budget stops it
+    }
+    return { readied: false, attempts };
+  };
+
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx({ workers: [{ taskType: "probe", handler: "workers/probe.ts" }] }, engine);
+  ctx.host.importModule = async () => ({ default: probe });
+
+  const handle = await mountWorkers(ctx, makeApp(), sched);
+  assert.deepEqual(handle.jobTypes, ["probe"]);
+
+  const wallStart = Date.now();
+  // Deliver the job: the handler runs up to its first `app.wait` and parks on the virtual timer.
+  const done = engine.deliver("probe", { jobKey: "j1", jobType: "probe", processInstanceKey: "pi", variables: {} });
+
+  // Nothing has advanced the clock yet, so the loop is parked — not spinning on real time.
+  assert.equal(sched.pending(), 1, "the handler must be parked on the virtual-clock wait, not a real timer");
+
+  // Advance the virtual clock across the whole budget; this is what bounds the loop.
+  await sched.advance(BUDGET_MS);
+  const out = await done;
+
+  const wallElapsed = Date.now() - wallStart;
+  assert.deepEqual(out, { readied: false, attempts: 6 }, "the loop must run exactly over its virtual budget");
+  assert.equal(sched.pending(), 0, "no virtual timers may leak past the budget");
+  assert.ok(
+    wallElapsed < 5_000,
+    `the loop must settle in virtual time, not burn the real ${BUDGET_MS}ms budget (took ${wallElapsed}ms real)`,
+  );
+
+  await handle.stop();
+});
+
+test("mountWorkers defaults the app clock to real timers when no scheduler is injected", async () => {
+  // Production parity: with no injected scheduler the handler's `app.now()`/`app.wait()` fall
+  // through to the live wall clock + real timers — no behavior change on the real transport.
+  let observed = -1;
+  const handler: AppJobHandler = async (_job, appApi) => {
+    const before = appApi.now();
+    await appApi.wait(5); // a real 5ms sleep on the default scheduler
+    observed = appApi.now() - before;
+    return { ok: true };
+  };
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx({ workers: [{ taskType: "tick", handler: "workers/tick.ts" }] }, engine);
+  ctx.host.importModule = async () => ({ default: handler });
+
+  const wallStart = Date.now();
+  const handle = await mountWorkers(ctx, makeApp()); // no scheduler → defaultScheduler()
+  const out = await engine.deliver("tick", { jobKey: "j1", jobType: "tick", processInstanceKey: "pi", variables: {} });
+  assert.deepEqual(out, { ok: true });
+  assert.ok(Date.now() - wallStart >= 4, "app.wait must actually sleep on the real clock by default");
+  assert.ok(observed >= 0, "app.now must read the real wall clock by default");
+  await handle.stop();
 });

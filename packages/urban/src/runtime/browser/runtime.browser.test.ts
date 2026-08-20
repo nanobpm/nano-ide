@@ -6,8 +6,8 @@
 // a real import, and adds the first true renderer-level unit coverage.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PAGE_NODE_TYPES } from "@nanobpm/nano-app-schema";
-import { RENDERERS, renderText, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell } from "./runtime.browser.js";
+import { PAGE_NODE_TYPES } from "../core/page-nodes.ts";
+import { RENDERERS, renderText, renderAppView, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell } from "./runtime.browser.js";
 
 // ── Minimal fake DOM ────────────────────────────────────────────────────────
 // Just enough of the Element/Document surface that el()/renderText touch:
@@ -77,6 +77,16 @@ function installFakeDom(): () => void {
   };
 }
 
+// A renderer statically returns HTMLElement but at runtime produces a FakeElement
+// (the installed fake `document.createElement`). Narrow to FakeElement so a test can
+// walk `.children` — without a banned `as` cast — by asserting the runtime shape.
+function asFake(node: unknown): FakeElement {
+  if (!(node instanceof FakeElement)) {
+    throw new Error("expected a FakeElement (is the fake DOM installed?)");
+  }
+  return node;
+}
+
 test("#291: RENDERERS is a real importable registry keyed exactly by PAGE_NODE_TYPES", () => {
   // The drift lock is enforced at compile time by `RENDERERS satisfies
   // Record<PageNodeType, Renderer>` in the source; this asserts the same at
@@ -115,6 +125,113 @@ test("#291: renderText degrades to empty text (never throws) on a missing text p
   const node = renderText({ type: "text", props: {} });
   assert.equal(node.tagName, "P");
   assert.equal(node.textContent, "");
+});
+
+test("#416: appView is a rendered node type (registry + bridged PAGE_NODE_TYPES)", () => {
+  // The whole point of #416: an `appView` page node must have a real renderer, not
+  // fall through to a blank <div>. It is in the RENDERERS registry and — since it
+  // ships here ahead of the canonical schema — in the locally-bridged PAGE_NODE_TYPES.
+  assert.ok(PAGE_NODE_TYPES.includes("appView"), "appView must be in the bridged PAGE_NODE_TYPES");
+  assert.equal(typeof RENDERERS.appView, "function", "appView must have a renderer");
+});
+
+test("#416: renderAppView mounts a base-relative iframe honoring embed/title/fill", (t) => {
+  t.after(installFakeDom());
+  const section = asFake(
+    renderAppView({
+      type: "appView",
+      props: { title: "Agent networks", embed: "./embed.html", fill: true },
+    }),
+  );
+  assert.equal(section.tagName, "SECTION");
+  // fill → the tall flex container variant so the embed gets viewport height.
+  assert.equal(section.className, "pc-appview pc-appview-fill");
+
+  const frame = section.children.find(
+    (c): c is FakeElement => c instanceof FakeElement && c.tagName === "IFRAME",
+  );
+  assert.ok(frame, "an <iframe> must be mounted");
+  // The iframe src is the node's embed, left document-relative so it resolves under
+  // both the app root and the console App-View proxy prefix.
+  assert.equal(frame.getAttribute("src"), "./embed.html");
+  assert.equal(frame.getAttribute("title"), "Agent networks");
+  assert.equal(frame.className, "pc-appview-frame");
+
+  // The title also renders as a visible label above the frame.
+  const label = section.children.find(
+    (c): c is FakeElement => c instanceof FakeElement && c.className === "pc-appview-title",
+  );
+  assert.ok(label, "the title renders as a label");
+  assert.equal(label.textContent, "Agent networks");
+});
+
+test("#416: renderAppView rebases a root-absolute embed onto the mount root", (t) => {
+  t.after(installFakeDom());
+  // A root-absolute "/embed.html" would escape the console proxy prefix and hit the
+  // console origin; the renderer strips the single leading slash to rebase it.
+  const section = asFake(renderAppView({ type: "appView", props: { embed: "/embed.html" } }));
+  const frame = section.children.find(
+    (c): c is FakeElement => c instanceof FakeElement && c.tagName === "IFRAME",
+  );
+  assert.ok(frame);
+  assert.equal(frame.getAttribute("src"), "embed.html");
+});
+
+test("#416: renderAppView is non-fill by default and never throws on missing props", (t) => {
+  t.after(installFakeDom());
+  const section = asFake(renderAppView({ type: "appView", props: {} }));
+  assert.equal(section.tagName, "SECTION");
+  assert.equal(section.className, "pc-appview");
+  const frame = section.children.find(
+    (c): c is FakeElement => c instanceof FakeElement && c.tagName === "IFRAME",
+  );
+  assert.ok(frame, "an <iframe> is still mounted with no embed");
+  // No usable embed → src is OMITTED (about:blank), not src="" (which resolves to
+  // the current document URL in browsers and risks a recursive self-embed).
+  assert.equal(frame.getAttribute("src"), null);
+  // No title → no label element rendered.
+  const label = section.children.find(
+    (c): c is FakeElement => c instanceof FakeElement && c.className === "pc-appview-title",
+  );
+  assert.equal(label, undefined);
+});
+
+test("#416: renderAppView neutralizes a dangerous-scheme embed (no executable iframe src)", (t) => {
+  t.after(installFakeDom());
+  // A hostile/malformed page doc must not be able to smuggle an executable iframe
+  // src via a javascript:/data:/vbscript: embed, nor bypass the check with embedded
+  // whitespace/tabs (browsers strip those before parsing the URL).
+  for (const embed of [
+    "javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "vbscript:msgbox(1)",
+    "  javascript:alert(1)  ",
+    "java\tscript:alert(1)",
+    "JAVASCRIPT:alert(1)",
+  ]) {
+    const section = asFake(renderAppView({ type: "appView", props: { embed } }));
+    const frame = section.children.find(
+      (c): c is FakeElement => c instanceof FakeElement && c.tagName === "IFRAME",
+    );
+    assert.ok(frame, `an <iframe> is still mounted for ${JSON.stringify(embed)}`);
+    assert.equal(
+      frame.getAttribute("src"),
+      null,
+      `dangerous embed ${JSON.stringify(embed)} must not become an iframe src`,
+    );
+  }
+});
+
+test("#416: renderAppView keeps a legit http(s) embed and trims surrounding whitespace", (t) => {
+  t.after(installFakeDom());
+  const section = asFake(
+    renderAppView({ type: "appView", props: { embed: "  https://example.test/embed.html  " } }),
+  );
+  const frame = section.children.find(
+    (c): c is FakeElement => c instanceof FakeElement && c.tagName === "IFRAME",
+  );
+  assert.ok(frame);
+  assert.equal(frame.getAttribute("src"), "https://example.test/embed.html");
 });
 
 test('#327: fmtCellValue "datetime" renders an ISO timestamp in the viewer\'s local time as "h:mmam Mon D"', () => {

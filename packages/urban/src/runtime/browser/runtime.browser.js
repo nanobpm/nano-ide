@@ -16,7 +16,7 @@
 // That lets the renderer functions and the RENDERERS registry be imported and
 // unit-tested with a fake DOM, and lets the string-generation build load it.
 
-/** @typedef {import("@nanobpm/nano-app-schema").PageNodeType} PageNodeType */
+/** @typedef {import("../core/page-nodes.ts").PageNodeType} PageNodeType */
 /**
  * A page node from a `*.page.json` document. `props` is an open, author-supplied
  * bag whose shape is owned/validated by `@nanobpm/nano-app-schema`, so it is
@@ -2532,16 +2532,108 @@ function renderNav(node) {
   return nav;
 }
 
+// A page-relative URL that resolves correctly whether the app is served at the
+// origin root (CLI on :3000) or under the Nano console's path-prefixed App-View
+// proxy (/console/app-view/<name>/). Same reasoning as the shell's `badgeHref`
+// and mount.js's reportUrl handling: a root-absolute "/x" would escape the proxy
+// prefix and hit the CONSOLE origin, so a single leading slash is stripped to
+// rebase onto the mount root; an already document-relative ("./x", "x") or an
+// absolute ("http(s)://…") / protocol-relative ("//host") URL is left untouched.
+// The result becomes an <iframe> src, so a scheme URL is only honoured when it is
+// http/https: a hostile/malformed page doc could otherwise smuggle an executable
+// `javascript:`/`data:`/`vbscript:` src, so any other scheme is rejected ("" →
+// caller omits the attribute). Input is trimmed and ASCII tab/newline stripped
+// FIRST (browsers strip those before parsing a URL, so `java\tscript:` would still
+// execute) so scheme detection cannot be bypassed by embedded whitespace.
+/** @param {string} url */
+function baseRelativeUrl(url) {
+  if (typeof url !== "string") return "";
+  const cleaned = url.replace(/[\t\n\r]/g, "").trim();
+  if (cleaned === "") return "";
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(cleaned);
+  if (scheme) {
+    const proto = scheme[1].toLowerCase();
+    return proto === "http" || proto === "https" ? cleaned : ""; // reject javascript:/data:/vbscript:/file:/…
+  }
+  if (cleaned.startsWith("//")) return cleaned; // protocol-relative
+  if (cleaned.startsWith("/")) return cleaned.slice(1); // root-absolute → document-relative (rebase onto mount root)
+  return cleaned; // already relative
+}
+
+// `appView` (ADR 0057 / #416): mount an embedded App View — an <iframe> hosting a
+// self-contained view document (e.g. the agent cockpit's embed.html) served
+// alongside the page. This is the runtime counterpart of the console's App-View
+// surface: the SAME embed document renders here (in the app's own UI) and, when the
+// console embeds the app, there. Before this renderer existed an `appView` node fell
+// through to a blank <div> (RENDERERS[n.type] || (() => el("div"))), so an entire
+// embedded view — the live agent cockpit — was SILENTLY invisible with no error.
+/** @param {PageNode} node */
+function renderAppView(node) {
+  const p = node.props || {};
+  const title = p.title != null ? String(p.title) : "";
+  const fill = p.fill === true;
+  const src = baseRelativeUrl(typeof p.embed === "string" ? p.embed : "");
+
+  const frame = /** @type {HTMLIFrameElement} */ (
+    el("iframe", {
+      class: "pc-appview-frame",
+      // Base-relative so the embed resolves under both the app root and the console
+      // App-View proxy prefix (see baseRelativeUrl). Omitted (about:blank) when no
+      // usable `embed` is declared — an empty `src=""` resolves to the current
+      // document URL in browsers, risking a recursive self-embed. The node still
+      // renders its chrome rather than throwing.
+      src: src || undefined,
+      title: title || "App view",
+      loading: "lazy",
+      referrerpolicy: "same-origin",
+    })
+  );
+
+  // Forward the App-View endpoint config to the embed's own window (ADR 0057:
+  // embed.html reads `window.__NANO_APP_VIEW__`). The console injects this when IT
+  // hosts the embed; here — the same-origin app render — mount.js already defaults
+  // every endpoint to the app's own origin, so the cockpit is fully functional with
+  // nothing injected. We seed the frame's window on load only to thread through
+  // explicit per-node overrides (props.reportUrl / relayUrl / transcriptsUrl), so a
+  // page can point the embed at a non-default endpoint without editing the embed
+  // document. Best-effort and guarded: a cross-origin embed is left to its defaults.
+  /** @type {Record<string, string>} */
+  const overrides = {};
+  if (typeof p.reportUrl === "string") overrides.reportUrl = p.reportUrl;
+  if (typeof p.relayUrl === "string") overrides.relayUrl = p.relayUrl;
+  if (typeof p.transcriptsUrl === "string") overrides.transcriptsUrl = p.transcriptsUrl;
+  frame.addEventListener("load", () => {
+    try {
+      const w = /** @type {any} */ (frame.contentWindow);
+      if (w) {
+        w.__NANO_APP_VIEW__ = {
+          ...(w.__NANO_APP_VIEW__ || {}),
+          host: (typeof location !== "undefined" && location.origin) || "",
+          ...overrides,
+        };
+      }
+    } catch (_e) {
+      // Cross-origin embed: we cannot (and need not) touch its window.
+    }
+  });
+
+  const section = el("section", { class: "pc-appview" + (fill ? " pc-appview-fill" : "") });
+  if (title) section.append(el("div", { class: "pc-appview-title" }, title));
+  section.append(frame);
+  return section;
+}
+
 // The browser renderer's dispatch table: the runtime source of truth for which
 // page-node types can be drawn. `@satisfies Record<PageNodeType, Renderer>` locks
-// it, at compile time, to `@nanobpm/nano-app-schema`'s PAGE_NODE_TYPES — the same
-// registry the Console's Page Composer is bound to. Adding a schema node type
-// without a renderer here (or vice-versa) is now a type error, so the table can
-// no longer silently drift from the schema (this replaces the #290 regex guard,
-// which had to string-scrape these keys precisely because this used to be a
-// string). The drift is also covered by a real-import unit test.
+// it, at compile time, to the shared `PAGE_NODE_TYPES` registry (`../core/page-nodes.ts`
+// — the canonical @nanobpm/nano-app-schema set, extended with the node types this
+// runtime ships ahead of the schema, e.g. `appView` #416). Adding a page-node type
+// without a renderer here (or vice-versa) is now a type error, so the table can no
+// longer silently drift from the registry (this replaces the #290 regex guard, which
+// had to string-scrape these keys precisely because this used to be a string). The
+// drift is also covered by a real-import unit test.
 /** @satisfies {Record<PageNodeType, Renderer>} */
-const RENDERERS = { text: renderText, actionForm: renderActionForm, dataGrid: renderDataGrid, prose: renderProse, nav: renderNav, button: renderButton };
+const RENDERERS = { text: renderText, actionForm: renderActionForm, dataGrid: renderDataGrid, prose: renderProse, nav: renderNav, button: renderButton, appView: renderAppView };
 
 // Durable per-node UI state. localStorage is keyed by the home page id + node
 // id so two grids on the same page (or the same grid across pages) don't clash,
@@ -2706,4 +2798,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, renderAppView, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };

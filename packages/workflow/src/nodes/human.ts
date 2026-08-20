@@ -7,23 +7,14 @@
 
 import { escapeXml } from "../xml.js";
 import { incomingOutgoing } from "../declarative.js";
+import { assertIoMapping, isNonBlankString, renderIoMapping } from "../io-mapping.js";
+import type { HumanIoMapping } from "../io-mapping.js";
 import { registerNodeKind } from "./registry.js";
 
-/** A single Zeebe I/O mapping entry — a FEEL `source` copied to/from a process
- *  variable `target`. */
-export interface HumanIoEntry {
-  /** FEEL expression evaluated for the mapping (e.g. `=orderId`). */
-  source: string;
-  /** The process variable the value is written to. */
-  target: string;
-}
-
-/** The `<zeebe:ioMapping>` for a user task: input mappings applied on activation
- *  and output mappings applied on completion. */
-export interface HumanIoMapping {
-  input?: HumanIoEntry[];
-  output?: HumanIoEntry[];
-}
+// The ioMapping shape lives in the shared `io-mapping` module (single source of
+// truth across node kinds); re-export it so existing `@nanobpm/workflow`
+// consumers keep importing `HumanIoMapping` / `HumanIoEntry` unchanged.
+export type { HumanIoEntry, HumanIoMapping } from "../io-mapping.js";
 
 /** Options for {@link FlowBuilder.human}. `form` is the `zeebe:formDefinition`
  *  form id; `assignee` / `candidateGroups` populate a `zeebe:assignmentDefinition`
@@ -72,29 +63,10 @@ declare module "../declarative.js" {
 }
 
 /** A present, non-empty, non-whitespace-only string — the shape every human()
- *  id / assignment / mapping-expression field must have. A blank value would
- *  emit a meaningless BPMN attribute (an empty formId, assignee, candidateGroups,
- *  or ioMapping source/target) that fails or misbehaves at deploy/run time, so we
- *  fail fast at build. Non-blank values are kept verbatim — FEEL expressions are
- *  never trimmed or normalized. */
-function isNonBlankString(v: unknown): v is string {
-  return typeof v === "string" && v.trim() !== "";
-}
-
-function isEntry(e: unknown): e is HumanIoEntry {
-  if (e === null || typeof e !== "object") return false;
-  if (!("source" in e) || !("target" in e)) return false;
-  const { source, target } = e;
-  return isNonBlankString(source) && isNonBlankString(target);
-}
-
-function validateEntries(name: string, dir: "input" | "output", entries: HumanIoEntry[] | undefined): void {
-  if (entries === undefined) return;
-  if (!Array.isArray(entries)) throw new Error(`human("${name}") io.${dir} must be an array of { source, target }`);
-  for (const e of entries) {
-    if (!isEntry(e)) throw new Error(`human("${name}") io.${dir} entries must be { source: non-empty string, target: non-empty string }`);
-  }
-}
+ *  id / assignment field must have. A blank value would emit a meaningless BPMN
+ *  attribute (an empty formId, assignee, or candidateGroups) that fails or
+ *  misbehaves at deploy/run time, so we fail fast at build. Shared with the
+ *  ioMapping validator via `io-mapping`. */
 
 function renderAssignment(node: HumanNode): string {
   if (node.assignee === undefined && node.candidateGroups === undefined) return "";
@@ -105,24 +77,6 @@ function renderAssignment(node: HumanNode): string {
   return `        <zeebe:assignmentDefinition${attrs} />\n`;
 }
 
-function renderMappings(entries: HumanIoEntry[] | undefined, tag: "input" | "output"): string {
-  if (!entries || entries.length === 0) return "";
-  return entries
-    .map((e) => `          <zeebe:${tag} source="${escapeXml(e.source)}" target="${escapeXml(e.target)}" />\n`)
-    .join("");
-}
-
-function renderIoMapping(node: HumanNode): string {
-  const io = node.io;
-  if (!io || ((io.input?.length ?? 0) === 0 && (io.output?.length ?? 0) === 0)) return "";
-  return (
-    `        <zeebe:ioMapping>\n` +
-    renderMappings(io.input, "input") +
-    renderMappings(io.output, "output") +
-    `        </zeebe:ioMapping>\n`
-  );
-}
-
 function renderUserTask(node: HumanNode, inc: string[], outg: string[]): string {
   const id = node.name;
   const ext =
@@ -130,7 +84,7 @@ function renderUserTask(node: HumanNode, inc: string[], outg: string[]): string 
     `        <zeebe:formDefinition formId="${escapeXml(node.form)}" />\n` +
     `        <zeebe:userTask />\n` +
     renderAssignment(node) +
-    renderIoMapping(node) +
+    renderIoMapping(node.io) +
     `      </bpmn:extensionElements>`;
   return (
     `    <bpmn:userTask id="${escapeXml(id)}" name="${escapeXml(id)}">\n` +
@@ -156,11 +110,7 @@ registerNodeKind("human", {
     if (opts.candidateGroups !== undefined && !isNonBlankString(opts.candidateGroups)) {
       throw new Error(`human("${name}") { candidateGroups } must be a non-empty string`);
     }
-    if (opts.io !== undefined && (opts.io === null || typeof opts.io !== "object" || Array.isArray(opts.io))) {
-      throw new Error(`human("${name}") { io } must be an object { input?, output? }`);
-    }
-    validateEntries(name, "input", opts.io?.input);
-    validateEntries(name, "output", opts.io?.output);
+    assertIoMapping(`human("${name}")`, opts.io);
     api.out.push({
       kind: "human",
       name,

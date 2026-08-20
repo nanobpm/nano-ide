@@ -176,20 +176,21 @@ export interface RawNanoJobWorker {
  *  (`TypeError: Cannot read properties of null (reading 'subscribe')`, #415). The
  *  REST/manual worker, by contrast, never self-starts, so `start()` must still be
  *  called here. We resolve the version-skew by starting eagerly but NULL-SAFELY:
- *  swallow the pre-bind race (the SDK self-starts once the transport binds)
- *  instead of letting it escape. The SDK owns the start lifecycle end to end (it
- *  logs and falls back to REST on its own subscribe failure), so discarding this
- *  result — as the previous `void worker.start()` already did for the resolved
- *  case — is safe. Pairs with the library-side null-safe, idempotent start
- *  (jwulf/nano-sdk-js#12) so neither an eager nor a duplicate start can crash. */
+ *  swallow ONLY the pre-bind race (the SDK self-starts once the transport binds)
+ *  and SURFACE any other start failure via `console.warn` rather than masking it.
+ *  The SDK owns the start lifecycle end to end (it logs and falls back to REST on
+ *  its own subscribe failure), so discarding the resolved result — as the previous
+ *  `void worker.start()` already did — is safe. Pairs with the library-side
+ *  null-safe, idempotent start (jwulf/nano-sdk-js#12) so neither an eager nor a
+ *  duplicate start can crash. */
 export function adaptJobWorker(worker: RawNanoJobWorker): NanoJobWorker {
   return {
     start: () => {
       try {
         const started = worker.start();
-        if (isPromiseLike(started)) started.then(undefined, ignoreStartRace);
+        if (isPromiseLike(started)) started.then(undefined, handleStartError);
       } catch (e) {
-        ignoreStartRace(e);
+        handleStartError(e);
       }
     },
     stop: () => worker.stop(),
@@ -203,11 +204,30 @@ function isPromiseLike(v: unknown): v is PromiseLike<unknown> {
   return isRecord(v) && typeof v.then === "function";
 }
 
-/** Swallow the SDK worker's pre-bind start race (a null-transport dereference the
- *  SDK recovers from via its own self-start). Kept as a named no-op so the intent
- *  is explicit at every call site. */
-function ignoreStartRace(_e: unknown): void {
-  /* the SDK self-starts once its transport binds — see adaptJobWorker */
+/** The SDK's pre-bind start race is a NULL/undefined-transport dereference the SDK
+ *  recovers from via its own self-start: a `TypeError` from reading a property of
+ *  `null`/`undefined` (e.g. `Cannot read properties of null (reading 'subscribe')`,
+ *  #415). Match it NARROWLY so a genuine start failure on the REST/manual path (or
+ *  any other SDK error) is never mistaken for the race and silently masked. */
+function isPreBindStartRace(e: unknown): boolean {
+  return e instanceof TypeError && /Cannot read propert(?:y|ies) of (?:null|undefined)/.test(e.message);
+}
+
+/** Handle an eager-start error NULL-SAFELY. Swallow ONLY the SDK's known pre-bind
+ *  transport race (it self-starts once its transport binds — see
+ *  {@link adaptJobWorker}); any OTHER error is a real start failure (e.g. on the
+ *  REST/manual path) and is SURFACED via `console.warn` so it is not silently
+ *  masked. Never rethrows — callers rely on this to keep an async `start()` from
+ *  escaping as an unhandled rejection that crashes the process. The SDK owns the
+ *  start lifecycle end to end (it logs and falls back to REST on its own subscribe
+ *  failure), so we surface-and-continue rather than propagate. */
+function handleStartError(e: unknown): void {
+  if (isPreBindStartRace(e)) return;
+  console.warn(
+    "[@nanobpm/workflow] job worker start() failed (not the known pre-bind transport " +
+      "race); the SDK owns start and REST fallback, so this is surfaced but not rethrown:",
+    e,
+  );
 }
 
 /** An activated job as delivered to a nano-sdk job handler: the workflow `Job`

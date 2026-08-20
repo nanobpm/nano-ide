@@ -60,10 +60,63 @@ class SelfStartingWorker {
   }
 }
 
+/** A raw worker whose `start()` fails with an arbitrary, NON-race error (either
+ *  synchronously or as a rejection). Models a genuine start failure on the
+ *  REST/manual path or any other SDK error — the class of failure the adapter must
+ *  NOT silently swallow. */
+class FailingWorker {
+  mode: "sync" | "async";
+  constructor(mode: "sync" | "async") {
+    this.mode = mode;
+  }
+  start(): void | Promise<void> {
+    const err = new Error("boom: real start failure");
+    if (this.mode === "sync") throw err;
+    return Promise.reject(err);
+  }
+  stop(): void {}
+  async stopGracefully(): Promise<void> {}
+}
+
+for (const mode of ["sync", "async"] as const) {
+  test(`adaptJobWorker.start() surfaces a genuine (non-race) ${mode} start failure instead of masking it`, async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (e: unknown) => rejections.push(e);
+    process.on("unhandledRejection", onRejection);
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args);
+    };
+    try {
+      const worker = adaptJobWorker(new FailingWorker(mode));
+
+      // A real failure must neither crash synchronously…
+      assert.doesNotThrow(() => worker.start());
+      // …nor escape as an unhandled rejection…
+      await new Promise((r) => setTimeout(r, 20));
+      assert.deepEqual(rejections, [], "a real start failure must not become an unhandled rejection");
+
+      // …but it MUST be surfaced (not silently swallowed like the pre-bind race).
+      assert.equal(warnings.length, 1, "a real start failure must be surfaced via console.warn");
+      const flat = warnings[0].map((a) => (a instanceof Error ? a.message : String(a))).join(" ");
+      assert.match(flat, /real start failure/, "the surfaced warning must carry the underlying error");
+    } finally {
+      console.warn = originalWarn;
+      process.off("unhandledRejection", onRejection);
+    }
+  });
+}
+
 test("adaptJobWorker.start() is null-safe against nano-sdk's async self-start (no crash, subscribes exactly once)", async () => {
   const rejections: unknown[] = [];
   const onRejection = (e: unknown) => rejections.push(e);
   process.on("unhandledRejection", onRejection);
+  const warnings: unknown[][] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args);
+  };
   try {
     const raw = new SelfStartingWorker();
     const worker = adaptJobWorker(raw);
@@ -83,7 +136,13 @@ test("adaptJobWorker.start() is null-safe against nano-sdk's async self-start (n
     // The SDK's own self-start (after bind) subscribed the transport exactly once;
     // the adapter's eager start neither crashed nor added a duplicate subscribe.
     assert.equal(raw.subscribes, 1, "the transport is subscribed exactly once, by the SDK self-start");
+
+    // The pre-bind race is recovered by the SDK's self-start, so it must be
+    // swallowed SILENTLY — not surfaced as a warning (that is reserved for real
+    // start failures).
+    assert.deepEqual(warnings, [], "the pre-bind transport race must be swallowed silently, not warned");
   } finally {
+    console.warn = originalWarn;
     process.off("unhandledRejection", onRejection);
   }
 });

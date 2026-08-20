@@ -49,15 +49,18 @@ export interface AppClock {
  * runtime's injectable timer seam to the surface handlers use, so worker/trigger/surface
  * handlers doing time-bounded work share the same clock as the background loops (no drift
  * between a handler's budget and the engine's timers). A non-positive/non-finite `wait`
- * delay clamps to fire at the current instant, mirroring the scheduler's own `setTimer`
- * clamp.
+ * delay clamps to fire at the current instant, and a far-future delay clamps to
+ * {@link MAX_TIMER_DELAY_MS} — matching the same clamp the background loops apply to their
+ * `setTimer` delays (see `mountTriggers`/`mountInstanceTracking`) — so `app.wait()` can
+ * never reintroduce a Node `TimeoutOverflowWarning`.
  */
 export function schedulerClock(sched: SchedulerDeps): AppClock {
   return {
     now: () => sched.now(),
     wait: (ms) =>
       new Promise<void>((resolve) => {
-        sched.setTimer(() => resolve(), Number.isFinite(ms) && ms > 0 ? ms : 0);
+        const delay = Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_TIMER_DELAY_MS) : 0;
+        sched.setTimer(() => resolve(), delay);
       }),
   };
 }

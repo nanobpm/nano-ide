@@ -44,7 +44,7 @@ export interface AppApi {
   env(name: string): string | undefined;
   /**
    * App clock seam — current time in ms since epoch, sourced from the runtime's injectable
-   * scheduler (`RuntimeOptions.scheduler`). The real wall clock in production; the virtual
+   * scheduler (`CreateUrbanAppOptions.scheduler`). The real wall clock in production; the virtual
    * clock under the test kit. A handler doing time-bounded work (poll loops, backoff,
    * budgets) should read `app.now()` instead of `Date.now()` so a whole-app `advanceTime()`
    * bounds it deterministically rather than the loop burning real wall-time. See

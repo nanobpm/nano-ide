@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.73.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.72.2...@nanobpm/urban-0.73.0) (2026-08-20)
+
+
+### Features
+
+* **urban:** add the appView page-node renderer (mount the App View iframe) ([#419](https://github.com/nanobpm/nano-ide/issues/419)) ([57cc8bd](https://github.com/nanobpm/nano-ide/commit/57cc8bd7d67d4b7f5481218f14bace640a385b2e))
+
 ## [0.72.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.72.1...@nanobpm/urban-0.72.2) (2026-08-20)
 
 

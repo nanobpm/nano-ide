@@ -134,6 +134,14 @@ export async function resolveInstalledConnectors(
  *  error boundary by the engine adapter); `job.fail(msg)` a plain throw (retry). */
 export function adaptConnectorHandler(worker: DefinedConnectorWorker): JobHandler {
   return async (job: EngineJob) => {
+    // A connector job always belongs to a process instance; a missing key is a
+    // protocol fault. Fail loud (the engine retries / raises an incident) rather
+    // than handing the connector a fabricated "" that would silently corrupt any
+    // instance-scoped call it makes.
+    const processInstanceKey = job.processInstanceKey;
+    if (processInstanceKey === undefined || processInstanceKey === "") {
+      throw new Error(`connector job '${job.jobType}' (${job.jobKey}) has no processInstanceKey`);
+    }
     let outcome:
       | { kind: "complete"; vars?: Record<string, unknown> }
       | { kind: "fail"; message: string }
@@ -142,7 +150,7 @@ export function adaptConnectorHandler(worker: DefinedConnectorWorker): JobHandle
     const facade: ConnectorWorkerJob = {
       jobKey: job.jobKey,
       type: job.jobType,
-      processInstanceKey: job.processInstanceKey ?? "",
+      processInstanceKey,
       elementId: job.elementId,
       variables: job.variables,
       async complete(vars) {

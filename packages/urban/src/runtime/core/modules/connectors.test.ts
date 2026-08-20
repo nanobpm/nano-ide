@@ -145,6 +145,7 @@ test("mountConnectors imports the pack entry and registers the drained worker", 
   const out = await engine.deliver("slack:send-message", {
     jobKey: "j1",
     jobType: "slack:send-message",
+    processInstanceKey: "pi1",
     variables: { text: "hi" },
   });
   assert.deepEqual(out, { echoed: "hi" });
@@ -214,7 +215,7 @@ test("mountConnectors fails closed on a duplicate worker type in one pack entry"
 });
 
 test("adaptConnectorHandler maps complete/fail/error(BpmnError) and a returned value", async () => {
-  const job: EngineJob = { jobKey: "j", jobType: "t", variables: {} };
+  const job: EngineJob = { jobKey: "j", jobType: "t", processInstanceKey: "pi", variables: {} };
 
   const completes = adaptConnectorHandler({ type: "t", handle: async (j) => void (await j.complete({ a: 1 })) });
   assert.deepEqual(await completes(job), { a: 1 });
@@ -230,4 +231,23 @@ test("adaptConnectorHandler maps complete/fail/error(BpmnError) and a returned v
     () => Promise.resolve(errors(job)),
     (e: unknown) => e instanceof BpmnError && e.errorCode === "CODE",
   );
+});
+
+test("adaptConnectorHandler fails loud on a job with no processInstanceKey (no masking to '')", async () => {
+  // Guard for the decode-boundary defect class (Magikcraft/nano-bpm#940): a
+  // keyless job must reject, never invoke the connector with a fabricated "".
+  let handlerRan = false;
+  const h = adaptConnectorHandler({
+    type: "t",
+    handle: async () => {
+      handlerRan = true;
+    },
+  });
+  const keyless: EngineJob = { jobKey: "j", jobType: "t", variables: {} };
+  await assert.rejects(() => Promise.resolve(h(keyless)), /no processInstanceKey/);
+  assert.equal(handlerRan, false, "connector handler must not run for a keyless job");
+
+  // An empty-string key is the exact masking source and is rejected too.
+  const emptyKey: EngineJob = { jobKey: "j", jobType: "t", processInstanceKey: "", variables: {} };
+  await assert.rejects(() => Promise.resolve(h(emptyKey)), /no processInstanceKey/);
 });

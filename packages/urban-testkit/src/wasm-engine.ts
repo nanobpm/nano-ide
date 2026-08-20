@@ -242,6 +242,12 @@ export class WasmEngineClient implements EngineClient {
   /** The first error a tracked in-flight handler surfaced from its engine-completion call, held so
    *  {@link drain} can rethrow it at the next quiesce point (preserving fail-loud), then cleared. */
   #inflightError: unknown;
+  /** Monotonic count of tracked handlers that have *settled* (completed or failed and left
+   *  {@link #inflight}) — never incremented by a handler still parked on a future virtual wait.
+   *  {@link drain} samples it around {@link #quiesce} to detect a handler that finished mid-quiesce
+   *  and may have enqueued fresh engine work, so it loops for another activation pass instead of
+   *  returning early on `!activatedAny` and leaving that work undrained until a later `settle`. */
+  #completions = 0;
 
   private constructor(engine: TestEngine) {
     this.#engine = engine;
@@ -690,8 +696,14 @@ export class WasmEngineClient implements EngineClient {
       }
       // Let every handler dispatched this iteration run until it completes (its `completeJob` may
       // enqueue fresh engine work the next iteration picks up) or parks on a future wait.
+      const completionsBefore = this.#completions;
       await this.#quiesce();
-      if (!activatedAny) return;
+      // A handler that *settled* during `#quiesce` (as opposed to merely parking on a future wait)
+      // may have enqueued fresh engine work via its `completeJob`. Even when this pass activated
+      // nothing, that newly enqueued work must get an activation pass, so only reach the fixpoint —
+      // and return — once a pass both activates nothing new AND settles no in-flight handler.
+      const settledAny = this.#completions !== completionsBefore;
+      if (!activatedAny && !settledAny) return;
     }
     throw new Error(
       `drain did not quiesce after ${MAX_DRAIN_ITERATIONS} iterations (worker re-creating work?)`,
@@ -709,6 +721,7 @@ export class WasmEngineClient implements EngineClient {
         if (this.#inflightError === undefined) this.#inflightError = err;
       })
       .finally(() => {
+        this.#completions++;
         this.#inflight.delete(tracked);
         if (jobKey !== "") this.#inflightJobKeys.delete(jobKey);
       });

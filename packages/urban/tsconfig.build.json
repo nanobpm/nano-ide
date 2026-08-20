@@ -7,5 +7,5 @@
     "rootDir": "src",
     "allowJs": false
   },
-  "exclude": ["**/*.test.ts", "node_modules", "dist", "src/runtime/browser"]
+  "exclude": ["**/*.test.ts", "**/*.test-utils.ts", "node_modules", "dist", "src/runtime/browser"]
 }

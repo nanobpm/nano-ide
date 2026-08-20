@@ -582,3 +582,61 @@ test("wasm: an explicit caller-supplied lineage envelope is preserved (override 
     await engine.close();
   }
 });
+
+// Regression (PR #409 review): `drain()` must reach a fixpoint at the current virtual instant even
+// when a previously-dispatched, still-in-flight handler settles *during* a later drain iteration's
+// `#quiesce()` (rather than during the pass that dispatched it) and its `completeJob` enqueues fresh
+// engine work. A single `drain()` used to return as soon as an iteration activated nothing new
+// (`activatedAny === false`), so that just-enqueued follow-on job was left undrained until a later
+// `settle()`/`drain()`. Here work1's handler is deliberately slow (spans past the pass that
+// dispatched it), so work1 completes in a later pass; the drain must still go on to serve work2 and
+// complete the instance in the same `createInstance` call.
+test("wasm: drain reaches a fixpoint when a slow handler completes mid-quiesce and enqueues follow-on work", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  const macrotask = () => new Promise<void>((r) => realSetTimeout(r, 0));
+  try {
+    let work2Ran = 0;
+    // Slow enough to survive the quiesce of the pass that dispatched it (one macrotask), then settle
+    // during the *next* pass's quiesce — the pass in which `activatedAny` is false. Its completion
+    // enqueues the work2 job, which the drain must still pick up before returning.
+    await engine.registerWorker("work1", async () => {
+      await macrotask();
+      await macrotask();
+      return {};
+    });
+    await engine.registerWorker("work2", () => {
+      work2Ran++;
+      return {};
+    });
+    await engine.deployResources([
+      {
+        name: "chain.bpmn",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="chain" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f1" sourceRef="s" targetRef="w1"/>
+    <serviceTask id="w1"><extensionElements><zeebe:taskDefinition type="work1"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="w1" targetRef="w2"/>
+    <serviceTask id="w2"><extensionElements><zeebe:taskDefinition type="work2"/></extensionElements></serviceTask>
+    <sequenceFlow id="f3" sourceRef="w2" targetRef="e"/><endEvent id="e"/>
+  </process>
+</definitions>`,
+        contentType: "application/bpmn+xml",
+      },
+    ]);
+
+    // A single createInstance → one drain(): both tasks must be served and the instance completed,
+    // with no extra settle() needed to pick up the follow-on job work1's completion enqueued.
+    const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "chain" });
+    assert.equal(work2Ran, 1, "the follow-on worker must run within the same drain, not be stranded");
+    const [inst] = await engine.searchProcessInstances({
+      processInstanceKeys: [processInstanceKey],
+    });
+    assert.equal(inst?.state, "COMPLETED", "the instance must complete once drain reaches its fixpoint");
+  } finally {
+    await engine.close();
+  }
+});

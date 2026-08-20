@@ -6,7 +6,7 @@ import type { EngineClient, EngineJob, HostContext, JobHandler, WorkerSubscripti
 import type { AppManifest } from "../manifest.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { mountWorkers, sdkDecisionEvaluator, type AppJobHandler } from "./workers.ts";
-import type { SchedulerDeps } from "./scheduler.ts";
+import { fakeScheduler } from "./scheduler.test-utils.ts";
 import { makeGateway } from "./gateway.ts";
 import { LineageStore } from "./lineage-store.ts";
 import {
@@ -442,52 +442,6 @@ test("mountWorkers surfaces a configured-but-missing default source as a warn (n
   assert.ok(warned, "a configured-but-missing default source must warn, not silently degrade");
   assert.ok(!logs.some((l) => l.msg.includes("no default data source")), "must not claim the datasource is absent");
 });
-
-/** A virtual-clock `SchedulerDeps` (mirrors the canonical `fakeScheduler` in
- *  triggers.test.ts / instance-tracking.test.ts): `advance` fires every timer due within
- *  the interval in order, draining microtasks between fires so an async loop's follow-on
- *  chain settles before the next fire. Lets a test bound a handler's time-bounded loop over
- *  virtual time without touching the real wall clock. */
-function fakeScheduler(startMs = 0): SchedulerDeps & { advance: (ms: number) => Promise<void>; pending: () => number } {
-  let clock = startMs;
-  let seq = 0;
-  const timers = new Map<number, { at: number; fn: () => void }>();
-  return {
-    now: () => clock,
-    setTimer: (fn, delayMs) => {
-      const id = ++seq;
-      timers.set(id, { at: clock + (Number.isFinite(delayMs) && delayMs > 0 ? delayMs : 0), fn });
-      return id;
-    },
-    clearTimer: (h) => {
-      if (typeof h === "number") timers.delete(h);
-    },
-    pending: () => timers.size,
-    advance: async (ms) => {
-      const target = clock + Math.max(0, ms);
-      for (;;) {
-        let nextId = -1;
-        let nextAt = Number.POSITIVE_INFINITY;
-        for (const [id, t] of timers) {
-          if (t.at <= target && t.at < nextAt) {
-            nextAt = t.at;
-            nextId = id;
-          }
-        }
-        if (nextId < 0) break;
-        const t = timers.get(nextId);
-        if (!t) break;
-        timers.delete(nextId);
-        clock = t.at;
-        t.fn();
-        await Promise.resolve();
-        await Promise.resolve();
-      }
-      clock = target;
-    },
-  };
-}
-
 test("mountWorkers threads the injected scheduler: a worker's time-bounded loop is bounded by advanceTime, not real wall-time", async () => {
   // The regression this guards (#408): before the scheduler was threaded into mountWorkers,
   // a handler doing time-bounded work had to hardwire `Date.now()`/`setTimeout`, so under the

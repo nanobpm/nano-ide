@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.13.0...@nanobpm/workflow-0.13.1) (2026-08-20)
+
+
+### Bug Fixes
+
+* **workflow:** make job-worker adapter start() null-safe against nano-sdk self-start ([#417](https://github.com/nanobpm/nano-ide/issues/417)) ([a1c7c07](https://github.com/nanobpm/nano-ide/commit/a1c7c07210cc0fd49dadc2cfd6ee35a96ccc946d))
+
 ## [0.13.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.12.0...@nanobpm/workflow-0.13.0) (2026-08-20)
 
 

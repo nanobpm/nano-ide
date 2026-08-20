@@ -493,24 +493,44 @@ test("mountWorkers threads the injected scheduler: a worker's time-bounded loop 
 });
 
 test("mountWorkers defaults the app clock to real timers when no scheduler is injected", async () => {
-  // Production parity: with no injected scheduler the handler's `app.now()`/`app.wait()` fall
-  // through to the live wall clock + real timers — no behavior change on the real transport.
-  let observed = -1;
-  const handler: AppJobHandler = async (_job, appApi) => {
-    const before = appApi.now();
-    await appApi.wait(5); // a real 5ms sleep on the default scheduler
-    observed = appApi.now() - before;
-    return { ok: true };
-  };
-  const engine = new MiniEngine();
-  const { ctx } = makeCtx({ workers: [{ taskType: "tick", handler: "workers/tick.ts" }] }, engine);
-  ctx.host.importModule = async () => ({ default: handler });
+  // Production parity: with no injected scheduler the handler's `app.now()`/`app.wait()` must fall
+  // through to the default seam — `Date.now()` + `globalThis.setTimeout`. Assert that seam directly
+  // by stubbing both globals, so the test is deterministic (no real 5ms sleep, no timer-jitter/clock-
+  // resolution race) and proves the exact wiring rather than an observable side effect of it.
+  const realSetTimeout = globalThis.setTimeout;
+  const realDateNow = Date.now;
+  const armedDelays: number[] = [];
+  let clock = 1_000;
+  try {
+    Date.now = () => clock;
+    // Object.assign carries realSetTimeout's full type (incl. `__promisify__`), so the merged value
+    // stays assignable to `typeof globalThis.setTimeout` without a cast; the spy fires ASAP and
+    // advances the fake clock by the armed delay, so no real wall-time elapses.
+    globalThis.setTimeout = Object.assign((fn: () => void, ms?: number) => {
+      armedDelays.push(ms ?? 0);
+      clock += ms ?? 0;
+      return realSetTimeout(fn, 0);
+    }, realSetTimeout);
 
-  const wallStart = Date.now();
-  const handle = await mountWorkers(ctx, makeApp()); // no scheduler → defaultScheduler()
-  const out = await engine.deliver("tick", { jobKey: "j1", jobType: "tick", processInstanceKey: "pi", variables: {} });
-  assert.deepEqual(out, { ok: true });
-  assert.ok(Date.now() - wallStart >= 4, "app.wait must actually sleep on the real clock by default");
-  assert.ok(observed >= 0, "app.now must read the real wall clock by default");
-  await handle.stop();
+    let observed = -1;
+    const handler: AppJobHandler = async (_job, appApi) => {
+      const before = appApi.now();
+      await appApi.wait(5); // must arm the default (stubbed) setTimeout with delay 5
+      observed = appApi.now() - before;
+      return { ok: true };
+    };
+    const engine = new MiniEngine();
+    const { ctx } = makeCtx({ workers: [{ taskType: "tick", handler: "workers/tick.ts" }] }, engine);
+    ctx.host.importModule = async () => ({ default: handler });
+
+    const handle = await mountWorkers(ctx, makeApp()); // no scheduler → defaultScheduler()
+    const out = await engine.deliver("tick", { jobKey: "j1", jobType: "tick", processInstanceKey: "pi", variables: {} });
+    assert.deepEqual(out, { ok: true });
+    assert.ok(armedDelays.includes(5), "app.wait(5) must arm the default globalThis.setTimeout seam with delay 5");
+    assert.equal(observed, 5, "app.now must read the default Date.now clock (advanced by the armed 5ms timer)");
+    await handle.stop();
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+    Date.now = realDateNow;
+  }
 });

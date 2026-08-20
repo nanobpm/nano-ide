@@ -500,11 +500,20 @@ export class WasmEngineClient implements EngineClient {
   }
 
   async close(): Promise<void> {
-    this.#workers.clear();
-    this.#workerMocks.clear();
-    this.#childProcessMocks.clear();
-    this.#childProcessJobTypes.clear();
-    this.#engine.free();
+    try {
+      // Fire-and-forget dispatch (see #track/drain) means a drain can return with a handler still
+      // in-flight, so an engine-completion failure it captures *after* that drain returned lands in
+      // #inflightError with no later #quiesce to rethrow it. Flush and surface it fail-loud at
+      // teardown — rather than free the engine and silently swallow a late worker failure. #quiesce
+      // clears #inflightError, so an error already rethrown by a prior drain is not raised twice.
+      await this.#quiesce();
+    } finally {
+      this.#workers.clear();
+      this.#workerMocks.clear();
+      this.#childProcessMocks.clear();
+      this.#childProcessJobTypes.clear();
+      this.#engine.free();
+    }
   }
 
   // --- Extras beyond EngineClient (used by the settle loop + assertions) ---

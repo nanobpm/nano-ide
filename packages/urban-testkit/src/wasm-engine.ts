@@ -45,10 +45,11 @@ import {
 // `@nanobpm/engine-testkit` (issue Magikcraft/nano-bpm#894); import and re-export
 // them so this adapter and the lifted assertion DSL share ONE definition
 // (No Drift Surfaces, AGENTS.md) instead of the two byte-identical copies they had
-// before. `ProcessInstanceSnapshot` stays declared here (structurally identical to
-// urban's), so the kit still depends only on urban's long-published public API and a
-// scaffolded app can pin the *current* urban release; `isRecord` is a generic JSON
-// guard.
+// before. The state mapping is therefore sourced from `@nanobpm/engine-testkit`
+// (this adapter already imports `@nanobpm/urban/runtime` too). `ProcessInstanceSnapshot`
+// stays declared here as a local structural mirror of urban's shape — not re-exported
+// from engine-testkit — so a scaffolded app can still pin the *current* urban release
+// without engine-testkit dictating that DTO; `isRecord` is a generic JSON guard.
 import {
   type ProcessInstanceState,
   wasmStateToProcessInstanceState,

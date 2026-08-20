@@ -186,12 +186,52 @@ test("#416: renderAppView is non-fill by default and never throws on missing pro
     (c): c is FakeElement => c instanceof FakeElement && c.tagName === "IFRAME",
   );
   assert.ok(frame, "an <iframe> is still mounted with no embed");
-  assert.equal(frame.getAttribute("src"), "");
+  // No usable embed → src is OMITTED (about:blank), not src="" (which resolves to
+  // the current document URL in browsers and risks a recursive self-embed).
+  assert.equal(frame.getAttribute("src"), null);
   // No title → no label element rendered.
   const label = section.children.find(
     (c): c is FakeElement => c instanceof FakeElement && c.className === "pc-appview-title",
   );
   assert.equal(label, undefined);
+});
+
+test("#416: renderAppView neutralizes a dangerous-scheme embed (no executable iframe src)", (t) => {
+  t.after(installFakeDom());
+  // A hostile/malformed page doc must not be able to smuggle an executable iframe
+  // src via a javascript:/data:/vbscript: embed, nor bypass the check with embedded
+  // whitespace/tabs (browsers strip those before parsing the URL).
+  for (const embed of [
+    "javascript:alert(1)",
+    "data:text/html,<script>alert(1)</script>",
+    "vbscript:msgbox(1)",
+    "  javascript:alert(1)  ",
+    "java\tscript:alert(1)",
+    "JAVASCRIPT:alert(1)",
+  ]) {
+    const section = asFake(renderAppView({ type: "appView", props: { embed } }));
+    const frame = section.children.find(
+      (c): c is FakeElement => c instanceof FakeElement && c.tagName === "IFRAME",
+    );
+    assert.ok(frame, `an <iframe> is still mounted for ${JSON.stringify(embed)}`);
+    assert.equal(
+      frame.getAttribute("src"),
+      null,
+      `dangerous embed ${JSON.stringify(embed)} must not become an iframe src`,
+    );
+  }
+});
+
+test("#416: renderAppView keeps a legit http(s) embed and trims surrounding whitespace", (t) => {
+  t.after(installFakeDom());
+  const section = asFake(
+    renderAppView({ type: "appView", props: { embed: "  https://example.test/embed.html  " } }),
+  );
+  const frame = section.children.find(
+    (c): c is FakeElement => c instanceof FakeElement && c.tagName === "IFRAME",
+  );
+  assert.ok(frame);
+  assert.equal(frame.getAttribute("src"), "https://example.test/embed.html");
 });
 
 test('#327: fmtCellValue "datetime" renders an ISO timestamp in the viewer\'s local time as "h:mmam Mon D"', () => {

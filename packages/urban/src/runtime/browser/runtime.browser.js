@@ -2538,13 +2538,26 @@ function renderNav(node) {
 // and mount.js's reportUrl handling: a root-absolute "/x" would escape the proxy
 // prefix and hit the CONSOLE origin, so a single leading slash is stripped to
 // rebase onto the mount root; an already document-relative ("./x", "x") or an
-// absolute ("https://…") / protocol-relative ("//host") URL is left untouched.
+// absolute ("http(s)://…") / protocol-relative ("//host") URL is left untouched.
+// The result becomes an <iframe> src, so a scheme URL is only honoured when it is
+// http/https: a hostile/malformed page doc could otherwise smuggle an executable
+// `javascript:`/`data:`/`vbscript:` src, so any other scheme is rejected ("" →
+// caller omits the attribute). Input is trimmed and ASCII tab/newline stripped
+// FIRST (browsers strip those before parsing a URL, so `java\tscript:` would still
+// execute) so scheme detection cannot be bypassed by embedded whitespace.
 /** @param {string} url */
 function baseRelativeUrl(url) {
-  if (typeof url !== "string" || url === "") return "";
-  if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//")) return url; // absolute / protocol-relative
-  if (url.startsWith("/")) return url.slice(1); // root-absolute → document-relative (rebase onto mount root)
-  return url; // already relative
+  if (typeof url !== "string") return "";
+  const cleaned = url.replace(/[\t\n\r]/g, "").trim();
+  if (cleaned === "") return "";
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(cleaned);
+  if (scheme) {
+    const proto = scheme[1].toLowerCase();
+    return proto === "http" || proto === "https" ? cleaned : ""; // reject javascript:/data:/vbscript:/file:/…
+  }
+  if (cleaned.startsWith("//")) return cleaned; // protocol-relative
+  if (cleaned.startsWith("/")) return cleaned.slice(1); // root-absolute → document-relative (rebase onto mount root)
+  return cleaned; // already relative
 }
 
 // `appView` (ADR 0057 / #416): mount an embedded App View — an <iframe> hosting a
@@ -2565,9 +2578,11 @@ function renderAppView(node) {
     el("iframe", {
       class: "pc-appview-frame",
       // Base-relative so the embed resolves under both the app root and the console
-      // App-View proxy prefix (see baseRelativeUrl). Empty when no `embed` is
-      // declared — the node still renders its chrome rather than throwing.
-      src,
+      // App-View proxy prefix (see baseRelativeUrl). Omitted (about:blank) when no
+      // usable `embed` is declared — an empty `src=""` resolves to the current
+      // document URL in browsers, risking a recursive self-embed. The node still
+      // renders its chrome rather than throwing.
+      src: src || undefined,
       title: title || "App view",
       loading: "lazy",
       referrerpolicy: "same-origin",

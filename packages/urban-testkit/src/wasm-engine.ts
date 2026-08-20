@@ -716,7 +716,11 @@ export class WasmEngineClient implements EngineClient {
    *  rethrow it loudly rather than let it escape as an unhandled rejection. */
   #track(jobKey: string, p: Promise<void>): void {
     if (jobKey !== "") this.#inflightJobKeys.add(jobKey);
-    const tracked = p
+    // Assign `tracked` before the `.finally` closure can reference it: the callback only runs once
+    // the promise settles (long after this statement completes), but an explicit let/assign makes
+    // the evaluation order unambiguous rather than relying on the self-referential `const`.
+    let tracked: Promise<void>;
+    tracked = p
       .catch((err: unknown) => {
         if (this.#inflightError === undefined) this.#inflightError = err;
       })

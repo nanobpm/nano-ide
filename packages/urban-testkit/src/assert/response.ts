@@ -9,7 +9,7 @@
 // a pure function of the response.
 
 import type { ApiResponse } from "../openapi-driver.ts";
-import { deepSubset, failAssertion, formatValue } from "./format.ts";
+import { deepSubset, failAssertion, formatValue } from "@nanobpm/engine-testkit";
 
 /** Fluent, synchronous assertions over an already-resolved HTTP response's
  *  status, JSON body, and headers. Each matcher returns the same object so calls

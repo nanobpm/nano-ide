@@ -9,7 +9,7 @@
 // is ever touched; a failure is a pure function of the table's contents.
 
 import type { TestApp } from "../boot-app.ts";
-import { deepSubset, failAssertion, formatValue } from "./format.ts";
+import { deepSubset, failAssertion, formatValue } from "@nanobpm/engine-testkit";
 
 /** Fluent assertions over the rows of a single SQLite table. Each matcher awaits a
  *  fresh read of the table and resolves to the same object so calls chain. */

@@ -40,17 +40,21 @@ import {
   rewriteCallActivities,
 } from "./child-process-mock.ts";
 
-// These three are structurally re-declared here (rather than imported from
-// `@nanobpm/urban/runtime`) on purpose: they let the kit depend only on urban's
-// long-published public API, so a scaffolded app can pin the *current* urban
-// release instead of an unreleased one. `ProcessInstanceState`/`Snapshot` are
-// structurally identical to urban's (an `EngineClient` implementation stays
-// assignable by structural typing), and `isRecord` is a generic JSON guard.
-
-/** A process instance's externally-visible lifecycle state — the small set the
- *  instance-tracking reconciler keys on. Structurally identical to urban's
- *  `ProcessInstanceState`. */
-export type ProcessInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED";
+// `ProcessInstanceState` and the wasm→state projection
+// `wasmStateToProcessInstanceState` are the canonical read-model mapping owned by
+// `@nanobpm/engine-testkit` (issue Magikcraft/nano-bpm#894); import and re-export
+// them so this adapter and the lifted assertion DSL share ONE definition
+// (No Drift Surfaces, AGENTS.md) instead of the two byte-identical copies they had
+// before. The state mapping is therefore sourced from `@nanobpm/engine-testkit`
+// (this adapter already imports `@nanobpm/urban/runtime` too). `ProcessInstanceSnapshot`
+// stays declared here as a local structural mirror of urban's shape — not re-exported
+// from engine-testkit — so a scaffolded app can still pin the *current* urban release
+// without engine-testkit dictating that DTO; `isRecord` is a generic JSON guard.
+import {
+  type ProcessInstanceState,
+  wasmStateToProcessInstanceState,
+} from "@nanobpm/engine-testkit";
+export { type ProcessInstanceState, wasmStateToProcessInstanceState };
 
 /** A single process instance's lifecycle snapshot, as returned by
  *  {@link EngineClient.searchProcessInstances}. Structurally identical to urban's. */
@@ -117,29 +121,6 @@ const DEFAULT_MAX_JOBS = 32;
 /** A hard cap on drain iterations, so a worker that endlessly re-creates work
  *  (a modelling bug) surfaces as a thrown error instead of hanging the test. */
 const MAX_DRAIN_ITERATIONS = 100_000;
-
-/** Map the wasm engine's process-instance `state` string onto the
- *  transport-agnostic {@link ProcessInstanceState}, mirroring the engine's REST
- *  projection: the transient `Terminating` drain state has already discarded its
- *  tokens and is on its way to `Terminated`, so it projects as `TERMINATED`
- *  externally (parity with `process_instance_state_enum` in the engine server).
- *  Returns `undefined` for an unrecognized value, which the caller skips. */
-export function wasmStateToProcessInstanceState(
-  raw: unknown,
-): ProcessInstanceState | undefined {
-  if (typeof raw !== "string") return undefined;
-  switch (raw.toUpperCase()) {
-    case "ACTIVE":
-      return "ACTIVE";
-    case "COMPLETED":
-      return "COMPLETED";
-    case "TERMINATED":
-    case "TERMINATING":
-      return "TERMINATED";
-    default:
-      return undefined;
-  }
-}
 
 /** A registered worker's dispatch parameters. */
 interface RegisteredWorker {

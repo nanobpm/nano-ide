@@ -237,7 +237,11 @@ the package barrel.
   assertThatResponse(res).hasStatus(200).hasJson({ ok: true });
   ```
 
-The shared selector resolver (`src/assert/selectors.ts`) — the single source of
-truth for turning a key/`byKey`/`byProcessId`/default into a concrete instance —
-and the failure-message helpers (`src/assert/format.ts`) back all matcher
-families.
+The engine-facing matchers, selectors (`byKey` / `byProcessId`) and their types
+live in [`@nanobpm/engine-testkit`](https://www.npmjs.com/package/@nanobpm/engine-testkit)
+— the single source of truth for the assertion DSL, reusable beyond Urban apps
+(issue [Magikcraft/nano-bpm#894](https://github.com/Magikcraft/nano-bpm/issues/894)).
+This package re-exports that surface and adds only the thin `TestApp`-adapting
+wrappers (`assertThatInstance` / `assertThatUserTask`, which forward the app's
+engine to the port-based matchers) plus the Urban-only `assertThatDb` /
+`assertThatResponse` families (SQLite + the OpenAPI route driver).

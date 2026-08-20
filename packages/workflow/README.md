@@ -236,6 +236,46 @@ Only `resourceId` is required; omit `append` and no `ioMapping` is emitted. A
 `w.task` **without** a `prompt` is unchanged — it emits no `linkedResources`.
 Data envelopes (via contracts) still lift alongside the prompt binding.
 
+#### Service-task I/O mappings (`w.task`/`w.run` with `{ io }`)
+
+Any service task — external (`w.task`) or locally-hosted (`w.run`) — can carry a
+general `<zeebe:ioMapping>` of arbitrary **input** (applied on activation) and
+**output** (applied on completion) variable mappings via an optional `io`. It
+reuses the same `{ input?, output? }` shape as `w.human`'s `io` (a single
+`HumanIoMapping` / `HumanIoEntry`, no parallel type):
+
+```ts
+w.task("record-conformance-ack", {
+  jobType: "pr.conformance-ack",
+  io: {
+    input: [
+      { source: "=planKey", target: "planKey" },
+      { source: "=if (is defined(note)) then note else null", target: "note" },
+    ],
+  },
+});
+```
+
+derives:
+
+```xml
+<bpmn:serviceTask id="record-conformance-ack" name="record-conformance-ack">
+  <bpmn:extensionElements>
+    <zeebe:taskDefinition type="pr.conformance-ack" />
+    <zeebe:ioMapping>
+      <zeebe:input source="=planKey" target="planKey" />
+      <zeebe:input source="=if (is defined(note)) then note else null" target="note" />
+    </zeebe:ioMapping>
+  </bpmn:extensionElements>
+</bpmn:serviceTask>
+```
+
+The `ioMapping` is emitted after `taskDefinition` (and after `linkedResources` /
+envelope `properties` when present). When a task has **both** a `prompt.append`
+and an explicit `io.input`, they merge into a **single** `<zeebe:ioMapping>` (the
+`appendPrompt` input trails the explicit inputs) — never two. Omit `io` (or pass
+an empty `{}`) and no `ioMapping` is emitted.
+
 ### Imperative (Temporal-style, engine-replayed) — experimental/internal
 
 Write the orchestration as a function. `ctx.run(name, fn)` is a durable step: its

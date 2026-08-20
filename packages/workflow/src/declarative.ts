@@ -48,6 +48,7 @@ import type {
   TimerStart,
 } from "./types.js";
 import type { Envelope, EnvelopeField } from "./envelope.js";
+import type { HumanIoMapping } from "./io-mapping.js";
 import { assertIdent, assertTimerCycle, assertTimerDate, assertTimerDuration, escapeXml, jobType, messageName } from "./xml.js";
 import { eachNodeKind, requireNodeKind } from "./nodes/registry.js";
 // Import the generated barrel purely for its registration side effects: every
@@ -98,7 +99,11 @@ export interface FlowBuilder<C extends object = object> {
    * the flow's contracts, the handler's job variables and return value are typed
    * from that contract's `in`/`out` envelopes; otherwise they are `JsonObject`.
    */
-  run<K extends string>(name: K, handler: TypedHandler<VarsOf<C, K>, ResultOf<C, K>>): FlowBuilder<C>;
+  run<K extends string>(
+    name: K,
+    handler: TypedHandler<VarsOf<C, K>, ResultOf<C, K>>,
+    opts?: { io?: HumanIoMapping },
+  ): FlowBuilder<C>;
   /**
    * A durable activity served by a worker OUTSIDE this program (a BPMN service
    * task, but no locally-hosted handler). Its job type defaults to the derived
@@ -111,7 +116,7 @@ export interface FlowBuilder<C extends object = object> {
    * workers must poll. Its contract envelopes (if any) type the model, not a
    * local handler.
    */
-  task<K extends string>(name: K, opts?: { jobType?: string }): FlowBuilder<C>;
+  task<K extends string>(name: K, opts?: { jobType?: string; io?: HumanIoMapping }): FlowBuilder<C>;
   /**
    * A durable wait for an external/human event, correlated on a process
    * variable (a BPMN message intermediate catch event). Resume it with

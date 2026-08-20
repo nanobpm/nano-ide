@@ -13,6 +13,8 @@
 
 import type { NodeEnvelopes } from "../types.js";
 import { assertJobType, escapeXml } from "../xml.js";
+import { assertIoMapping, renderIoMapping } from "../io-mapping.js";
+import type { HumanIoEntry, HumanIoMapping } from "../io-mapping.js";
 import { registerNodeKind } from "./registry.js";
 
 /** Binds an LLM prompt resource to an agent service task. Emits, alongside the
@@ -44,6 +46,11 @@ declare module "../types.js" {
       jobType?: string;
       /** The agent prompt binding, when the task is an LLM-agent service task. */
       prompt?: PromptBinding;
+      /** An explicit `<zeebe:ioMapping>` on the service task — arbitrary input
+       *  (and output) variable mappings, using the shared ioMapping shape. When a
+       *  `prompt.append` is ALSO present it is folded into this single mapping as
+       *  an extra `appendPrompt` input (no duplicate `ioMapping` element). */
+      io?: HumanIoMapping;
     };
   }
 }
@@ -56,9 +63,13 @@ declare module "../declarative.js" {
      * (`resourceType="GenericScript" linkName="prompt"`). Pair it with a
      * `{ jobType }` capability token (e.g. `senior:retro`) so an agent pool
      * services it. `prompt.append` (optional) feeds a FEEL expression to the
-     * worker through a `zeebe:ioMapping` `appendPrompt` input.
+     * worker through a `zeebe:ioMapping` `appendPrompt` input. `io` (optional)
+     * adds arbitrary input/output variable mappings to the SAME `zeebe:ioMapping`.
      */
-    task<K extends string>(name: K, opts: { jobType?: string; prompt: PromptBinding }): FlowBuilder<C>;
+    task<K extends string>(
+      name: K,
+      opts: { jobType?: string; prompt: PromptBinding; io?: HumanIoMapping },
+    ): FlowBuilder<C>;
   }
 }
 
@@ -93,57 +104,71 @@ function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
   return resolved;
 }
 
-/** Build the prompt-specific `<bpmn:extensionElements>` delta appended to the
- *  shared service-task emission: the `zeebe:linkedResources` prompt binding and
- *  (optionally) a `zeebe:ioMapping` `appendPrompt` input. The task shell
+/** Build the `<bpmn:extensionElements>` delta appended to the shared
+ *  service-task emission: the optional `zeebe:linkedResources` prompt binding
+ *  followed by a single, correctly-ordered `zeebe:ioMapping`. The task shell
  *  (taskDefinition + envelope properties) is rendered by the built-in
  *  `EmitApi.addServiceTask`, so this variant only contributes its delta and the
- *  envelope serialization can never drift from the plain service task. */
-function promptExtensions(prompt: PromptBinding): string {
-  const { resourceId, bindingType, append } = prompt;
+ *  envelope serialization can never drift from the plain service task.
+ *
+ *  The `ioMapping` is the SINGLE source for all variable mappings on the task:
+ *  the explicit `io.input`/`io.output` plus — when `prompt.append` is present —
+ *  the `appendPrompt` input, folded in as one more input entry so a task with
+ *  both a `prompt.append` and an explicit `io.input` emits exactly one
+ *  `<zeebe:ioMapping>` (never two). Element order matches the golden:
+ *  `linkedResources` (when any) then `ioMapping` (when any), the latter after
+ *  `taskDefinition`/`properties`. */
+function taskExtensions(prompt: PromptBinding | undefined, io: HumanIoMapping | undefined): string {
   const linked =
-    `        <zeebe:linkedResources>\n` +
-    `          <zeebe:linkedResource resourceId="${escapeXml(resourceId)}" ` +
-    `bindingType="${escapeXml(bindingType ?? "latest")}" resourceType="GenericScript" linkName="prompt" />\n` +
-    `        </zeebe:linkedResources>\n`;
-  const io =
-    append !== undefined
-      ? `        <zeebe:ioMapping>\n` +
-        `          <zeebe:input source="${escapeXml(append)}" target="appendPrompt" />\n` +
-        `        </zeebe:ioMapping>\n`
+    prompt !== undefined
+      ? `        <zeebe:linkedResources>\n` +
+        `          <zeebe:linkedResource resourceId="${escapeXml(prompt.resourceId)}" ` +
+        `bindingType="${escapeXml(prompt.bindingType ?? "latest")}" resourceType="GenericScript" linkName="prompt" />\n` +
+        `        </zeebe:linkedResources>\n`
       : "";
-  return linked + io;
+  // Merge the explicit io mapping and the prompt's `appendPrompt` input into one
+  // mapping. The append input trails the explicit inputs — it appends runtime
+  // context to the bound prompt, so it reads naturally after the task's own
+  // inputs — and outputs follow, matching `renderIoMapping`'s input-then-output
+  // ordering.
+  const inputs: HumanIoEntry[] = [...(io?.input ?? [])];
+  if (prompt?.append !== undefined) inputs.push({ source: prompt.append, target: "appendPrompt" });
+  const merged: HumanIoMapping = { input: inputs, output: io?.output ?? [] };
+  return linked + renderIoMapping(merged);
 }
 
 registerNodeKind("task", {
-  build: (api) => (name: string, opts?: { jobType?: string; prompt?: PromptBinding }) => {
+  build: (api) => (name: string, opts?: { jobType?: string; prompt?: PromptBinding; io?: HumanIoMapping }) => {
     api.claim(name);
     const override = opts?.jobType;
     if (override !== undefined) assertJobType("task jobType", override);
     const prompt = opts?.prompt !== undefined ? resolvePrompt(name, opts.prompt) : undefined;
+    assertIoMapping(`task("${name}")`, opts?.io);
     api.out.push({
       kind: "task",
       name,
       envelopes: api.contractEnvelopes(name),
       jobType: override,
       prompt,
+      io: opts?.io,
     });
     return api.self();
   },
   emit: (node, incoming, _loop, api) => {
-    // No prompt → the standard service-task emission is preserved unchanged (no
-    // `linkedResources` are emitted).
-    if (node.prompt === undefined) {
+    // Neither a prompt binding nor an explicit io mapping → the standard
+    // service-task emission is preserved unchanged (no `linkedResources`, no
+    // `ioMapping`).
+    if (node.prompt === undefined && node.io === undefined) {
       api.addServiceTask(node);
       api.connect(incoming, node.name);
       return [api.newEdge(node.name)];
     }
-    // Prompt binding present → the shared `addServiceTask` renders the task
-    // shell (taskDefinition + envelope properties, recording envelopes); we only
-    // supply the `zeebe:linkedResource` (and optional `appendPrompt` ioMapping)
-    // delta, so the envelope/taskDefinition serialization has a single source.
-    const prompt = node.prompt;
-    api.addServiceTask(node, { extraExt: promptExtensions(prompt) });
+    // A prompt binding and/or an explicit io mapping present → the shared
+    // `addServiceTask` renders the task shell (taskDefinition + envelope
+    // properties, recording envelopes); we only supply the `linkedResource`
+    // and/or `ioMapping` delta, so the envelope/taskDefinition serialization has
+    // a single source.
+    api.addServiceTask(node, { extraExt: taskExtensions(node.prompt, node.io) });
     api.connect(incoming, node.name);
     return [api.newEdge(node.name)];
   },

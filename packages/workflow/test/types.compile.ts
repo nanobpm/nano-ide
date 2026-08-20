@@ -13,6 +13,7 @@
 // back to `JsonObject`.
 
 import { defineFlow, envelope } from "../src/index.js";
+import type { HumanIoMapping } from "../src/index.js";
 
 // (A) Untyped flow whose handlers RETURN DATA — the exact shape that regressed.
 //     Under the old `Record<string, never>` default this failed with
@@ -62,3 +63,22 @@ export const fanout = defineFlow(
     });
   },
 );
+
+// (D) Service-task io mappings — `w.task` / `w.run` accept an optional `{ io }`
+//     using the SHARED HumanIoMapping shape (issue #405). This must compile: the
+//     option is optional, reuses `{ input?, output? }` of `{ source, target }`
+//     entries, and combines with an external `task`'s `jobType`/`prompt`.
+const conformanceIo: HumanIoMapping = {
+  input: [{ source: "=planKey", target: "planKey" }],
+  output: [{ source: "=ack", target: "ack" }],
+};
+
+export const serviceIo = defineFlow("service-io", (w) => {
+  w.task("record-conformance-ack", { jobType: "pr.conformance-ack", io: conformanceIo });
+  w.task("agent", {
+    jobType: "senior:x",
+    prompt: { resourceId: "x.md", append: "=ctx" },
+    io: { input: [{ source: "=planKey", target: "planKey" }] },
+  });
+  w.run("compute", async () => ({ n: 1 }), { io: { output: [{ source: "=n", target: "n" }] } });
+});

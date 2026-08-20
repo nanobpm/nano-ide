@@ -154,6 +154,87 @@ export interface NanoJobWorker {
   stopGracefully?(opts?: { waitUpToMs?: number }): Promise<void>;
 }
 
+/** The subset of a raw `@nanobpm/nano-sdk` job worker the adapter drives. Its
+ *  `start()` may be synchronous or async: on nano-sdk >=1.2.5's Falcon/auto path
+ *  it is async and the SDK self-starts the worker after an asynchronous transport
+ *  bind (see {@link adaptJobWorker}). */
+export interface RawNanoJobWorker {
+  start(): void | Promise<void>;
+  stop(): void | Promise<void>;
+  stopGracefully(opts?: { waitUpToMs?: number }): Promise<unknown>;
+}
+
+/** Adapt a raw `@nanobpm/nano-sdk` job worker to the {@link NanoJobWorker} handle
+ *  the Worker runtime drives, making the eager `start()` NULL-SAFE.
+ *
+ *  nano-sdk >=1.2.5's Falcon/auto worker SELF-STARTS after an ASYNCHRONOUS
+ *  transport bind: `createJobWorker` hands back a worker whose transport is null
+ *  until Nano is detected, at which point the SDK `bindTransport(t)`s it and
+ *  `start()`s the worker ITSELF. Calling `start()` before that bind dereferences
+ *  the null transport and — because `start()` is async — surfaces as an UNHANDLED
+ *  REJECTION that crashes the process
+ *  (`TypeError: Cannot read properties of null (reading 'subscribe')`, #415). The
+ *  REST/manual worker, by contrast, never self-starts, so `start()` must still be
+ *  called here. We resolve the version-skew by starting eagerly but NULL-SAFELY:
+ *  swallow ONLY the pre-bind race (the SDK self-starts once the transport binds)
+ *  and SURFACE any other start failure via `console.warn` rather than masking it.
+ *  The SDK owns the start lifecycle end to end (it logs and falls back to REST on
+ *  its own subscribe failure), so discarding the resolved result — as the previous
+ *  `void worker.start()` already did — is safe. Pairs with the library-side
+ *  null-safe, idempotent start (jwulf/nano-sdk-js#12) so neither an eager nor a
+ *  duplicate start can crash. */
+export function adaptJobWorker(worker: RawNanoJobWorker): NanoJobWorker {
+  return {
+    start: () => {
+      try {
+        const started = worker.start();
+        if (isPromiseLike(started)) started.then(undefined, handleStartError);
+      } catch (e) {
+        handleStartError(e);
+      }
+    },
+    stop: () => worker.stop(),
+    stopGracefully: async (opts) => {
+      await worker.stopGracefully(opts);
+    },
+  };
+}
+
+function isPromiseLike(v: unknown): v is PromiseLike<unknown> {
+  return isRecord(v) && typeof v.then === "function";
+}
+
+/** The SDK's pre-bind start race is a NULL/undefined-transport dereference the SDK
+ *  recovers from via its own self-start: a `TypeError` from reading the transport's
+ *  `subscribe` off a `null`/`undefined` transport
+ *  (`Cannot read properties of null (reading 'subscribe')`, #415). Match it NARROWLY
+ *  — the specific `subscribe` dereference signature, not any null/undefined deref —
+ *  so a genuine start failure on the REST/manual path (or an unrelated null-deref
+ *  bug during `start()`) is never mistaken for the race and silently masked. */
+function isPreBindStartRace(e: unknown): boolean {
+  return (
+    e instanceof TypeError &&
+    /Cannot read propert(?:y|ies) of (?:null|undefined) \(reading ['"]subscribe['"]\)/.test(e.message)
+  );
+}
+
+/** Handle an eager-start error NULL-SAFELY. Swallow ONLY the SDK's known pre-bind
+ *  transport race (it self-starts once its transport binds — see
+ *  {@link adaptJobWorker}); any OTHER error is a real start failure (e.g. on the
+ *  REST/manual path) and is SURFACED via `console.warn` so it is not silently
+ *  masked. Never rethrows — callers rely on this to keep an async `start()` from
+ *  escaping as an unhandled rejection that crashes the process. The SDK owns the
+ *  start lifecycle end to end (it logs and falls back to REST on its own subscribe
+ *  failure), so we surface-and-continue rather than propagate. */
+function handleStartError(e: unknown): void {
+  if (isPreBindStartRace(e)) return;
+  console.warn(
+    "[@nanobpm/workflow] job worker start() failed (not the known pre-bind transport " +
+      "race); the SDK owns start and REST fallback, so this is surfaced but not rethrown:",
+    e,
+  );
+}
+
 /** An activated job as delivered to a nano-sdk job handler: the workflow `Job`
  *  fields plus the acknowledgement actions. */
 export type ActivatedJob = Job & {
@@ -253,15 +334,7 @@ export class WorkflowClient {
             return JobActionReceiptSymbol;
           },
         });
-        return {
-          start: () => {
-            void worker.start();
-          },
-          stop: () => worker.stop(),
-          stopGracefully: async (opts) => {
-            await worker.stopGracefully(opts);
-          },
-        };
+        return adaptJobWorker(worker);
       },
     };
   }

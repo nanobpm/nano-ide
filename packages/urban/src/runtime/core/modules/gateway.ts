@@ -47,10 +47,16 @@ export interface ForeignKeyMeta {
   onDelete: string;
 }
 
-/** One table: its columns, index names, and foreign keys. Powers domain-type projection and
- * the page runtime's list/detail binding. */
+/** One introspected datasource object: its columns, index names, and foreign keys. Powers
+ * domain-type projection and the page runtime's list/detail binding. `kind` distinguishes a
+ * base `table` (read/write) from a SQL `view` (read-only): a view is readable through the same
+ * `SELECT * FROM <name>` path as a table, but SQLite rejects writes to it, so write surfaces
+ * (DB Manager, forms, the domain writer bindings) must not offer insert/update/delete against
+ * a view. */
 export interface TableMeta {
   name: string;
+  /** `table` for a base table (read/write); `view` for a read-only SQL VIEW. */
+  kind: "table" | "view";
   columns: ColumnMeta[];
   indexes: string[];
   foreignKeys: ForeignKeyMeta[];
@@ -248,16 +254,25 @@ class SqliteGateway implements DataSource {
   }
 
   async schema(): Promise<TableMeta[]> {
+    // Introspect base tables AND views (`type IN ('table','view')`): the datasource read path
+    // (`SELECT * FROM <name>`) works verbatim on a view, so a page datasource / domain read must
+    // be able to see one. A view is tagged `kind:'view'` below so write surfaces know not to
+    // offer insert/update/delete against it (SQLite rejects writes to a view).
+    //
     // Exclude SQLite internals (`sqlite_%`) and Nano's own bookkeeping tables (`_urban_%` /
-    // `_nano_%`, e.g. the migrations ledger): neither is a user/domain table, so they must
-    // never surface in the domain model, DB Manager, or forms.
-    const tables = this.#db.all<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type = 'table' " +
+    // `_nano_%`, e.g. the migrations ledger): neither is a user/domain object, so they must
+    // never surface in the domain model, DB Manager, or forms. The same exclusions apply to
+    // views.
+    const tables = this.#db.all<{ name: string; type: string }>(
+      "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') " +
         "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_urban\\_%' ESCAPE '\\' " +
         "AND name NOT LIKE '\\_nano\\_%' ESCAPE '\\' ORDER BY name",
     );
     const out: TableMeta[] = [];
     for (const t of tables) {
+      // `PRAGMA table_info(<view>)` returns the view's columns (pk/notnull report 0, which is
+      // correct — a view has no primary key); `PRAGMA index_list` / `foreign_key_list` return
+      // empty for a view (harmless).
       const cols = this.#db.all<{ name: string; type: string; notnull: number; pk: number }>(
         `PRAGMA table_info(${quoteIdent(t.name)})`,
       );
@@ -270,6 +285,7 @@ class SqliteGateway implements DataSource {
       }>(`PRAGMA foreign_key_list(${quoteIdent(t.name)})`);
       out.push({
         name: t.name,
+        kind: t.type === "view" ? "view" : "table",
         columns: cols.map((c) => ({
           name: c.name,
           type: c.type,

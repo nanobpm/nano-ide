@@ -18,6 +18,9 @@
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { relative } from "node:path";
+// Shared with the publish-drift guard (scripts/check-publish-drift.mjs) so the
+// two never disagree on how versions compare — one source of truth (issue #423).
+import { cmpVersion } from "./lib/publish-drift.mjs";
 
 const dirs = JSON.parse(execFileSync("npm", ["query", ".workspace"], { encoding: "utf8" }))
   .map((w) => w.path)
@@ -30,17 +33,6 @@ function tryOut(cmd, args) {
   } catch {
     return "";
   }
-}
-
-/** Compare two dotted version strings numerically (major.minor.patch). */
-function cmpVersion(a, b) {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
-    if (d !== 0) return d;
-  }
-  return 0;
 }
 
 /** The highest existing `<name>@<version>` tag strictly below `version`, or null

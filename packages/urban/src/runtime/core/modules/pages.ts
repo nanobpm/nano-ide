@@ -11,6 +11,8 @@
 //   GET  /              (+ /app/runtime.js)         → the schema-driven browser renderer
 //   GET  /app/pages/<id>                            → the page's page.json
 //   GET  /app/data/<source>/<table>[?where&order]   → rows (filtered/ordered, whitelisted)
+//   GET  /{embed,standalone}.html /mount.js /cockpit.css → appView sidecars (from pagesDir, #420)
+//   GET  /dist/<path>                               → the app dist/ bundle the sidecars reference
 //   POST /app/actions/start/<process>               → engine.createInstance
 //   POST /app/actions/cancel                        → engine.cancelInstance
 //   POST /app/actions/message                       → engine.publishMessage
@@ -60,6 +62,16 @@ export interface PagesDeps {
   /** Read a page file; injectable for tests. */
   readPage(path: string): Promise<string>;
   /**
+   * Read a static asset file at an app-root-relative path (the `appView` sidecar
+   * documents under `pagesDir` — `embed.html`/`standalone.html`/`mount.js`/`cockpit.css`
+   * — and the app `dist/` bundle their import-maps reference). A thin adapter over the
+   * host's `readTextFile` seam, distinct from `readPage` (which is page.json-scoped) so
+   * the intent reads clearly at the call site. Optional; falls back to `readPage` when
+   * absent (both delegate to the same host seam), so existing tests need no change.
+   * Injectable for tests. Rejects (→ 404) when the file is missing.
+   */
+  readAsset?(path: string): Promise<string>;
+  /**
    * List the available page ids (the `*.page.json` basenames under `pagesDir`),
    * powering the `/app/pages` index endpoint and a `nav` node's `items: "auto"`.
    * Optional; when absent the index is empty. Injectable for tests.
@@ -88,6 +100,83 @@ function javascript(
   };
 }
 
+// The `appView` sidecar documents an app ships alongside its `*.page.json` under
+// `pagesDir` (ADR 0057 / #416 / #420). The renderer (#419) mounts an <iframe> whose
+// src is the node's base-relative `embed` (`./embed.html`), which — resolved against
+// the shell served at the app mount root — the browser fetches at `/embed.html`; that
+// document then pulls `./cockpit.css`, `./mount.js`, and (via its import-map)
+// `../dist/…`. A DEPLOYED app served none of these, so the src 404'd and the cockpit
+// iframe loaded nothing (#416's user-facing "nothing shows in the Cockpit"). These are
+// the root-served sidecar files, mapped 1:1 onto `pagesDir/<name>`. The `dist/` tree the
+// import-map references is served separately under the `/dist/` prefix below.
+const SIDECAR_ASSETS = ["embed.html", "standalone.html", "mount.js", "cockpit.css"] as const;
+
+// The app `dist/` directory (app-root sibling of the pages dir) the sidecar import-maps
+// resolve `../dist/…` onto. Because the embed is served at the mount root, `../dist`
+// resolves to `/dist` regardless of `pagesDir`, so the URL→disk mapping is fixed.
+const DIST_DIR = "dist";
+
+/** Content type for a served static web asset, by extension. The sidecars + the ESM/CSS/JSON
+ *  the import-maps reference are all UTF-8 text (the only channel `readTextFile` offers); an
+ *  unknown extension falls back to `application/octet-stream` rather than mislabelling. This is
+ *  a distinct concern from deploy's `contentTypeFor` (engine resource types: bpmn/dmn/form/…),
+ *  so the two maps do not share a source. */
+function assetContentType(path: string): string {
+  const dot = path.lastIndexOf(".");
+  const ext = dot >= 0 ? path.slice(dot + 1).toLowerCase() : "";
+  switch (ext) {
+    case "html":
+      return "text/html; charset=utf-8";
+    case "js":
+    case "mjs":
+      return "text/javascript; charset=utf-8";
+    case "css":
+      return "text/css; charset=utf-8";
+    case "json":
+    case "map": // source maps are JSON
+      return "application/json; charset=utf-8";
+    case "svg":
+      return "image/svg+xml; charset=utf-8";
+    case "txt":
+      return "text/plain; charset=utf-8";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+// A URL sub-path (the `<rest>` of `/dist/<rest>`) is safe to map onto the filesystem
+// only when it is a plain, forward, relative descent: no `..`/`.` segment (path
+// traversal out of `dist/`), no empty segment (a leading/doubled slash), no absolute
+// path, and no percent-escape or backslash (the request `path` is `URL.pathname`, which
+// is NOT percent-decoded — so a `%2e%2e`/`%2f` smuggled traversal never reaches the FS;
+// we reject any `%` outright rather than decode-then-recheck). Returns the normalised
+// relative path, or null to 404. Mirrors the `[A-Za-z0-9_-]` guards the page/data routes
+// already apply, widened to the `/` `.` a nested asset path needs.
+function safeAssetSubpath(rest: string): string | null {
+  if (rest === "" || rest.includes("%") || rest.includes("\\") || rest.includes("\0")) return null;
+  if (rest.startsWith("/")) return null;
+  const segs = rest.split("/");
+  for (const s of segs) {
+    if (s === "" || s === "." || s === "..") return null;
+    if (!/^[A-Za-z0-9._-]+$/.test(s)) return null;
+  }
+  return segs.join("/");
+}
+
+/** Serve a static asset file at an app-root-relative path: 200 with its content type, or 404 when
+ *  the file is missing/unreadable. Used by both the root sidecar routes and the `/dist/` tree. */
+async function serveAsset(
+  read: (path: string) => Promise<string>,
+  filePath: string,
+): Promise<{ status: number; headers: Record<string, string>; body: string }> {
+  try {
+    const body = await read(filePath);
+    return { status: 200, headers: { "content-type": assetContentType(filePath) }, body };
+  } catch {
+    return { status: 404, headers: { "content-type": "text/plain; charset=utf-8" }, body: "not found" };
+  }
+}
+
 /** A SQL identifier guard — a table name must be a bare identifier *and* a known table
  * (checked against `schema()`), so `/app/data/:table` can never inject SQL. */
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -112,6 +201,10 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   const rowLimit = Number.isFinite(rowLimitRaw) ? Math.max(0, Math.floor(rowLimitRaw)) : 200;
   const sourceName = opts.sourceName ?? "app";
   const { db, engine, readPage, listPages, cancel } = deps;
+  // Static assets (the `appView` sidecars + the `dist/` bundle) read through the host seam.
+  // Falls back to `readPage` when no dedicated reader is injected — both delegate to the same
+  // `host.readTextFile`, so there is one source of file bytes, not two.
+  const readAsset = deps.readAsset ?? readPage;
 
   // The table-name whitelist is memoised: an Urban app runs its migrations at boot
   // (before serving), so the schema is stable for the process lifetime, and the renderer
@@ -175,7 +268,41 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
     handler: () => javascript(RENDERER_JS, 200, { "cache-control": "no-cache" }),
   });
 
-  // ── GET /app/pages (index of available pages) ───────────────────────────
+  // ── appView sidecar assets (#420) ───────────────────────────────────────
+  // The `appView` renderer (#419) mounts an <iframe> at the node's base-relative `embed`
+  // (`./embed.html`), which — against the shell served at the mount root — the browser
+  // fetches at `/embed.html`; that document then pulls `./cockpit.css`, `./mount.js`, and
+  // its import-map's `../dist/…`. A DEPLOYED app served none of these, so the iframe src
+  // 404'd and the agent cockpit loaded nothing (#416 was necessary but not sufficient
+  // without this static-serving surface). Serve each sidecar at its root URL, mapped 1:1
+  // onto `pagesDir/<name>` (exact routes — never a root catch-all, which would shadow the
+  // `/healthz` liveness route the runtime appends after the pages surface).
+  for (const name of SIDECAR_ASSETS) {
+    routes.push({
+      method: "GET",
+      path: `/${name}`,
+      source: "surface:pages",
+      handler: () => serveAsset(readAsset, `${pagesDir}/${name}`),
+    });
+  }
+  // The `dist/` tree the sidecars' import-maps reference (`../dist/cockpit/index.js` →
+  // `/dist/cockpit/index.js`). A prefix route over an app-root `dist/` directory; the
+  // sub-path is strictly validated (no traversal/escape) before it reaches the FS.
+  routes.push({
+    method: "GET",
+    path: `/${DIST_DIR}/`,
+    prefix: true,
+    source: "surface:pages",
+    handler: (req) => {
+      const rest = req.path.slice(`/${DIST_DIR}/`.length);
+      const safe = safeAssetSubpath(rest);
+      if (safe === null) {
+        return { status: 404, headers: { "content-type": "text/plain; charset=utf-8" }, body: "not found" };
+      }
+      return serveAsset(readAsset, `${DIST_DIR}/${safe}`);
+    },
+  });
+
   // Powers multi-page navigation: a `nav` node with `items: "auto"` lists every
   // page here, and it lets any client enumerate the app's screens. Each entry
   // carries the page's own `title` (best-effort — an unreadable/!JSON page still
@@ -449,6 +576,7 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
     engine: app.engine,
     cancel: (key) => cancelInstanceReconciling(app, bindings, key),
     readPage: (p) => ctx.host.readTextFile(p),
+    readAsset: (p) => ctx.host.readTextFile(p),
     listPages: async () => {
       const dir = opts.pagesDir ?? "pages";
       const names = await ctx.host.listDir(dir).catch(() => []);

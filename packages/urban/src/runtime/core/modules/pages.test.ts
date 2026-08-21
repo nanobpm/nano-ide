@@ -1690,3 +1690,136 @@ test("the syntax guard is red/green: an injected syntax error fails `node --chec
   assert.equal(result.ok, false, "an injected syntax error must fail `node --check`");
   assert.match(result.stderr, /SyntaxError/);
 });
+
+// ── appView sidecar + dist static-file serving (#420) ──────────────────────
+// The renderer (#419) mounts the cockpit iframe at `./embed.html`; in a DEPLOYED app
+// urban must serve that sidecar (and the `dist/` bundle its import-map references) or
+// the iframe src 404s and the cockpit stays blank (#416's user-facing symptom). These
+// tests pin the static-serving surface #420 adds.
+
+/** Build the pages routes over an in-memory asset filesystem (app-root-relative path → body). */
+function buildWithAssets(files: Record<string, string>) {
+  const { engine } = fakeEngine();
+  const routes = createPagesRoutes(
+    { pagesDir: "pages", homePage: "home", sourceName: "app" },
+    {
+      db: fakeDb(),
+      engine,
+      readPage: async () => JSON.stringify({ title: "Home", nodes: [] }),
+      readAsset: async (path: string) => {
+        if (path in files) return files[path];
+        throw new Error(`no such file: ${path}`);
+      },
+      listPages: async () => ["home"],
+    },
+  );
+  return makeRouter(routes);
+}
+
+test("GET /embed.html serves the pages-dir sidecar as HTML", async () => {
+  const router = buildWithAssets({ "pages/embed.html": "<!doctype html><title>embed</title>" });
+  const res = await router(req("GET", "/embed.html"));
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /text\/html/);
+  assert.match(res.body ?? "", /<title>embed<\/title>/);
+});
+
+test("all four appView sidecars are served from the pages dir with correct content types", async () => {
+  const router = buildWithAssets({
+    "pages/embed.html": "<html>embed</html>",
+    "pages/standalone.html": "<html>standalone</html>",
+    "pages/mount.js": "export const mountCockpit = () => {};",
+    "pages/cockpit.css": "body{margin:0}",
+  });
+  const cases: [string, RegExp][] = [
+    ["/embed.html", /text\/html/],
+    ["/standalone.html", /text\/html/],
+    ["/mount.js", /text\/javascript/],
+    ["/cockpit.css", /text\/css/],
+  ];
+  for (const [path, ct] of cases) {
+    const res = await router(req("GET", path));
+    assert.equal(res.status, 200, `${path} should 200`);
+    assert.match(res.headers?.["content-type"] ?? "", ct, `${path} content-type`);
+  }
+});
+
+test("a missing sidecar 404s instead of throwing", async () => {
+  const router = buildWithAssets({}); // no files
+  const res = await router(req("GET", "/embed.html"));
+  assert.equal(res.status, 404);
+});
+
+test("GET /dist/<path> serves the import-map bundle the embed references", async () => {
+  const router = buildWithAssets({ "dist/cockpit/index.js": "export function bootCockpit(){}" });
+  const res = await router(req("GET", "/dist/cockpit/index.js"));
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /text\/javascript/);
+  assert.match(res.body ?? "", /bootCockpit/);
+});
+
+test("a source map under /dist/ is served as JSON", async () => {
+  const router = buildWithAssets({ "dist/cockpit/index.js.map": "{\"version\":3}" });
+  const res = await router(req("GET", "/dist/cockpit/index.js.map"));
+  assert.equal(res.status, 200);
+  assert.match(res.headers?.["content-type"] ?? "", /application\/json/);
+});
+
+test("a /dist/ path traversal attempt is rejected (never reaches the filesystem)", async () => {
+  // The reader would happily read `dist/../secret` if the route let it through; the
+  // sub-path guard must reject any `..` / absolute / percent-escaped segment first.
+  let readAttempts = 0;
+  const { engine } = fakeEngine();
+  const router = makeRouter(
+    createPagesRoutes(
+      { pagesDir: "pages", homePage: "home", sourceName: "app" },
+      {
+        db: fakeDb(),
+        engine,
+        readPage: async () => JSON.stringify({ title: "Home", nodes: [] }),
+        readAsset: async (path: string) => {
+          readAttempts++;
+          return `bytes of ${path}`;
+        },
+        listPages: async () => ["home"],
+      },
+    ),
+  );
+  for (const evil of ["/dist/../secret.json", "/dist/a/../../secret", "/dist/%2e%2e/secret", "/dist//etc"]) {
+    const res = await router(req("GET", evil));
+    assert.equal(res.status, 404, `${evil} must 404`);
+  }
+  assert.equal(readAttempts, 0, "no traversal path may reach the asset reader");
+});
+
+test("the static asset routes do not shadow the app's own routes or /healthz", async () => {
+  // The sidecars are served as EXACT routes (not a root catch-all), so `/`, `/app/*` and
+  // the runtime's appended `/healthz` liveness route all still resolve. A catch-all would
+  // silently swallow `/healthz` (breaking liveness probes) — this pins that it does not.
+  const routes = createPagesRoutes(
+    { pagesDir: "pages", homePage: "home", sourceName: "app" },
+    {
+      db: fakeDb(),
+      engine: fakeEngine().engine,
+      readPage: async () => JSON.stringify({ title: "Home", nodes: [] }),
+      readAsset: async () => "<html></html>",
+      listPages: async () => ["home"],
+    },
+  );
+  // No pages route matches /healthz, so the runtime's own healthz route (appended after
+  // the pages surface) would still win. Assert none of the pages routes claim it.
+  const router = makeRouter([
+    ...routes,
+    {
+      method: "GET",
+      path: "/healthz",
+      handler: () => ({ status: 200, headers: { "content-type": "application/json" }, body: JSON.stringify({ ok: true }) }),
+    },
+  ]);
+  const health = await router(req("GET", "/healthz"));
+  assert.equal(health.status, 200);
+  assert.deepEqual(JSON.parse(health.body ?? "{}"), { ok: true });
+  // The home shell still renders (not shadowed by a static route).
+  const home = await router(req("GET", "/"));
+  assert.match(home.body ?? "", /data-home="home"/);
+});

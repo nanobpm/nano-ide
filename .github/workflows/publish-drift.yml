@@ -1,0 +1,45 @@
+name: Publish drift
+
+# Catch a stuck publish even when nothing has been pushed — the case that bit us
+# in #421: a fix merged to `main`, release-please bumped the version, its
+# `npm publish` in release.yml silently 404'd on a missing Trusted Publisher, and
+# then nobody pushed for a while, so `@nanobpm/agentic` / `@nanobpm/urban-agent-client`
+# sat at the old npm version freezing consumers with no signal (issue #423).
+#
+# release.yml already asserts publish success at the end of a release run; this
+# scheduled job is the safety net for the "no new pushes" gap that job cannot
+# cover. On drift it fails red AND opens/updates a single tracking issue so the
+# freeze is visible outside the workflow logs.
+on:
+  schedule:
+    # Daily at 07:00 UTC.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+
+# `issues: write` lets the guard open/update the tracking issue.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  publish-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          # Full history: the guard dates each version from the commit that
+          # introduced it (scripts/check-publish-drift.mjs versionAgeHours), so a
+          # legitimately in-flight release is tolerated via the grace window.
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Compare every public workspace package's `main` version against npm and
+      # fail (opening/updating a tracking issue) when `main` is ahead beyond the
+      # grace window — a merged version that was never published.
+      - run: node scripts/check-publish-drift.mjs --open-issue
+        env:
+          GH_TOKEN: ${{ github.token }}

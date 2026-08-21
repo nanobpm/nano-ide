@@ -21,6 +21,7 @@
     "lint": "biome check",
     "validate": "node scripts/validate-manifests.mjs",
     "check:migrations": "node scripts/check-migrations.mjs",
+    "check:publish-drift": "node scripts/check-publish-drift.mjs",
     "check:schema": "node scripts/check-schema-augmentations.mjs",
     "check:intellisense": "npm run check:intellisense --workspaces --if-present",
     "gen:intellisense": "npm run gen:intellisense --workspaces --if-present"

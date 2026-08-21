@@ -63,3 +63,11 @@ jobs:
       - run: node scripts/publish.mjs
         env:
           GH_TOKEN: ${{ github.token }}
+      # Terminal assertion: every public workspace package's `main` version must
+      # now actually be on npm. A partial-failure publish (some packages 404,
+      # others succeed) otherwise lets the run "complete" with a buried error —
+      # this turns it red loudly instead (issue #423). --grace-hours 0: publish
+      # just ran, so there is no in-flight release to tolerate. Shares the
+      # npm-vs-local comparison with publish.mjs via scripts/lib/publish-drift.mjs.
+      - name: Assert every intended version reached npm
+        run: node scripts/check-publish-drift.mjs --grace-hours 0

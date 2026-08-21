@@ -8,7 +8,7 @@
 // is equal or ahead (a normal lagging local checkout).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cmpVersion, findPublishDrift, isAheadOfNpm, isNpmNotPublishedError } from "./publish-drift.mjs";
+import { cmpVersion, findPublishDrift, isAheadOfNpm, isNpmNotPublishedError, versionPathspec } from "./publish-drift.mjs";
 
 test("cmpVersion orders dotted numeric versions", () => {
 	assert.ok(cmpVersion("0.4.0", "0.1.0") > 0);
@@ -144,4 +144,20 @@ test("isNpmNotPublishedError does NOT treat a transient failure as unpublished",
 	assert.equal(isNpmNotPublishedError("npm error code E401\nUnable to authenticate"), false);
 	assert.equal(isNpmNotPublishedError(""), false);
 	assert.equal(isNpmNotPublishedError(null), false);
+});
+
+test("versionPathspec normalizes an absolute workspace dir to a repo-relative pathspec", () => {
+	// The failure mode being guarded: `npm query .workspace` yields ABSOLUTE dirs,
+	// and git silently fails to match an absolute pathspec under a worktree or
+	// symlinked checkout — versionAgeHours then reads null and the grace window is
+	// quietly disabled. The pathspec must be relative to the repo root git runs in.
+	assert.equal(
+		versionPathspec("/repo/packages/agentic", "/repo"),
+		"packages/agentic/package.json",
+	);
+	assert.ok(!versionPathspec("/repo/packages/agentic", "/repo").startsWith("/"));
+});
+
+test("versionPathspec targets the repo-root package.json when dir is the cwd", () => {
+	assert.equal(versionPathspec("/repo", "/repo"), "./package.json");
 });

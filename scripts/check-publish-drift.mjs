@@ -30,7 +30,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { findPublishDrift, isNpmNotPublishedError } from "./lib/publish-drift.mjs";
+import { findPublishDrift, isNpmNotPublishedError, versionPathspec } from "./lib/publish-drift.mjs";
 
 /** Parse the small flag set this script accepts. */
 function parseArgs(argv) {
@@ -105,7 +105,10 @@ function npmVersionOf(name) {
  *  `null` when git history is unavailable (e.g. a shallow checkout). The `-S`
  *  pickaxe finds the commit that changed the count of the exact version literal;
  *  `-1` (newest first) is when the current version was set. Needs full history
- *  (release.yml / the schedule check out with fetch-depth 0). */
+ *  (release.yml / the schedule check out with fetch-depth 0). The pathspec is
+ *  normalized to be repo-relative (via versionPathspec) because `npm query`
+ *  hands us absolute dirs, and git silently fails to match an absolute pathspec
+ *  under a worktree/symlinked checkout — which would disable the grace window. */
 function versionAgeHours(dir, version) {
 	const iso = tryOut("git", [
 		"log",
@@ -113,7 +116,7 @@ function versionAgeHours(dir, version) {
 		"--format=%cI",
 		`-S"version": "${version}"`,
 		"--",
-		`${dir}/package.json`,
+		versionPathspec(dir, process.cwd()),
 	]);
 	if (!iso) return null;
 	const then = Date.parse(iso);

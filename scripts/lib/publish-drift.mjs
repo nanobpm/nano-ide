@@ -16,6 +16,26 @@
 // can never disagree about which versions are missing from npm (no drift
 // surface — AGENTS.md §"Derivation Over Duplication").
 
+import { relative } from "node:path";
+
+/**
+ * Build the git pathspec for a workspace's `package.json`, normalized to be
+ * relative to `cwd`. `npm query .workspace` yields *absolute* directory paths
+ * (see scripts/publish.mjs, which likewise normalizes with
+ * `relative(process.cwd(), dir)`). Handing git an absolute pathspec is fragile —
+ * it silently fails to match under a linked worktree, a `/var`↔`/private/var`
+ * style symlinked checkout (macOS), or when git runs from a different cwd — so
+ * `git log` returns nothing, the version age reads as unknown, and the grace
+ * window is quietly disabled. A repo-relative pathspec matches reliably.
+ * @param {string} dir — the (possibly absolute) workspace directory.
+ * @param {string} cwd — the directory git will run from (the repo root).
+ * @returns {string} a `<relative-dir>/package.json` pathspec for `git log -- …`.
+ */
+export function versionPathspec(dir, cwd) {
+	const rel = relative(cwd, dir) || ".";
+	return `${rel}/package.json`;
+}
+
 /**
  * Compare two dotted numeric version strings (`major.minor.patch`). Returns a
  * negative number when `a < b`, zero when equal, positive when `a > b`. Missing

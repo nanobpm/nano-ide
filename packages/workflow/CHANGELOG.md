@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.13.1...@nanobpm/workflow-0.14.0) (2026-08-21)
+
+
+### Features
+
+* **workflow:** fireAndForget boundary body (non-converging onTimeout escape) ([#426](https://github.com/nanobpm/nano-ide/issues/426)) ([d319970](https://github.com/nanobpm/nano-ide/commit/d319970d595e8bdebd8e61fd2538c19968c51bc7))
+
 ## [0.13.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.13.0...@nanobpm/workflow-0.13.1) (2026-08-20)
 
 

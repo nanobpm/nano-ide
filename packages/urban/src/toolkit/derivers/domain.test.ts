@@ -61,7 +61,8 @@ test("emitDomainModel: multi-source → DomainSources + DomainTables alias to de
 
 test("emitDomainModel: a VIEW yields a read-only row interface (readonly fields)", () => {
   // The datasource read path works verbatim on a view, so consumers still get a typed row —
-  // but a view is read-only in SQLite, so its fields are emitted `readonly`.
+  // but Urban treats every view as read-only (it never attaches INSTEAD OF triggers), so its
+  // fields are emitted `readonly`.
   const sources: SourceSchema[] = [{ source: "app", tables: [
     table("orders", [col("id","INTEGER",false,true), col("total","INTEGER",true,false)]),
     table("paid_orders", [col("id","INTEGER",false,false), col("total","INTEGER",false,false)], "view"),

@@ -201,7 +201,8 @@ test("a base table is writable but a VIEW is not", async () => {
     const id = await orders.insert({ status: "new", total: 3 });
     assert.equal(typeof id === "number" || typeof id === "bigint", true);
 
-    // SQLite rejects a write to a view — the write surface must never offer it.
+    // Urban treats every view as read-only (no INSTEAD OF trigger), so a plain view rejects
+    // the write — the write surface must never offer it.
     const view = src.table<{ id: number; total: number }>("paid_orders");
     await assert.rejects(() => view.insert({ id: 99, total: 1 }));
   });

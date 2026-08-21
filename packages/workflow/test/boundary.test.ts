@@ -128,6 +128,72 @@ test("boundary: the onTimeout body converges with the activity's normal continua
   assert.ok(escFromBoundary, "the boundary event's outgoing flow must feed the onTimeout body");
 });
 
+test("boundary: fireAndForget caps the onTimeout body with an end event and does NOT converge", () => {
+  // A non-interrupting reviewer-nudge SLA: when the timer fires, run a side-effect
+  // (`nudge`) and END that token. The reviewed activity must NOT gain a second
+  // incoming — the escape path contributes no danglers to the continuation.
+  const flow = defineFlow("rn", (w) => {
+    w.task("review");
+    w.boundary({ timer: "PT24H", interrupting: false, fireAndForget: true, onTimeout: (b) => { b.task("nudge"); } });
+    w.task("after");
+  });
+  const model = normalize(declarativeToBpmn(flow));
+  // `after` has exactly ONE incoming — only the normal path, not the escape path.
+  const afterNode = model.nodes.find((n) => n.includes("taskDefinition{type=rn:after}"));
+  assert.ok(afterNode, "the post-boundary activity must exist");
+  assert.match(afterNode, /in=1/);
+  // The escalation body's side-effect flows into a plain end event (in=1,out=0).
+  const nudgeNode = model.nodes.find((n) => n.includes("taskDefinition{type=rn:nudge}"));
+  assert.ok(nudgeNode, "the escalation side-effect must exist");
+  assert.match(nudgeNode, /out=1/);
+  const endFromNudge = model.flows.find((f) => f.includes("rn:nudge") && f.includes("=[]=>") && f.includes("endEvent"));
+  assert.ok(endFromNudge, "the onTimeout side-effect must feed an end event (fire-and-forget)");
+  // The boundary event is still non-interrupting and attached to `review`.
+  const be = boundaryNode(model);
+  assert.match(be, /cancelActivity=false/);
+});
+
+test("boundary: fireAndForget on a gateway-followed task pushes no spurious token downstream", () => {
+  // With a converging boundary, an SLA on a task followed by a gateway would push
+  // a spurious token into the downstream gateway. Fire-and-forget must not: the
+  // gateway keeps only its normal single incoming.
+  const flow = defineFlow("g", (w) => {
+    w.task("reviewed");
+    w.boundary({ timer: "PT1H", interrupting: false, fireAndForget: true, onTimeout: (b) => { b.task("sla-nudge"); } });
+    w.switch("decide", { ok: (c) => { c.task("approve"); }, no: (c) => { c.task("reject"); } });
+  });
+  const model = normalize(declarativeToBpmn(flow));
+  const gateway = model.nodes.find((n) => n.startsWith("exclusiveGateway"));
+  assert.ok(gateway, "the downstream gateway must exist");
+  assert.match(gateway, /in=1/);
+});
+
+test("boundary: fireAndForget defaults to false (the converging boundary)", () => {
+  // Omitting fireAndForget keeps the converging behaviour: `after` has in=2.
+  const flow = defineFlow("d", (w) => {
+    w.task("act");
+    w.boundary({ timer: "PT1H", onTimeout: (b) => { b.task("record-timeout"); } });
+    w.task("after");
+  });
+  const model = normalize(declarativeToBpmn(flow));
+  const afterNode = model.nodes.find((n) => n.includes("taskDefinition{type=d:after}"));
+  assert.ok(afterNode, "the post-boundary activity must exist");
+  assert.match(afterNode, /in=2/);
+  // No end event caps the escalation body in the converging case.
+  assert.equal(model.nodes.filter((n) => n.startsWith("endEvent")).length, 1);
+});
+
+test("boundary: fireAndForget must be a boolean", () => {
+  assert.throws(
+    () =>
+      defineFlow("e", (w) => {
+        w.task("a");
+        w.boundary({ timer: "PT1H", fireAndForget: "yes", onTimeout: (b) => { b.task("x"); } });
+      }),
+    /\{ fireAndForget \} must be a boolean/,
+  );
+});
+
 test("boundary: full derive → normalize → parity against a checked-in golden", () => {
   // Exercises the whole harness path (a boundary in a complete flow) against an
   // id-renamed, DI-independent golden copy of the derived output.

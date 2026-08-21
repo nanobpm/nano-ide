@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.75.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.74.1...@nanobpm/urban-0.75.0) (2026-08-21)
+
+
+### Features
+
+* **urban:** let page datasources read SQL VIEWs (schema introspects views, tagged read-only) ([#429](https://github.com/nanobpm/nano-ide/issues/429)) ([917a0ea](https://github.com/nanobpm/nano-ide/commit/917a0ea5b679961eb7aa3c145b4b6b9bbe2960d9))
+
 ## [0.74.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.74.0...@nanobpm/urban-0.74.1) (2026-08-21)
 
 

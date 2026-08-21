@@ -76,13 +76,17 @@ function fieldType(col: ColumnMeta): string {
   return col.notNull || col.primaryKey ? base : `${base} | null`;
 }
 
-/** One `export interface` block for a table under an explicit interface name. */
+/** One `export interface` block for a table under an explicit interface name. Urban treats a
+ * VIEW as read-only (a plain SQLite view rejects writes absent INSTEAD OF triggers, which Urban
+ * never attaches), so its fields are emitted `readonly` — consumers get typed reads and the
+ * `readonly` modifier signals/guards against mutating the row through the generated type. */
 function tableInterfaceNamed(name: string, t: TableMeta): string {
+  const ro = t.kind === "view" ? "readonly " : "";
   const fields = t.columns
     .map((c) => {
       const key = isIdent(c.name) ? c.name : JSON.stringify(c.name);
       const pk = c.primaryKey ? " (primary key)" : "";
-      return `  /** ${c.type || "?"}${pk} */\n  ${key}: ${fieldType(c)};`;
+      return `  /** ${c.type || "?"}${pk} */\n  ${ro}${key}: ${fieldType(c)};`;
     })
     .join("\n");
   return `export interface ${name} {\n${fields}\n}`;
@@ -276,6 +280,15 @@ function primaryKeyOf(t: TableMeta): string {
   return t.columns.find((c) => c.primaryKey)?.name ?? "id";
 }
 
+/** Urban treats a view as read-only (a plain SQLite view rejects writes absent INSTEAD OF
+ * triggers, which Urban never attaches), so it must not get a `Table<T>` writer binding
+ * in the generated `domain.ts`; its typed row still lives in `domain-rows.d.ts` (read-only) and
+ * stays reachable for reads via `db.raw`. A reserved-named object is dropped too, so it can't
+ * clobber the `raw`/`close` escape hatch. */
+function isWriterBound(t: TableMeta): boolean {
+  return t.kind !== "view" && !RESERVED_DOMAIN_MEMBERS.has(t.name);
+}
+
 /**
  * Emit `domain.ts`: a typed data-object accessor over the App's default datasource, so a worker
  * writes `db.orders.insert({...})` / `db.orders.get(id)` instead of hand-writing SQL (ADR 0029 §6).
@@ -303,9 +316,7 @@ export function emitDomainBindings(
     ? defaultSource
     : sources[0]?.source;
   const primary = sources.find((s) => s.source === def);
-  const tables = (primary?.tables ?? []).filter(
-    (t) => !RESERVED_DOMAIN_MEMBERS.has(t.name),
-  );
+  const tables = (primary?.tables ?? []).filter(isWriterBound);
 
   // Multi-source apps: emit a *keyed* accessor so `openDomain("analytics")` is typed against that
   // source's tables, not the default's. The row-type spine (`DomainSources`, keyed by alias then
@@ -375,7 +386,7 @@ function emitKeyedDomainBindings(
   const tableDescriptors = sources
     .map((s) => {
       const rows = s.tables
-        .filter((t) => !RESERVED_DOMAIN_MEMBERS.has(t.name))
+        .filter(isWriterBound)
         .map((t) =>
           `{ name: ${JSON.stringify(t.name)}, pk: ${JSON.stringify(primaryKeyOf(t))} }`
         )
@@ -431,6 +442,7 @@ function tableMetaFromType(typeName: string, def: ToolkitType): TableMeta {
   const { table, columns } = tableSchemaForType(typeName, def);
   return {
     name: table,
+    kind: "table",
     columns: columns.map((c) => ({
       name: c.name,
       type: c.sqlType,

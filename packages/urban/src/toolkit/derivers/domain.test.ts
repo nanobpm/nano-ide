@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   emitDomainModel,
   emitDomain,
+  emitDomainBindings,
   deriveDomain,
   sourcesFromManifest,
   registryFromManifest,
@@ -20,7 +21,7 @@ const GOLDENS: Record<string, string> = JSON.parse("{\n  \"empty\": \"// AUTO-GE
 
 const col = (name: string, type: string, notNull: boolean, primaryKey: boolean) =>
   ({ name, type, notNull, primaryKey });
-const table = (name: string, cols: TableMeta["columns"]): TableMeta => ({ name, columns: cols, indexes: [], foreignKeys: [] });
+const table = (name: string, cols: TableMeta["columns"], kind: TableMeta["kind"] = "table"): TableMeta => ({ name, kind, columns: cols, indexes: [], foreignKeys: [] });
 
 test("emitDomainModel: empty app → bare DomainTables (byte-parity)", () => {
   assert.equal(emitDomainModel([], undefined, {}), GOLDENS.empty);
@@ -56,6 +57,37 @@ test("emitDomainModel: multi-source → DomainSources + DomainTables alias to de
     { source: "analytics", tables: [ table("events", [col("id","INTEGER",false,true), col("kind","TEXT",true,false)]) ] },
   ];
   assert.equal(emitDomainModel(sources, "analytics", {}), GOLDENS.multi);
+});
+
+test("emitDomainModel: a VIEW yields a read-only row interface (readonly fields)", () => {
+  // The datasource read path works verbatim on a view, so consumers still get a typed row —
+  // but Urban treats every view as read-only (it never attaches INSTEAD OF triggers), so its
+  // fields are emitted `readonly`.
+  const sources: SourceSchema[] = [{ source: "app", tables: [
+    table("orders", [col("id","INTEGER",false,true), col("total","INTEGER",true,false)]),
+    table("paid_orders", [col("id","INTEGER",false,false), col("total","INTEGER",false,false)], "view"),
+  ]}];
+  const out = emitDomainModel(sources, "app", {});
+  // A base table stays writable (non-readonly fields).
+  assert.match(out, /export interface Orders \{\n {2}\/\*\* INTEGER \(primary key\) \*\/\n {2}id: number;/);
+  // The view's row interface is entirely read-only.
+  assert.match(out, /export interface PaidOrders \{\n {2}\/\*\* INTEGER \*\/\n {2}readonly id: number \| null;\n {2}\/\*\* INTEGER \*\/\n {2}readonly total: number \| null;\n\}/);
+  // Both appear in the DomainTables lookup — a view is a readable object.
+  assert.match(out, /"paid_orders": PaidOrders;/);
+});
+
+test("emitDomainBindings: a VIEW gets NO Table<T> writer binding; base tables do", () => {
+  const sources: SourceSchema[] = [{ source: "app", tables: [
+    table("orders", [col("id","INTEGER",false,true), col("total","INTEGER",true,false)]),
+    table("paid_orders", [col("id","INTEGER",false,false), col("total","INTEGER",false,false)], "view"),
+  ]}];
+  const bindings = emitDomainBindings(sources, "app");
+  // The base table gets a typed Table<T> gateway (insert/update/delete available).
+  assert.match(bindings, /readonly orders: Table<Orders>;/);
+  assert.match(bindings, /orders: raw\.table<Orders>\("orders", "id"\),/);
+  // The view is NOT offered a writer binding — it never appears as a Table<T> field or bind.
+  assert.equal(bindings.includes("paid_orders"), false);
+  assert.equal(bindings.includes("PaidOrders"), false);
 });
 
 // --- manifest bridge: code-first derivation reproduces the console output --------------------

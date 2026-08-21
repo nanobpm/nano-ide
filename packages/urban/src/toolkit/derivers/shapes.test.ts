@@ -20,6 +20,7 @@ test("emitDomainModelJson fuses tables, manifest types, shapes, and metadata", (
         tables: [
           {
             name: "orders",
+            kind: "table",
             columns: [{ name: "id", type: "INTEGER", notNull: true, primaryKey: true }],
             indexes: [],
             foreignKeys: [],
@@ -121,6 +122,7 @@ test("resolveShapes treats a qualified-alias carry of the colliding leaf as comp
       tables: [
         {
           name: "orders",
+          kind: "table",
           columns: [{ name: "id", type: "INTEGER", notNull: true, primaryKey: true }],
           indexes: [],
           foreignKeys: [],

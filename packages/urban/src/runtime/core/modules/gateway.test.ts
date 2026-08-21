@@ -125,6 +125,99 @@ test("schema introspects columns/pk and excludes internal tables", async () => {
   });
 });
 
+test("schema introspects a VIEW tagged read-only; base tables stay writable", async () => {
+  await withGateway(async (src) => {
+    await src.exec(
+      "INSERT INTO orders (id, status, total) VALUES (1, 'new', 10), (2, 'paid', 20)",
+    );
+    // A derived rollup as a SQL VIEW — the exact "no drift surface" the issue enables.
+    await src.exec(
+      "CREATE VIEW paid_orders AS SELECT id, total FROM orders WHERE status = 'paid'",
+    );
+
+    const meta = await src.schema();
+    const byName = new Map(meta.map((t) => [t.name, t]));
+
+    // Both the base table and the view are introspected…
+    assert.deepEqual(
+      meta.map((t) => t.name),
+      ["orders", "paid_orders"],
+    );
+    // …and tagged so a write surface can tell them apart.
+    assert.equal(byName.get("orders")?.kind, "table");
+    assert.equal(byName.get("paid_orders")?.kind, "view");
+
+    // A view has columns (pk/notnull report 0 — a view has no primary key).
+    const view = byName.get("paid_orders");
+    assert.deepEqual(
+      view?.columns.map((c) => c.name),
+      ["id", "total"],
+    );
+    assert.equal(view?.columns.every((c) => c.primaryKey === false), true);
+  });
+});
+
+test("datasource reads rows from a VIEW with filter and order applied", async () => {
+  interface Paid {
+    id: number;
+    total: number;
+  }
+  await withGateway(async (src) => {
+    await src.exec(
+      "INSERT INTO orders (id, status, total) VALUES " +
+        "(1, 'new', 10), (2, 'paid', 20), (3, 'paid', 5)",
+    );
+    await src.exec(
+      "CREATE VIEW paid_orders AS SELECT id, total FROM orders WHERE status = 'paid'",
+    );
+
+    const view = src.table<Paid>("paid_orders");
+    // The Table read path (`SELECT * FROM <name> …`) works verbatim on a view.
+    const all = await view.all();
+    assert.deepEqual(
+      all.map((r) => r.id).sort(),
+      [2, 3],
+    );
+    // filter (WHERE) applies as normal.
+    const byTotal = await view.find({ total: 20 });
+    assert.deepEqual(byTotal.map((r) => r.id), [2]);
+    // ordered raw read (ORDER BY) applies as normal.
+    const ordered = await src.query<Paid>(
+      "SELECT * FROM paid_orders ORDER BY total ASC",
+    );
+    assert.deepEqual(ordered.map((r) => r.id), [3, 2]);
+  });
+});
+
+test("a base table is writable but a VIEW is not", async () => {
+  await withGateway(async (src) => {
+    await src.exec("INSERT INTO orders (id, status, total) VALUES (1, 'paid', 20)");
+    await src.exec(
+      "CREATE VIEW paid_orders AS SELECT id, total FROM orders WHERE status = 'paid'",
+    );
+
+    // The base table writes fine.
+    const orders = src.table<Order>("orders");
+    const id = await orders.insert({ status: "new", total: 3 });
+    assert.equal(typeof id === "number" || typeof id === "bigint", true);
+
+    // Urban treats every view as read-only (no INSTEAD OF trigger), so a plain view rejects
+    // the write — the write surface must never offer it.
+    const view = src.table<{ id: number; total: number }>("paid_orders");
+    await assert.rejects(() => view.insert({ id: 99, total: 1 }));
+  });
+});
+
+test("schema excludes internal tables AND internal views", async () => {
+  await withGateway(async (src) => {
+    await src.exec("CREATE VIEW _urban_hidden AS SELECT 1 AS x");
+    await src.exec("CREATE VIEW _nano_hidden AS SELECT 1 AS x");
+    await src.exec("CREATE VIEW visible AS SELECT id FROM orders");
+    const names = (await src.schema()).map((t) => t.name);
+    assert.deepEqual(names, ["orders", "visible"]);
+  });
+});
+
 test("query rejects (not throws synchronously) on invalid SQL", async () => {
   await withGateway(async (src) => {
     await assert.rejects(src.query("SELECT * FROM does_not_exist"));

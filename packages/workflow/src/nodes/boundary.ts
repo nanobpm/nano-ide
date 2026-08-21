@@ -1,8 +1,10 @@
-// Flow-node kind: `boundary` — an activity-level attached interrupting timer
-// boundary event (an SLA). Chained onto the activity it guards, it attaches a
+// Flow-node kind: `boundary` — an activity-level attached timer boundary event
+// (an SLA). Chained onto the activity it guards, it attaches a
 // `<bpmn:boundaryEvent … attachedToRef=… ><bpmn:timerEventDefinition>` to that
-// activity: when the timer elapses the activity is cancelled (interrupting) and
-// the token routes to the `onTimeout` escalation body, which then converges with
+// activity: when the timer elapses the boundary fires and the token routes to
+// the `onTimeout` escalation body (and, for an interrupting boundary — the
+// default — the host activity is cancelled; a non-interrupting boundary leaves
+// it running). By default the escalation body then converges with
 // the activity's normal continuation — OR, with `fireAndForget: true`, ends in a
 // `<bpmn:endEvent>` without converging (a non-converging escape path). Contributed
 // entirely from this module through the extension seam (epic #314, S2/#317) — NO

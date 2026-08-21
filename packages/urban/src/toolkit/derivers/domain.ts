@@ -76,9 +76,10 @@ function fieldType(col: ColumnMeta): string {
   return col.notNull || col.primaryKey ? base : `${base} | null`;
 }
 
-/** One `export interface` block for a table under an explicit interface name. A VIEW is
- * read-only (SQLite rejects writes to it), so its fields are emitted `readonly` — consumers get
- * typed reads but the type itself blocks accidental writer code. */
+/** One `export interface` block for a table under an explicit interface name. Urban treats a
+ * VIEW as read-only (a plain SQLite view rejects writes absent INSTEAD OF triggers, which Urban
+ * never attaches), so its fields are emitted `readonly` — consumers get typed reads and the
+ * `readonly` modifier signals/guards against mutating the row through the generated type. */
 function tableInterfaceNamed(name: string, t: TableMeta): string {
   const ro = t.kind === "view" ? "readonly " : "";
   const fields = t.columns
@@ -279,7 +280,8 @@ function primaryKeyOf(t: TableMeta): string {
   return t.columns.find((c) => c.primaryKey)?.name ?? "id";
 }
 
-/** A view is read-only (SQLite rejects writes), so it must not get a `Table<T>` writer binding
+/** Urban treats a view as read-only (a plain SQLite view rejects writes absent INSTEAD OF
+ * triggers, which Urban never attaches), so it must not get a `Table<T>` writer binding
  * in the generated `domain.ts`; its typed row still lives in `domain-rows.d.ts` (read-only) and
  * stays reachable for reads via `db.raw`. A reserved-named object is dropped too, so it can't
  * clobber the `raw`/`close` escape hatch. */

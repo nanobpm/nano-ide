@@ -50,9 +50,10 @@ export interface ForeignKeyMeta {
 /** One introspected datasource object: its columns, index names, and foreign keys. Powers
  * domain-type projection and the page runtime's list/detail binding. `kind` distinguishes a
  * base `table` (read/write) from a SQL `view` (read-only): a view is readable through the same
- * `SELECT * FROM <name>` path as a table, but SQLite rejects writes to it, so write surfaces
- * (DB Manager, forms, the domain writer bindings) must not offer insert/update/delete against
- * a view. */
+ * `SELECT * FROM <name>` path as a table, but Urban treats every view as read-only (a plain
+ * SQLite view rejects writes unless someone attaches INSTEAD OF triggers, which Urban never
+ * does), so write surfaces (DB Manager, forms, the domain writer bindings) must not offer
+ * insert/update/delete against a view. */
 export interface TableMeta {
   name: string;
   /** `table` for a base table (read/write); `view` for a read-only SQL VIEW. */
@@ -257,7 +258,8 @@ class SqliteGateway implements DataSource {
     // Introspect base tables AND views (`type IN ('table','view')`): the datasource read path
     // (`SELECT * FROM <name>`) works verbatim on a view, so a page datasource / domain read must
     // be able to see one. A view is tagged `kind:'view'` below so write surfaces know not to
-    // offer insert/update/delete against it (SQLite rejects writes to a view).
+    // offer insert/update/delete against it (Urban treats every view as read-only; a plain
+    // SQLite view rejects writes absent INSTEAD OF triggers, which Urban never attaches).
     //
     // Exclude SQLite internals (`sqlite_%`) and Nano's own bookkeeping tables (`_urban_%` /
     // `_nano_%`, e.g. the migrations ledger): neither is a user/domain object, so they must

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.74.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.73.0...@nanobpm/urban-0.74.0) (2026-08-21)
+
+
+### Features
+
+* **urban:** serve appView sidecar + dist assets so the embed iframe 200s in deployed apps ([944aa7c](https://github.com/nanobpm/nano-ide/commit/944aa7c7ab67282cdbd394f8071ce53c89d6de44)), closes [#420](https://github.com/nanobpm/nano-ide/issues/420) [#416](https://github.com/nanobpm/nano-ide/issues/416)
+* **urban:** serve appView sidecar + dist assets so the embed iframe 200s in deployed apps (closes [#420](https://github.com/nanobpm/nano-ide/issues/420)) ([#428](https://github.com/nanobpm/nano-ide/issues/428)) ([944aa7c](https://github.com/nanobpm/nano-ide/commit/944aa7c7ab67282cdbd394f8071ce53c89d6de44))
+
 ## [0.73.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.72.2...@nanobpm/urban-0.73.0) (2026-08-20)
 
 

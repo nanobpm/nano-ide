@@ -30,7 +30,7 @@
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { findPublishDrift } from "./lib/publish-drift.mjs";
+import { findPublishDrift, isNpmNotPublishedError } from "./lib/publish-drift.mjs";
 
 /** Parse the small flag set this script accepts. */
 function parseArgs(argv) {
@@ -75,11 +75,30 @@ function workspaceDirs() {
 		.filter(Boolean);
 }
 
-/** Latest version published on npm for `name`, or `null` when unpublished (404). */
+/** Latest version published on npm for `name`, or `null` only when the package
+ *  has genuinely never been published (npm `E404`). Any *other* `npm view`
+ *  failure (a transient outage, rate-limit, auth/OIDC/network hiccup) is NOT
+ *  evidence of "unpublished": collapsing it to `null` would misreport a
+ *  published package as drifted and open a false tracking issue. So we fail the
+ *  whole guard loudly (exit 3) on a non-E404 error instead of returning a
+ *  misleading `null`. */
 function npmVersionOf(name) {
-	// `npm view <name> version` prints the latest version, or errors (E404) when
-	// the package has never been published.
-	return tryOut("npm", ["view", name, "version"]);
+	try {
+		return execFileSync("npm", ["view", name, "version"], {
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
+	} catch (err) {
+		const stderr = String(err?.stderr ?? "");
+		if (isNpmNotPublishedError(stderr)) return null;
+		console.error(
+			`::error::\`npm view ${name} version\` failed and it is NOT an npm E404 — ` +
+				`refusing to treat this as "never published", which would raise a false ` +
+				`drift alarm. Fix the transient/auth failure and re-run. Underlying error:\n` +
+				`${stderr.trim() || err?.message || "unknown error"}`,
+		);
+		process.exit(3);
+	}
 }
 
 /** Hours since the commit that introduced `version` into `dir/package.json`, or
@@ -134,7 +153,10 @@ function describe(d) {
 /** Open or update a tracking issue so the freeze is visible outside CI logs.
  *  Best-effort: a `gh` failure never changes the exit code (the ::error:: and
  *  non-zero exit already make the run red). Idempotent — reuses the one open
- *  issue carrying the marker instead of opening a new one every run. */
+ *  issue carrying the marker instead of opening a new one every run, and edits
+ *  that issue's body in place (rather than appending a comment each run) so a
+ *  persistent drift keeps a single up-to-date issue instead of accreting a pile
+ *  of duplicate payload comments. */
 function openTrackingIssue(drifted) {
 	const MARKER = "<!-- publish-drift-guard -->";
 	const repo = process.env.GITHUB_REPOSITORY;
@@ -175,7 +197,9 @@ function openTrackingIssue(drifted) {
 	}
 
 	if (number) {
-		if (tryOut("gh", ["issue", "comment", String(number), "--body", body]) !== null) {
+		// Edit the existing issue's body in place so it stays current instead of
+		// accumulating a duplicate comment on every run of a persistent drift.
+		if (tryOut("gh", ["issue", "edit", String(number), "--body", body]) !== null) {
 			console.log(`updated tracking issue #${number}`);
 		}
 	} else {

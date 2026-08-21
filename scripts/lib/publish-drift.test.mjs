@@ -8,7 +8,7 @@
 // is equal or ahead (a normal lagging local checkout).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cmpVersion, findPublishDrift, isAheadOfNpm } from "./publish-drift.mjs";
+import { cmpVersion, findPublishDrift, isAheadOfNpm, isNpmNotPublishedError } from "./publish-drift.mjs";
 
 test("cmpVersion orders dotted numeric versions", () => {
 	assert.ok(cmpVersion("0.4.0", "0.1.0") > 0);
@@ -125,4 +125,23 @@ test("reports only the drifted packages in a mixed set", () => {
 
 test("an empty package set is fine", () => {
 	assert.equal(findPublishDrift([]).ok, true);
+});
+
+test("isNpmNotPublishedError recognises a genuine npm 404 (never published)", () => {
+	// npm prints the E404 code on both modern (`npm error code E404`) and older
+	// (`npm ERR! code E404`) CLIs — only this case means "unpublished".
+	assert.equal(isNpmNotPublishedError("npm error code E404\nnpm error 404 Not Found"), true);
+	assert.equal(isNpmNotPublishedError("npm ERR! code E404"), true);
+});
+
+test("isNpmNotPublishedError does NOT treat a transient failure as unpublished", () => {
+	// The failure mode being guarded (issue #423): a network/rate-limit/auth hiccup
+	// must never be misread as "never published" — that would raise a false drift
+	// alarm and open a spurious tracking issue for a package that IS on npm.
+	assert.equal(isNpmNotPublishedError("npm error code E429\nToo Many Requests"), false);
+	assert.equal(isNpmNotPublishedError("npm error network request to https://registry.npmjs.org failed"), false);
+	assert.equal(isNpmNotPublishedError("npm error code ETIMEDOUT"), false);
+	assert.equal(isNpmNotPublishedError("npm error code E401\nUnable to authenticate"), false);
+	assert.equal(isNpmNotPublishedError(""), false);
+	assert.equal(isNpmNotPublishedError(null), false);
 });

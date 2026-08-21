@@ -50,6 +50,21 @@ export function isAheadOfNpm(localVersion, npmVersion) {
 }
 
 /**
+ * Classify a failed `npm view <name> version` from its captured stderr. npm
+ * exits non-zero both when a package has genuinely never been published
+ * (`E404`) and on transient failures (network outage, rate-limit, auth/OIDC
+ * hiccup). Only the former means "unpublished". Treating a transient failure as
+ * unpublished would raise a false drift alarm (and open a spurious tracking
+ * issue), so the caller must tell the two apart rather than collapse every
+ * failure to `null`.
+ * @param {string} stderr — captured stderr from the failed `npm view`.
+ * @returns {boolean} true only when the failure is a genuine npm 404 (never published).
+ */
+export function isNpmNotPublishedError(stderr) {
+	return /\bE404\b/.test(String(stderr ?? ""));
+}
+
+/**
  * @typedef {Object} PackageState
  * @property {string} name — the npm package name.
  * @property {string} version — the `package.json` version on `main`.

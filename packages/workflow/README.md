@@ -73,13 +73,19 @@ approval gate rendered on a task list), composed with control-flow combinators:
   (a message- or timer-event-definition), the arm bodies rejoining downstream by an
   implicit XOR merge. This is the shape a convergence loop uses to bound a
   human-in-the-loop wait with a timeout.
-- `w.run(...).boundary({ timer, onTimeout, interrupting?, name? })` — attach an
-  SLA (an interrupting timer boundary event) to the PRECEDING activity: when
-  `timer` elapses the activity is cancelled and the token routes to the
-  `onTimeout` escalation body, which then converges with the activity's normal
-  continuation. `timer` is an ISO-8601 duration (`PT24H`) or a FEEL
+- `w.run(...).boundary({ timer, onTimeout, interrupting?, fireAndForget?, name? })`
+  — attach an SLA (a timer boundary event) to the PRECEDING
+  activity: when `timer` elapses the boundary fires and the token routes to
+  the `onTimeout` escalation body, which then converges with the activity's normal
+  continuation (and, for an interrupting boundary — the default — the host activity
+  is cancelled). `timer` is an ISO-8601 duration (`PT24H`) or a FEEL
   `=`-expression (`=escalationSlaTimeout`). `interrupting` defaults to `true`
   (pass `false` for a non-interrupting boundary that leaves the activity running).
+  Pass `fireAndForget: true` for a NON-CONVERGING escape path — the `onTimeout`
+  body ends in a `<bpmn:endEvent>` and contributes no danglers to the
+  continuation (the correct shape for a non-interrupting reviewer nudge: a
+  side-effect that ends its own token and must not re-enter the reviewed
+  activity).
 
 ```ts
 import { defineFlow, WorkflowClient, Worker } from "@nanobpm/workflow";

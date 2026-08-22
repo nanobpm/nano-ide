@@ -140,6 +140,14 @@ interface RegisteredWorker {
   readonly fetchVariables?: readonly string[];
 }
 
+/** Per-handler async-context payload (see {@link WasmEngineClient.close}/`#track`/`#handlerContext`):
+ *  carries the handler's OWN tracked promise so a nested self-close() can exclude itself from the
+ *  teardown settlement wait. Single source of truth for the store shape — used by the
+ *  `AsyncLocalStorage`, `#track`, and `#runJob`. */
+interface HandlerStore {
+  own?: Promise<void>;
+}
+
 /** A synthetic activation descriptor for a mock-only type (a mocked `taskType` with no real
  *  `registerWorker`). It only supplies the `activateJobs` parameters so a mock-only type's jobs
  *  can be pulled; its `handler` is never called (the mock either resolves the job or, on no
@@ -242,9 +250,11 @@ export class WasmEngineClient implements EngineClient {
    *  close() returns. {@link close} reads this store to record the caller as a close-awaiter (see
    *  {@link #closeAwaiters}), so {@link #settleInflight} excludes it from its settlement wait and a
    *  handler-initiated close() drains its PEERS without dead-awaiting itself (close() waiting on the
-   *  handler that is waiting on close()). Empty for an external close() (no handler on the stack), so
-   *  that path is unchanged. */
-  readonly #handlerContext = new AsyncLocalStorage<{ own?: Promise<void> }>();
+   *  handler that is waiting on close()). Scoped by {@link #runJob} to the actual `worker.handler`
+   *  invocation ONLY — never the dispatch-time `#onJob`/mock callbacks that run first — so a dispatch
+   *  observer re-entering close() is an EXTERNAL close, not the parked handler. Empty for an external
+   *  close() (no handler on the stack), so that path is unchanged. */
+  readonly #handlerContext = new AsyncLocalStorage<HandlerStore>();
   /** Tracked promises of handlers that are currently parked inside a {@link close} call — the
    *  initiator AND any peer that re-entered the memoized run. Such a promise sits in {@link #inflight}
    *  but can only settle AFTER close() returns, so {@link #settleInflight} excludes EVERY member of
@@ -876,7 +886,7 @@ export class WasmEngineClient implements EngineClient {
           // below (so its effects are visible after `settle`); a handler parked on a *future*
           // virtual-clock `app.wait` is left in-flight for `advanceTime` to drive, instead of
           // deadlocking the drain on a clock that only moves later.
-          this.#track(jobKey, () => this.#runJob(worker, realWorker !== undefined, raw));
+          this.#track(jobKey, (store) => this.#runJob(worker, realWorker !== undefined, raw, store));
         }
       }
       // Let every handler dispatched this iteration run until it completes (its `completeJob` may
@@ -899,7 +909,7 @@ export class WasmEngineClient implements EngineClient {
    *  maps a handler throw onto the engine's completion surface internally, so a rejection here can
    *  only come from the engine completion call itself; capture it (deduped) so {@link drain} can
    *  rethrow it loudly rather than let it escape as an unhandled rejection. */
-  #track(jobKey: string, run: () => Promise<void>): void {
+  #track(jobKey: string, run: (store: HandlerStore) => Promise<void>): void {
     if (jobKey !== "") this.#inflightJobKeys.add(jobKey);
     // Register the tracked promise in `#inflight` and publish it as the handler's OWN promise BEFORE
     // `run()` executes. A handler that calls close() synchronously — before its first await — must
@@ -913,12 +923,16 @@ export class WasmEngineClient implements EngineClient {
     const tracked = new Promise<void>((resolve) => {
       settleTracked = resolve;
     });
-    // `run()` starts `#runJob`; every async continuation of that handler — including a nested close()
-    // — inherits `store`, so `#settleInflight`/close() can identify a self-closing handler.
-    const store: { own?: Promise<void> } = { own: tracked };
+    // `store.own` identifies THIS handler's tracked promise so a nested close() the handler makes can
+    // exclude itself from `#settleInflight()`. `#runJob` scopes `#handlerContext` to the actual
+    // `worker.handler` invocation ONLY (see there): dispatch-time callbacks it runs first — the
+    // `observeJobs` coverage observer and mock predicates — must NOT run under this store, or an
+    // observer re-entering close() would read this still-parked handler's promise as its OWN and
+    // exclude it, freeing the engine under a live handler (#446). So `#track` passes `store` to `run`
+    // by value instead of entering the context here; only the handler call enters it.
+    const store: HandlerStore = { own: tracked };
     this.#inflight.add(tracked);
-    void this.#handlerContext
-      .run(store, run)
+    void run(store)
       .catch((err: unknown) => {
         if (this.#inflightError === undefined) this.#inflightError = err;
       })
@@ -1043,6 +1057,7 @@ export class WasmEngineClient implements EngineClient {
     worker: RegisteredWorker,
     hasRealWorker: boolean,
     raw: Record<string, unknown>,
+    store: HandlerStore,
   ): Promise<void> {
     const jobKey = str(raw.key);
     // A keyless job cannot be completed/failed/errored; skip it rather than
@@ -1110,7 +1125,15 @@ export class WasmEngineClient implements EngineClient {
     // locked job won't re-activate. With a real worker, run it exactly as an un-mocked type.
     if (!hasRealWorker) return;
     try {
-      const out = await worker.handler(job);
+      // Scope the handler `AsyncLocalStorage` context to the actual worker-handler invocation ONLY.
+      // Everything above (the `#onJob` coverage observer, mock resolution/`applyOutcome`) is
+      // dispatch-time machinery, NOT the handler — running it under this store would let a dispatch
+      // callback that re-enters close() (e.g. an `observeJobs` observer) read THIS still-parked
+      // handler's tracked promise as `store.own`, exclude it from `#settleInflight()`, and free the
+      // engine under the live handler (#446). The store still propagates through every async
+      // continuation of `worker.handler` — including a nested self-close() — so a handler that
+      // genuinely initiates teardown is still identified and excluded from its own wait.
+      const out = await this.#handlerContext.run(store, () => worker.handler(job));
       // A handler can self-initiate teardown by calling close() (workers reach the engine through
       // `AppApi`); close() then frees the engine while this handler is parked on its await. On resume
       // the engine handle is gone, so completing the job would drive a freed pointer — the very issue

@@ -1090,6 +1090,95 @@ test("wasm: two handlers can both call engine.close() without dead-awaiting each
   }
 });
 
+// Regression (PR #447 review, wasm-engine.ts:920 handler-context thread): the `AsyncLocalStorage`
+// handler context must scope to the ACTUAL worker-handler invocation, not the whole `#runJob`.
+// `#runJob` runs dispatch-time callbacks — the `observeJobs` coverage observer (and mock predicates)
+// — BEFORE `worker.handler` starts. If those ran under the handler context, an observer that
+// re-enters `close()` would read the still-parked handler's tracked promise as `store.own`, record
+// it as a close-awaiter, and `#settleInflight()` would exclude it and free the engine WHILE the real
+// handler is still parked on real async work — the #446 use-after-free. A dispatch observer is not
+// the handler, so its `close()` is an EXTERNAL close that must await the parked handler in full.
+// Deterministic: the observer's `close()` must not resolve while the handler is parked; a regression
+// resolves it early and fails fast on the `!closeResolved` assertion rather than hanging.
+test("wasm: a dispatch-time observer re-entering close() awaits the parked handler, not frees under it (#447 review)", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  const macrotask = () => new Promise<void>((r) => realSetTimeout(r, 0));
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let handlerFinished = false;
+  let closeResolved = false;
+  let closeP: Promise<void> | undefined;
+  let closed = false;
+  const model = {
+    name: "observer-close.bpmn",
+    content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="observer-close" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f" sourceRef="s" targetRef="t"/>
+    <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="observed"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
+  </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="observer-close">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="150" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="t_di" bpmnElement="t"><dc:Bounds x="240" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="400" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f_di" bpmnElement="f"><di:waypoint x="186" y="118"/><di:waypoint x="240" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="340" y="118"/><di:waypoint x="400" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>`,
+    contentType: "application/bpmn+xml",
+  };
+  try {
+    // The real handler parks on a real-time barrier, holding `#inflight` steady. It is a genuine
+    // in-flight handler close() MUST await before freeing the engine.
+    await engine.registerWorker("observed", async () => {
+      await barrier;
+      handlerFinished = true;
+      return {};
+    });
+    // The observer runs at dispatch — BEFORE `worker.handler` — and re-enters close() fire-and-forget.
+    // It is not the handler, so its close() is external and must await the parked handler.
+    engine.observeJobs(() => {
+      closeP ??= engine.close().then(() => {
+        closeResolved = true;
+      });
+    });
+    await engine.deployResources([model]);
+    await engine.createInstance({ processDefinitionId: "observer-close" });
+    // Let dispatch, the observer's close(), and `#settleInflight()` run while the handler stays
+    // parked on the (unreleased) barrier. A regression frees the engine here and resolves close().
+    for (let i = 0; i < 5; i++) await macrotask();
+    assert.ok(
+      !closeResolved,
+      "an observer-initiated close() must NOT resolve while the real handler it dispatched is still parked",
+    );
+    assert.ok(!handlerFinished, "the handler is still parked on the barrier");
+    // Release the handler: it completes on the still-live engine, then close() drains it and frees.
+    release();
+    for (let i = 0; i < 5; i++) await macrotask();
+    await closeP;
+    closed = true;
+    assert.ok(handlerFinished, "the parked handler must complete before the engine is freed");
+    assert.ok(closeResolved, "close() resolves once the awaited handler has settled");
+    await engine.close();
+  } finally {
+    if (!closed) {
+      release();
+      await engine.close();
+    }
+  }
+});
+
 // Regression (PR #447 review, wasm-engine.ts:1075 — self-close use-after-free, categorical): the
 // `#freed` guard in `#runJob` only silences a resumed self-closing handler's own final `completeJob`.
 // A handler that self-closes and then keeps using `AppApi.engine` — `publishMessage`, `createInstance`,

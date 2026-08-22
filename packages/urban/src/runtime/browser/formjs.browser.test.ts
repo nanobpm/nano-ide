@@ -56,6 +56,26 @@ test("buildField maps a checkbox to a boolean value", (t) => {
   assert.deepEqual(built!.read!(), { key: "agree", value: true });
 });
 
+test("buildField reads the checked radio option (and omits an unselected group)", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const built = buildField({
+    type: "radio",
+    key: "size",
+    label: "Size",
+    values: [
+      { value: "s", label: "Small" },
+      { value: "l", label: "Large" },
+    ],
+  });
+  assert.ok(built?.read);
+  assert.equal(built!.read!(), null, "an unselected radio group is omitted from the submitted variables");
+  const radios = created.filter((n) => n.tagName === "INPUT" && n.type === "radio");
+  assert.equal(radios.length, 2);
+  radios[1].checked = true;
+  assert.deepEqual(built!.read!(), { key: "size", value: "l" }, "read() finds the checked option via querySelector('input:checked')");
+});
+
 test("renderForm submits a null-prototype variables bag (prototype-pollution safe)", async (t) => {
   const created: FakeElement[] = [];
   t.after(installFakeDom(created));

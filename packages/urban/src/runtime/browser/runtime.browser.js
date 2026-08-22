@@ -1930,7 +1930,17 @@ function buildEngineForm(cfg, row, onSuccess) {
         renderer.renderForm(f.schema, {
           submitLabel: "Complete",
           /** @param {Record<string, any>} variables */
-          onSubmit: (variables) => complete(variables),
+          onSubmit: (variables) => {
+            msg.className = "njf-msg";
+            msg.textContent = "Sending\u2026";
+            // Surface completion failures to the operator (parity with the bare-completion
+            // path). Rethrow so renderForm's catch still re-enables the submit button.
+            return complete(variables).catch((e) => {
+              msg.className = "njf-msg err";
+              msg.textContent = String(e.message || e);
+              throw e;
+            });
+          },
         }),
         msg,
       );

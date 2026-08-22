@@ -93,6 +93,32 @@ test("buildEngineForm resolves the row's formKey and completes with the entered 
   assert.equal(refreshed, true, "a successful completion invokes onSuccess (grid re-poll)");
 });
 
+test("buildEngineForm surfaces a completion failure in the rendered-form path", async (t) => {
+  const created: FakeElement[] = [];
+  const calls: FetchCall[] = [];
+  t.after(installFakeDom(created));
+  t.after(
+    installFakeFetch((url) => {
+      if (url.includes("/app/actions/form")) {
+        return { status: 200, json: { schema: { components: [{ type: "textfield", key: "note" }] } } };
+      }
+      return { status: 500 }; // completion fails
+    }, calls),
+  );
+  const box = buildEngineForm(CFG, { form_key: "form-e", user_task_key: "ut-e" }, () => {});
+  assert.ok(box);
+  await new Promise((r) => setTimeout(r, 0));
+  const form = created.find((n) => n.tagName === "FORM");
+  assert.ok(form, "the deployed schema was rendered");
+  await form!.fire("submit");
+  await new Promise((r) => setTimeout(r, 0));
+  const msg = created.find((n) => n.className.includes("njf-msg") && n.className.includes("err"));
+  assert.ok(msg, "a failed completion is surfaced to the operator (not silent)");
+  assert.notEqual(msg!.textContent, "", "the error message element has text");
+  const submit = created.find((n) => n.tagName === "BUTTON" && n.type === "submit");
+  assert.equal(submit!.disabled, false, "the submit button is re-enabled so the operator can retry");
+});
+
 test("buildEngineForm degrades to bare completion when the row has no formKey", async (t) => {
   const created: FakeElement[] = [];
   const calls: FetchCall[] = [];

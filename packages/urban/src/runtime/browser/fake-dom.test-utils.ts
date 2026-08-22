@@ -60,9 +60,37 @@ export class FakeElement {
   get firstChild(): FakeElement | { text: string } | null {
     return this.children[0] ?? null;
   }
-  querySelector(): null {
-    return null;
+  querySelector(selector: string): FakeElement | null {
+    const walk = (nodes: Array<FakeElement | { text: string }>): FakeElement | null => {
+      for (const kid of nodes) {
+        if (kid instanceof FakeElement) {
+          if (fakeSelectorMatches(kid, selector)) return kid;
+          const found = walk(kid.children);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+    return walk(this.children);
   }
+}
+
+// Minimal CSS-selector matcher for the DOM surface the browser runtime touches
+// (currently the radio group's `input:checked` lookup). Supports an optional tag
+// name plus `:checked`; any other pseudo/selector deliberately fails to match so
+// unsupported queries surface rather than silently returning a wrong node.
+function fakeSelectorMatches(node: FakeElement, selector: string): boolean {
+  const parts = selector.trim().split(":");
+  const tag = parts[0];
+  if (tag && node.tagName !== tag.toUpperCase()) return false;
+  for (const pseudo of parts.slice(1)) {
+    if (pseudo === "checked") {
+      if (!node.checked) return false;
+    } else {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** Install a fake `document` on globalThis; returns a restore function. */

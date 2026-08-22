@@ -36,6 +36,7 @@ test("resolveFormResponse passes raw identifiers through to getForm and returns 
   });
   const res = await resolveFormResponse(engine, "form-1", undefined);
   assert.equal(res.status, 200);
+  assert.ok(res.body);
   assert.deepEqual(JSON.parse(res.body), schema);
   // A blank formKey is passed through unchanged so getForm can fall back to formId
   // (that fallback is getForm's single responsibility, not the gate's).
@@ -61,6 +62,7 @@ test("completeUserTaskResponse completes the task with the submitted variables",
   };
   const res = await completeUserTaskResponse(engine, JSON.stringify({ userTaskKey: "ut-7", variables: { a: 1 } }));
   assert.equal(res.status, 200);
+  assert.ok(res.body);
   assert.deepEqual(JSON.parse(res.body), { ok: true });
   assert.deepEqual(calls, [{ key: "ut-7", variables: { a: 1 } }]);
 });

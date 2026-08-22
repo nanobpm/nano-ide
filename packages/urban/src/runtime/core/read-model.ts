@@ -733,10 +733,16 @@ export class ReadModelRegistry {
    *  read-model definition in code always replaces a stale VIEW body (a plain `CREATE VIEW IF NOT
    *  EXISTS` would leave the SQL backend running an old definition, reintroducing backend drift).
    *  Referenced base/projection tables need not exist yet — SQLite only resolves a VIEW's body when
-   *  it is queried. */
+   *  it is queried.
+   *
+   *  The DROP is `main.`-qualified on purpose: an unqualified `DROP VIEW IF EXISTS "name"` resolves
+   *  TEMP first, so a stray TEMP view of the same name (e.g. leaked from a parity-guard run on a
+   *  long-lived handle) would be dropped INSTEAD of the managed `main` view — and the following
+   *  `CREATE VIEW IF NOT EXISTS` would then no-op against the surviving `main` view, leaving a stale
+   *  managed body in production. Qualifying to `main` drops exactly the managed view we recreate. */
   ensureViews(db: { exec(sql: string): void }, options?: SqlCompileOptions): void {
     for (const model of this.#byName.values()) {
-      db.exec(`DROP VIEW IF EXISTS ${quoteIdent(model.decl.name)};`);
+      db.exec(`DROP VIEW IF EXISTS main.${quoteIdent(model.decl.name)};`);
       db.exec(model.viewDdl(options));
     }
   }
@@ -791,6 +797,12 @@ function normaliseSqlValue(value: unknown): unknown {
   // `true`/`1` pair is parity, not a spurious mismatch.
   if (typeof value === "boolean") return value ? 1 : 0;
   if (value === undefined) return null;
+  // A SQLite INTEGER can surface as `number` on one side (when it fits) and `bigint` on the other,
+  // depending on the driver — the comparison below is `Object.is`, so `1n` vs `1` would be a spurious
+  // mismatch. Collapse a LOSSLESS `bigint` (one that round-trips exactly through `Number`, i.e. within
+  // safe-integer range) to `number`. A `bigint` past 2^53 is kept EXACT — narrowing it would collapse
+  // two distinct 64-bit keys and mask a real divergence (mirrors the exactness `orderable` preserves).
+  if (typeof value === "bigint" && BigInt(Number(value)) === value) return Number(value);
   return value;
 }
 

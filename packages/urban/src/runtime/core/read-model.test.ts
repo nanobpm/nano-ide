@@ -474,6 +474,36 @@ test("the parity guard reports a mismatch (not a bigint serialisation TypeError)
   });
 });
 
+test("the parity guard treats a lossless bigint and its number equal (parity) but keeps a bigint past 2^53 exact (mismatch)", async () => {
+  // A SQLite INTEGER can surface as `number` on the SQL side and `bigint` on the TS side (or vice
+  // versa) depending on the driver — the guard compares with `Object.is`, so `1` vs `1n` would be a
+  // SPURIOUS mismatch. normaliseSqlValue collapses a LOSSLESS bigint to number so identical integers
+  // are parity; a bigint past 2^53 stays EXACT so a genuine divergence is never masked.
+  const model = defineReadModel({
+    name: "bigint_norm_read_model",
+    baseTable: "bigint_norm_rows",
+    derive: { key: col("k") },
+  });
+  // baseRow { k: 1 } → the SQL VIEW yields the number 1.
+  const losslessDrift: ReadModel = {
+    ...model,
+    fnFor: (column) => (column === "key" ? () => 1n : model.fnFor(column)),
+  };
+  const exactDrift: ReadModel = {
+    ...model,
+    fnFor: (column) => (column === "key" ? () => 9007199254740993n : model.fnFor(column)),
+  };
+  await withDb((db) => {
+    // 1n (TS) vs 1 (SQL) is parity — the lossless bigint normalises to number.
+    assert.doesNotThrow(() => assertReadModelParity(losslessDrift, db, [{ baseRow: { k: 1 } }]));
+    // 2^53+1 (TS) vs 1 (SQL) stays a mismatch — a bigint past 2^53 is not collapsed onto a number.
+    assert.throws(
+      () => assertReadModelParity(exactDrift, db, [{ baseRow: { k: 1 } }]),
+      /parity mismatch in "bigint_norm_read_model"\.key/,
+    );
+  });
+});
+
 
 test("the parity guard runs entirely in the TEMP schema and never clobbers real main-schema tables/views the DB already holds under the model's names", async () => {
   // The guard drops/creates the base table, projection tables and managed VIEW by the model's REAL
@@ -641,6 +671,34 @@ test("ensureViews replaces a stale VIEW body (managed provisioning, not IF NOT E
     db.run(`INSERT INTO tasks VALUES (?, ?, ?, ?)`, ["t1", "pi-1", "done", 9]);
     const row = db.all<{ display_status: string }>(`SELECT display_status FROM tasks_display`)[0];
     assert.equal(row.display_status, "completed"); // stale body was dropped and replaced
+  });
+});
+
+test("ensureViews drops the MAIN managed view even when a TEMP view shadows the name (no stale main body)", async () => {
+  // An unqualified `DROP VIEW IF EXISTS "n"` resolves TEMP first, so a stray TEMP view of the same
+  // name (e.g. leaked from a parity-guard run on a long-lived handle) would be dropped INSTEAD of the
+  // managed `main` view; the following `CREATE VIEW IF NOT EXISTS "n"` would then no-op against the
+  // surviving main view, leaving a changed definition's STALE body live in production. ensureViews
+  // qualifies the DROP to `main`, so a redefinition always refreshes the managed main body.
+  await withDb((db) => {
+    db.exec(`CREATE TABLE shadow_base (id TEXT);`);
+    db.run(`INSERT INTO shadow_base VALUES (?)`, ["x"]);
+
+    const v1 = defineReadModel({ name: "shadow_rm", baseTable: "shadow_base", derive: { label: lit("A") } });
+    const regA = new ReadModelRegistry();
+    regA.register(v1);
+    regA.ensureViews(db); // main.shadow_rm = body A
+
+    // A stray TEMP view of the same name that would swallow an unqualified DROP.
+    db.exec(`CREATE TEMP VIEW shadow_rm AS SELECT 'temp' AS label;`);
+
+    const v2 = defineReadModel({ name: "shadow_rm", baseTable: "shadow_base", derive: { label: lit("B") } });
+    const regB = new ReadModelRegistry();
+    regB.register(v2);
+    regB.ensureViews(db); // must replace the MAIN body with B, not leave A behind the TEMP shadow
+
+    const mainRow = db.all<{ label: string }>(`SELECT label FROM main.shadow_rm`)[0];
+    assert.equal(mainRow.label, "B", "the managed main view must refresh to the new body, not stay stale behind a TEMP shadow");
   });
 });
 

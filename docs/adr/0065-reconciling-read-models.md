@@ -1,160 +1,169 @@
-# ADR 0065 — Reconciling read models (declare once, compile to both; engine truth as the source)
+# ADR 0065 — Reconciling read models (declare-once derived views over engine truth)
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-22
-Relates to: ADR 0063 (the framework-level lineage primitive — the writer→source
-inversion this generalises), ADR 0055 (the Urban runtime absorbs app surfaces), and the
-write-provenance / per-source sidecar plane this mirrors.
-Repo: nanobpm/nano-ide (`packages/urban`). First consumer: nanobpm/nano-workforce.
+Relates to: ADR 0053 (derivation is a shared library — the principle this generalizes),
+ADR 0055 (the Urban runtime absorbs app surfaces — where this primitive lives),
+ADR 0063 (framework-level lineage primitive — the SDK-envelope + generic-projection +
+per-source-sidecar shape this mirrors), and the `instanceTracking` reconciler
+(`packages/urban/src/runtime/core/modules/instance-tracking.ts` — the write-time seam
+this inverts).
+Repo: nanobpm/nano-ide (`packages/urban`, `packages/urban-testkit`).
 
-Implementation epic: nanobpm/nano-ide#452. Prior art: nano-workforce#412 (display
-projections became SQLite VIEWs). Closes the drift classes behind nano-workforce#422
-(a stale ⚠ after an answered escalation), #439-L1 and #318.
+Implementation issue: nanobpm/nano-ide#452. Motivating instances (nano-workforce):
+nanobpm/nano-workforce#412 (projection → SQL VIEW technique), nanobpm/nano-workforce#439 (the L1/L2 derivation framing),
+nanobpm/nano-workforce#318 (engine-authoritative wait-state derivation), nanobpm/nano-workforce#422 (answered-escalation drift —
+the instance that exposed the residual class), fixed tactically by nanobpm/nano-workforce#458.
 
 ## Context
 
-An Urban app presents **derived operator state** — a task's display stage, an instance's
-status edge, whether it is parked on a human. That state is a *pure function of canonical
-inputs* (the engine's truth plus the app's own rows), yet it keeps **tearing** from those
-inputs: a value stored or projected at write time drifts out of step with the inputs it was
-derived from, and the operator sees a stale answer.
+Urban apps present operators with **derived** state: a feature's `stage`, its
+`attention` badge, its `list_bucket` — none of which are ground truth. They are functions
+of a canonical input (the base row, the engine's wait/terminal state). We have learned,
+across a run of incidents, that **anywhere derived state is *stored* it eventually tears**
+from its inputs.
 
-nano-workforce#412 removed the first drift surface by making display projections **SQLite
-VIEWs** rather than stored columns — a VIEW is recomputed on every read, so it cannot lag
-its inputs. That was the right move, but two drift surfaces survived it, plus the deeper one
-that VIEWs alone cannot reach:
+Two derivation layers, named in nanobpm/nano-workforce#439:
 
-| # | Drift surface | Where it lives today |
+| | L1 — base status | L2 — display projection |
 |---|---|---|
-| 1 | A **derived value is STORED by a writer** (a reconciler `table.update`s a `status` column), so it tears from its inputs the moment they change again. | `instance-tracking.ts` writes `onTerminated.set` / `onWaitingHuman.set`. |
-| 2 | A derived column is **authored TWICE** — once as SQL (`CASE`/`EXISTS`) in the VIEW, once as a TS oracle (`deriveStage`) — kept in lockstep only by a **hand-written parity test** (itself a drift surface). | Every VIEW + its `derive*` twin + its parity test. |
-| 3 | Every read model is **hand-wired end to end** — migration + VIEW + page binding + pages↔schema contract entry + parity test — re-authored **per projection**. | Each read model, by hand. |
+| Example | `feature_runs.status` | `stage`, `attention`, `list_bucket` |
+| Maintained by | workers (imperative writes) **and** `instanceTracking` reconciler | derived *from* `status` |
+| Fixed as a class? | **No** — still imperatively written | Partly — nanobpm/nano-workforce#412 made it a VIEW, not a stored column |
 
-Surface #2 is the trap hiding inside #412's fix: the moment a value is computed both in SQL
-(for the VIEW) and in TS (for in-process logic), you own two authorings of one truth and a
-test whose only job is to notice when they diverge. Surface #1 is the original sin — a
-*writer* that already knows engine truth chooses to **store** a derived edge instead of
-letting it be derived, re-introducing tearing that #412 removed elsewhere. Surface #3 is the
-per-projection tax that makes every new read model expensive enough to discourage doing it
-right.
+L2 got a *class* technique (nanobpm/nano-workforce#412: a projection is a SQLite VIEW, never a stored column),
+but three drift surfaces survive even after that win, and nanobpm/nano-workforce#422 is the proof:
+
+1. **The base `status` (L1) is still maintained imperatively.** Workers write it, and the
+   `instanceTracking` reconciler writes it too — `onTerminated.set → abandoned`,
+   `onWaitingHuman.set → awaiting_operator` (issue nanobpm/nano-workforce#355). The answered-escalation loop in
+   nwf returns the token to `implement-task` *without* resetting `status`, so `status`
+   stays `escalated` until the re-run completes, and every reader of `status` sees the
+   stale value. nanobpm/nano-workforce#458 fixed exactly one edge — it re-pointed the `attention`
+   badge at engine truth (an open `user_tasks` row) instead of `status` — but any *other*
+   reader of `status` remains exposed. That is an instance fix, not a class fix.
+
+2. **Each derived column is authored twice.** The SQL `CASE`/`EXISTS` inside the VIEW and
+   the TypeScript oracle (`deriveStage`) express the *same* function in two languages,
+   kept in lockstep by a hand-written parity test. The lockstep test is itself a drift
+   surface — it does not remove the duplication, it only alarms when the two copies
+   diverge.
+
+3. **Every read model is hand-wired.** Per projection, an author writes: the migration,
+   the VIEW DDL, the page binding, the pages↔schema contract entry, and the parity test.
+   That per-app boilerplate is where the whack-a-mole lives.
+
+The crucial observation: **`instanceTracking` already knows the engine truth and already
+computes the derived edge — but it *writes* it.** It is a reconciler that *maintains*
+(`table.update`), which is precisely the write path that tears. The categorical fix is to
+turn that reconciler from a **writer** into a **source**, and let read models *derive*
+rather than be *patched* — the same inversion ADR 0063 performed for lineage (a per-app
+hand-rolled correlation promoted to a framework-owned generic projection provisioned as a
+per-source sidecar with a boot migration and a drift-guard test).
 
 ## Decision
 
-One declaration, two backends, engine truth as the source — all in `@nanobpm/urban`, exported
-from the runtime barrel (`@nanobpm/urban/runtime`). Four proposal points:
+Introduce a framework primitive in `@nanobpm/urban` — **reconciling read models** — with
+four parts. Modeled on ADR 0063: canonical projections + one declaration + framework-owned
+plumbing + the reconciler inversion.
 
-### 1. Canonical engine-truth projections (close surface #1's *source* gap)
+### 1. Canonical engine-truth projections (promote, don't hand-roll)
 
-Provision framework-owned, per-source **sidecar** projections that make engine truth
-*queryable*, exactly the way `LineageStore` (ADR 0063) is: a `_urban_`-prefixed table hidden
-from the domain model / DB Manager, with a canonical DDL applied by `ensureSchema()`, mirrored
-verbatim by a boot migration under `db/migrations/`, drift-guarded by a test, and provisioned
-per source in `workers.ts`. Two land in this epic:
+Framework-owned read projections, provisioned as per-source sidecars exactly like
+`LineageStore` (ADR 0063) and the write-provenance table, reconciled by the existing poll
+loop and **never app-written**:
 
-- **`urban_open_user_tasks`** — the set of currently-open (`CREATED`-state) user tasks per
-  process instance, recorded idempotently from the same engine query the reconciler already
-  runs (`searchUserTasks({ state: "CREATED" })`). This *absorbs* nano-workforce's hand-rolled
-  `user_tasks` table: it is the one authoritative projection of "which instances are parked on
-  a human".
-- **`urban_instance_state`** — the canonical per-instance engine lifecycle state
-  (`ACTIVE`/`COMPLETED`/`TERMINATED`, and whether waiting-on-human), recorded from engine
-  truth so a read model can derive an instance's status edge purely from this projection.
+- `urban_open_user_tasks` — open user tasks by `(subject_type, subject_key, element_id)`.
+  nano-workforce's `user_tasks` (populated by `pollUserTasks` in `app/service.ts`) is a
+  hand-rolled instance of exactly this; the primitive absorbs it.
+- `urban_instance_state` — per instance: live / terminated, and (where
+  Magikcraft/nano-bpm#808 lands) the native execution edge.
 
-They are framework **bookkeeping** (never app-written); an app with no datasource records
-nothing (absent-safe), and a projection write never breaks a job. *(Lands in a later PR of
-this epic; the primitive below is authored so it can reference these by name before they land.)*
+These are the canonical inputs a derived read model is allowed to read besides its own
+base table. A row exists **iff** the engine says so, so a projection over them cannot go
+stale.
 
-### 2. Declare a read model once, in a closed expression DSL
+### 2. Declare a projection once; compile to both surfaces
 
-`defineReadModel(...)` (`core/read-model.ts`) declares a derived read model **once**, as a
-pure derivation over a **base row** plus **named canonical projections**. The derivation body
-is a small **CLOSED expression DSL** — a discriminated-union AST, *not* arbitrary strings or
-SQL fragments — supporting at minimum:
+An app declares a derived read model as a **pure derivation** over its base row and the
+canonical projections, in one place:
 
-- **comparisons** (`eq`/`neq`/`lt`/`lte`/`gt`/`gte`),
-- **`CASE`** / when-then-else (`caseWhen`),
-- **`EXISTS`** over a *named* projection with a correlation predicate (`exists(name, where)`),
-- **column references** to the base row (`col`) and to the correlated projection row (`pcol`),
-- **literals** (`lit`) and boolean combinators (`and`/`or`/`not`).
+```ts
+defineReadModel("feature_read_model", {
+  base: "feature_runs",
+  derive: {
+    attention: (row, engine) =>
+      engine.hasOpenUserTask("feature", row.feature_key, "feature-blocked") ? "blocked"
+        : engine.hasOpenUserTask("feature", row.feature_key, "feature-escalation") ? "⚠"
+        : null,
+    stage: (row) => /* … */,
+    list_bucket: (row) => /* … */,
+  },
+})
+```
 
-Closedness is the whole point: because the derivation is data, one declaration can be walked
-by more than one backend.
+The `derive` entries are expressed in a small, closed **expression DSL** (the snippet above is illustrative pseudocode; the real API is DSL nodes rather than arbitrary TypeScript). Urban compiles each entry to **both**:
 
-### 3. One AST, two backends — so they cannot drift (close surface #2)
+- the **SQLite VIEW** select-list (`compileToSqlSelect` → the `CASE` / correlated
+  `EXISTS`), so the existing flat page-filter DSL can still filter and sort on the derived
+  column; and
+- the **runtime TypeScript** function (`compileToFn` → `(baseRow, projections) => value`,
+  retiring the hand-written `deriveStage` oracle).
 
-A single compiler emits **both** backends from that one AST, by construction:
+Because both fall out of one declaration, drift surface #2 disappears by construction —
+there is nothing to keep in lockstep. A closed expression DSL (rather than arbitrary TS)
+makes compilation to SQL tractable and total; it covers the stage/attention/list_bucket
+shape we actually have.
 
-- `compileToSqlSelect(expr)` → the SQLite VIEW select-list expression string for the derived
-  column.
-- `compileToFn(expr)` → a runtime TS function `(baseRow, projections) => value` computing the
-  **same** value in-process.
+### 3. The framework emits the plumbing
 
-Because both walk the identical AST exhaustively, the SQL a VIEW runs and the TS an app calls
-are two renderings of one authoring — the double-authoring of surface #2 is gone. The
-`EXISTS` projection reference resolves through a **projection-name seam**: the SQL backend
-learns which physical `_urban_` table to read; the TS backend is handed the projection's rows
-at evaluate time. A read model may reference a projection by name even before its sidecar
-lands.
+From the single `defineReadModel`, Urban generates — per ADR 0063's shape — the managed
+VIEW (applied at boot / as a generated migration), the pages↔schema contract entry, and
+the parity guard (`assertReadModelParity`, which materialises the VIEW over throwaway
+fixtures and asserts the `compileToSqlSelect` and `compileToFn` lowerings agree). No
+per-app migration/VIEW/contract/test boilerplate; drift surface #3 disappears.
 
-### 4. Framework-emitted plumbing + parity guard (close surface #3)
+### 4. Invert the reconciler: writer → source
 
-From a `defineReadModel` declaration the framework **derives** the rest, so an app stops
-hand-wiring it:
+Once derivable columns are framework VIEWs over canonical projections,
+`instanceTracking`'s `onTerminated.set` / `onWaitingHuman.set` are unnecessary **for
+anything derivable** — there is no stored derived column left to tear. `status` then
+splits cleanly into:
 
-- the **managed SQLite VIEW DDL** (`deriveReadModelViewDdl` / `ReadModel.viewDdl()`), applied
-  on the same per-source boot path the existing derived VIEWs / lineage sidecar use (a
-  `readModelRegistry` a declaration registers into; the runtime `ensureViews` it against the
-  app's data source at worker mount);
-- a **parity guard** (`assertReadModelParity`) that, given sample base + projection rows,
-  materialises the VIEW over throwaway fixtures, reads the SQL-derived value, computes the
-  TS-function value for the same inputs, and asserts they agree — so an app no longer writes a
-  bespoke parity test per projection. It fails loudly, naming the column and sample, when a
-  deliberately-mutated AST would diverge.
+- **business outcomes that need a record** (e.g. `merged`, genuinely `abandoned`) — real
+  stored state, written once at the transition; and
+- **derivable edges** (waiting-on-human, terminated) — pure projections of
+  `urban_open_user_tasks` / `urban_instance_state`.
 
-### Writer → source inversion (close surface #1)
-
-The last surface is `instance-tracking.ts` *writing* the derived status edges it already
-computes. The fix is the same move ADR 0063 made for lineage: **invert the writer into a
-source.** The reconciler stops applying `table.update` patches for the derivable
-(terminated → terminal-status, waiting-on-human → `awaiting_operator`) edges and instead
-**feeds** the canonical projections (#1). Those edges become a `defineReadModel` derivation
-over `urban_instance_state` and `urban_open_user_tasks`, recomputed on every read — so a
-re-escalation after an answer re-flips **by construction** and the #422 staleness cannot
-recur. Real business outcomes that an app's own workers genuinely store once (e.g. a finalize
-worker's terminal outcome) stay stored; only the *derivable* edges are inverted. The cancel
-path that also reconciles a terminated key is updated in lockstep so cancel and poll cannot
-drift. *(Lands in the final PR of this epic.)*
-
-## Rollout (issue #452)
-
-1. **nano-workforce#412 (done, different repo):** display projections became SQLite VIEWs —
-   removed stored display columns.
-2. **This primitive (`defineReadModel` + DSL + two-backend compiler + managed-VIEW derivation
-   + parity guard):** declare-once, compile-to-both, with the read-model registry and
-   projection-name seams established for the later waves.
-3. **Canonical engine-truth projections** (`urban_open_user_tasks`, `urban_instance_state`):
-   the per-source sidecars that make engine truth queryable, registered under the
-   projection-name seam.
-4. **Writer → source inversion:** retire the derivable-status writes in `instance-tracking.ts`
-   (and the cancel path); derive those edges via `defineReadModel` over the canonical
-   projections instead.
+This delivers nanobpm/nano-workforce#439's L1 arm and nanobpm/nano-workforce#318 as a **framework capability**, not per-app code, and
+retires drift surface #1 at its source.
 
 ## Consequences
 
-- A read model is **authored once**; the SQL VIEW and the in-process TS function are two
-  renderings of it and cannot drift (surface #2 closed). The parity guard becomes a framework
-  utility, not per-projection boilerplate (surface #3 closed).
-- Derived operator state stops tearing from its inputs: a derivable edge is a VIEW/function
-  over live canonical projections, recomputed on read, so an answered escalation re-flips by
-  construction (surface #1 closed; #422 gone).
-- Engine truth gets a single authoritative home per concern (`urban_open_user_tasks`,
-  `urban_instance_state`), absorbing hand-rolled app tables like nano-workforce's
-  `user_tasks`.
-- The projections are per-source sidecars on the app's own data source (like lineage /
-  write-provenance): an app with no datasource records nothing (absent-safe), and a projection
-  write never breaks a job.
-- New read models cost a single declaration, so doing it right (derive, don't store) becomes
-  the path of least resistance.
-- The DSL is intentionally small and closed. Derivations that outgrow it are a signal to
-  extend the AST (one node kind, both backends) rather than to escape into raw SQL — keeping
-  the no-drift guarantee total.
+- A new Urban app declares a reconciling read model in one place and gets the VIEW, the
+  contract entry, the parity guard, and drift-freedom for free — no hand-wired SQL/TS
+  mirror, no write path to leave stale.
+- The three residual drift surfaces named above are each closed structurally rather than
+  left to be alarmed by a hand-written test: #2 by compile-to-both, #3 by
+  framework-emitted plumbing, #1 by writer→source inversion. A parity guard still ships
+  (part 3), but its role changes: it is no longer the app-authored lockstep test between
+  two hand-maintained SQL/TS copies (which *was* drift surface #2) — it becomes a
+  framework-owned regression guard that the two lowerings the compiler emits from the one
+  declaration agree, protecting the compiler rather than papering over duplication.
+- `parentProcessInstanceKey` / Magikcraft/nano-bpm#808 slots into `urban_instance_state` later without an API
+  change (same weak/strong pattern as ADR 0063).
+- Migration risk is bounded: existing per-app VIEWs (nwf migrations 073/075) are
+  superseded incrementally; the primitive can adopt one read model at a time.
+- Scope guard: this ADR is the primitive. The nwf-specific read models are the first
+  consumer and are migrated behind it, not designed here.
+
+## Rollout (incremental, each step independently shippable)
+
+1. **Now:** land nanobpm/nano-workforce#458 — the instance fix for the live symptom (nanobpm/nano-workforce#422).
+2. **First framework step (PR-sized, highest leverage):** the declare-once → compile-to-both
+   expression DSL, applied to nwf's existing read models (feature/plan). Kills drift
+   surface #2 on real surfaces; lowest risk, highest proof value; no engine-truth changes yet.
+3. Promote `user_tasks` → the canonical `urban_open_user_tasks` projection; re-point the read
+   models at it (removes drift surface #1's *source* for the attention/wait edges).
+4. Invert `instanceTracking` from writer → source; retire the derivable `status` writes
+   (closes drift surface #1 and delivers nanobpm/nano-workforce#439-L1 / nanobpm/nano-workforce#318).

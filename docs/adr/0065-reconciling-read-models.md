@@ -11,9 +11,9 @@ this inverts).
 Repo: nanobpm/nano-ide (`packages/urban`, `packages/urban-testkit`).
 
 Implementation issue: nanobpm/nano-ide#452. Motivating instances (nano-workforce):
-#412 (projection → SQL VIEW technique), #439 (the L1/L2 derivation framing),
-#318 (engine-authoritative wait-state derivation), #422 (answered-escalation drift —
-the instance that exposed the residual class), fixed tactically by nano-workforce#458.
+nanobpm/nano-workforce#412 (projection → SQL VIEW technique), nanobpm/nano-workforce#439 (the L1/L2 derivation framing),
+nanobpm/nano-workforce#318 (engine-authoritative wait-state derivation), nanobpm/nano-workforce#422 (answered-escalation drift —
+the instance that exposed the residual class), fixed tactically by nanobpm/nano-workforce#458.
 
 ## Context
 
@@ -23,23 +23,23 @@ of a canonical input (the base row, the engine's wait/terminal state). We have l
 across a run of incidents, that **anywhere derived state is *stored* it eventually tears**
 from its inputs.
 
-Two derivation layers, named in nano-workforce#439:
+Two derivation layers, named in nanobpm/nano-workforce#439:
 
 | | L1 — base status | L2 — display projection |
 |---|---|---|
 | Example | `feature_runs.status` | `stage`, `attention`, `list_bucket` |
 | Maintained by | workers (imperative writes) **and** `instanceTracking` reconciler | derived *from* `status` |
-| Fixed as a class? | **No** — still imperatively written | Partly — #412 made it a VIEW, not a stored column |
+| Fixed as a class? | **No** — still imperatively written | Partly — nanobpm/nano-workforce#412 made it a VIEW, not a stored column |
 
-L2 got a *class* technique (#412: a projection is a SQLite VIEW, never a stored column),
-but two drift surfaces survive even after that win, and #422 is the proof:
+L2 got a *class* technique (nanobpm/nano-workforce#412: a projection is a SQLite VIEW, never a stored column),
+but two drift surfaces survive even after that win, and nanobpm/nano-workforce#422 is the proof:
 
 1. **The base `status` (L1) is still maintained imperatively.** Workers write it, and the
    `instanceTracking` reconciler writes it too — `onTerminated.set → abandoned`,
-   `onWaitingHuman.set → awaiting_operator` (issue #355). The answered-escalation loop in
+   `onWaitingHuman.set → awaiting_operator` (issue nanobpm/nano-workforce#355). The answered-escalation loop in
    nwf returns the token to `implement-task` *without* resetting `status`, so `status`
    stays `escalated` until the re-run completes, and every reader of `status` sees the
-   stale value. nano-workforce#458 fixed exactly one edge — it re-pointed the `attention`
+   stale value. nanobpm/nano-workforce#458 fixed exactly one edge — it re-pointed the `attention`
    badge at engine truth (an open `user_tasks` row) instead of `status` — but any *other*
    reader of `status` remains exposed. That is an instance fix, not a class fix.
 
@@ -133,7 +133,7 @@ splits cleanly into:
 - **derivable edges** (waiting-on-human, terminated) — pure projections of
   `urban_open_user_tasks` / `urban_instance_state`.
 
-This delivers #439's L1 arm and #318 as a **framework capability**, not per-app code, and
+This delivers nanobpm/nano-workforce#439's L1 arm and nanobpm/nano-workforce#318 as a **framework capability**, not per-app code, and
 retires drift surface #1 at its source.
 
 ## Consequences
@@ -144,7 +144,7 @@ retires drift surface #1 at its source.
 - The three residual drift surfaces named above are each closed structurally rather than
   alarmed: #2 by compile-to-both, #3 by framework-emitted plumbing, #1 by
   writer→source inversion.
-- `parentProcessInstanceKey` / #808 slots into `urban_instance_state` later without an API
+- `parentProcessInstanceKey` / Magikcraft/nano-bpm#808 slots into `urban_instance_state` later without an API
   change (same weak/strong pattern as ADR 0063).
 - Migration risk is bounded: existing per-app VIEWs (nwf migrations 073/075) are
   superseded incrementally; the primitive can adopt one read model at a time.
@@ -153,11 +153,11 @@ retires drift surface #1 at its source.
 
 ## Rollout (incremental, each step independently shippable)
 
-1. **Now:** land nano-workforce#458 — the instance fix for the live symptom (#422).
+1. **Now:** land nanobpm/nano-workforce#458 — the instance fix for the live symptom (nanobpm/nano-workforce#422).
 2. **First framework step (PR-sized, highest leverage):** the declare-once → compile-to-both
    expression DSL, applied to nwf's existing three read models (feature/plan). Kills drift
    surface #2 on real surfaces; lowest risk, highest proof value; no engine-truth changes yet.
 3. Promote `user_tasks` → the canonical `urban_open_user_tasks` projection; re-point the read
    models at it (removes drift surface #1's *source* for the attention/wait edges).
 4. Invert `instanceTracking` from writer → source; retire the derivable `status` writes
-   (closes drift surface #1 and delivers #439-L1 / #318).
+   (closes drift surface #1 and delivers nanobpm/nano-workforce#439-L1 / nanobpm/nano-workforce#318).

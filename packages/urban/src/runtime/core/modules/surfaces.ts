@@ -50,7 +50,7 @@ form .field input[type=checkbox],form .field input[type=radio]{width:auto}
 <h1>Task inbox</h1><ul id="tasks"><li>loading…</li></ul>
 <div id="form"></div>
 <script>
-const BASE=location.pathname.replace(/\/+$/,'');
+const BASE=location.pathname.replace(/[/]+$/,'');
 const tasksEl=document.getElementById('tasks');
 const formEl=document.getElementById('form');
 

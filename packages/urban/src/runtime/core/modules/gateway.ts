@@ -13,6 +13,7 @@
 //   const o = await orders.get(id);
 
 import type { SqliteDb } from "../host.ts";
+import { RESERVED_OBJECT_PREFIXES } from "../read-model.ts";
 
 export type Row = Record<string, unknown>;
 
@@ -264,11 +265,13 @@ class SqliteGateway implements DataSource {
     // Exclude SQLite internals (`sqlite_%`) and Nano's own bookkeeping tables (`_urban_%` /
     // `_nano_%`, e.g. the migrations ledger): neither is a user/domain object, so they must
     // never surface in the domain model, DB Manager, or forms. The same exclusions apply to
-    // views.
+    // views. The prefix set is derived from RESERVED_OBJECT_PREFIXES (No Drift Surfaces) so this
+    // read-side filter cannot diverge from the write-side skip / manifest-validation rejection.
+    const reservedClause = RESERVED_OBJECT_PREFIXES.map(
+      (p) => `AND name NOT LIKE '${p.replace(/_/g, "\\_")}%' ESCAPE '\\'`,
+    ).join(" ");
     const tables = this.#db.all<{ name: string; type: string }>(
-      "SELECT name, type FROM sqlite_master WHERE type IN ('table','view') " +
-        "AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '\\_urban\\_%' ESCAPE '\\' " +
-        "AND name NOT LIKE '\\_nano\\_%' ESCAPE '\\' ORDER BY name",
+      `SELECT name, type FROM sqlite_master WHERE type IN ('table','view') ${reservedClause} ORDER BY name`,
     );
     const out: TableMeta[] = [];
     for (const t of tables) {

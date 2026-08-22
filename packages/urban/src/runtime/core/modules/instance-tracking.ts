@@ -310,9 +310,11 @@ type ProvisionDb = { exec(sql: string): void; all<T = Record<string, unknown>>(s
 /** Is there a NON-view object (a real table) named `name` in the database? SQLite shares one namespace
  *  for tables and views, so a real table shadows a managed VIEW: `DROP VIEW IF EXISTS` won't remove it
  *  and `CREATE VIEW IF NOT EXISTS` then silently no-ops. Provisioning must refuse rather than appear to
- *  succeed while a page reads the wrong object. */
+ *  succeed while a page reads the wrong object. The name match is `COLLATE NOCASE`: SQLite resolves
+ *  object names case-insensitively, so a real table `plans__tracking` shadows a configured view
+ *  `Plans__tracking` at DROP/CREATE time — a binary `=` here would miss it and defeat this guard. */
 function nonViewObjectExists(db: ProvisionDb, name: string): boolean {
-  const rows = db.all<{ type: string }>(`SELECT type FROM sqlite_master WHERE name = ? AND type <> 'view'`, [name]);
+  const rows = db.all<{ type: string }>(`SELECT type FROM sqlite_master WHERE name = ? COLLATE NOCASE AND type <> 'view'`, [name]);
   return rows.length > 0;
 }
 

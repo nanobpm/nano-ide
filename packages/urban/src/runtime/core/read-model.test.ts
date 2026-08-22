@@ -25,6 +25,8 @@ import {
   ProjectionRegistry,
   projectionRegistry,
   ReadModelRegistry,
+  isReservedObjectName,
+  RESERVED_OBJECT_PREFIXES,
   when,
 } from "./read-model.ts";
 import type { ReadModel } from "./read-model.ts";
@@ -81,6 +83,19 @@ const EXPECTED: Record<string, { display_status: string; is_high_priority: numbe
   t2: { display_status: "awaiting_operator", is_high_priority: 0 },
   t3: { display_status: "active", is_high_priority: 1 },
 };
+
+test("isReservedObjectName flags every reserved prefix, case-insensitively, and clears domain names", () => {
+  // Single source of truth for the prefixes the datasource surface hides (gateway.schema()) and the
+  // provenance recorder skips (datasource.ts). SQLite folds ASCII object names, so a cased reserved
+  // name must not slip through.
+  assert.deepEqual([...RESERVED_OBJECT_PREFIXES], ["_urban_", "_nano_", "sqlite_"]);
+  for (const name of ["_urban_x", "_URBAN_x", "_nano_y", "sqlite_master", "SQLITE_stat1"]) {
+    assert.ok(isReservedObjectName(name), `expected "${name}" reserved`);
+  }
+  for (const name of ["orders", "plans__tracking", "urban_things", "nano", "sqlitely"]) {
+    assert.ok(!isReservedObjectName(name), `expected "${name}" NOT reserved`);
+  }
+});
 
 test("(i) the read model with CASE + EXISTS compiles to a SQLite VIEW returning the expected values", async () => {
   await withDb((db) => {

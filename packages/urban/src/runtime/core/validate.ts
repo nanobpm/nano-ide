@@ -16,7 +16,7 @@ import {
   DEFAULT_DERIVED_STATUS_COLUMN,
   defaultInstanceTrackingViewName,
 } from "./modules/instance-status-read-model.ts";
-import { SQL_IDENT } from "./read-model.ts";
+import { SQL_IDENT, isReservedObjectName } from "./read-model.ts";
 
 export interface ValidationIssue {
   path: string;
@@ -331,6 +331,22 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           path: `instanceTracking[${i}].statusField`,
           message: `statusField "${statusFieldName}" collides with the default derived status column "${DEFAULT_DERIVED_STATUS_COLUMN}" (set readModel.statusColumn to a distinct name, or rename statusField)`,
         });
+      }
+      // Reserved-prefix guard (ADR 0065): the effective managed VIEW name (`readModel.view` or the
+      // default `<table>__tracking`) must not begin with a reserved object prefix (`_urban_` / `_nano_`
+      // / `sqlite_`). Such a VIEW provisions fine but is filtered out of the datasource `schema()`
+      // surface (`gateway.ts`), so the operator page configured for it reads `unknown table`. Reject at
+      // author time rather than let it fail opaquely at read. Only bindings with a `statusField`
+      // provision a VIEW, so only those can hit this.
+      if (statusFieldName !== undefined && typeof b?.table === "string" && b.table.length > 0) {
+        const rmView = typeof rmRec?.view === "string" && rmRec.view.length > 0 ? rmRec.view : undefined;
+        const effectiveView = rmView ?? defaultInstanceTrackingViewName(b.table);
+        if (isReservedObjectName(effectiveView)) {
+          issues.push({
+            path: rmView ? `instanceTracking[${i}].readModel.view` : `instanceTracking[${i}].table`,
+            message: `managed VIEW name "${effectiveView}" uses a reserved prefix (_urban_ / _nano_ / sqlite_); such a view is hidden from the datasource surface and cannot be read by a page (choose a non-reserved readModel.view or base table name)`,
+          });
+        }
       }
     });
     // Duplicate managed-VIEW names across bindings (ADR 0065): each binding's read model DROP+CREATEs a

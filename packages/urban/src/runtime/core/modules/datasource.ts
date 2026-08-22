@@ -14,7 +14,7 @@ import {
 } from "./gateway.ts";
 import { currentJobContext } from "../execContext.ts";
 import { isAbsolutePath } from "../../../toolkit/artifact.ts";
-import { SQL_IDENT } from "../read-model.ts";
+import { SQL_IDENT, isReservedObjectName } from "../read-model.ts";
 
 export function sqlitePathFromUrl(url: string): string {
   // Accept "file:./x.db", "file:x.db", "sqlite:./x.db" or a bare path.
@@ -96,7 +96,7 @@ export function makeProvenanceRecorder(
   source: string,
 ): InsertObserver {
   return (table, pk) => {
-    if (table.startsWith("_urban_") || table.startsWith("_nano_") || table.startsWith("sqlite_")) {
+    if (isReservedObjectName(table)) {
       return;
     }
     const ctx = currentJobContext();

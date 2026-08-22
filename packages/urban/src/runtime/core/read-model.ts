@@ -278,6 +278,20 @@ export function assertSqlIdentifier(kind: string, name: string): string {
   }
   return name;
 }
+/** Object-name prefixes reserved for engine/runtime internals. Tables and views whose names begin
+ *  with one of these are Nano bookkeeping (`_urban_*` / `_nano_*`) or SQLite internals (`sqlite_*`):
+ *  the provenance recorder skips them (`modules/datasource.ts`) and the datasource `schema()` surface
+ *  filters them out (`modules/gateway.ts`), so they are invisible to `/app/data`, DB Manager, and forms.
+ *  This is the single source of truth for that prefix set (No Drift Surfaces — a manifest that provisions
+ *  a `_urban_*` VIEW would otherwise validate yet be unreadable by the documented pages surface). */
+export const RESERVED_OBJECT_PREFIXES = ["_urban_", "_nano_", "sqlite_"] as const;
+/** True iff `name` begins with a {@link RESERVED_OBJECT_PREFIXES} prefix. Case-insensitive, matching
+ *  SQLite's ASCII identifier folding (a `_URBAN_x` table resolves to the same reserved object as
+ *  `_urban_x`), so a reserved name cannot slip through by casing. */
+export function isReservedObjectName(name: string): boolean {
+  const folded = name.toLowerCase();
+  return RESERVED_OBJECT_PREFIXES.some((p) => folded.startsWith(p));
+}
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }

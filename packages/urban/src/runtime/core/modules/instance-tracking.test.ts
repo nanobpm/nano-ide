@@ -849,6 +849,27 @@ test("skips provisioning when a non-view object already holds the managed VIEW n
   await h.close();
 });
 
+test("detects a non-view shadow case-insensitively (SQLite folds object names)", async () => {
+  // SQLite resolves object names case-insensitively, so a real table `plans__tracking` shadows a
+  // configured view `PLANS__TRACKING` at DROP/CREATE time. A binary `=` name check would miss the
+  // shadow and let `CREATE VIEW IF NOT EXISTS` silently no-op against the existing table; the guard
+  // must fold case (COLLATE NOCASE) so it refuses (warn + skip) and leaves the real table untouched.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  h.db.exec('CREATE TABLE "plans__tracking" (x TEXT)'); // lowercase real table squats the name
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ readModel: { view: "PLANS__TRACKING" } })], sched); // cased override
+  await sched.advance(1000);
+  const obj = h.db.all<{ type: string }>("SELECT type FROM sqlite_master WHERE name='plans__tracking'");
+  assert.equal(obj.length, 1);
+  assert.equal(obj[0].type, "table"); // untouched — not dropped, not shadowed by a VIEW
+  assert.ok(h.logs.some((l) => l.level === "warn" && l.msg.includes("non-view object")));
+  await handle.stop();
+  await h.close();
+});
+
 function mount(h: Harness, bindings: InstanceTracking[], sched: SchedulerDeps) {
   h.api.manifest.instanceTracking = bindings;
   return mountInstanceTracking(

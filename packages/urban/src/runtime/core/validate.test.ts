@@ -470,6 +470,46 @@ test("readModel.view colliding with the base table is flagged case-insensitively
   assert.ok(issues.some((i) => i.path === "instanceTracking[0].readModel.view"));
 });
 
+test("a reserved-prefix readModel.view is flagged (hidden from the datasource surface)", () => {
+  // A `_urban_*` / `_nano_*` / `sqlite_*` view provisions fine but is filtered out of gateway.schema(),
+  // so a page reads `unknown table`. Reject it at author time, on the explicit override, case-insensitively.
+  for (const view of ["_urban_status", "_NANO_status", "sqlite_meta"]) {
+    const issues = collectManifestIssues({
+      ...valid,
+      instanceTracking: [
+        {
+          table: "plans",
+          keyField: "process_key",
+          statusField: "status",
+          onTerminated: { set: { status: "abandoned" } },
+          readModel: { view },
+        },
+      ],
+    });
+    assert.ok(
+      issues.some((i) => i.path === "instanceTracking[0].readModel.view"),
+      `expected reserved view "${view}" to be flagged`,
+    );
+  }
+});
+
+test("a reserved-prefix default VIEW (from a reserved base table) is flagged on `table`", () => {
+  // With no override the VIEW defaults to `<table>__tracking`; a `_urban_*` base table therefore yields a
+  // reserved default view name. The issue is attributed to `table` since there is no explicit view.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "_urban_plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].table"));
+});
+
 test("readModel.statusColumn colliding with statusField is flagged case-insensitively", () => {
   const issues = collectManifestIssues({
     ...valid,

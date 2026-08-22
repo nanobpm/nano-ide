@@ -10,6 +10,22 @@ export interface SchedulerDeps {
   clearTimer: (handle: unknown) => void;
   /** Current wall-clock time in ms since epoch. */
   now: () => number;
+  /** Optional shutdown signal. When it aborts, a pending {@link schedulerClock} `wait()` clears its
+   *  armed timer and rejects, so a handler parked on the (virtual) clock unwinds at teardown instead
+   *  of wedging whoever awaits it. Under the test kit this is the engine's shutdown signal: a worker
+   *  handler parked on `app.wait()` sits on a virtual timer that no `advanceTime` will fire during
+   *  `engine.close()`, so without this its promise never settles and `close()` hangs (the issue #446
+   *  follow-up — the virtual-timer sibling of the real-time use-after-free). Absent on the live
+   *  scheduler, where real timers always fire on wall-clock time, so `wait()` never rejects there. */
+  readonly signal?: AbortSignal;
+}
+
+/** The rejection surfaced to a `wait()` cancelled by a shutdown {@link SchedulerDeps.signal}: the
+ *  signal's `reason` when it is an {@link Error}, else a generic teardown error. Reusing the reason
+ *  keeps a caller's fail-loud message (e.g. "WasmEngineClient closing") intact. */
+function schedulerAbortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error ? reason : new Error("app.wait aborted: scheduler shutting down");
 }
 
 /** Max delay a single `setTimeout` honours before its 32-bit signed overflow (~24.8 days). */
@@ -58,9 +74,47 @@ export function schedulerClock(sched: SchedulerDeps): AppClock {
   return {
     now: () => sched.now(),
     wait: (ms) =>
-      new Promise<void>((resolve) => {
+      new Promise<void>((resolve, reject) => {
+        const signal = sched.signal;
+        // Already shutting down: reject immediately rather than arm a timer that would outlive the
+        // teardown (and, under the virtual clock, never fire).
+        if (signal?.aborted) {
+          reject(schedulerAbortError(signal));
+          return;
+        }
         const delay = Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_TIMER_DELAY_MS) : 0;
-        sched.setTimer(() => resolve(), delay);
+        let settled = false;
+        let onAbort: (() => void) | undefined;
+        const handle = sched.setTimer(() => {
+          settled = true;
+          if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, delay);
+        // When a shutdown signal is present, a mid-wait abort disarms the timer and rejects, so a
+        // handler parked here unwinds at teardown instead of wedging its awaiter. Inert (no listener,
+        // no behaviour change) on the live scheduler, which supplies no signal.
+        //
+        // `settled` guards the synchronous-timer case: this seam permits `setTimer` to invoke its
+        // callback synchronously (the test `capturingScheduler` does exactly that), which resolves
+        // the wait *before* we get here. Installing an abort listener on that already-settled promise
+        // would leak its closure until the signal fires (and have shutdown clear an already-fired
+        // handle), so skip it entirely when the callback already ran.
+        if (signal && !settled) {
+          onAbort = () => {
+            sched.clearTimer(handle);
+            reject(schedulerAbortError(signal));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          // Re-entrant seam: `setTimer` above is injectable and may abort `signal` *synchronously*
+          // without firing the timer callback (so `settled` is still false). An abort event is not
+          // replayed to a listener added after the fact, so the listener just registered would never
+          // run and the wait would hang until the runner timeout. Re-check and drive the abort path
+          // by hand — removing the (now-inert) listener first so it cannot also fire and double-reject.
+          if (signal.aborted && !settled) {
+            signal.removeEventListener("abort", onAbort);
+            onAbort();
+          }
+        }
       }),
   };
 }

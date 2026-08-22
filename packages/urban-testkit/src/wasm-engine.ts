@@ -502,11 +502,16 @@ export class WasmEngineClient implements EngineClient {
   async close(): Promise<void> {
     try {
       // Fire-and-forget dispatch (see #track/drain) means a drain can return with a handler still
-      // in-flight, so an engine-completion failure it captures *after* that drain returned lands in
-      // #inflightError with no later #quiesce to rethrow it. Flush and surface it fail-loud at
-      // teardown — rather than free the engine and silently swallow a late worker failure. #quiesce
-      // clears #inflightError, so an error already rethrown by a prior drain is not raised twice.
-      await this.#quiesce();
+      // in-flight. Await every in-flight handler to FULL settlement before `free()` — NOT just a
+      // macrotask fixpoint. A handler parked on *real-time* async work (the reproduction was a
+      // worker spawning a subprocess) holds #inflight.size steady across macrotasks, so the old
+      // `#quiesce()` fixpoint declared quiescence and returned with the handler still pending;
+      // `free()` then released the engine underneath it, and when the handler resumed it called
+      // `completeJob` on a released wasm handle — the opaque "null pointer passed to rust"
+      // use-after-free (issue #446). Awaiting the actual handler promises closes that race
+      // categorically. #settleInflight also surfaces (fail-loud) the first engine-completion error
+      // a tracked handler captured, so a late worker failure is not silently swallowed at teardown.
+      await this.#settleInflight();
     } finally {
       this.#workers.clear();
       this.#workerMocks.clear();
@@ -752,6 +757,34 @@ export class WasmEngineClient implements EngineClient {
     while (this.#inflight.size !== prev) {
       prev = this.#inflight.size;
       await flushMacrotask();
+    }
+    if (this.#inflightError !== undefined) {
+      const err = this.#inflightError;
+      this.#inflightError = undefined;
+      throw err;
+    }
+  }
+
+  /** Await every in-flight fire-and-forget handler to FULL settlement, then surface (once) the
+   *  first engine-completion error any of them captured. Unlike {@link #quiesce}'s macrotask
+   *  fixpoint, this awaits the actual tracked promises, so a handler parked on *real-time* async
+   *  work (e.g. a worker awaiting a spawned subprocess) — which holds `#inflight.size` steady and
+   *  is therefore invisible to the fixpoint — is genuinely waited for. Used by {@link close} so the
+   *  engine is never {@link TestEngine.free freed} while such a handler is still running (issue
+   *  #446 use-after-free). Loops to a fixpoint because a handler settling can, in principle, leave
+   *  a follow-on tracked handler behind; `Promise.allSettled` snapshots the set, so re-check until
+   *  it is empty. Bounded by {@link MAX_DRAIN_ITERATIONS} so a pathological handler that perpetually
+   *  re-creates in-flight work fails loud rather than hanging teardown forever. */
+  async #settleInflight(): Promise<void> {
+    for (let i = 0; i < MAX_DRAIN_ITERATIONS; i++) {
+      if (this.#inflight.size === 0) break;
+      await Promise.allSettled([...this.#inflight]);
+    }
+    if (this.#inflight.size !== 0) {
+      throw new Error(
+        `close() did not settle in-flight handlers after ${MAX_DRAIN_ITERATIONS} iterations ` +
+          "(a worker handler perpetually re-creating in-flight work?)",
+      );
     }
     if (this.#inflightError !== undefined) {
       const err = this.#inflightError;

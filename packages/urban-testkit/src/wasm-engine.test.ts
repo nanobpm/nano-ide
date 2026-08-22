@@ -696,3 +696,57 @@ test("wasm: close() surfaces a worker failure captured after the dispatching dra
     "close() must surface the late in-flight worker failure, not swallow it at teardown",
   );
 });
+
+// Regression (issue #446): the WasmEngineClient use-after-free. A fire-and-forget worker handler
+// that parks on *real-time* async work (the reproduction was a readiness probe spawning a
+// subprocess) is NOT observed by close()'s macrotask fixpoint — `#quiesce()` sees the in-flight
+// count hold steady while the handler is parked on a wall-clock timer, declares quiescence, and
+// returns with the handler still pending. close() then freed the engine underneath it; when the
+// handler resumed it called `completeJob` on the released wasm handle — the opaque
+// "null pointer passed to rust" fault. close() must instead await every in-flight handler to full
+// settlement (not just a macrotask fixpoint) before `free()`, closing the use-after-free
+// categorically. This test parks a handler on a real-timer promise that outlives the macrotask
+// fixpoint, then asserts close() waited for it to finish before returning.
+test("wasm: close() awaits a real-time in-flight handler to settlement before free() (no use-after-free)", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  // A wall-clock delay longer than the couple of setTimeout(0) macrotasks `#quiesce()` flushes, so
+  // the handler is still parked when the fixpoint stabilises — exactly the real-time await the
+  // macrotask fixpoint cannot observe.
+  const realDelay = (ms: number) => new Promise<void>((r) => realSetTimeout(r, ms));
+  let handlerFinished = false;
+  await engine.registerWorker("slow-realtime", async () => {
+    await realDelay(25);
+    handlerFinished = true;
+    return {};
+  });
+  await engine.deployResources([
+    {
+      name: "slow-realtime.bpmn",
+      content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="slow-realtime" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f" sourceRef="s" targetRef="t"/>
+    <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="slow-realtime"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
+  </process>
+</definitions>`,
+      contentType: "application/bpmn+xml",
+    },
+  ]);
+
+  // createInstance drains; the handler parks on the real-timer, so the drain returns with it
+  // in-flight (its `completeJob` has NOT run yet).
+  await engine.createInstance({ processDefinitionId: "slow-realtime" });
+  assert.equal(handlerFinished, false, "the handler must still be parked on its real-timer here");
+
+  // close() must not free the engine until this real-time handler has fully settled — otherwise the
+  // handler resumes and calls `completeJob` on a freed engine ("null pointer passed to rust").
+  await engine.close();
+  assert.ok(
+    handlerFinished,
+    "close() must await the in-flight real-time handler to settlement before free()",
+  );
+});

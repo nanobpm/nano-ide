@@ -158,6 +158,16 @@ export function reconcileWaitingHumanKey(
   const key = String(processInstanceKey ?? "");
   if (!projections || !key) return 0;
   try {
+    // Re-check the terminal source IMMEDIATELY before the sync. `openTasks` was probed with an `await`
+    // that yields the event loop, so a concurrent cancel (or another binding's poll) can record this
+    // instance TERMINATED and retire its tasks WHILE the probe is in flight. Terminated wins, so
+    // re-inserting the (now stale) open tasks here would strand a row `reconcileTerminatedKey` already
+    // cleared — the key is then classified settled and never re-probed, leaving a permanent stale
+    // projection row. If it went terminal, ensure the tasks stay retired and skip the sync.
+    if (projections.instanceState.getState(key)?.state === TERMINATED_STATE) {
+      projections.openUserTasks.clearInstance(key);
+      return 0;
+    }
     projections.openUserTasks.syncInstance(key, openTasks);
     return 1;
   } catch (err) {
@@ -294,6 +304,33 @@ async function reconcileOnce(
   return { scanned: keys.length, reconciled };
 }
 
+/** The subset of the SQLite source handle the VIEW provisioner needs. */
+type ProvisionDb = { exec(sql: string): void; all<T = Record<string, unknown>>(sql: string, params?: unknown[]): T[] };
+
+/** Is there a NON-view object (a real table) named `name` in the database? SQLite shares one namespace
+ *  for tables and views, so a real table shadows a managed VIEW: `DROP VIEW IF EXISTS` won't remove it
+ *  and `CREATE VIEW IF NOT EXISTS` then silently no-ops. Provisioning must refuse rather than appear to
+ *  succeed while a page reads the wrong object. */
+function nonViewObjectExists(db: ProvisionDb, name: string): boolean {
+  const rows = db.all<{ type: string }>(`SELECT type FROM sqlite_master WHERE name = ? AND type <> 'view'`, [name]);
+  return rows.length > 0;
+}
+
+/** Retire (DROP) a previously-managed tracking VIEW by name. Used on every skip path (a binding with no
+ *  `statusField`, a base-column collision) so a manifest change or a schema drift cannot leave a stale,
+ *  still-readable derived surface behind. Only ever drops a VIEW (never a real table of the same name),
+ *  and never throws through — a retire failure must not break the mount. */
+function retireManagedTrackingView(api: Pick<AppApi, "log">, db: ProvisionDb, viewName: string, table: string): void {
+  try {
+    db.exec(`DROP VIEW IF EXISTS main."${viewName}";`);
+  } catch (err) {
+    api.log("warn", `instanceTracking: failed to retire stale derived VIEW "${viewName}"`, {
+      table,
+      error: String(err),
+    });
+  }
+}
+
 /** Provision each binding's DERIVED read-model VIEW on the app's default data source (ADR 0065, the
  *  writer→source inversion). The VIEW re-exports `base.*` plus a derived effective-status column computed
  *  by a `defineReadModel` derivation over the canonical projections, so the operator page reads the
@@ -312,7 +349,7 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
     api.log("debug", "instanceTracking: no default data source; derived VIEW provisioning skipped");
     return;
   }
-  let db: { exec(sql: string): void; all<T = Record<string, unknown>>(sql: string, params?: unknown[]): T[] };
+  let db: ProvisionDb;
   try {
     db = api.data.source().db;
   } catch (err) {
@@ -322,6 +359,21 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
     return;
   }
   for (const binding of bindings) {
+    // Resolve the managed VIEW name (config override or `<table>__tracking`) up front — we need it even
+    // on the skip paths below to RETIRE a previously-managed VIEW, so a manifest change (statusField
+    // dropped) or a collision cannot leave a stale, still-readable derived surface behind.
+    const { view: targetView, statusColumn } = instanceTrackingReadModelTarget(binding);
+    let viewName: string;
+    try {
+      viewName = assertSqlIdentifier("instanceTracking.readModel.view", targetView);
+    } catch (err) {
+      api.log("warn", "instanceTracking: invalid read-model view name; derived VIEW skipped", {
+        table: binding.table,
+        error: String(err),
+      });
+      continue;
+    }
+
     let model: ReturnType<typeof defineInstanceTrackingReadModel>;
     try {
       model = defineInstanceTrackingReadModel(binding);
@@ -332,7 +384,13 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
       });
       continue;
     }
-    if (!model) continue; // no statusField ⇒ nothing derivable to project
+    if (!model) {
+      // No statusField ⇒ nothing derivable to project. Retire any VIEW an earlier boot managed under
+      // this name: without this, dropping `statusField` from a binding would leave the old derived
+      // surface discoverable/readable while the runtime believes it provisioned nothing.
+      retireManagedTrackingView(api, db, viewName, binding.table);
+      continue;
+    }
     // Base-column collision guard (ADR 0065): the VIEW selects `base.*` and appends the derived status as
     // `${statusColumn} AS ...`. If the base table ALREADY has a column of that name (the default
     // `derived_status`, or an override that happens to match a real column), SQLite keeps the base column
@@ -340,7 +398,6 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
     // `statusColumn` reads the STALE stored value. Detect it and skip (loudly) rather than publish a VIEW
     // that silently defeats the derivation. `readModel.statusColumn === statusField` is already rejected at
     // manifest validation; this catches collisions with ANY other base column, which needs the live schema.
-    const { statusColumn } = instanceTrackingReadModelTarget(binding);
     try {
       const cols = db.all<{ name: string }>(`PRAGMA table_info("${assertSqlIdentifier("instanceTracking.table", binding.table)}")`);
       const folded = statusColumn.toLowerCase();
@@ -350,6 +407,9 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
           `instanceTracking: derived status column "${statusColumn}" collides with an existing "${binding.table}" column; derived VIEW skipped (set readModel.statusColumn to a non-colliding name)`,
           { table: binding.table, statusColumn },
         );
+        // Retire any stale VIEW managed under this name — a collision means we can't publish a CORRECT
+        // derivation, and leaving an earlier boot's VIEW in place would keep serving a stale surface.
+        retireManagedTrackingView(api, db, viewName, binding.table);
         continue;
       }
     } catch (err) {
@@ -359,11 +419,31 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
       });
       continue;
     }
+    // A real (non-view) object of this name shares SQLite's table/view namespace: `DROP VIEW IF EXISTS`
+    // won't remove it and `CREATE VIEW IF NOT EXISTS` then silently no-ops, so a page configured for this
+    // view would read the wrong object with no derived column while the mount looks successful. Refuse
+    // explicitly rather than pretend to provision. (Cross-binding name/table collisions are rejected at
+    // manifest validation; this catches an undeclared app table that happens to share the name.)
+    try {
+      if (nonViewObjectExists(db, viewName)) {
+        api.log(
+          "warn",
+          `instanceTracking: managed VIEW name "${viewName}" is taken by an existing non-view object; derived VIEW skipped (choose a distinct readModel.view)`,
+          { table: binding.table, view: viewName },
+        );
+        continue;
+      }
+    } catch (err) {
+      api.log("warn", "instanceTracking: failed to inspect existing objects; derived VIEW skipped", {
+        table: binding.table,
+        error: String(err),
+      });
+      continue;
+    }
     try {
       // Qualify the DROP to `main.` for the same reason `ReadModelRegistry.ensureViews` does: an
       // unqualified DROP resolves a stray TEMP view of the same name first (e.g. leaked from a parity
       // run), leaving the managed `main` view stale.
-      const viewName = assertSqlIdentifier("instanceTracking.readModel.view", model.decl.name);
       db.exec(`DROP VIEW IF EXISTS main."${viewName}";`);
       db.exec(model.viewDdl());
     } catch (err) {

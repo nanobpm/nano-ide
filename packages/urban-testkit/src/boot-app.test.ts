@@ -215,10 +215,29 @@ test("bootTestApp reconciles a terminated instance's tracking row on advanceTime
     let row = await orders.findOne({ process_key: processInstanceKey });
     assert.equal(row?.status, "active", "row not yet reconciled before any poll fires");
 
-    // Advance past the poll interval: the reconciler observes TERMINATED and patches the row.
+    // Advance past the poll interval: the reconciler observes TERMINATED and feeds the canonical
+    // projection. Since ADR 0065 (the writer→source inversion) the reconciler is a SOURCE, not a
+    // WRITER — it makes NO base-row write, so the base `status` STAYS "active" (the worker-owned
+    // business status). The terminal outcome is DERIVED, on read, by the managed VIEW.
     await app.advanceTime(1000);
     row = await orders.findOne({ process_key: processInstanceKey });
-    assert.equal(row?.status, "abandoned", "reconciler abandoned the terminated instance's row");
+    assert.equal(row?.status, "active", "base row status is untouched — the reconciler no longer writes it (ADR 0065)");
+
+    // The effective (derived) status is served by the managed `<table>__tracking` VIEW, which
+    // re-exports `base.*` plus a `derived_status` column computed over the canonical projection. The
+    // terminal edge (`EXISTS urban_instance_state … TERMINATED`) now resolves to the binding's
+    // `onTerminated.set.status` value ("abandoned") with no stored write to tear from engine truth.
+    const tracking = app.db.table<{ process_key: string; status: string; derived_status: string }>(
+      "orders__tracking",
+      "process_key",
+    );
+    const derived = await tracking.findOne({ process_key: processInstanceKey });
+    assert.equal(derived?.status, "active", "the VIEW re-exports the untouched base status");
+    assert.equal(
+      derived?.derived_status,
+      "abandoned",
+      "the derived VIEW reports the terminal status, derived over the canonical projection (ADR 0065)",
+    );
   } finally {
     await app.stop();
     await rm(dir, { recursive: true, force: true });

@@ -14,6 +14,9 @@ import type { InstanceTracking } from "../manifest.ts";
 import {
   DEFAULT_INSTANCE_TRACKING_POLL_MS,
   mountInstanceTracking,
+  reconcileTerminatedKey,
+  reconcileWaitingHumanKey,
+  tryInstanceProjections,
   WAITING_HUMAN_PROBE_CONCURRENCY,
 } from "./instance-tracking.ts";
 import { defineInstanceTrackingReadModel } from "./instance-status-read-model.ts";
@@ -786,6 +789,62 @@ test("skips the derived VIEW when its status column collides with an existing ba
   );
   assert.equal(views.length, 0); // VIEW was NOT created
   assert.ok(h.logs.some((l) => l.level === "warn" && l.msg.includes("collides with an existing")));
+  await handle.stop();
+  await h.close();
+});
+
+test("reconcileWaitingHumanKey does not re-project a settled TERMINATED instance (cancel-during-poll race)", async () => {
+  // The wait-on-human probe `await`s the engine, yielding the event loop; a concurrent cancel can record
+  // the instance TERMINATED and retire its tasks WHILE the probe is in flight. Re-inserting the (now
+  // stale) open tasks would strand a row the terminal path already cleared — the key is then classified
+  // settled and never re-probed, a permanent stale projection row. The terminal recheck must refuse.
+  const { engine } = fakeEngine({});
+  const h = await withHarness(engine, PLANS_DDL, async () => {});
+  const projections = tryInstanceProjections(h.api);
+  assert.ok(projections);
+  // A concurrent cancel recorded TERMINATED (and cleared any tasks) mid-probe.
+  reconcileTerminatedKey(h.api, projections, "pi1");
+  assert.equal(projectedState(h, "pi1"), "TERMINATED");
+  // The in-flight probe now tries to feed a stale open task; the guard drops it (returns 0, no row).
+  const fed = reconcileWaitingHumanKey(h.api, projections, "pi1", [{ userTaskKey: "pi1-t0" }]);
+  assert.equal(fed, 0);
+  assert.equal(projectedOpenTasks(h, "pi1"), 0);
+  await h.close();
+});
+
+test("retires a stale managed VIEW when a binding no longer declares a statusField", async () => {
+  // A manifest change that drops `statusField` leaves the binding with nothing derivable. An earlier
+  // boot's managed VIEW must be RETIRED, or its stale derived surface stays discoverable/readable while
+  // the runtime believes it provisioned nothing.
+  const { engine } = fakeEngine({});
+  const h = await withHarness(engine, PLANS_DDL, async () => {});
+  h.db.exec('CREATE VIEW main."plans__tracking" AS SELECT * FROM plans;'); // a previous boot's VIEW
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ statusField: undefined, activeStatuses: undefined })], sched);
+  const views = h.db.all<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type='view' AND name='plans__tracking'",
+  );
+  assert.equal(views.length, 0); // stale VIEW retired
+  await handle.stop();
+  await h.close();
+});
+
+test("skips provisioning when a non-view object already holds the managed VIEW name", async () => {
+  // A real table sharing the managed-view name shadows it: `DROP VIEW IF EXISTS` can't remove a table and
+  // `CREATE VIEW IF NOT EXISTS` then silently no-ops, so a page would read the wrong object while the mount
+  // looked successful. Provisioning must refuse (warn + skip) and leave the real table untouched.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  h.db.exec('CREATE TABLE "plans__tracking" (x TEXT)'); // an undeclared real table squats the name
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched);
+  await sched.advance(1000);
+  const obj = h.db.all<{ type: string }>("SELECT type FROM sqlite_master WHERE name='plans__tracking'");
+  assert.equal(obj.length, 1);
+  assert.equal(obj[0].type, "table"); // untouched — not dropped, not shadowed by a VIEW
+  assert.ok(h.logs.some((l) => l.level === "warn" && l.msg.includes("non-view object")));
   await handle.stop();
   await h.close();
 });

@@ -316,6 +316,22 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           }
         }
       }
+      // Validate the EFFECTIVE default target too, not just an explicit override. When
+      // `readModel.statusColumn` is omitted (or `readModel` entirely), the VIEW derives the status
+      // under the default column `derived_status`. A binding with `statusField: "derived_status"` and
+      // no override therefore collides with the default derived column exactly as an explicit override
+      // would — SQLite keeps the stored base column and the derived read is stale. The explicit-override
+      // collision is caught above; this closes the omitted-override path (which the runtime would
+      // otherwise only discover at boot, then skip the VIEW).
+      const rmRec = isRecord(b?.readModel) ? b.readModel : undefined;
+      const hasExplicitStatusColumn = typeof rmRec?.statusColumn === "string" && rmRec.statusColumn.length > 0;
+      if (statusFieldName !== undefined && !hasExplicitStatusColumn &&
+        DEFAULT_DERIVED_STATUS_COLUMN.toLowerCase() === statusFieldName.toLowerCase()) {
+        issues.push({
+          path: `instanceTracking[${i}].statusField`,
+          message: `statusField "${statusFieldName}" collides with the default derived status column "${DEFAULT_DERIVED_STATUS_COLUMN}" (set readModel.statusColumn to a distinct name, or rename statusField)`,
+        });
+      }
     });
     // Duplicate managed-VIEW names across bindings (ADR 0065): each binding's read model DROP+CREATEs a
     // VIEW named `readModel.view` or, by default, `<table>__tracking`. Two bindings that fold to the same
@@ -324,6 +340,18 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
     // binding loses its derivation. Reject the collision here, folded (SQLite folds identifiers), naming
     // both bindings. Only bindings with a `statusField` provision a VIEW, so only those can collide.
     const viewOwners = new Map<string, number>();
+    // Also reserve every binding's BASE TABLE name: SQLite shares one namespace for tables and views,
+    // so a managed VIEW `orders__tracking` for one binding collides with another binding whose base
+    // `table` is `orders__tracking`. The manifest would pass validation, then `CREATE VIEW` fails at boot
+    // and the first binding loses its derived surface. Collect base tables first (folded), then flag any
+    // managed-view name that lands on one.
+    const baseTableOwners = new Map<string, number>();
+    tracking.forEach((t, i) => {
+      const b = isRecord(t) ? t : undefined;
+      if (typeof b?.table !== "string" || b.table.length === 0) return;
+      const folded = b.table.toLowerCase();
+      if (!baseTableOwners.has(folded)) baseTableOwners.set(folded, i);
+    });
     tracking.forEach((t, i) => {
       const b = isRecord(t) ? t : undefined;
       if (typeof b?.table !== "string" || b.table.length === 0) return;
@@ -339,6 +367,16 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
         });
       } else {
         viewOwners.set(folded, i);
+      }
+      // A managed VIEW name that folds to another binding's base table shares SQLite's table/view
+      // namespace and would fail `CREATE VIEW` at boot. (Its own base table is already rejected above as
+      // "view cannot shadow its table"; here we catch collisions with a DIFFERENT binding's base table.)
+      const tableOwner = baseTableOwners.get(folded);
+      if (tableOwner !== undefined && tableOwner !== i) {
+        issues.push({
+          path: `instanceTracking[${i}].readModel.view`,
+          message: `managed VIEW name "${view}" collides with the base table of instanceTracking[${tableOwner}] (SQLite shares one table/view namespace); give this binding a distinct readModel.view`,
+        });
       }
     });
   }

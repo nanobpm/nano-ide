@@ -553,3 +553,69 @@ test("distinct managed-VIEW names across bindings on the same table have no view
   });
   assert.deepEqual(issues, []);
 });
+
+test("statusField folding to the default derived column (no override) is flagged", () => {
+  // With no `readModel.statusColumn`, the VIEW derives under the default `derived_status`. A binding
+  // whose `statusField` IS `derived_status` therefore collides with the default derived column exactly
+  // as an explicit override would — SQLite keeps the stored base column and the derived read is stale.
+  // This is the omitted-override path the runtime would otherwise only discover at boot.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "Derived_Status", // folds to the default derived column name
+        onTerminated: { set: { Derived_Status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].statusField"));
+});
+
+test("an explicit readModel.statusColumn that differs from the default derived column is not falsely flagged", () => {
+  // statusField == default derived column, but an explicit override moves the derived column elsewhere:
+  // no collision, so the omitted-override guard must NOT fire.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "derived_status",
+        onTerminated: { set: { derived_status: "abandoned" } },
+        readModel: { statusColumn: "effective_status" },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("a managed VIEW name colliding with another binding's base table is flagged", () => {
+  // SQLite shares one namespace for tables and views: a managed VIEW named `orders` (binding 0) collides
+  // with binding 1's base table `orders`, so `CREATE VIEW` would fail at boot and binding 0 loses its
+  // derived surface. Reject it at author time.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "orders" }, // folds to binding[1]'s base table
+      },
+      {
+        table: "orders",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(
+    issues.some(
+      (i) => i.path === "instanceTracking[0].readModel.view" && i.message.includes("base table"),
+    ),
+  );
+});

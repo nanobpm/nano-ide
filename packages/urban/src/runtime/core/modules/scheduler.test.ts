@@ -108,7 +108,8 @@ test("schedulerClock.wait installs no abort listener when a signalled wait resol
   controller.abort(new Error("shutting down"));
   assert.deepEqual(cleared, [], "a synchronously-resolved wait must not install an abort listener");
 });
-// when the caller aborts with a bare value rather than an Error.
+// The abort reason is attacker/caller-controlled: guard the case where it is a bare value rather
+// than an Error so `wait()` still rejects with a generic teardown error instead of leaking it.
 test("schedulerClock.wait rejects with a generic teardown error when the abort reason is not an Error", async () => {
   const controller = new AbortController();
   const sched: SchedulerDeps = {

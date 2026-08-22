@@ -883,16 +883,14 @@ export function assertReadModelParity(
     projectionTables.set(name, table);
   }
 
-  // Fresh fixtures in the TEMP schema. Drop first (schema-qualified with `temp.` so an unqualified
-  // name can never resolve to — and delete — a real `main` table/view) so the guard can be called
-  // repeatedly on one DB without clobbering the caller's application data.
-  db.exec(`DROP VIEW IF EXISTS temp.${quoteIdent(model.decl.name)};`);
-  db.exec(`DROP TABLE IF EXISTS temp.${quoteIdent(baseTable)};`);
-  for (const table of projectionTables.values()) db.exec(`DROP TABLE IF EXISTS temp.${quoteIdent(table)};`);
-
-  createFixture(baseTable, baseCols);
-  for (const [name, table] of projectionTables) createFixture(table, projCols.get(name) ?? new Set());
-  db.exec(model.viewDdl(options.sql, { temp: true }));
+  // Drop/create every fixture through this single helper so the pre-check reset (leaked objects from
+  // an earlier call) and the post-check teardown (below) can never drift apart. Schema-qualified with
+  // `temp.` so an unqualified name can never resolve to — and delete — a real `main` table/view.
+  const dropFixtures = (): void => {
+    db.exec(`DROP VIEW IF EXISTS temp.${quoteIdent(model.decl.name)};`);
+    db.exec(`DROP TABLE IF EXISTS temp.${quoteIdent(baseTable)};`);
+    for (const table of projectionTables.values()) db.exec(`DROP TABLE IF EXISTS temp.${quoteIdent(table)};`);
+  };
 
   const insertRow = (table: string, row: Record<string, unknown>): void => {
     const keys = Object.keys(row);
@@ -910,35 +908,47 @@ export function assertReadModelParity(
     );
   };
 
-  samples.forEach((sample, idx) => {
-    // Reset fixture data for this isolated sample.
-    db.run(`DELETE FROM ${quoteIdent(baseTable)};`);
-    for (const table of projectionTables.values()) db.run(`DELETE FROM ${quoteIdent(table)};`);
-    insertRow(baseTable, sample.baseRow);
-    for (const [pname, rows] of Object.entries(sample.projections ?? {})) {
-      // Ignore projections the model never references — no fixture table exists for them, and they
-      // cannot affect any derived column, so inserting would fail the guard for a non-parity reason.
-      const table = projectionTables.get(pname);
-      if (!table) continue;
-      for (const r of rows) insertRow(table, r);
-    }
+  // Fresh fixtures in the TEMP schema. Drop first so the guard can be called repeatedly on one DB
+  // without clobbering the caller's application data, and ALWAYS drop again in `finally` so leftover
+  // TEMP objects can never shadow the caller's real `main` tables/view after the guard returns/throws.
+  dropFixtures();
+  try {
+    createFixture(baseTable, baseCols);
+    for (const [name, table] of projectionTables) createFixture(table, projCols.get(name) ?? new Set());
+    db.exec(model.viewDdl(options.sql, { temp: true }));
 
-    // Read the SQL-derived values straight from the managed VIEW — the VIEW body already computes
-    // each derived column, so this exercises the exact DDL the framework emits (not a recompiled copy).
-    const derivedList = columns.map((c) => quoteIdent(c)).join(", ");
-    const sqlRows = db.all<Record<string, unknown>>(
-      `SELECT ${derivedList} FROM ${quoteIdent(model.decl.name)};`,
-    );
-    const sqlRow = sqlRows[0] ?? {};
-    for (const c of columns) {
-      const sqlValue = normaliseSqlValue(sqlRow[c]);
-      const fnValue = normaliseSqlValue(model.fnFor(c)(sample.baseRow, sample.projections));
-      if (!Object.is(sqlValue, fnValue)) {
-        onMismatch(
-          `read-model parity mismatch in "${model.decl.name}".${c} (sample #${idx}): ` +
-            `SQL=${formatParityValue(sqlValue)} vs TS=${formatParityValue(fnValue)}`,
-        );
+    samples.forEach((sample, idx) => {
+      // Reset fixture data for this isolated sample.
+      db.run(`DELETE FROM ${quoteIdent(baseTable)};`);
+      for (const table of projectionTables.values()) db.run(`DELETE FROM ${quoteIdent(table)};`);
+      insertRow(baseTable, sample.baseRow);
+      for (const [pname, rows] of Object.entries(sample.projections ?? {})) {
+        // Ignore projections the model never references — no fixture table exists for them, and they
+        // cannot affect any derived column, so inserting would fail the guard for a non-parity reason.
+        const table = projectionTables.get(pname);
+        if (!table) continue;
+        for (const r of rows) insertRow(table, r);
       }
-    }
-  });
+
+      // Read the SQL-derived values straight from the managed VIEW — the VIEW body already computes
+      // each derived column, so this exercises the exact DDL the framework emits (not a recompiled copy).
+      const derivedList = columns.map((c) => quoteIdent(c)).join(", ");
+      const sqlRows = db.all<Record<string, unknown>>(
+        `SELECT ${derivedList} FROM ${quoteIdent(model.decl.name)};`,
+      );
+      const sqlRow = sqlRows[0] ?? {};
+      for (const c of columns) {
+        const sqlValue = normaliseSqlValue(sqlRow[c]);
+        const fnValue = normaliseSqlValue(model.fnFor(c)(sample.baseRow, sample.projections));
+        if (!Object.is(sqlValue, fnValue)) {
+          onMismatch(
+            `read-model parity mismatch in "${model.decl.name}".${c} (sample #${idx}): ` +
+              `SQL=${formatParityValue(sqlValue)} vs TS=${formatParityValue(fnValue)}`,
+          );
+        }
+      }
+    });
+  } finally {
+    dropFixtures();
+  }
 }

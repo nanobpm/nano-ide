@@ -521,6 +521,44 @@ test("the parity guard runs entirely in the TEMP schema and never clobbers real 
 });
 
 
+test("the parity guard drops its TEMP fixtures/VIEW after running so a long-lived connection is left clean (even on mismatch)", async () => {
+  // The guard builds TEMP tables + a TEMP VIEW under the model's real names. If it left them behind,
+  // subsequent UNqualified reads/writes on that same long-lived handle would silently resolve to the
+  // leftover TEMP fixtures (TEMP shadows same-named `main` objects for the connection's lifetime), and
+  // the TEMP VIEW would shadow the managed `main` VIEW. It must drop everything it created in a
+  // `finally`, on both the passing path AND the throwing (mismatch) path.
+  const leftoverTempObjects = (db: SqliteDb): string[] =>
+    db
+      .all<{ name: string }>(`SELECT name FROM temp.sqlite_master WHERE type IN ('table', 'view')`)
+      .map((r) => r.name);
+
+  // Passing run: TEMP schema is empty afterwards.
+  await withDb((db) => {
+    assertReadModelParity(taskReadModel, db, [
+      { baseRow: { process_instance_key: "pi-1", state: "done", priority: 9 }, projections: {} },
+    ]);
+    assert.deepEqual(leftoverTempObjects(db), []);
+  });
+
+  // Throwing run (deliberate drift): the `finally` still drops everything before the throw propagates.
+  const drifted: ReadModel = {
+    ...taskReadModel,
+    fnFor: (column) =>
+      column === "display_status"
+        ? compileToFn(caseWhen([when(neq(col("state"), lit("done")), lit("completed"))], lit("active")))
+        : taskReadModel.fnFor(column),
+  };
+  await withDb((db) => {
+    assert.throws(() =>
+      assertReadModelParity(drifted, db, [
+        { baseRow: { process_instance_key: "pi-1", state: "done", priority: 9 }, projections: {} },
+      ]),
+    );
+    assert.deepEqual(leftoverTempObjects(db), []);
+  });
+});
+
+
 test("eq/neq coerce booleans like SQLite (1/0) so the TS backend cannot drift from the VIEW", () => {
   // `lit(true)` compiles to SQL `1`; strict `===` would make `1 === true` false and diverge.
   const on = compileToFn(eq(col("flag"), lit(true)));

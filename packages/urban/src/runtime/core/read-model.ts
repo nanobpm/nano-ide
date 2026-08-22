@@ -776,6 +776,14 @@ function normaliseSqlValue(value: unknown): unknown {
   return value;
 }
 
+function formatParityValue(value: unknown): string {
+  // `JSON.stringify` throws a TypeError on `bigint`, which a derived INTEGER > 2^53 can reach this
+  // path as. Format it explicitly so the guard always reports the parity mismatch instead of masking
+  // it with a serialisation error.
+  if (typeof value === "bigint") return `${value}n`;
+  return JSON.stringify(value);
+}
+
 /**
  * The framework PARITY GUARD (surface #3). Given a compiled read model and sample base+projection
  * rows, it materialises the managed VIEW over throwaway in-memory tables, reads the SQL-derived
@@ -905,7 +913,7 @@ export function assertReadModelParity(
       if (!Object.is(sqlValue, fnValue)) {
         onMismatch(
           `read-model parity mismatch in "${model.decl.name}".${c} (sample #${idx}): ` +
-            `SQL=${JSON.stringify(sqlValue)} vs TS=${JSON.stringify(fnValue)}`,
+            `SQL=${formatParityValue(sqlValue)} vs TS=${formatParityValue(fnValue)}`,
         );
       }
     }

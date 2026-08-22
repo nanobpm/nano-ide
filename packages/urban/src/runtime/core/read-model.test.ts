@@ -424,6 +424,31 @@ test("the parity guard agrees with the SQL VIEW for a numeric key compared to a 
 });
 
 
+test("the parity guard reports a mismatch (not a bigint serialisation TypeError) when a divergent value is a bigint", async () => {
+  // A derived INTEGER > 2^53 can reach the mismatch formatter as a `bigint`. `JSON.stringify` throws
+  // a TypeError on bigint, which would mask the real parity failure — the guard must still name the
+  // mismatch. Drift the TS backend so it returns a bigint the SQL VIEW does not, then assert the
+  // thrown error is the parity mismatch (mentioning the bigint value), not a TypeError.
+  const model = defineReadModel({
+    name: "bigint_mismatch_read_model",
+    baseTable: "bigint_mismatch_rows",
+    derive: {
+      key: col("k"),
+    },
+  });
+  const drifted: ReadModel = {
+    ...model,
+    fnFor: (column) => (column === "key" ? () => 9007199254740993n : model.fnFor(column)),
+  };
+  await withDb((db) => {
+    assert.throws(
+      () => assertReadModelParity(drifted, db, [{ baseRow: { k: 1 } }]),
+      /parity mismatch in "bigint_mismatch_read_model"\.key.*TS=9007199254740993n/,
+    );
+  });
+});
+
+
 test("eq/neq coerce booleans like SQLite (1/0) so the TS backend cannot drift from the VIEW", () => {
   // `lit(true)` compiles to SQL `1`; strict `===` would make `1 === true` false and diverge.
   const on = compileToFn(eq(col("flag"), lit(true)));

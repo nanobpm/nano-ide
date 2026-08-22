@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.77.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.76.0...@nanobpm/urban-0.77.0) (2026-08-22)
+
+
+### Features
+
+* **urban:** allow relative same-origin cross-surface nav links ([#437](https://github.com/nanobpm/nano-ide/issues/437)) ([6fd6961](https://github.com/nanobpm/nano-ide/commit/6fd69619e5458254fc04812046695a25ed9101f9))
+
 ## [0.76.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.75.1...@nanobpm/urban-0.76.0) (2026-08-22)
 
 

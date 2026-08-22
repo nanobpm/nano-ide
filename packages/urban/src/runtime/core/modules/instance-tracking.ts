@@ -38,7 +38,7 @@ import type { UserTaskSummary } from "../host.ts";
 import { type InstanceTracking, isConfiguredStatusSelector } from "../manifest.ts";
 import { assertSqlIdentifier } from "../read-model.ts";
 import { registerCanonicalProjections } from "./canonical-projections.ts";
-import { defineInstanceTrackingReadModel, TERMINATED_STATE } from "./instance-status-read-model.ts";
+import { defineInstanceTrackingReadModel, instanceTrackingReadModelTarget, TERMINATED_STATE } from "./instance-status-read-model.ts";
 import { INSTANCE_STATE_PROJECTION, InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
 import { defaultScheduler, MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
@@ -120,7 +120,12 @@ export function reconcileTerminatedKey(
     // that still looks parked on a human (terminated wins over waiting-human, at the source as in the
     // derivation). Both writes are idempotent.
     projections.openUserTasks.clearInstance(key);
-    projections.instanceState.recordState(key, TERMINATED_STATE, false);
+    // `recordState` returns false when the state is unchanged (an already-recorded TERMINATED re-fed on a
+    // later tick or by the cancel path). Only log/count a REAL transition: without this, every repeated
+    // terminal poll of a settled instance emits an info log and inflates `reconciled` as if it wrote,
+    // producing one spurious "recorded terminated instance" line per settled instance per tick.
+    const changed = projections.instanceState.recordState(key, TERMINATED_STATE, false);
+    if (!changed) return 0;
     api.log("info", "instanceTracking: recorded terminated instance", {
       projection: INSTANCE_STATE_PROJECTION,
       processInstanceKey: key,
@@ -218,12 +223,25 @@ async function reconcileOnce(
     else keyToRows.set(key, [row]);
   }
   const keys = [...keyToRows.keys()];
-  if (keys.length === 0) return { scanned: 0, reconciled: 0 };
 
-  const snapshots = await api.engine.searchProcessInstances({
-    processInstanceKeys: keys,
-    state: "TERMINATED",
-  });
+  // NB: do NOT early-return on an empty active set. A key that LEFT the active selector (its task was
+  // answered and its worker flipped it to a non-active status) still has a stale open-task projection to
+  // retire below — returning early here would strand it, re-tearing the derived edge (ADR 0065). The
+  // engine query and human probe both degrade to no-ops on an empty set, so falling through is cheap.
+
+  // Skip keys already recorded TERMINATED in the canonical projection: a settled instance never leaves
+  // TERMINATED, and the base row keeps its (unchanged) `statusField`, so with `activeStatuses`/no-selector
+  // it would pass the selector on every tick and be re-queried + re-fed forever (the old `table.update`
+  // moved it out of the active set; the inversion deliberately does not). The projection is the
+  // authoritative settled-set, so exclude those keys from both the engine query and the wait-on-human
+  // probe below — a pure efficiency win (the re-feed was already an idempotent no-op).
+  const settled = (key: string): boolean =>
+    projections?.instanceState.getState(key)?.state === TERMINATED_STATE;
+  const liveKeys = keys.filter((key) => !settled(key));
+
+  const snapshots = liveKeys.length > 0
+    ? await api.engine.searchProcessInstances({ processInstanceKeys: liveKeys, state: "TERMINATED" })
+    : [];
 
   // Feed the terminal fact through the shared `reconcileTerminatedKey` — the one place that records the
   // terminal source into `urban_instance_state` — so the poll path and the cancel primitive can never
@@ -238,9 +256,9 @@ async function reconcileOnce(
   }
 
   // Wait-on-human edge (issue #355), symmetric to onTerminated. Precedence: terminated wins, so a key
-  // recorded as terminated above is excluded here (and its open tasks were already retired). An instance
-  // is "waiting on a human" iff it has an open user task — the authoritative engine truth — so read
-  // `openUserTasks` (never a bare `searchUserTasks`, which lags a completion and would latch a closed
+  // recorded as terminated above (or already settled) is excluded here (its open tasks were retired). An
+  // instance is "waiting on a human" iff it has an open user task — the authoritative engine truth — so
+  // read `openUserTasks` (never a bare `searchUserTasks`, which lags a completion and would latch a closed
   // task; issue #355 "instance B") and FEED that current open set into the projection via
   // `reconcileWaitingHumanKey`. Feed EVERY probed key, including those with NO open task: an empty set
   // RETIRES a just-answered task so the derived edge re-flips to non-parked by construction — this is the
@@ -248,7 +266,20 @@ async function reconcileOnce(
   // bounded-parallel batches (`WAITING_HUMAN_PROBE_CONCURRENCY`) so a pass over a large active backlog
   // scales with max latency rather than N×latency.
   if (binding.onWaitingHuman) {
-    const humanKeys = keys.filter((key) => !terminatedKeys.has(key)); // terminated already won
+    const humanKeySet = new Set(keys.filter((key) => !terminatedKeys.has(key) && !settled(key)));
+    // Retire stale projections INDEPENDENTLY of the active-status selector. With `activeStatuses`, a key
+    // can be projected while its task is open and then move to a non-active worker status when the task is
+    // answered — it then never passes the selector again, so its `urban_open_user_tasks` row would linger
+    // and the VIEW keep deriving `awaiting_operator` (a fresh #422 tear). Re-probe every key STILL
+    // projected as open so an answered/closed one is retired (`syncInstance([])`). The projection is
+    // app-wide, but re-syncing a key another binding owns is a harmless idempotent no-op against engine
+    // truth, so probing the whole projected set is always safe.
+    if (projections) {
+      for (const key of projections.openUserTasks.instanceKeys()) {
+        if (!terminatedKeys.has(key) && !settled(key)) humanKeySet.add(key);
+      }
+    }
+    const humanKeys = [...humanKeySet];
     for (let i = 0; i < humanKeys.length; i += WAITING_HUMAN_PROBE_CONCURRENCY) {
       const batch = humanKeys.slice(i, i + WAITING_HUMAN_PROBE_CONCURRENCY);
       const perKey = await Promise.all(
@@ -281,7 +312,7 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
     api.log("debug", "instanceTracking: no default data source; derived VIEW provisioning skipped");
     return;
   }
-  let db: { exec(sql: string): void };
+  let db: { exec(sql: string): void; all<T = Record<string, unknown>>(sql: string, params?: unknown[]): T[] };
   try {
     db = api.data.source().db;
   } catch (err) {
@@ -302,6 +333,32 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
       continue;
     }
     if (!model) continue; // no statusField ⇒ nothing derivable to project
+    // Base-column collision guard (ADR 0065): the VIEW selects `base.*` and appends the derived status as
+    // `${statusColumn} AS ...`. If the base table ALREADY has a column of that name (the default
+    // `derived_status`, or an override that happens to match a real column), SQLite keeps the base column
+    // under that name and auto-renames the derived one — provisioning "succeeds" but a page querying
+    // `statusColumn` reads the STALE stored value. Detect it and skip (loudly) rather than publish a VIEW
+    // that silently defeats the derivation. `readModel.statusColumn === statusField` is already rejected at
+    // manifest validation; this catches collisions with ANY other base column, which needs the live schema.
+    const { statusColumn } = instanceTrackingReadModelTarget(binding);
+    try {
+      const cols = db.all<{ name: string }>(`PRAGMA table_info("${assertSqlIdentifier("instanceTracking.table", binding.table)}")`);
+      const folded = statusColumn.toLowerCase();
+      if (cols.some((c) => typeof c.name === "string" && c.name.toLowerCase() === folded)) {
+        api.log(
+          "warn",
+          `instanceTracking: derived status column "${statusColumn}" collides with an existing "${binding.table}" column; derived VIEW skipped (set readModel.statusColumn to a non-colliding name)`,
+          { table: binding.table, statusColumn },
+        );
+        continue;
+      }
+    } catch (err) {
+      api.log("warn", "instanceTracking: failed to introspect base columns; derived VIEW skipped", {
+        table: binding.table,
+        error: String(err),
+      });
+      continue;
+    }
     try {
       // Qualify the DROP to `main.` for the same reason `ReadModelRegistry.ensureViews` does: an
       // unqualified DROP resolves a stray TEMP view of the same name first (e.g. leaked from a parity

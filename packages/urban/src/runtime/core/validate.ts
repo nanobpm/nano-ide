@@ -12,17 +12,16 @@ import schema from "@nanobpm/nano-app-schema/schema" with { type: "json" };
 import { isRecord } from "./guards.ts";
 import { BIND_MODES, NETWORK_KEYS, isBindMode, isConfiguredStatusSelector } from "./manifest.ts";
 import type { AppManifest } from "./manifest.ts";
+import {
+  DEFAULT_DERIVED_STATUS_COLUMN,
+  defaultInstanceTrackingViewName,
+} from "./modules/instance-status-read-model.ts";
+import { SQL_IDENT } from "./read-model.ts";
 
 export interface ValidationIssue {
   path: string;
   message: string;
 }
-
-/** SQL identifier shape used to validate `instanceTracking.readModel` names — mirrors the
- *  `SQL_IDENT` the read-model compiler enforces (`core/read-model.ts`) so a value accepted here is
- *  accepted at VIEW provisioning too. Kept in sync deliberately (a divergence would let a manifest
- *  validate but fail at boot). */
-const SQL_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 export class ManifestValidationError extends Error {
   readonly issues: ValidationIssue[];
@@ -207,6 +206,9 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           message: "missing onTerminated.set patch (a non-empty column → value map)",
         });
       }
+      // The single derived-status target for this binding (used by the readModel.statusColumn collision
+      // guard below). Undefined when absent/blank.
+      const statusFieldName = typeof b?.statusField === "string" && b.statusField.length > 0 ? b.statusField : undefined;
       // `onWaitingHuman` (issue #355) is the optional wait-on-human edge — the twin of
       // `onTerminated`. It is optional (a binding may reconcile only the terminal edge), but when
       // present its `set` must be a non-empty column → value patch for the same reason
@@ -291,19 +293,59 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
               });
             }
           }
-          if (typeof rm.view === "string" && typeof b?.table === "string" && rm.view === b.table) {
+          // Fold case before comparing: `defineReadModel`/SQLite treat identifiers case-insensitively,
+          // so `table:"plans"` + `readModel.view:"Plans"` would pass a case-sensitive check here yet be
+          // rejected as a base-table collision at VIEW construction. Compare folded so author-time
+          // validation matches provisioning behavior.
+          if (typeof rm.view === "string" && typeof b?.table === "string" && rm.view.toLowerCase() === b.table.toLowerCase()) {
             issues.push({
               path: `instanceTracking[${i}].readModel.view`,
               message: "readModel.view must differ from the base table (a view cannot shadow its table)",
             });
           }
+          // The VIEW emits `${statusColumn} AS ...` after `base.*`; if the derived status column folds to
+          // the same identifier as the base `statusField`, SQLite exposes two output columns of that name
+          // and keeps the base (stored) one — so consumers read the STALE value, silently defeating the
+          // derivation. Reject the collision at author time (case-insensitive, matching SQLite's folding).
+          if (typeof rm.statusColumn === "string" && statusFieldName !== undefined &&
+            rm.statusColumn.toLowerCase() === statusFieldName.toLowerCase()) {
+            issues.push({
+              path: `instanceTracking[${i}].readModel.statusColumn`,
+              message: `readModel.statusColumn must differ from statusField "${statusFieldName}" (a same-named derived column is shadowed by the stored base column and reads stale)`,
+            });
+          }
         }
+      }
+    });
+    // Duplicate managed-VIEW names across bindings (ADR 0065): each binding's read model DROP+CREATEs a
+    // VIEW named `readModel.view` or, by default, `<table>__tracking`. Two bindings that fold to the same
+    // VIEW name (two bindings on one base table with no distinct override, or names differing only by
+    // case) would silently clobber each other at provisioning — the later CREATE wins and the earlier
+    // binding loses its derivation. Reject the collision here, folded (SQLite folds identifiers), naming
+    // both bindings. Only bindings with a `statusField` provision a VIEW, so only those can collide.
+    const viewOwners = new Map<string, number>();
+    tracking.forEach((t, i) => {
+      const b = isRecord(t) ? t : undefined;
+      if (typeof b?.table !== "string" || b.table.length === 0) return;
+      if (typeof b?.statusField !== "string" || b.statusField.length === 0) return; // no VIEW ⇒ no collision
+      const rm = isRecord(b.readModel) ? b.readModel : undefined;
+      const view = typeof rm?.view === "string" && rm.view.length > 0 ? rm.view : defaultInstanceTrackingViewName(b.table);
+      const folded = view.toLowerCase();
+      const prev = viewOwners.get(folded);
+      if (prev !== undefined) {
+        issues.push({
+          path: `instanceTracking[${i}].readModel.view`,
+          message: `managed VIEW name "${view}" collides with instanceTracking[${prev}] (identifiers fold case-insensitively); give each binding a distinct readModel.view`,
+        });
+      } else {
+        viewOwners.set(folded, i);
       }
     });
   }
 
   return issues;
 }
+
 
 export function assertValidManifest(m: unknown): asserts m is AppManifest {
   const issues = collectManifestIssues(m);

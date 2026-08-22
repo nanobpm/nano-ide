@@ -706,6 +706,90 @@ test("the derived status read model's SQL and TS backends stay in parity", async
   await h.close();
 });
 
+// ── Efficiency + retirement edges (ADR 0065 review round) ───────────────────────────────────────
+
+test("a settled TERMINATED key is not re-queried and does not re-log on subsequent polls", async () => {
+  // Once recorded TERMINATED the base row keeps its (unchanged) status, so it would keep passing the
+  // selector; the reconciler must skip the settled key on later ticks — no repeat engine query, no repeat
+  // `recorded terminated instance` log, no inflated `reconciled` (fixes the one-log-per-settled-per-tick).
+  const { engine, queries } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched);
+  await sched.advance(1000);
+  await sched.advance(1000);
+  await sched.advance(1000);
+  assert.deepEqual(queries, [["pi1"]]); // queried once; settled thereafter, never re-queried
+  const terminalLogs = h.logs.filter((l) => l.msg.includes("recorded terminated instance"));
+  assert.equal(terminalLogs.length, 1); // logged exactly once, not per tick
+  await handle.stop();
+  await h.close();
+});
+
+// A binding that both derives the wait-on-human edge AND uses a fail-CLOSED `activeStatuses` allow-list —
+// the exact combination whose retirement gap the review flagged (a key answered off the allow-list would
+// strand its open-task projection).
+const activeWaitingBinding = (over: Partial<InstanceTracking> = {}): InstanceTracking => ({
+  table: "plans",
+  keyField: "process_key",
+  statusField: "status",
+  activeStatuses: ["dispatched"],
+  onTerminated: { set: { status: "abandoned" } },
+  onWaitingHuman: { set: { status: "awaiting_operator" } },
+  pollMs: 1000,
+  ...over,
+});
+
+test("retires a stale open-task projection for a key that left the activeStatuses allow-list", async () => {
+  // Instance parked on a human while `dispatched` (in the allow-list) → projected open. The app then
+  // answers: the task closes AND the worker flips the row to a non-active status, so the row no longer
+  // passes `activeStatuses`. Without retiring projected keys independently of the allow-list, the open-task
+  // row would linger and the VIEW keep deriving awaiting_operator — a fresh nano-workforce#422 tear.
+  const openTasks: Record<string, number> = { pi1: 1 };
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, openTasks);
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [activeWaitingBinding()], sched);
+  await sched.advance(1000);
+  assert.equal(projectedOpenTasks(h, "pi1"), 1); // parked: projected open
+  assert.equal(derivedOne(h, "pi1"), "awaiting_operator");
+
+  // Answer: task closed AND worker moved the row OUT of the active set.
+  openTasks.pi1 = 0;
+  await h.table.update("pi1", { status: "done" });
+  await sched.advance(1000);
+  assert.equal(projectedOpenTasks(h, "pi1"), 0); // retired even though the row left activeStatuses
+  await handle.stop();
+  await h.close();
+});
+
+test("skips the derived VIEW when its status column collides with an existing base column", async () => {
+  // The VIEW selects `base.*` then `${statusColumn} AS ...`; a base column already named the same
+  // (here the default `derived_status`) would make SQLite keep the STORED column and shadow the derived
+  // one, so a page reading it sees a stale value. Provisioning must detect the collision, skip the VIEW,
+  // and warn — rather than publish a VIEW that silently defeats the derivation.
+  const ddl =
+    "CREATE TABLE plans (plan_key TEXT PRIMARY KEY, process_key TEXT, status TEXT NOT NULL, note TEXT, derived_status TEXT)";
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, ddl, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched); // default statusColumn = derived_status ⇒ collides
+  await sched.advance(1000);
+  const views = h.db.all<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type='view' AND name='plans__tracking'",
+  );
+  assert.equal(views.length, 0); // VIEW was NOT created
+  assert.ok(h.logs.some((l) => l.level === "warn" && l.msg.includes("collides with an existing")));
+  await handle.stop();
+  await h.close();
+});
+
 function mount(h: Harness, bindings: InstanceTracking[], sched: SchedulerDeps) {
   h.api.manifest.instanceTracking = bindings;
   return mountInstanceTracking(

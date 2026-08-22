@@ -75,7 +75,10 @@ export type InstanceTracking = SchemaInstanceTracking & {
    */
   readonly onWaitingHuman?: {
     /** Column → literal patch. Its `statusField` entry supplies the VALUE the derived wait-on-human
-     *  edge resolves to (an instance with an open user task ⇒ this status); no longer a stored write. */
+     *  edge resolves to (an instance with an open user task ⇒ this status); no longer a stored write.
+     *  Since the inversion the reconciler makes NO base-row write at all, so only the `statusField` entry
+     *  is consumed — any other key is intentionally IGNORED (an app-owned column is the app worker's job,
+     *  not the reconciler's; ADR 0065). */
     readonly set: { readonly [k: string]: string | number | boolean | null };
   };
   /**
@@ -90,6 +93,13 @@ export type InstanceTracking = SchemaInstanceTracking & {
    * avoid a collision (e.g. more than one binding on one base table, or a base column already named
    * `derived_status`). A binding with no `statusField` provisions no VIEW (nothing to derive), but the
    * reconciler still feeds the projections.
+   *
+   * The VIEW is a first-class readable pages surface, not a separate wiring step: `SqliteGateway.schema()`
+   * introspects views (`type IN ('table','view')`) and `/app/data/<source>/<view>` serves `SELECT *`
+   * verbatim, so an operator page reads the derived status simply by pointing its page `data.table` at
+   * this managed VIEW (which re-exports `base.*`, so it is a drop-in for the base table) and its column at
+   * `statusColumn`. This is opt-in by design: the base table stays readable carrying the worker-owned
+   * status; the runtime does NOT silently rebind every page off the base table.
    */
   readonly readModel?: {
     /** Managed VIEW name (must be a SQL identifier and differ from the base table). */

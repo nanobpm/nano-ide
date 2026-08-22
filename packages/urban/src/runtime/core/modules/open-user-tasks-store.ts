@@ -144,6 +144,17 @@ export class OpenUserTasksStore {
     this.#db.run(`DELETE FROM ${OPEN_USER_TASKS_TABLE} WHERE process_instance_key = ?`, [processInstanceKey]);
   }
 
+  /** Every distinct instance key currently projected as having ≥1 open user task. Used by the
+   *  reconciler to re-probe (and, when answered, RETIRE) keys that have dropped out of a binding's
+   *  `activeStatuses` allow-list — a projected row must be retired independently of the base-row
+   *  selector, or an answered escalation's row would linger and the derived edge tear (ADR 0065). */
+  instanceKeys(): string[] {
+    const rows = this.#db.all<{ process_instance_key: string }>(
+      `SELECT DISTINCT process_instance_key FROM ${OPEN_USER_TASKS_TABLE}`,
+    );
+    return rows.map((r) => r.process_instance_key);
+  }
+
   /** True iff the instance currently has any open user task — the "parked on a human" predicate. */
   hasOpenTask(processInstanceKey: string): boolean {
     if (!processInstanceKey) return false;

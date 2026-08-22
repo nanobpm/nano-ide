@@ -261,8 +261,17 @@ function resolveBaseAlias(alias: string | undefined): string {
   return assertSqlIdentifier("base alias", alias ?? DEFAULT_BASE_ALIAS);
 }
 
-/** A conservative SQL identifier guard — we interpolate names directly into DDL/SQL. */
-const SQL_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A conservative SQL identifier guard — we interpolate names directly into DDL/SQL. This is the
+ *  single source of truth for "is this a legal identifier"; the manifest validator imports it (rather
+ *  than re-declaring the regex) so a name accepted at author time is accepted at VIEW provisioning too
+ *  (No Drift Surfaces — a divergence would let a manifest validate but fail at boot). */
+export const SQL_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** True iff `name` is a legal SQL identifier per {@link SQL_IDENT}. The boolean twin of
+ *  {@link assertSqlIdentifier}, for callers (e.g. the manifest validator) that collect issues rather
+ *  than throw. */
+export function isSqlIdentifier(name: string): boolean {
+  return SQL_IDENT.test(name);
+}
 export function assertSqlIdentifier(kind: string, name: string): string {
   if (!SQL_IDENT.test(name)) {
     throw new Error(`invalid ${kind} "${name}": must match ${SQL_IDENT.source}`);

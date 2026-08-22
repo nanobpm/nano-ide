@@ -18,6 +18,12 @@ export interface ValidationIssue {
   message: string;
 }
 
+/** SQL identifier shape used to validate `instanceTracking.readModel` names — mirrors the
+ *  `SQL_IDENT` the read-model compiler enforces (`core/read-model.ts`) so a value accepted here is
+ *  accepted at VIEW provisioning too. Kept in sync deliberately (a divergence would let a manifest
+ *  validate but fail at boot). */
+const SQL_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 export class ManifestValidationError extends Error {
   readonly issues: ValidationIssue[];
   constructor(issues: ValidationIssue[]) {
@@ -263,6 +269,35 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           path: `instanceTracking[${i}].pollMs`,
           message: "pollMs must be a finite positive number of milliseconds",
         });
+      }
+      // `readModel` (ADR 0065, the writer→source inversion) overrides the derived status VIEW name /
+      // column the runtime provisions. Both are compiled into SQL identifiers, so a non-identifier
+      // value would fail opaquely at VIEW provisioning; validate them here. The VIEW must differ from
+      // the base `table` (SQLite forbids a view and a table sharing a name).
+      if (b?.readModel !== undefined) {
+        const rm = isRecord(b.readModel) ? b.readModel : undefined;
+        if (!rm) {
+          issues.push({
+            path: `instanceTracking[${i}].readModel`,
+            message: "readModel must be an object with optional `view` / `statusColumn`",
+          });
+        } else {
+          for (const field of ["view", "statusColumn"] as const) {
+            const v = rm[field];
+            if (v !== undefined && (typeof v !== "string" || !SQL_IDENT.test(v))) {
+              issues.push({
+                path: `instanceTracking[${i}].readModel.${field}`,
+                message: `readModel.${field} must be a SQL identifier (${SQL_IDENT.source})`,
+              });
+            }
+          }
+          if (typeof rm.view === "string" && typeof b?.table === "string" && rm.view === b.table) {
+            issues.push({
+              path: `instanceTracking[${i}].readModel.view`,
+              message: "readModel.view must differ from the base table (a view cannot shadow its table)",
+            });
+          }
+        }
       }
     });
   }

@@ -6,21 +6,23 @@
 //   1. Report the *real* outcome. A cancel can fail (permissions, the instance already gone,
 //      a transport error). Swallowing that and reporting success leaves an instance running in
 //      the engine while the UI claims it stopped — the worst possible lie for a "cancel" button.
-//   2. Reconcile the tracked row immediately. Apps bind process instances to rows via
-//      `instanceTracking`; the poll reconciler flips a row to its terminal status within a few
-//      seconds of the instance terminating. When *we* are the one terminating it, we can apply
-//      that same declared patch right away instead of waiting for the next poll tick.
+//   2. Reconcile the tracked instance immediately. Apps bind process instances to rows via
+//      `instanceTracking`; since ADR 0065 the reconciler is a SOURCE, not a writer — its poll feeds
+//      engine truth into the canonical `urban_instance_state` projection and the terminal status edge
+//      is DERIVED from it (no stored column to tear; nano-workforce#422). When *we* are the one
+//      terminating the instance, we can record that same terminal source right away instead of waiting
+//      for the next poll tick, and the derived read model reflects it on the next read.
 //
 // This primitive keys success on the engine's response, then reconciles off the read model: a
 // non-throwing `cancelInstance` is a committed termination (trusted even if the read model still
 // lags at ACTIVE), while a throw that does not read back a positively-terminal state (still ACTIVE,
-// or absent from the read model) is an honest failure. It reuses the instanceTracking bindings'
-// `onTerminated.set` patch, so the immediate reconcile can never drift from the poll reconciler's.
+// or absent from the read model) is an honest failure. It records the terminal source through the
+// SAME `reconcileTerminatedKey` the poll reconciler uses, so cancel and poll can never drift.
 
 import type { AppApi } from "../context.ts";
 import type { InstanceTracking } from "../manifest.ts";
 import { errorMessage } from "../guards.ts";
-import { reconcileTerminatedKey } from "./instance-tracking.ts";
+import { reconcileTerminatedKey, tryInstanceProjections } from "./instance-tracking.ts";
 
 export type CancelInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED" | "gone";
 
@@ -30,7 +32,8 @@ export interface CancelInstanceResult {
   /** The instance state as read back from the engine after the cancel attempt.
    *  `"gone"` means the engine has no record of the key (already cleaned up / never existed). */
   state: CancelInstanceState;
-  /** Rows flipped to their terminal status by the immediate instanceTracking reconcile. */
+  /** 1 when the immediate reconcile recorded the terminal source into the canonical instance-state
+   *  projection (so the derived terminal status edge reflects it at once), else 0. */
   reconciled: number;
   error?: string;
 }
@@ -39,22 +42,23 @@ type CancelApi = Pick<AppApi, "engine" | "data" | "log">;
 
 /**
  * Cancel a process instance honestly: terminate it, verify it is actually gone, and immediately
- * reconcile any instanceTracking row bound to its key.
+ * record the terminal source for its key into the canonical instance-state projection.
  *
  * Outcome rules:
  *  - `cancelInstance` returns without throwing → the engine accepted the termination (a committed
  *    204); trust it even if the read model still lags at ACTIVE.
  *  - `cancelInstance` throws but the instance reads back positively terminal (TERMINATED/COMPLETED)
- *    → the cancel was effectively idempotent; treat as success. Only a TERMINATED read reconciles a
- *    row here (see below); a COMPLETED read intentionally reconciles nothing.
+ *    → the cancel was effectively idempotent; treat as success. Only a TERMINATED read records a
+ *    terminal source here (see below); a COMPLETED read intentionally records nothing.
  *  - `cancelInstance` throws and the read is NOT positively terminal — still ACTIVE, or "gone"
  *    (absent from the read model, which after an engine restart can transiently lack a live
- *    instance) → an honest failure: report it and do NOT touch any row (the instance may still be
+ *    instance) → an honest failure: report it and do NOT record anything (the instance may still be
  *    running). A throw is not a committed cancel, and absence from the read model is not proof of
  *    termination, so success is never inferred from it.
  *
- * Reconcile only on `TERMINATED`: a COMPLETED instance's terminal row-write is owned by the app's
- * own finalize logic, and a gone/ACTIVE instance has nothing to flip here.
+ * Record only on `TERMINATED`: a COMPLETED instance's terminal outcome is owned by the app's own
+ * finalize logic, and a gone/ACTIVE instance has nothing to record here. When the app declares no
+ * `instanceTracking` bindings there is nothing to reconcile, so the projection feed is skipped.
  */
 export async function cancelInstanceReconciling(
   api: CancelApi,
@@ -81,7 +85,7 @@ export async function cancelInstanceReconciling(
     //     before it rehydrates, so "gone" is absence-of-evidence, NOT proof of termination.
     // Trust neither as success: claiming a cancel that may not have happened (while the run keeps
     // executing) is the worst possible lie for a cancel button. Report ok:false so the caller
-    // surfaces it and retries; never flip a tracked row to terminal while the instance may live.
+    // surfaces it and retries; never record a terminal source while the instance may live.
     api.log("error", "cancel: engine termination not confirmed, instance may still be active", {
       processInstanceKey: key,
       state,
@@ -91,14 +95,17 @@ export async function cancelInstanceReconciling(
   }
 
   let reconciled = 0;
-  if (state === "TERMINATED") {
+  if (state === "TERMINATED" && bindings.length > 0) {
+    // Record through the SAME `reconcileTerminatedKey` the poll path uses, over the app's own
+    // projection stores, so cancel and poll can never drift. It is internally absent-safe and never
+    // throws through — a projection-write failure logs a warn and returns 0 rather than turning a
+    // successful engine termination into a 500; the poll reconciler catches the projection up on its
+    // next tick. The extra try/catch is belt-and-suspenders against a store construction fault.
     try {
-      reconciled = await reconcileTerminatedKey(api, bindings, key);
+      const projections = tryInstanceProjections(api);
+      reconciled = reconcileTerminatedKey(api, projections, key);
     } catch (error) {
-      // The engine termination itself succeeded — a reconcile *write* failure (bad binding,
-      // transient DB error) must not turn that into an unhandled 500. Log it and let the
-      // instanceTracking poll reconciler catch the row up on its next tick.
-      api.log("error", "cancel: instance terminated but row reconcile failed", {
+      api.log("error", "cancel: instance terminated but projection reconcile failed", {
         processInstanceKey: key,
         error: errorMessage(error),
       });

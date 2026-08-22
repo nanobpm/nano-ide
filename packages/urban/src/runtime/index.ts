@@ -308,6 +308,20 @@ export type {
   InstanceStateRow,
   InstanceStateStoreOptions,
 } from "./core/modules/instance-state-store.ts";
+// The DERIVED half of the instanceTracking writer→source inversion (ADR 0065, #439-L1 / #318): the
+// builder that declares a binding's effective-status read model — the terminal + wait-on-human edges —
+// as ONE `defineReadModel` derivation over the canonical projections, compiled to both the managed
+// SQLite VIEW and the TS function. The reconciler feeds the projections; this derives the status edge.
+export {
+  DEFAULT_DERIVED_STATUS_COLUMN,
+  defaultInstanceTrackingViewName,
+  defineInstanceTrackingReadModel,
+  deriveInstanceStatusExpr,
+  instanceTrackingReadModelTarget,
+  TERMINATED_STATE,
+  terminatedEdgeExpr,
+  waitingHumanEdgeExpr,
+} from "./core/modules/instance-status-read-model.ts";
 // instance in?" from the BPMN scope hierarchy + write-provenance (Tier 0, zero declaration), an
 // optional `nano:phase` override (Tier 1), and a lineage rollup for the epic frontier (Tier 2).
 export {

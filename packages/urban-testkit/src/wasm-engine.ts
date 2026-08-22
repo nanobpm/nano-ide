@@ -261,9 +261,17 @@ export class WasmEngineClient implements EngineClient {
   /** Memoized shutdown run (see {@link close}). `close()` is idempotent: the FIRST call starts the
    *  one-and-only teardown and every later/concurrent call awaits this same promise, so the WASM
    *  handle is `free()`d exactly once — two `close()` calls can never double-free it. A run that
-   *  FAILS to settle (engine left allocated, not freed) clears this so the caller can cancel/retry;
-   *  a successful run stays memoized so its `free()` is never re-invoked. */
+   *  fails to settle *before* `free()` (engine left allocated, not freed) clears this so the caller
+   *  can cancel/retry; once `free()` has run the memo is kept even if the run then rejects (a late
+   *  in-flight error surfaced by {@link #throwInflightError}), so a retry can never re-`free()`. */
   #closeRun: Promise<void> | undefined;
+
+  /** Flips true the instant {@link #doClose} reaches `#engine.free()`. Guards the `#closeRun` memo:
+   *  a rejection *after* the handle is freed must stay memoized (clearing it would let a later
+   *  `close()` re-enter `#doClose` and `free()` the same handle twice — the use-after-free #446
+   *  exists to prevent), whereas a pre-free rejection may clear it for a legitimate retry. */
+  #freed = false;
+
 
   /** A shutdown {@link AbortSignal} that aborts when {@link close} begins. The test kit threads it
    *  into the scheduler backing `app.wait()`, so a worker handler parked on the virtual clock is
@@ -526,11 +534,13 @@ export class WasmEngineClient implements EngineClient {
   async close(): Promise<void> {
     // Idempotent teardown: memoize the single shutdown run so a second close() (concurrent, or after
     // the first resolves) awaits the SAME promise instead of re-running `#settleInflight()` and a
-    // second `#engine.free()` on the same WASM handle (a double-free). A run that fails to settle
-    // deliberately leaves the engine allocated (see `#doClose`); clear the memo in that case so the
-    // caller can cancel/retry, but keep a successful run memoized so its `free()` is never re-invoked.
+    // second `#engine.free()` on the same WASM handle (a double-free). A run that fails *before*
+    // `free()` deliberately leaves the engine allocated (see `#doClose`); clear the memo in that case
+    // so the caller can cancel/retry. But once `free()` has run (`#freed`), keep even a rejected run
+    // memoized: `#doClose` can still reject *after* `free()` when `#throwInflightError()` surfaces a
+    // late completion error, and re-running it would `free()` the already-freed handle a second time.
     this.#closeRun ??= this.#doClose().catch((err) => {
-      this.#closeRun = undefined;
+      if (!this.#freed) this.#closeRun = undefined;
       throw err;
     });
     return this.#closeRun;
@@ -571,6 +581,7 @@ export class WasmEngineClient implements EngineClient {
     this.#childProcessMocks.clear();
     this.#childProcessJobTypes.clear();
     this.#engine.free();
+    this.#freed = true;
     // Settlement succeeded; surface (once, fail-loud) the first engine-completion error a tracked
     // handler captured, so a late worker failure is not silently swallowed at teardown.
     this.#throwInflightError();

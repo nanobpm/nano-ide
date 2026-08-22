@@ -821,6 +821,12 @@ test("wasm: close() cancels a handler parked on a virtual-clock wait instead of 
   const realSetTimeout = globalThis.setTimeout;
   let handlerSettled = false;
   let closed = false;
+  // Test-controlled safety release for the park below. If an assertion fails before close()
+  // completes, the finally awaits the memoized close() — which, when the shutdown path under test
+  // is broken (never aborts shutdownSignal), would be the never-settling promise and wedge the whole
+  // suite until the runner timeout. Aborting this in cleanup force-unparks the handler so that close
+  // resolves and the real assertion failure surfaces fast.
+  const release = new AbortController();
   try {
     // Stand in for a worker parked on `app.wait()`: a promise ONLY the shutdown abort can settle —
     // never a macrotask, never real time. That is exactly how the testkit scheduler backs `app.wait()`
@@ -830,11 +836,13 @@ test("wasm: close() cancels a handler parked on a virtual-clock wait instead of 
       try {
         await new Promise<void>((_resolve, reject) => {
           const signal = engine.shutdownSignal;
+          const onAbort = () => reject(new Error("shutdown"));
           if (signal.aborted) {
             reject(new Error("shutdown"));
             return;
           }
-          signal.addEventListener("abort", () => reject(new Error("shutdown")), { once: true });
+          signal.addEventListener("abort", onAbort, { once: true });
+          release.signal.addEventListener("abort", onAbort, { once: true });
         });
       } finally {
         handlerSettled = true;
@@ -892,7 +900,11 @@ test("wasm: close() cancels a handler parked on a virtual-clock wait instead of 
   } finally {
     // The engine allocates native WASM memory. If an assertion above throws before close() completes,
     // release it so the failing case does not leak the native handle into the rest of the suite.
+    // Force-unpark the handler first (test-controlled release): should the shutdown path under test be
+    // broken and close() therefore never settle, this ensures the memoized close() below still resolves
+    // and the assertion failure fails fast instead of wedging the suite on a never-settling wait.
     // close() is idempotent (memoized shutdown run), so closing an already-closed engine is a no-op.
+    release.abort();
     if (!closed) await engine.close();
   }
 });
@@ -913,4 +925,61 @@ test("wasm: close() is idempotent and never double-frees the WASM handle (#447 r
   );
   // A later, sequential close() awaits the same memoized (successful) run — also a no-op.
   await engine.close();
+});
+// Regression (PR #447 review, wasm-engine.ts:535): the `#closeRun` memo must survive a rejection that
+// happens *after* `#engine.free()`. `#doClose()` frees the handle and THEN calls `#throwInflightError()`,
+// which throws when a tracked handler captured a late completion error (the scenario above). If close()
+// cleared the memo on that post-free rejection, a second close() would re-enter `#doClose()` and
+// `free()` the already-freed handle a second time — the "null pointer passed to rust" double-free the
+// idempotence was meant to prevent. A second close() must instead await the SAME memoized (rejected)
+// run and surface the same error, never re-free.
+test("wasm: close() stays memoized after free() so a post-free failure never double-frees (#447 review)", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  const macrotask = () => new Promise<void>((r) => realSetTimeout(r, 0));
+  let releaseGate = () => {};
+  const gate = new Promise<void>((r) => {
+    releaseGate = r;
+  });
+  await engine.registerWorker("late", async () => {
+    await gate;
+    throw {
+      [Symbol.toPrimitive]() {
+        throw new Error("late-completion-boom");
+      },
+    };
+  });
+  await engine.deployResources([
+    {
+      name: "late.bpmn",
+      content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="late" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f" sourceRef="s" targetRef="t"/>
+    <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="late"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
+  </process>
+</definitions>`,
+      contentType: "application/bpmn+xml",
+    },
+  ]);
+
+  await engine.createInstance({ processDefinitionId: "late" });
+  releaseGate();
+  await macrotask();
+  await macrotask();
+
+  // First close() frees the engine, then surfaces the late in-flight failure (rejects *after* free()).
+  await assert.rejects(engine.close(), /late-completion-boom/, "first close() surfaces the late failure");
+  // Second close() must await the same memoized run and reject with the same error — NOT re-run
+  // `#doClose()` and re-`free()` the handle (which would reject with wbindgen's "null pointer passed to
+  // rust" double-free fault instead).
+  await assert.rejects(engine.close(), (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    assert.match(message, /late-completion-boom/, "second close() must surface the memoized error");
+    assert.doesNotMatch(message, /null pointer passed to rust/, "second close() must not double-free");
+    return true;
+  });
 });

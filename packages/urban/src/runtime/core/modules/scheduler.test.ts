@@ -109,8 +109,7 @@ test("schedulerClock.wait installs no abort listener when a signalled wait resol
   assert.deepEqual(cleared, [], "a synchronously-resolved wait must not install an abort listener");
 });
 // when the caller aborts with a bare value rather than an Error.
-test("schedulerClock.wait rejects with a generic teardown error when the abort reason is not an Error", async () => {
-  const controller = new AbortController();
+test("schedulerClock.wait rejects with a generic teardown error when the abort reason is not an Error", async () => {  const controller = new AbortController();
   const sched: SchedulerDeps = {
     now: () => 0,
     signal: controller.signal,
@@ -120,4 +119,29 @@ test("schedulerClock.wait rejects with a generic teardown error when the abort r
   const waiting = schedulerClock(sched).wait(1000);
   controller.abort("not-an-error");
   await assert.rejects(waiting, /scheduler shutting down/);
+});
+
+// Regression (PR #447 review, scheduler.ts:108): `setTimer` is an injectable seam that may abort the
+// shutdown `signal` SYNCHRONOUSLY while arming, WITHOUT firing its callback (a re-entrant scheduler).
+// An abort event is not replayed to a listener added after the fact, so a wait that merely installed
+// its listener would hang forever — never rejecting, never clearing the armed timer. `wait()` must
+// re-check `signal.aborted` after installing the listener and drive the abort path by hand.
+test("schedulerClock.wait rejects (and clears its timer) when setTimer aborts the signal synchronously", async () => {
+  const controller = new AbortController();
+  const cleared: unknown[] = [];
+  const sched: SchedulerDeps = {
+    now: () => 0,
+    signal: controller.signal,
+    setTimer: () => {
+      controller.abort(new Error("aborted during setTimer"));
+      return 99;
+    },
+    clearTimer: (h) => cleared.push(h),
+  };
+  await assert.rejects(
+    schedulerClock(sched).wait(1000),
+    /aborted during setTimer/,
+    "a synchronous mid-arm abort must reject the wait, not leave it hanging",
+  );
+  assert.deepEqual(cleared, [99], "the armed timer must be cleared when the synchronous abort is handled");
 });

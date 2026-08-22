@@ -105,6 +105,15 @@ export function schedulerClock(sched: SchedulerDeps): AppClock {
             reject(schedulerAbortError(signal));
           };
           signal.addEventListener("abort", onAbort, { once: true });
+          // Re-entrant seam: `setTimer` above is injectable and may abort `signal` *synchronously*
+          // without firing the timer callback (so `settled` is still false). An abort event is not
+          // replayed to a listener added after the fact, so the listener just registered would never
+          // run and the wait would hang until the runner timeout. Re-check and drive the abort path
+          // by hand — removing the (now-inert) listener first so it cannot also fire and double-reject.
+          if (signal.aborted && !settled) {
+            signal.removeEventListener("abort", onAbort);
+            onAbort();
+          }
         }
       }),
   };

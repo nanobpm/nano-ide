@@ -31,6 +31,8 @@ import type { EngineClient } from "../host.ts";
 import { html, json, type Route } from "../router.ts";
 import { cancelInstanceReconciling, type CancelInstanceResult } from "./cancel.ts";
 import { apiDocsPath } from "./api.ts";
+import { FORMJS_JS } from "./formjs.gen.ts";
+import { completeUserTaskResponse, resolveFormResponse } from "./forms.ts";
 import { quoteIdent } from "./gateway.ts";
 import { RENDERER_JS } from "./runtime.gen.ts";
 
@@ -545,6 +547,28 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
     },
   });
 
+  // ── GET /app/actions/form  &  POST /app/actions/complete (ADR 0026, #457) ───
+  // Engine-declared forms in a `dataGrid` detail drawer. A grid whose `detail`
+  // opts into `engineForm` resolves the selected row's `form_key` here and
+  // completes the row's user task here — the SAME two seams the `taskInbox`
+  // surface uses, reused (not forked) via `forms.ts` so the resolution gate and
+  // the completion contract can't drift between the two surfaces. This closes the
+  // form-duplication drift class: the grid renders the authoritative deployed
+  // `.form` rather than a hand-authored page-local `detail.form` copy.
+  routes.push({
+    method: "GET",
+    path: "/app/actions/form",
+    source: "surface:pages",
+    handler: (req) =>
+      resolveFormResponse(engine, req.query.get("formKey") ?? undefined, req.query.get("formId") ?? undefined),
+  });
+  routes.push({
+    method: "POST",
+    path: "/app/actions/complete",
+    source: "surface:pages",
+    handler: async (req) => completeUserTaskResponse(engine, await req.text()),
+  });
+
   // ── nested (multi-appView) sidecars (#442) ──────────────────────────────
   // An app with more than one `appView` cannot share the four FLAT sidecar names above:
   // each view ships its own SUBDIR sidecar — e.g. `pages/cockpit.page.json` →
@@ -668,6 +692,7 @@ function rendererShell(homePage: string, apiDocsPath?: string): string {
 </head>
 <body>${apiDocsBadge}
   <main id="page" data-home="${escapeAttr(homePage)}"><p class="pc-empty">Loading…</p></main>
+  <script>${FORMJS_JS}</script>
   <script type="module" src=".${RUNTIME_JS_PATH}"></script>
 </body>
 </html>`;
@@ -736,6 +761,19 @@ body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64r
 .pc-field-check input { width:auto; padding:0; accent-color:var(--nano-accent); cursor:pointer; }
 .pc-btn { padding:.5rem .9rem; border:0; border-radius:.4rem; background:var(--nano-accent); color:var(--nano-on-accent); font:inherit; cursor:pointer; }
 .pc-btn:disabled { opacity:.5; cursor:default; }
+/* The shared engine-form renderer (NanoFormJs, ADR 0026/#457) styled to match the
+   page runtime's native detail controls. njf-* are its stable class names; both
+   this surface and the taskInbox page style the same renderer output. */
+.njf-form { display:flex; flex-direction:column; gap:.4rem; margin-top:.5rem; }
+.njf-heading { font-size:1rem; margin:0 0 .25rem; }
+.njf-text { color:var(--nano-text-muted); margin:.25rem 0; }
+.njf-field { display:flex; flex-direction:column; gap:.25rem; }
+.njf-field label { font-size:.8rem; color:var(--nano-text-muted); }
+.njf-field input:not([type=checkbox]):not([type=radio]), .njf-field textarea, .njf-field select { padding:.5rem .6rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); max-width:24rem; }
+.njf-actions { display:flex; gap:.5rem; margin-top:.4rem; }
+.njf-actions button { padding:.5rem .9rem; border:0; border-radius:.4rem; background:var(--nano-accent); color:var(--nano-on-accent); font:inherit; cursor:pointer; }
+.njf-msg { font-size:.85rem; margin-top:.35rem; }
+.njf-msg.err { color:var(--nano-danger); }
 .pc-msg { font-size:.85rem; margin-top:.5rem; min-height:1.2em; }
 .pc-msg.err { color:var(--nano-danger); }
 .pc-msg.ok { color:var(--nano-ok); }

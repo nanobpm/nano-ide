@@ -8,8 +8,9 @@
 // Surfaces contribute routes to the shared server.
 
 import type { AppApi, RuntimeContext } from "../context.ts";
-import { presentFormIdentifier } from "../host.ts";
-import { html, json, noContent, normalizeRoutePath, type Route } from "../router.ts";
+import { html, json, normalizeRoutePath, type Route } from "../router.ts";
+import { FORMJS_JS } from "./formjs.gen.ts";
+import { completeUserTaskResponse, resolveFormResponse } from "./forms.ts";
 import { mountActions } from "./actions.ts";
 import { mountAgent } from "./agent.ts";
 import { mountApi } from "./api.ts";
@@ -42,13 +43,15 @@ function inboxPage(): string {
 ul{list-style:none;padding:0}li{margin:.4rem 0;display:flex;align-items:center;gap:.5rem}
 code{background:#f4f4f4;padding:.1rem .3rem;border-radius:3px}
 button{font:inherit;padding:.2rem .6rem;cursor:pointer}
-form label{display:block;margin:.6rem 0 .2rem;font-weight:600}
-form .field input,form .field textarea,form .field select{font:inherit;padding:.3rem;width:100%;box-sizing:border-box;max-width:24rem}
-form .field input[type=checkbox],form .field input[type=radio]{width:auto}
+.njf-field label{display:block;margin:.6rem 0 .2rem;font-weight:600}
+.njf-field input,.njf-field textarea,.njf-field select{font:inherit;padding:.3rem;width:100%;box-sizing:border-box;max-width:24rem}
+.njf-field input[type=checkbox],.njf-field input[type=radio]{width:auto}
+.njf-actions{margin-top:.6rem}
 #form{margin-top:1.5rem;border-top:1px solid #ddd;padding-top:1rem}
 .muted{color:#666}</style>
 <h1>Task inbox</h1><ul id="tasks"><li>loading…</li></ul>
 <div id="form"></div>
+<script>${FORMJS_JS}</script>
 <script>
 const BASE=location.pathname.replace(/[/]+$/,'');
 const tasksEl=document.getElementById('tasks');
@@ -83,7 +86,14 @@ function openForm(t){
   api('/api/form?'+q).then(f=>{
     formEl.replaceChildren();
     if(!f||!f.schema){renderNoForm(t);return;}
-    renderForm(t,f.schema);
+    // Reuse the ONE shared form-js renderer (NanoFormJs) — no fork with the pages surface.
+    formEl.appendChild(NanoFormJs.renderForm(f.schema,{
+      heading:'Task '+(t.elementId||t.userTaskKey),
+      submitLabel:'Submit',
+      cancelLabel:'Cancel',
+      onSubmit:(variables)=>complete(t.userTaskKey,variables),
+      onCancel:loadTasks,
+    }));
   }).catch(err=>{formEl.replaceChildren(el('p',{class:'muted'},'Failed to load form: '+err.message));});
 }
 
@@ -93,93 +103,6 @@ function renderNoForm(t){
   bar.appendChild(btn('Complete',()=>complete(t.userTaskKey,{})));
   bar.appendChild(btn('Cancel',loadTasks));
   formEl.appendChild(bar);
-}
-
-function renderForm(t,schema){
-  const form=document.createElement('form');
-  form.appendChild(el('h2',{},'Task '+(t.elementId||t.userTaskKey)));
-  const components=Array.isArray(schema.components)?schema.components:[];
-  const inputs=[];
-  for(const c of components){
-    const built=buildField(c);
-    if(!built)continue;
-    form.appendChild(built.field);
-    if(built.read)inputs.push(built.read);
-  }
-  const submit=btn('Submit',null);submit.type='submit';
-  const bar=el('div',{});bar.appendChild(submit);bar.appendChild(btn('Cancel',loadTasks));
-  form.appendChild(bar);
-  form.addEventListener('submit',e=>{
-    e.preventDefault();
-    // Null-prototype: field keys come from the engine-supplied form schema. A component
-    // keyed '__proto__'/'constructor' must land as a plain own property (and round-trip
-    // through JSON), never mutate a prototype — no prototype pollution in the page runtime.
-    const variables=Object.create(null);
-    for(const read of inputs){const kv=read();if(kv)variables[kv.key]=kv.value;}
-    submit.disabled=true;
-    complete(t.userTaskKey,variables).catch(()=>{submit.disabled=false;});
-  });
-  formEl.appendChild(form);
-}
-
-function buildField(c){
-  const type=c&&c.type;
-  // Static (keyless) components: show text as a paragraph, ignore layout-only ones.
-  if(type==='text'){return {field:el('p',{class:'muted'},typeof c.text==='string'?c.text:'')};}
-  const key=c&&c.key;
-  if(!key)return null;
-  const wrap=el('div',{class:'field'});
-  const label=typeof c.label==='string'&&c.label?c.label:key;
-  if(type==='checkbox'){
-    const input=document.createElement('input');input.type='checkbox';
-    const lab=el('label',{});lab.appendChild(input);lab.appendChild(document.createTextNode(' '+label));
-    wrap.appendChild(lab);
-    return {field:wrap,read:()=>({key,value:input.checked})};
-  }
-  const labelEl=el('label',{},label);
-  wrap.appendChild(labelEl);
-  let input;
-  if(type==='textarea'){input=document.createElement('textarea');}
-  else if(type==='select'){
-    input=document.createElement('select');
-    input.appendChild(el('option',{value:''},'—'));
-    for(const o of (Array.isArray(c.values)?c.values:[])){
-      input.appendChild(el('option',{value:String(o.value)},String(o.label!=null?o.label:o.value)));
-    }
-  }
-  else if(type==='radio'){
-    const name='r'+Math.random().toString(36).slice(2);
-    const group=el('div',{});
-    for(const o of (Array.isArray(c.values)?c.values:[])){
-      const rlab=el('label',{});
-      const r=document.createElement('input');r.type='radio';r.name=name;r.value=String(o.value);
-      rlab.appendChild(r);rlab.appendChild(document.createTextNode(' '+String(o.label!=null?o.label:o.value)));
-      group.appendChild(rlab);
-    }
-    wrap.appendChild(group);
-    return {field:wrap,read:()=>{const sel=group.querySelector('input:checked');return sel?{key,value:sel.value}:null;}};
-  }
-  else{
-    input=document.createElement('input');
-    input.type=(type==='number')?'number':(type==='datetime'?'datetime-local':'text');
-  }
-  // Associate the label with the input (for/id) so screen readers announce it on focus.
-  const fieldId='f'+Math.random().toString(36).slice(2);
-  input.id=fieldId;labelEl.setAttribute('for',fieldId);
-  wrap.appendChild(input);
-  const isNumber=type==='number';
-  return {field:wrap,read:()=>{
-    const raw=input.value;
-    if(raw===''||raw==null)return null;
-    if(isNumber){
-      const n=Number(raw);
-      // A non-numeric value in a number field is only reachable via tampering (the browser
-      // blanks invalid type=number input). Treat it as absent rather than silently submitting
-      // NaN, which JSON.stringify serializes as null — quietly changing the submitted value.
-      return Number.isFinite(n)?{key,value:n}:null;
-    }
-    return {key,value:raw};
-  }};
 }
 
 function complete(userTaskKey,variables){
@@ -236,39 +159,14 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       method: "GET",
       path: `${base}/api/form`,
       source: "surface:taskInbox",
-      handler: async (req) => {
-        const formKey = req.query.get("formKey") ?? undefined;
-        const formId = req.query.get("formId") ?? undefined;
-        // Reject only when *neither* identifier is present. Presence follows getForm's
-        // canonical rule (`presentFormIdentifier`: empty/whitespace = absent) so a
-        // whitespace-only `?formKey=   ` request 400s here instead of slipping past a raw
-        // truthiness check and returning a spurious 204. The raw values are still passed
-        // through unchanged — resolving a blank key to its `formId` fallback is getForm's
-        // single responsibility.
-        if (!presentFormIdentifier(formKey) && !presentFormIdentifier(formId))
-          return json({ error: "formKey or formId required" }, 400);
-        const form = await app.engine.getForm({ formKey, formId });
-        // A task whose form can't be resolved returns 204: the client renders the
-        // no-form fallback rather than erroring.
-        if (!form) return noContent();
-        return json(form);
-      },
+      handler: async (req) =>
+        resolveFormResponse(app.engine, req.query.get("formKey") ?? undefined, req.query.get("formId") ?? undefined),
     });
     routes.push({
       method: "POST",
       path: `${base}/api/complete`,
       source: "surface:taskInbox",
-      handler: async (req) => {
-        let body: { userTaskKey?: string; variables?: Record<string, unknown> };
-        try {
-          body = JSON.parse((await req.text()) || "{}");
-        } catch {
-          return json({ error: "invalid JSON body" }, 400);
-        }
-        if (!body.userTaskKey) return json({ error: "userTaskKey required" }, 400);
-        await app.engine.completeUserTask(body.userTaskKey, body.variables);
-        return json({ ok: true });
-      },
+      handler: async (req) => completeUserTaskResponse(app.engine, await req.text()),
     });
   }
 

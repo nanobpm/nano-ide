@@ -278,7 +278,17 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
   const baseAlias = options.baseAlias ?? DEFAULT_BASE_ALIAS;
   const resolveTable = options.resolveProjectionTable ?? ((n: string) => projectionRegistry.sqlTableFor(n));
 
-  const walk = (node: Expr, projTable: string | undefined): string => {
+  // Reserved alias for the EXISTS projection relation, derived so it can never equal `baseAlias`: a
+  // projection whose physical table name happens to match the base alias would otherwise shadow the
+  // outer base row inside the sub-select, silently breaking `col(...)` correlation. Depth-indexed so
+  // nested EXISTS predicates each bind `pcol(...)` to their own projection, not the innermost one.
+  const projAliasAt = (depth: number): string => {
+    let alias = `__urban_proj_${depth}`;
+    while (alias === baseAlias) alias = `_${alias}`;
+    return alias;
+  };
+
+  const walk = (node: Expr, projTable: string | undefined, existsDepth: number): string => {
     switch (node.kind) {
       case "lit":
         return sqlLiteral(node.value);
@@ -292,36 +302,38 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
       case "compare":
         // SQLite comparisons against NULL yield NULL, but the TS backend (compareValues) collapses any
         // nullish operand to `false`/0. COALESCE the SQL result to 0 so both backends agree on NULL inputs.
-        return `COALESCE((${walk(node.left, projTable)} ${SQL_COMPARE[node.op]} ${walk(node.right, projTable)}), 0)`;
+        return `COALESCE((${walk(node.left, projTable, existsDepth)} ${SQL_COMPARE[node.op]} ${walk(node.right, projTable, existsDepth)}), 0)`;
       case "and":
         // `NULL AND 0`/`NULL OR 0` can yield NULL in SQLite, but the TS backend coerces each clause through
         // `truthy(...)` (NULL → false), so COALESCE the boolean expression to 0 to keep the 0/1 domain aligned.
         return node.clauses.length
-          ? `COALESCE((${node.clauses.map((c) => walk(c, projTable)).join(" AND ")}), 0)`
+          ? `COALESCE((${node.clauses.map((c) => walk(c, projTable, existsDepth)).join(" AND ")}), 0)`
           : "1";
       case "or":
         return node.clauses.length
-          ? `COALESCE((${node.clauses.map((c) => walk(c, projTable)).join(" OR ")}), 0)`
+          ? `COALESCE((${node.clauses.map((c) => walk(c, projTable, existsDepth)).join(" OR ")}), 0)`
           : "0";
       case "not":
         // `NOT NULL` is NULL in SQLite, while the TS backend returns `!truthy(NULL)` → true. Compile as
         // `NOT COALESCE(x, 0)` so `not(NULL)` is 1 in both backends under the shared "NULL → false" rule.
-        return `(NOT COALESCE(${walk(node.expr, projTable)}, 0))`;
+        return `(NOT COALESCE(${walk(node.expr, projTable, existsDepth)}, 0))`;
       case "case": {
         const whens = node.whens
-          .map((w) => `WHEN ${walk(w.when, projTable)} THEN ${walk(w.then, projTable)}`)
+          .map((w) => `WHEN ${walk(w.when, projTable, existsDepth)} THEN ${walk(w.then, projTable, existsDepth)}`)
           .join(" ");
-        return `CASE ${whens} ELSE ${walk(node.else, projTable)} END`;
+        return `CASE ${whens} ELSE ${walk(node.else, projTable, existsDepth)} END`;
       }
       case "exists": {
         const table = assertSqlIdentifier("projection table", resolveTable(node.projection));
-        // The correlated sub-select's predicate sees the projection row (via pcol) and the outer
-        // base row (via col) — the closed AST keeps the correlation explicit and injection-free.
-        return `EXISTS (SELECT 1 FROM ${quoteIdent(table)} WHERE ${walk(node.where, table)})`;
+        // Alias the projection relation to a reserved name distinct from `baseAlias` so `col(...)` in the
+        // predicate always correlates to the OUTER base row (via `pcol` binds to this alias). The closed
+        // AST keeps the correlation explicit and injection-free.
+        const projAlias = projAliasAt(existsDepth);
+        return `EXISTS (SELECT 1 FROM ${quoteIdent(table)} AS ${quoteIdent(projAlias)} WHERE ${walk(node.where, projAlias, existsDepth + 1)})`;
       }
     }
   };
-  return walk(expr, undefined);
+  return walk(expr, undefined, 0);
 }
 
 // ─────────────────────────────────────────── TS backend ──────────────────────────────────────────
@@ -717,6 +729,13 @@ export interface ParityOptions {
   readonly columns?: string[];
   /** A failure sink; defaults to throwing an `Error`. */
   readonly onMismatch?: (message: string) => never;
+  /**
+   * The SAME SQL compile options used to provision the runtime VIEW (e.g. a custom
+   * `resolveProjectionTable` or `baseAlias`). Threaded through so the guard builds fixtures and
+   * materialises the VIEW against the same physical projection tables the runtime uses — otherwise a
+   * caller with a custom resolver would test a different VIEW than production and get false mismatches.
+   */
+  readonly sql?: SqlCompileOptions;
 }
 
 function defaultOnMismatch(message: string): never {
@@ -750,6 +769,9 @@ export function assertReadModelParity(
 ): void {
   const onMismatch = options.onMismatch ?? defaultOnMismatch;
   const columns = options.columns ?? Object.keys(model.decl.derive);
+  // Resolve projection NAMES to physical tables with the SAME resolver (and identifier validation) the
+  // SQL compiler uses, so the guard's fixtures line up with the VIEW it materialises below.
+  const resolveTable = options.sql?.resolveProjectionTable ?? ((n: string) => projectionRegistry.sqlTableFor(n));
 
   // Validate the requested columns up front so an unknown name yields an actionable error rather than
   // a downstream `undefined` blowing up inside `collectColumns`/`fnFor`.
@@ -791,7 +813,7 @@ export function assertReadModelParity(
   const projectionTables = new Map<string, string>();
   const tableOwner = new Map<string, string>();
   for (const name of model.projectionNames) {
-    const table = projectionRegistry.sqlTableFor(name);
+    const table = assertSqlIdentifier("projection table", resolveTable(name));
     // Two distinct projection names resolving to ONE physical table is a mapping bug: the guard would
     // otherwise `CREATE TABLE` (and later drop/insert) that table twice and fail for a non-parity
     // reason. Reject it up front with an actionable error instead (mirrors the column check above).
@@ -813,7 +835,7 @@ export function assertReadModelParity(
 
   createFixture(baseTable, baseCols);
   for (const [name, table] of projectionTables) createFixture(table, projCols.get(name) ?? new Set());
-  db.exec(model.viewDdl());
+  db.exec(model.viewDdl(options.sql));
 
   const insertRow = (table: string, row: Record<string, unknown>): void => {
     const keys = Object.keys(row);

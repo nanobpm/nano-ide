@@ -172,7 +172,7 @@ test("(iii) the parity guard FAILS when a deliberately-mutated AST makes the bac
 test("compileToSqlSelect emits a closed, injection-free SQL expression for CASE + EXISTS", () => {
   const sql = taskReadModel.sqlSelectFor("display_status");
   assert.match(sql, /^CASE WHEN/);
-  assert.match(sql, /EXISTS \(SELECT 1 FROM "urban_open_user_tasks" WHERE/);
+  assert.match(sql, /EXISTS \(SELECT 1 FROM "urban_open_user_tasks" AS "__urban_proj_0" WHERE/);
   assert.match(sql, /"base"\."state" = 'done'/);
 });
 
@@ -224,9 +224,88 @@ test("EXISTS references a projection by name; the projection registry resolves t
   const sql = compileToSqlSelect(exists("urban_instance_state", eq(pcol("k"), col("k"))), {
     resolveProjectionTable: (n) => reg.sqlTableFor(n),
   });
-  assert.match(sql, /FROM "_urban_instance_state" WHERE/);
+  assert.match(sql, /FROM "_urban_instance_state" AS "__urban_proj_0" WHERE/);
   // An unregistered name falls back to itself, so a read model compiles before its sidecar lands.
   assert.equal(reg.sqlTableFor("not_yet_landed"), "not_yet_landed");
+});
+
+test("EXISTS aliases the projection relation distinctly from the base alias so col(...) correlates to the OUTER base row", () => {
+  // A projection whose PHYSICAL table equals the base alias must not shadow the outer base row inside
+  // the sub-select: the projection relation gets a reserved alias, pcol binds to it, and col still binds
+  // to the outer base alias — otherwise `col(...)` would silently bind to the inner projection row.
+  const sql = compileToSqlSelect(exists("p", eq(pcol("k"), col("k"))), {
+    baseAlias: "base",
+    resolveProjectionTable: () => "base", // physical projection table collides with the base alias
+  });
+  assert.match(sql, /FROM "base" AS "__urban_proj_0" WHERE COALESCE\(\("__urban_proj_0"\."k" = "base"\."k"\), 0\)/);
+
+  // If the base alias IS the reserved alias itself, the projection alias is prefixed further so the two
+  // stay distinct — the derivation is collision-free for any base alias.
+  const collide = compileToSqlSelect(exists("p", eq(pcol("k"), col("k"))), {
+    baseAlias: "__urban_proj_0",
+    resolveProjectionTable: () => "__urban_proj_0",
+  });
+  assert.match(collide, /FROM "__urban_proj_0" AS "___urban_proj_0" WHERE COALESCE\(\("___urban_proj_0"\."k" = "__urban_proj_0"\."k"\), 0\)/);
+});
+
+test("nested EXISTS bind each pcol(...) to its own projection via depth-indexed aliases", () => {
+  const sql = compileToSqlSelect(
+    exists("outer", and(eq(pcol("ok"), col("bk")), exists("inner", eq(pcol("ik"), col("bk"))))),
+  );
+  // The outer projection is __urban_proj_0, the nested one __urban_proj_1 — so the inner pcol cannot
+  // shadow the outer projection's row.
+  assert.match(sql, /FROM "outer" AS "__urban_proj_0" WHERE/);
+  assert.match(sql, /FROM "inner" AS "__urban_proj_1" WHERE COALESCE\(\("__urban_proj_1"\."ik" = "base"\."bk"\), 0\)/);
+  assert.match(sql, /"__urban_proj_0"\."ok" = "base"\."bk"/);
+});
+
+test("the parity guard threads custom SQL options (resolver + VIEW) and keeps EXISTS correlation when the projection table equals the base alias", async () => {
+  // End-to-end: the guard must (a) resolve the projection NAME through options.sql.resolveProjectionTable,
+  // (b) materialise the VIEW with those same options, and (c) alias the EXISTS relation so a projection
+  // physically named like the base alias still correlates — all three together keep the backends in parity.
+  const model = defineReadModel({
+    name: "collide_alias_read_model",
+    baseTable: "rows",
+    derive: {
+      has_match: caseWhen([when(exists("p", eq(pcol("bk"), col("bk"))), lit(1))], lit(0)),
+    },
+  });
+  const sql = { resolveProjectionTable: (n: string) => (n === "p" ? "base" : n) };
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(
+        model,
+        db,
+        [
+          { baseRow: { bk: "x" }, projections: { p: [{ bk: "x" }] } },
+          { baseRow: { bk: "y" }, projections: { p: [{ bk: "x" }] } },
+        ],
+        { sql },
+      ),
+    );
+  });
+});
+
+test("the parity guard resolves projection tables through options.sql and validates them like the SQL compiler", async () => {
+  // The guard must consult options.sql.resolveProjectionTable and apply the SAME identifier validation the
+  // SQL compiler uses — so a resolver returning an invalid table name is rejected up front, not silently
+  // ignored (which would build fixtures against a different physical table than the runtime VIEW).
+  const model = defineReadModel({
+    name: "bad_resolver_read_model",
+    baseTable: "rows",
+    derive: {
+      has_match: caseWhen([when(exists("p", eq(pcol("k"), col("k"))), lit(1))], lit(0)),
+    },
+  });
+  await withDb((db) => {
+    assert.throws(
+      () =>
+        assertReadModelParity(model, db, [{ baseRow: { k: "x" }, projections: { p: [{ k: "x" }] } }], {
+          sql: { resolveProjectionTable: () => "bad table" },
+        }),
+      /invalid projection table "bad table"/,
+    );
+  });
 });
 
 test("the process-wide projectionRegistry is idempotent and rejects a conflicting redefinition", () => {

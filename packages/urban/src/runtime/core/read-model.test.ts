@@ -249,6 +249,21 @@ test("eq/neq compare bigint INTEGERs numerically so the TS backend cannot drift 
   assert.equal(off({ k: 2n }), true);
 });
 
+test("eq/neq/gt compare 64-bit bigint keys EXACTLY so distinct keys past 2^53 don't collapse", () => {
+  // Number(9007199254740993n) === Number(9007199254740992n) → both round to 9007199254740992, so
+  // truncating a 64-bit key through Number() would make two DISTINCT keys compare equal and drift from
+  // the SQL VIEW. The TS backend must compare the bigints exactly.
+  const big = 9007199254740993n; // 2^53 + 1 — NOT representable as a JS number
+  const twoP53 = 9007199254740992n; // 2^53 — Number() maps `big` onto this
+  const same = compileToFn(eq(col("a"), col("b")));
+  assert.equal(same({ a: big, b: big }), true, "a 64-bit key equals itself exactly");
+  assert.equal(same({ a: big, b: twoP53 }), false, "keys differing only past 2^53 must NOT be equal");
+  const different = compileToFn(neq(col("a"), col("b")));
+  assert.equal(different({ a: big, b: twoP53 }), true, "distinct 64-bit keys are unequal");
+  const greater = compileToFn(gt(col("a"), col("b")));
+  assert.equal(greater({ a: big, b: twoP53 }), true, "2^53+1 > 2^53 holds without truncation");
+});
+
 test("CASE-WHEN coerces string conditions numerically like SQLite ('0'/'abc' false, '2abc' true)", async () => {
   // SQLite evaluates a string in a boolean context by its leading numeric prefix, so a non-boolean
   // column flowing into a CASE condition must coerce identically in TS or the two backends diverge.
@@ -309,6 +324,33 @@ test("the parity guard rejects an unknown column with an actionable error", asyn
           { columns: ["not_a_column"] },
         ),
       /no derived column "not_a_column"/,
+    );
+  });
+});
+
+test("the parity guard rejects two projections mapped to one physical table with an actionable error", async () => {
+  // A mapping bug: two DSL projection names resolving to ONE physical table would make the guard
+  // CREATE (then drop/insert) that table twice and fail for a non-parity reason. It must reject up
+  // front with an actionable error (idempotent registrations, so safe to re-run).
+  projectionRegistry.register({ name: "dup_proj_a", sqlTable: "dup_shared_table" });
+  projectionRegistry.register({ name: "dup_proj_b", sqlTable: "dup_shared_table" });
+  const model = defineReadModel({
+    name: "dup_table_read_model",
+    baseTable: "dup_rows",
+    derive: {
+      label: caseWhen(
+        [
+          when(exists("dup_proj_a", eq(pcol("k"), col("k"))), lit("a")),
+          when(exists("dup_proj_b", eq(pcol("k"), col("k"))), lit("b")),
+        ],
+        lit("none"),
+      ),
+    },
+  });
+  await withDb((db) => {
+    assert.throws(
+      () => assertReadModelParity(model, db, [{ baseRow: { k: "x" } }]),
+      /maps projections "dup_proj_a" and "dup_proj_b" to the same physical table "dup_shared_table"/,
     );
   });
 });

@@ -324,36 +324,74 @@ function compareValues(op: CompareOp, left: unknown, right: unknown): boolean {
   // any NULL/undefined operand makes eq/lt/… false and neq false too (SQL `x <> NULL` is also NULL).
   const nullish = left === null || left === undefined || right === null || right === undefined;
   if (nullish) return false;
+  // Compare through the SAME scalar normalisation as ordering so the TS backend matches SQLite:
+  // booleans compile to 1/0 in SQL (see sqlLiteral), so `eq(col("x"), lit(true))` must be true when
+  // `x` is 1 (strict `===` would make `1 === true` false and drift); and 64-bit INTEGER keys arriving
+  // as `bigint` compare EXACTLY (never truncated through `Number()` — see compareOrderable).
+  const cmp = compareOrderable(orderable(left), orderable(right));
   switch (op) {
-    // Equality runs through the SAME scalar coercion as ordering so the TS backend matches SQLite:
-    // booleans compile to 1/0 in SQL (see sqlLiteral), so `eq(col("x"), lit(true))` must be true when
-    // `x` is 1. Strict `===` would make `1 === true` false and silently drift from the SQL VIEW.
     case "eq":
-      return orderable(left) === orderable(right);
+      return cmp === 0;
     case "neq":
-      return orderable(left) !== orderable(right);
+      // A NaN (incomparable, e.g. a number against a non-numeric string) is "not equal" → true.
+      return cmp !== 0;
     case "lt":
-      return orderable(left) < orderable(right);
+      return cmp < 0;
     case "lte":
-      return orderable(left) <= orderable(right);
+      return cmp <= 0;
     case "gt":
-      return orderable(left) > orderable(right);
+      return cmp > 0;
     case "gte":
-      return orderable(left) >= orderable(right);
+      return cmp >= 0;
   }
 }
 
-/** Narrow a scalar to an orderable primitive for `<`/`<=`/`>`/`>=`, matching SQLite affinity: numbers
- *  compare numerically, booleans as 0/1, `bigint` INTEGERs numerically (so `1n` and `1` don't drift),
- *  everything else as its string form. Avoids unsafe casts. */
-function orderable(value: unknown): number | string {
+/** Normalise a scalar to an orderable primitive for comparison, matching SQLite affinity: numbers
+ *  compare numerically, booleans as 0/1, `bigint` INTEGERs are kept EXACT (so 64-bit keys past 2^53
+ *  don't collapse together), everything else as its string form. Avoids unsafe casts. */
+function orderable(value: unknown): number | bigint | string {
   if (typeof value === "number") return value;
-  // SQLite INTEGERs can reach the TS backend as `bigint` (e.g. a 64-bit key in a base row); compare
-  // them numerically so `eq(col("k"), lit(1))` matches the SQL VIEW instead of stringifying to "1".
-  if (typeof value === "bigint") return Number(value);
+  // SQLite INTEGERs can reach the TS backend as `bigint` (e.g. a 64-bit key in a base row). Keep the
+  // exact `bigint` — truncating via `Number()` would collapse two distinct keys beyond Number.MAX_-
+  // SAFE_INTEGER to one value and silently drift from the SQL VIEW (compareOrderable compares exactly).
+  if (typeof value === "bigint") return value;
   if (typeof value === "string") return value;
   if (typeof value === "boolean") return value ? 1 : 0;
   return String(value);
+}
+
+/** Three-way compare two {@link orderable} scalars the way SQLite's WHERE/ORDER BY would, WITHOUT
+ *  truncating 64-bit `bigint` keys through `Number()`. Returns a negative/zero/positive number, or
+ *  `NaN` when the operands are incomparable (e.g. a number against a non-numeric string) — callers
+ *  treat that as "not equal, not ordered", mirroring SQLite's numeric-vs-text affinity split. */
+function compareOrderable(left: number | bigint | string, right: number | bigint | string): number {
+  // A `bigint` in play and NEITHER operand a string → stay in the integer domain and compare exactly,
+  // so keys past Number.MAX_SAFE_INTEGER don't round together. (A string operand falls through to the
+  // coercing path below, preserving the pre-existing number-vs-text behaviour.)
+  const bigintDomain =
+    (typeof left === "bigint" || typeof right === "bigint") &&
+    typeof left !== "string" &&
+    typeof right !== "string";
+  if (bigintDomain) {
+    const lb = asExactBigInt(left);
+    const rb = asExactBigInt(right);
+    if (lb !== undefined && rb !== undefined) return lb < rb ? -1 : lb > rb ? 1 : 0;
+  }
+  // Fall back to JS's native comparison. Any `bigint` reaching here pairs with a non-integer number or
+  // a string, where exact integer comparison is moot; coerce it to a number so the operands share a type.
+  const l = typeof left === "bigint" ? Number(left) : left;
+  const r = typeof right === "bigint" ? Number(right) : right;
+  if (l < r) return -1;
+  if (l > r) return 1;
+  return l === r ? 0 : Number.NaN;
+}
+
+/** The exact `bigint` for an integer-valued numeric scalar, or `undefined` when it isn't an integer
+ *  (a real/`NaN` number, or a string) — the caller then compares via `Number` instead. */
+function asExactBigInt(value: number | bigint | string): bigint | undefined {
+  if (typeof value === "bigint") return value;
+  if (typeof value === "number" && Number.isInteger(value)) return BigInt(value);
+  return undefined;
 }
 
 /** True in SQL's CASE-WHEN / boolean sense, mirroring SQLite's numeric coercion: non-null, non-zero. */
@@ -740,7 +778,23 @@ export function assertReadModelParity(
 
   // Fresh fixtures. Drop first so the guard can be called repeatedly on one DB.
   const projectionTables = new Map<string, string>();
-  for (const name of model.projectionNames) projectionTables.set(name, projectionRegistry.sqlTableFor(name));
+  const tableOwner = new Map<string, string>();
+  for (const name of model.projectionNames) {
+    const table = projectionRegistry.sqlTableFor(name);
+    // Two distinct projection names resolving to ONE physical table is a mapping bug: the guard would
+    // otherwise `CREATE TABLE` (and later drop/insert) that table twice and fail for a non-parity
+    // reason. Reject it up front with an actionable error instead (mirrors the column check above).
+    const owner = tableOwner.get(table);
+    if (owner !== undefined && owner !== name) {
+      throw new Error(
+        `read model "${model.decl.name}" maps projections "${owner}" and "${name}" to the same ` +
+          `physical table "${table}"; each projection needs a distinct sqlTable so the parity guard ` +
+          `can build an isolated fixture for it`,
+      );
+    }
+    tableOwner.set(table, name);
+    projectionTables.set(name, table);
+  }
 
   db.exec(`DROP VIEW IF EXISTS ${quoteIdent(model.decl.name)};`);
   db.exec(`DROP TABLE IF EXISTS ${quoteIdent(baseTable)};`);

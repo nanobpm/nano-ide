@@ -10,6 +10,22 @@ export interface SchedulerDeps {
   clearTimer: (handle: unknown) => void;
   /** Current wall-clock time in ms since epoch. */
   now: () => number;
+  /** Optional shutdown signal. When it aborts, a pending {@link schedulerClock} `wait()` clears its
+   *  armed timer and rejects, so a handler parked on the (virtual) clock unwinds at teardown instead
+   *  of wedging whoever awaits it. Under the test kit this is the engine's shutdown signal: a worker
+   *  handler parked on `app.wait()` sits on a virtual timer that no `advanceTime` will fire during
+   *  `engine.close()`, so without this its promise never settles and `close()` hangs (the issue #446
+   *  follow-up — the virtual-timer sibling of the real-time use-after-free). Absent on the live
+   *  scheduler, where real timers always fire on wall-clock time, so `wait()` never rejects there. */
+  readonly signal?: AbortSignal;
+}
+
+/** The rejection surfaced to a `wait()` cancelled by a shutdown {@link SchedulerDeps.signal}: the
+ *  signal's `reason` when it is an {@link Error}, else a generic teardown error. Reusing the reason
+ *  keeps a caller's fail-loud message (e.g. "WasmEngineClient closing") intact. */
+function schedulerAbortError(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  return reason instanceof Error ? reason : new Error("app.wait aborted: scheduler shutting down");
 }
 
 /** Max delay a single `setTimeout` honours before its 32-bit signed overflow (~24.8 days). */
@@ -58,9 +74,30 @@ export function schedulerClock(sched: SchedulerDeps): AppClock {
   return {
     now: () => sched.now(),
     wait: (ms) =>
-      new Promise<void>((resolve) => {
+      new Promise<void>((resolve, reject) => {
+        const signal = sched.signal;
+        // Already shutting down: reject immediately rather than arm a timer that would outlive the
+        // teardown (and, under the virtual clock, never fire).
+        if (signal?.aborted) {
+          reject(schedulerAbortError(signal));
+          return;
+        }
         const delay = Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_TIMER_DELAY_MS) : 0;
-        sched.setTimer(() => resolve(), delay);
+        let onAbort: (() => void) | undefined;
+        const handle = sched.setTimer(() => {
+          if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, delay);
+        // When a shutdown signal is present, a mid-wait abort disarms the timer and rejects, so a
+        // handler parked here unwinds at teardown instead of wedging its awaiter. Inert (no listener,
+        // no behaviour change) on the live scheduler, which supplies no signal.
+        if (signal) {
+          onAbort = () => {
+            sched.clearTimer(handle);
+            reject(schedulerAbortError(signal));
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
       }),
   };
 }

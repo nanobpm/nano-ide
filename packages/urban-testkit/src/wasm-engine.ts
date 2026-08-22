@@ -248,6 +248,24 @@ export class WasmEngineClient implements EngineClient {
    *  and may have enqueued fresh engine work, so it loops for another activation pass instead of
    *  returning early on `!activatedAny` and leaving that work undrained until a later `settle`. */
   #completions = 0;
+  /** Shutdown lifecycle for {@link close}. `#closing` flips true the instant close() begins and
+   *  gates {@link drain} so a concurrently-suspended drain cannot activate jobs on an engine that is
+   *  being (or has been) freed. `#shutdown` is aborted at the same point and surfaced via
+   *  {@link shutdownSignal}: a handler parked on the app clock's `wait()` (see the testkit scheduler
+   *  wiring) sits on a virtual timer that no `advanceTime` fires during teardown, so aborting lets it
+   *  unwind — its throw maps to `failJob` on the still-live engine — and {@link #settleInflight}
+   *  actually settles instead of hanging. Real-time work is unaffected and still genuinely awaited
+   *  before `free()` (issue #446). */
+  #closing = false;
+  readonly #shutdown = new AbortController();
+
+  /** A shutdown {@link AbortSignal} that aborts when {@link close} begins. The test kit threads it
+   *  into the scheduler backing `app.wait()`, so a worker handler parked on the virtual clock is
+   *  cancelled at teardown rather than wedging `close()` on a timer that will never fire (the
+   *  virtual-timer sibling of the issue #446 real-time use-after-free). */
+  get shutdownSignal(): AbortSignal {
+    return this.#shutdown.signal;
+  }
 
   private constructor(engine: TestEngine) {
     this.#engine = engine;
@@ -500,6 +518,17 @@ export class WasmEngineClient implements EngineClient {
   }
 
   async close(): Promise<void> {
+    // Enter the shutdown state up front (idempotent). `#closing` gates a concurrently-suspended
+    // `drain()` from activating jobs on an engine that is about to be freed, and aborting `#shutdown`
+    // cancels handlers parked on the app clock's `wait()` — a virtual timer no `advanceTime` will
+    // fire during teardown. Aborting BEFORE `#settleInflight()` is what makes that settle finite: the
+    // parked handler's `app.wait()` rejects, the handler unwinds, and its throw is mapped to `failJob`
+    // on the still-live engine (this all runs before `free()`), so `#inflight` drains to empty. A
+    // handler parked on *real-time* async work ignores the signal and is still fully awaited (#446).
+    this.#closing = true;
+    if (!this.#shutdown.signal.aborted) {
+      this.#shutdown.abort(new Error("WasmEngineClient closing"));
+    }
     // Fire-and-forget dispatch (see #track/drain) means a drain can return with a handler still
     // in-flight. Await every in-flight handler to FULL settlement before `free()` — NOT just a
     // macrotask fixpoint. A handler parked on *real-time* async work (the reproduction was a
@@ -673,6 +702,13 @@ export class WasmEngineClient implements EngineClient {
    */
   async drain(): Promise<void> {
     for (let i = 0; i < MAX_DRAIN_ITERATIONS; i++) {
+      // Shutdown lifecycle guard: once close() has begun, a drain that starts — or a suspended drain
+      // that resumes at this loop top — must NOT run another activation pass. close() may have already
+      // freed (or be about to free) the engine once #settleInflight drains #inflight, so a post-close
+      // activateJobs would drive the freed handle (the #settleInflight-vs-drain race the #446 fix's
+      // reviewer flagged). Any handler THIS drain already dispatched is in #inflight and is still
+      // awaited by close()'s #settleInflight before free(), so bailing here strands nothing.
+      if (this.#closing) return;
       let activatedAny = false;
       for (const jobType of this.#dispatchableJobTypes()) {
         // A synthetic child-process job type has no registered worker and is resolved on its own

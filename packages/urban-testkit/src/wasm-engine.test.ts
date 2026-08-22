@@ -807,3 +807,83 @@ test("wasm: close() awaits a real-time in-flight handler to settlement before fr
     if (!closed) await engine.close();
   }
 });
+
+// Regression (issue #446 follow-up, wasm-engine.ts:785): the virtual-timer sibling of the real-time
+// use-after-free above. A handler parked on the testkit's VIRTUAL `app.wait()` clock sits on a timer
+// no `advanceTime` fires during teardown, so it holds `#inflight` steady exactly like the real-time
+// park — but unlike real-time work it will NEVER settle on its own. close()'s `#settleInflight()`
+// therefore awaited a promise that could not resolve and hung until the test-runner timeout. close()
+// now aborts `shutdownSignal` BEFORE settling, so a virtual-clock park is cancelled: its `app.wait()`
+// rejects, the handler unwinds (its throw maps to `failJob` on the still-live engine), `#inflight`
+// drains, and close() completes. Real-time work ignores the signal and is still awaited (test above).
+test("wasm: close() cancels a handler parked on a virtual-clock wait instead of hanging (#446 follow-up)", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  let handlerSettled = false;
+  // Stand in for a worker parked on `app.wait()`: a promise ONLY the shutdown abort can settle —
+  // never a macrotask, never real time. That is exactly how the testkit scheduler backs `app.wait()`
+  // (a virtual timer), so it reproduces the close() hang without booting a whole app. Without the
+  // shutdown abort this promise never settles and close() below would hang forever.
+  await engine.registerWorker("virtual-wait", async () => {
+    try {
+      await new Promise<void>((_resolve, reject) => {
+        const signal = engine.shutdownSignal;
+        if (signal.aborted) {
+          reject(new Error("shutdown"));
+          return;
+        }
+        signal.addEventListener("abort", () => reject(new Error("shutdown")), { once: true });
+      });
+    } finally {
+      handlerSettled = true;
+    }
+  });
+  await engine.deployResources([
+    {
+      name: "virtual-wait.bpmn",
+      content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="virtual-wait" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f" sourceRef="s" targetRef="t"/>
+    <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="virtual-wait"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
+  </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="virtual-wait">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="150" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="t_di" bpmnElement="t"><dc:Bounds x="240" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="400" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f_di" bpmnElement="f"><di:waypoint x="186" y="118"/><di:waypoint x="240" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="340" y="118"/><di:waypoint x="400" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>`,
+      contentType: "application/bpmn+xml",
+    },
+  ]);
+
+  // createInstance drains; the handler parks on the "virtual wait", so the drain returns with it
+  // in-flight (its completion has NOT run).
+  await engine.createInstance({ processDefinitionId: "virtual-wait" });
+  assert.equal(handlerSettled, false, "the handler must still be parked on its virtual wait here");
+
+  // close() must abort shutdownSignal, cancelling the park, so it completes deterministically within
+  // a few real macrotasks (abort → wait rejects → handler unwinds → failJob → #inflight empties → free).
+  // No wall-clock waiting: a hang would leave closeSettled false and fail fast (rather than deadlock).
+  const closing = engine.close();
+  let closeSettled = false;
+  void closing.then(() => {
+    closeSettled = true;
+  });
+  for (let i = 0; i < 5; i++) {
+    await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+  }
+  assert.ok(handlerSettled, "shutdown must cancel the virtual-clock park (not leave it hanging)");
+  assert.ok(closeSettled, "close() must complete once the virtual park is cancelled, not hang on it");
+  await closing;
+});

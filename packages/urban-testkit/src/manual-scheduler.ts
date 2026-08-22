@@ -40,8 +40,11 @@ export interface ManualScheduler extends SchedulerDeps {
   pending(): number;
 }
 
-/** Create a {@link ManualScheduler} whose virtual clock starts at `epochMs` (default 0). */
-export function createManualScheduler(epochMs = 0): ManualScheduler {
+/** Create a {@link ManualScheduler} whose virtual clock starts at `epochMs` (default 0). An
+ *  optional `signal` is surfaced on the returned seam so {@link schedulerClock} can cancel a
+ *  handler parked on `app.wait()` at shutdown (see {@link SchedulerDeps.signal}); the scheduler's
+ *  own timer bookkeeping is unaffected by it. */
+export function createManualScheduler(epochMs = 0, signal?: AbortSignal): ManualScheduler {
   let clock = epochMs;
   let seq = 0;
   const timers = new Map<number, ScheduledTimer>();
@@ -70,6 +73,7 @@ export function createManualScheduler(epochMs = 0): ManualScheduler {
 
   return {
     now: () => clock,
+    signal,
     setTimer: (fn, delayMs) => {
       const id = ++seq;
       // A non-finite/negative delay would otherwise arm a timer "in the past" and hot-loop;

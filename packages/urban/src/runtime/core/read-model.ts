@@ -527,8 +527,16 @@ export interface ReadModel {
   fnFor(column: string): DerivationFn;
   /** Evaluate ALL derived columns for a base row in-process (the TS backend of the whole model). */
   evaluate(baseRow: BaseRow, projections?: ProjectionRows): Record<string, unknown>;
-  /** The managed `CREATE VIEW` DDL (seam (a) applies this at boot). */
-  viewDdl(options?: SqlCompileOptions): string;
+  /** The managed `CREATE VIEW` DDL (seam (a) applies this at boot). Pass `{ temp: true }` to emit a
+   *  `CREATE TEMP VIEW` in SQLite's TEMP schema (used by the parity guard so it never touches the
+   *  application's real objects); the SELECT body is byte-identical either way. */
+  viewDdl(options?: SqlCompileOptions, viewOptions?: ViewDdlOptions): string;
+}
+
+/** Shape modifiers for {@link ReadModel.viewDdl} (as opposed to the SQL compile options for its body). */
+export interface ViewDdlOptions {
+  /** Emit `CREATE TEMP VIEW` (SQLite TEMP schema) instead of a plain `CREATE VIEW`. */
+  readonly temp?: boolean;
 }
 
 function collectProjectionNames(expr: Expr, into: Set<string>): void {
@@ -649,13 +657,14 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
     return fn;
   };
 
-  const viewDdl = (options?: SqlCompileOptions): string => {
+  const viewDdl = (options?: SqlCompileOptions, viewOptions?: ViewDdlOptions): string => {
     const baseAlias = resolveBaseAlias(options?.baseAlias);
     const selectBase = decl.selectBaseColumns !== false;
     const derived = columns.map((c) => `${sqlSelectFor(c, options)} AS ${quoteIdent(c)}`);
     const selectList = [...(selectBase ? [`${quoteIdent(baseAlias)}.*`] : []), ...derived].join(",\n  ");
+    const createView = viewOptions?.temp ? "CREATE TEMP VIEW IF NOT EXISTS" : "CREATE VIEW IF NOT EXISTS";
     return (
-      `CREATE VIEW IF NOT EXISTS ${quoteIdent(decl.name)} AS\n` +
+      `${createView} ${quoteIdent(decl.name)} AS\n` +
       `SELECT\n  ${selectList}\n` +
       `FROM ${quoteIdent(decl.baseTable)} ${quoteIdent(baseAlias)};`
     );
@@ -792,8 +801,10 @@ function formatParityValue(value: unknown): string {
  * `onMismatch`) on the first divergence, naming the column, sample index, and both values.
  *
  * The caller supplies a SQLite handle (e.g. an in-memory DB from the node/deno host). The guard
- * creates minimal fixture tables for the base table and each referenced projection from the sample
- * rows' own keys, so it needs no pre-existing schema.
+ * builds minimal fixture tables for the base table and each referenced projection from the sample
+ * rows' own keys — entirely in SQLite's TEMP schema (`CREATE TEMP TABLE`/`CREATE TEMP VIEW`, dropped
+ * `temp.`-qualified) — so it needs no pre-existing schema AND can never clobber real application
+ * tables/views the caller's DB happens to hold under the same names.
  */
 export function assertReadModelParity(
   model: ReadModel,
@@ -837,13 +848,16 @@ export function assertReadModelParity(
   const createFixture = (table: string, cols: Set<string>): void => {
     const colList = [...cols];
     // A degenerate fixture with no columns still needs a placeholder so the table is creatable.
+    // TEMP tables live in SQLite's `temp` schema and shadow same-named objects in `main`, so the
+    // guard never touches (nor can it clobber) the application's real base/projection tables.
     const ddl = colList.length
-      ? `CREATE TABLE ${quoteIdent(table)} (${colList.map((c) => quoteIdent(c)).join(", ")});`
-      : `CREATE TABLE ${quoteIdent(table)} (_placeholder);`;
+      ? `CREATE TEMP TABLE ${quoteIdent(table)} (${colList.map((c) => quoteIdent(c)).join(", ")});`
+      : `CREATE TEMP TABLE ${quoteIdent(table)} (_placeholder);`;
     db.exec(ddl);
   };
 
-  // Fresh fixtures. Drop first so the guard can be called repeatedly on one DB.
+  // Resolve each projection name to its physical fixture table (validated), rejecting a many-to-one
+  // mapping up front so the guard never creates/drops one table twice for a non-parity reason.
   const projectionTables = new Map<string, string>();
   const tableOwner = new Map<string, string>();
   for (const name of model.projectionNames) {
@@ -863,13 +877,16 @@ export function assertReadModelParity(
     projectionTables.set(name, table);
   }
 
-  db.exec(`DROP VIEW IF EXISTS ${quoteIdent(model.decl.name)};`);
-  db.exec(`DROP TABLE IF EXISTS ${quoteIdent(baseTable)};`);
-  for (const table of projectionTables.values()) db.exec(`DROP TABLE IF EXISTS ${quoteIdent(table)};`);
+  // Fresh fixtures in the TEMP schema. Drop first (schema-qualified with `temp.` so an unqualified
+  // name can never resolve to — and delete — a real `main` table/view) so the guard can be called
+  // repeatedly on one DB without clobbering the caller's application data.
+  db.exec(`DROP VIEW IF EXISTS temp.${quoteIdent(model.decl.name)};`);
+  db.exec(`DROP TABLE IF EXISTS temp.${quoteIdent(baseTable)};`);
+  for (const table of projectionTables.values()) db.exec(`DROP TABLE IF EXISTS temp.${quoteIdent(table)};`);
 
   createFixture(baseTable, baseCols);
   for (const [name, table] of projectionTables) createFixture(table, projCols.get(name) ?? new Set());
-  db.exec(model.viewDdl(options.sql));
+  db.exec(model.viewDdl(options.sql, { temp: true }));
 
   const insertRow = (table: string, row: Record<string, unknown>): void => {
     const keys = Object.keys(row);

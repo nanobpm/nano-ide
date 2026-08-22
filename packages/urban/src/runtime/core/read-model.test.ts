@@ -449,6 +449,52 @@ test("the parity guard reports a mismatch (not a bigint serialisation TypeError)
 });
 
 
+test("the parity guard runs entirely in the TEMP schema and never clobbers real main-schema tables/views the DB already holds under the model's names", async () => {
+  // The guard drops/creates the base table, projection tables and managed VIEW by the model's REAL
+  // names. If it did so in the `main` schema, calling it against a DB that already holds application
+  // tables/views with those names would silently DELETE the caller's data. It must instead operate in
+  // SQLite's TEMP schema (CREATE TEMP TABLE/VIEW, temp.-qualified drops), leaving `main` untouched.
+  await withDb((db) => {
+    // Real application objects in `main`, under the SAME names the guard uses, holding real rows.
+    db.exec(`CREATE TABLE tasks (id TEXT, process_instance_key TEXT, state TEXT, priority INTEGER);`);
+    db.exec(`CREATE TABLE urban_open_user_tasks (process_instance_key TEXT);`);
+    db.exec(taskReadModel.viewDdl());
+    db.run(`INSERT INTO tasks (id, process_instance_key, state, priority) VALUES (?, ?, ?, ?)`, [
+      "real-1",
+      "pi-real",
+      "done",
+      7,
+    ]);
+    db.run(`INSERT INTO urban_open_user_tasks (process_instance_key) VALUES (?)`, ["pi-real"]);
+
+    assert.doesNotThrow(() =>
+      assertReadModelParity(taskReadModel, db, [
+        { baseRow: { process_instance_key: "pi-1", state: "done", priority: 9 }, projections: {} },
+        {
+          baseRow: { process_instance_key: "pi-2", state: "running", priority: 3 },
+          projections: { urban_open_user_tasks: [{ process_instance_key: "pi-2" }] },
+        },
+      ]),
+    );
+
+    // The real main-schema base table, projection table AND managed VIEW survive with their data.
+    const tasks = db.all<{ id: string }>(`SELECT id FROM main.tasks`);
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0]?.id, "real-1");
+    const proj = db.all<{ process_instance_key: string }>(
+      `SELECT process_instance_key FROM main.urban_open_user_tasks`,
+    );
+    assert.equal(proj.length, 1);
+    assert.equal(proj[0]?.process_instance_key, "pi-real");
+    const view = db.all<{ display_status: string }>(
+      `SELECT display_status FROM main.tasks_display WHERE id = 'real-1'`,
+    );
+    assert.equal(view.length, 1);
+    assert.equal(view[0]?.display_status, "completed");
+  });
+});
+
+
 test("eq/neq coerce booleans like SQLite (1/0) so the TS backend cannot drift from the VIEW", () => {
   // `lit(true)` compiles to SQL `1`; strict `===` would make `1 === true` false and diverge.
   const on = compileToFn(eq(col("flag"), lit(true)));

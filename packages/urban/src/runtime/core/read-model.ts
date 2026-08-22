@@ -188,9 +188,18 @@ export class ProjectionRegistry {
   readonly #byName = new Map<string, ProjectionSource>();
 
   register(source: ProjectionSource): void {
-    const existing = this.#byName.get(source.name);
+    const key = foldSqlIdentifier(source.name);
+    const existing = this.#byName.get(key);
     const sqlTable = source.sqlTable ?? source.name;
     if (existing) {
+      if (existing.name !== source.name) {
+        // Case-only variant of an already-registered name (e.g. "Foo" vs "foo"). SQLite folds
+        // identifiers, so both denote ONE physical relation; allowing both would silently alias.
+        throw new Error(
+          `projection "${source.name}" already registered as "${existing.name}"; SQLite folds ` +
+            `identifiers case-insensitively, so names differing only in case denote one relation`,
+        );
+      }
       const existingTable = existing.sqlTable ?? existing.name;
       if (existingTable !== sqlTable) {
         throw new Error(
@@ -202,21 +211,21 @@ export class ProjectionRegistry {
     }
     assertSqlIdentifier("projection name", source.name);
     assertSqlIdentifier("projection table", sqlTable);
-    this.#byName.set(source.name, { name: source.name, sqlTable });
+    this.#byName.set(key, { name: source.name, sqlTable });
   }
 
   /** The physical SQL table/view for a projection name; falls back to the name itself if unregistered
    *  (so a read model compiles against a not-yet-landed sidecar, which supplies the same-named table). */
   sqlTableFor(name: string): string {
-    return this.#byName.get(name)?.sqlTable ?? name;
+    return this.#byName.get(foldSqlIdentifier(name))?.sqlTable ?? name;
   }
 
   has(name: string): boolean {
-    return this.#byName.has(name);
+    return this.#byName.has(foldSqlIdentifier(name));
   }
 
   names(): string[] {
-    return [...this.#byName.keys()];
+    return [...this.#byName.values()].map((s) => s.name);
   }
 
   /** Reset all registrations. Mirrors {@link ReadModelRegistry.clear} so tests and dev harnesses can
@@ -735,14 +744,23 @@ export class ReadModelRegistry {
   readonly #byName = new Map<string, ReadModel>();
 
   register(model: ReadModel): void {
-    const existing = this.#byName.get(model.decl.name);
+    const key = foldSqlIdentifier(model.decl.name);
+    const existing = this.#byName.get(key);
     if (existing) {
+      if (existing.decl.name !== model.decl.name) {
+        // Case-only variant (e.g. "TASKS" vs "tasks"). SQLite folds VIEW names, so both would collide
+        // at `ensureViews`; reject the collision here with an actionable error instead.
+        throw new Error(
+          `read model "${model.decl.name}" already registered as "${existing.decl.name}"; SQLite folds ` +
+            `identifiers case-insensitively, so names differing only in case denote one VIEW`,
+        );
+      }
       if (existing.viewDdl() !== model.viewDdl()) {
         throw new Error(`read model "${model.decl.name}" already registered with a different definition`);
       }
       return;
     }
-    this.#byName.set(model.decl.name, model);
+    this.#byName.set(key, model);
   }
 
   all(): ReadModel[] {
@@ -750,7 +768,7 @@ export class ReadModelRegistry {
   }
 
   get(name: string): ReadModel | undefined {
-    return this.#byName.get(name);
+    return this.#byName.get(foldSqlIdentifier(name));
   }
 
   /** Apply every registered model's managed VIEW to a database (the boot-path entry point). Safe to

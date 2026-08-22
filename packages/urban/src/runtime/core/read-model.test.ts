@@ -437,6 +437,35 @@ test("defineReadModel rejects a name/base-table collision that differs only in c
   );
 });
 
+test("ProjectionRegistry rejects two projection names that collide only under SQLite case-folding", () => {
+  // SQLite matches identifiers case-insensitively, so "Foo" and "foo" denote ONE physical relation.
+  // Keying the registry by exact name would let both register as distinct entries and silently alias;
+  // the dedup key must fold, mirroring every other identity check in this module.
+  const reg = new ProjectionRegistry();
+  reg.register({ name: "Foo", sqlTable: "foo_table" });
+  assert.throws(
+    () => reg.register({ name: "foo", sqlTable: "foo_table" }),
+    /already registered as "Foo"/,
+  );
+  // Lookups fold too: a case-variant name resolves to the registered physical table.
+  assert.equal(reg.sqlTableFor("FOO"), "foo_table");
+  assert.ok(reg.has("fOo"));
+  // Exact re-registration stays an idempotent no-op.
+  assert.doesNotThrow(() => reg.register({ name: "Foo", sqlTable: "foo_table" }));
+});
+
+test("ReadModelRegistry rejects two read-model names that collide only under SQLite case-folding", () => {
+  // SQLite folds VIEW names, so "TASKS" and "tasks" would collide at `ensureViews`. The registry must
+  // reject the case-only collision at registration time rather than letting drop/create race opaquely.
+  const upper = defineReadModel({ name: "MODELCASE", baseTable: "rows", derive: { c: col("x") } });
+  const lower = defineReadModel({ name: "modelcase", baseTable: "rows", derive: { c: col("x") } });
+  const reg = new ReadModelRegistry();
+  reg.register(upper);
+  assert.throws(() => reg.register(lower), /already registered as "MODELCASE"/);
+  // A case-variant lookup resolves to the registered model.
+  assert.equal(reg.get("ModelCase"), upper);
+});
+
 test("evaluate() writes derived columns as own properties on a null-prototype bag (no prototype pollution via a `__proto__` column)", () => {
   // Derived column names are user-controlled and only identifier-validated, so `__proto__` is a legal
   // name. On a plain `{}` bag, `out["__proto__"] = <value>` trips `Object.prototype`'s magic accessor

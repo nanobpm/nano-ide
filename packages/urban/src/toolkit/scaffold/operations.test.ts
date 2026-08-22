@@ -48,7 +48,19 @@ test("operation stub is lint-clean under the scaffold config: tab-indented, both
   for (const line of bodyLines) {
     assert.ok(line.startsWith("\t"), `body line is tab-indented, not space-indented: ${line}`);
   }
-  assert.match(stub, /app\.log\.warn\("operation not implemented", \{ operationId: "getInvoice", input \}\)/);
+  assert.match(stub, /app\.log\.warn\("operation not implemented", \{ operationId: "getInvoice", method: input\.req\.method \}\)/);
+  // Guard the PII/credential-leak defect class (nano-ide#454): the stub must reference a
+  // non-sensitive identifier, never serialize the whole validated `input` (which carries
+  // params/query/body/req) into the NDJSON log line.
+  assert.doesNotMatch(stub, /app\.log\.warn\([^)]*,\s*input\s*\}/);
+});
+
+test("operation stub logs a non-sensitive identifier, not the raw input payload", () => {
+  // Red/Green guard for the operation-stub log-leak: an unedited 501 handler must not emit the
+  // validated request body/params/query (potential credentials or PII) to structured logs.
+  const stub = renderOperationStub("createInvoice");
+  assert.doesNotMatch(stub, /,\s*input\s*\}\)/);
+  assert.match(stub, /method: input\.req\.method/);
 });
 
 test("planOperationScaffold plans one stub per declared operationId", () => {

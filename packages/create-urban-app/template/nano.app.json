@@ -60,5 +60,10 @@
 		"path": "/"
 	},
 
-	"workers": [{ "taskType": "__APP_ID__.greet", "handler": "workers/greet.ts" }]
+	"workers": [
+		{
+			"taskType": "__APP_ID__.greet",
+			"handler": "workers/greet.ts"
+		}
+	]
 }

@@ -78,10 +78,16 @@ function applyConditionals(content: string, on: { deno: boolean }): string {
   return content.replace(block, (_m, body: string) => (on.deno ? body : ""));
 }
 
-/** Rename template entries that stand in for dotfiles npm strips from packs. */
+/**
+ * Rename template entries that can't live under their real name inside this repo:
+ * dotfiles npm strips from packs (`_gitignore`, `_github`), and `_biome.json` — a
+ * `root: true` config that would otherwise be discovered as a conflicting nested
+ * root by the monorepo's own Biome scan. The scaffolded app gets the real names.
+ */
 function finalName(name: string): string {
   if (name === "_gitignore") return ".gitignore";
   if (name === "_github") return ".github";
+  if (name === "_biome.json") return "biome.json";
   return name;
 }
 
@@ -155,7 +161,7 @@ function toHeadlessManifest(json: string): string {
   } = JSON.parse(json);
   delete m.surfaces;
   delete m.triggers;
-  return JSON.stringify(m, null, 2) + "\n";
+  return JSON.stringify(m, null, "\t") + "\n";
 }
 
 // Re-export for callers that want the template path (e.g. tests).

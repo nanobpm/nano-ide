@@ -1,16 +1,23 @@
 {
 	"$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
-	"root": false,
+	"root": true,
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab",
+		"includes": ["**", "!nano-generated/**"]
+	},
 	"files": {
 		"includes": [
 			"main.ts",
 			"workers/**/*.ts",
 			"operations/**/*.ts",
+			"tests/**/*.ts",
 			"resources/**",
 			"db/**",
 			"pages/**",
 			"*.json",
-			"!nano-generated",
+			"nano-generated/**/*.ts",
+			"!package-lock.json",
 			"!node_modules"
 		]
 	},
@@ -20,11 +27,13 @@
 			"main.ts",
 			"workers/**/*.ts",
 			"operations/**/*.ts",
+			"tests/**/*.ts",
 			"resources/**",
 			"db/**",
 			"pages/**",
 			"*.json",
-			"!nano-generated",
+			"nano-generated/**/*.ts",
+			"!package-lock.json",
 			"!node_modules"
 		],
 		"rules": {

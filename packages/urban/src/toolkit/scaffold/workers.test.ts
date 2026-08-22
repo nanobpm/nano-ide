@@ -7,7 +7,7 @@ import {
   type ScaffoldWorker,
 } from "./workers.ts";
 import type { ModelSource } from "../derivers/worker-io.ts";
-import { scaffoldWorkers } from "../scaffold.ts";
+import { detectJsonIndent, scaffoldWorkers } from "../scaffold.ts";
 import type { GenIO } from "../gen.ts";
 
 // A service task with a data-envelope in/out contract; `type` is the taskType, and the
@@ -51,6 +51,43 @@ test("untyped stub imports no generated types and uses bare AppJobHandler", () =
   const stub = renderWorkerStub("demo.do", false, false);
   assert.doesNotMatch(stub, /worker-io\.d\.ts/);
   assert.match(stub, /const handler: AppJobHandler = async \(job, app\) =>/);
+});
+
+test("stub is lint-clean under the scaffold config: tab-indented, both params referenced", () => {
+  // Guards the two ways `urban gen`'s stub used to fail a fresh scaffold's own `biome check`
+  // (nano-ide#451): space indentation (Biome defaults to tabs) and unused `job`/`app` params
+  // (correctness/noUnusedFunctionParameters). Body lines must be tab-indented and both params
+  // must be read before the author fills in the body.
+  const stub = renderWorkerStub("greet.hello", false, false);
+  const bodyLines = stub.split("\n").filter((l) => l.startsWith(" ") || l.startsWith("\t"));
+  assert.ok(bodyLines.length > 0, "the stub has an indented body");
+  for (const line of bodyLines) {
+    assert.ok(line.startsWith("\t"), `body line is tab-indented, not space-indented: ${line}`);
+  }
+  assert.match(stub, /app\.log\.warn\("worker not implemented", \{ jobKey: job\.jobKey \}\)/);
+});
+
+test("detectJsonIndent reuses tab/space width but clamps to JSON.stringify's 10-char cap", () => {
+  assert.equal(detectJsonIndent('{\n\t"a": 1\n}'), "\t");
+  assert.equal(detectJsonIndent('{\n  "a": 1\n}'), "  ");
+  assert.equal(detectJsonIndent("{}"), "\t", "no indentation falls back to a tab");
+  // JSON.stringify silently truncates a string `space` to 10 chars, so a wider space indent must
+  // be clamped rather than promising a fidelity the serializer cannot honor.
+  const wide = `{\n${" ".repeat(12)}"a": 1\n}`;
+  const indent = detectJsonIndent(wide);
+  assert.equal(indent, " ".repeat(10));
+  assert.equal(JSON.stringify({ a: 1 }, null, indent), JSON.stringify({ a: 1 }, null, wide.match(/\n( +)/)?.[1]));
+  // The 10-char cap is not space-only: an overlong *tab* indent must clamp too, or the rewrite
+  // would silently differ from an 11+-tab input (JSON.stringify truncates any string `space`).
+  const wideTabs = `{\n${"\t".repeat(12)}"a": 1\n}`;
+  const tabIndent = detectJsonIndent(wideTabs);
+  assert.equal(tabIndent, "\t".repeat(10));
+  assert.equal(JSON.stringify({ a: 1 }, null, tabIndent), JSON.stringify({ a: 1 }, null, wideTabs.match(/\n(\t+)/)?.[1]));
+  // Line-ending agnostic: the width must be detected regardless of terminator, or a space-indented
+  // Windows/old-Mac manifest would be rewritten at the tab fallback width instead of preserved.
+  assert.equal(detectJsonIndent('{\r\n  "a": 1\r\n}'), "  ", "CRLF space indent preserved");
+  assert.equal(detectJsonIndent('{\r  "a": 1\r}'), "  ", "bare-CR space indent preserved");
+  assert.equal(detectJsonIndent('{\n\r  "a": 1\n\r}'), "  ", "LFCR space indent preserved");
 });
 
 test("typed-out-only stub fills In with the open default", () => {
@@ -181,6 +218,21 @@ test("scaffoldWorkers --write creates the stub and patches the manifest once", a
   const manifest = JSON.parse(io.files["/app/nano.app.json"]);
   assert.deepEqual(manifest.workers.map((w: { taskType: string }) => w.taskType), ["t.wired", "t.new"]);
   assert.ok(io.files["/app/nano.app.json"].endsWith("\n"), "manifest ends with newline");
+});
+
+test("scaffoldWorkers preserves the manifest's own indentation when wiring (nano-ide#451)", async () => {
+  // `urban gen` used to reserialize nano.app.json with a hard-coded 2-space indent, clobbering
+  // the tab-indented scaffold and breaking its own `biome check`. The patch must round-trip the
+  // file's existing indentation instead.
+  for (const indent of ["\t", "  "]) {
+    const files = appFixture();
+    files["/app/nano.app.json"] = `${JSON.stringify(JSON.parse(files["/app/nano.app.json"]), null, indent)}\n`;
+    const io = memIO(files);
+    await scaffoldWorkers({ root: "/app", io, write: true });
+    const patched = io.files["/app/nano.app.json"];
+    const firstIndent = patched.match(/\n([ \t]+)\S/)?.[1];
+    assert.equal(firstIndent, indent, `indentation preserved (${JSON.stringify(indent)})`);
+  }
 });
 
 test("scaffoldWorkers never clobbers an existing stub (keeps it), still wires it", async () => {

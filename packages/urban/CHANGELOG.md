@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.78.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.4...@nanobpm/urban-0.78.0) (2026-08-22)
+
+
+### Features
+
+* **urban:** defineReadModel — declare-once, compile-to-both derived read models (ADR 0065) ([#455](https://github.com/nanobpm/nano-ide/issues/455)) ([277b162](https://github.com/nanobpm/nano-ide/commit/277b16272eb71a439a7d7648c97141b28e31ec92))
+
+## [0.77.4](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.3...@nanobpm/urban-0.77.4) (2026-08-22)
+
+
+### Bug Fixes
+
+* **create-urban-app:** scaffolded app is lint-green out of the box ([#454](https://github.com/nanobpm/nano-ide/issues/454)) ([945fabf](https://github.com/nanobpm/nano-ide/commit/945fabfafda7acd1dfac5d34c02dbd441e01aa51))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * create-urban-app bumped from ^0.15.1 to ^0.15.2
+
+## [0.77.3](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.2...@nanobpm/urban-0.77.3) (2026-08-22)
+
+
+### Bug Fixes
+
+* **urban-testkit:** close() awaits in-flight handlers before free() (use-after-free) ([#447](https://github.com/nanobpm/nano-ide/issues/447)) ([eadca4e](https://github.com/nanobpm/nano-ide/commit/eadca4e8d73b00c2717f0a7523ec38f5d868d29c))
+
+## [0.77.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.1...@nanobpm/urban-0.77.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **urban:** emit lint-clean nano-generated code; lint it in the scaffold ([#448](https://github.com/nanobpm/nano-ide/issues/448)) ([a19485d](https://github.com/nanobpm/nano-ide/commit/a19485d1730cdf27ae56d4e27c10acf215adb293))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * create-urban-app bumped from ^0.15.0 to ^0.15.1
+
 ## [0.77.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.0...@nanobpm/urban-0.77.1) (2026-08-22)
 
 

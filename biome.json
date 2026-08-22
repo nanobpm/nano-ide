@@ -15,7 +15,7 @@
 	"assist": { "enabled": false },
 	"linter": {
 		"enabled": true,
-		"rules": { "recommended": false }
+		"rules": { "preset": "none" }
 	},
 	"plugins": ["./plugins/no-unsafe-type-assertion.grit"]
 }

@@ -105,9 +105,11 @@ defineReadModel("feature_read_model", {
 The `derive` entries are a small, closed **expression DSL** (compare / `CASE` / `EXISTS`
 over base columns + the canonical projections). Urban compiles each entry to **both**:
 
-- the **SQLite VIEW** select-list (the `CASE` / correlated `EXISTS`), so the existing flat
-  page-filter DSL can still filter and sort on the derived column; and
-- the **runtime TypeScript** function (retiring the hand-written `deriveStage` oracle).
+- the **SQLite VIEW** select-list (`compileToSqlSelect` → the `CASE` / correlated
+  `EXISTS`), so the existing flat page-filter DSL can still filter and sort on the derived
+  column; and
+- the **runtime TypeScript** function (`compileToFn` → `(baseRow, projections) => value`,
+  retiring the hand-written `deriveStage` oracle).
 
 Because both fall out of one declaration, drift surface #2 disappears by construction —
 there is nothing to keep in lockstep. A closed expression DSL (not arbitrary TS) is what
@@ -118,8 +120,9 @@ shape we actually have.
 
 From the single `defineReadModel`, Urban generates — per ADR 0063's shape — the managed
 VIEW (applied at boot / as a generated migration), the pages↔schema contract entry, and
-the parity guard. No per-app migration/VIEW/contract/test boilerplate; drift surface #3
-disappears.
+the parity guard (`assertReadModelParity`, which materialises the VIEW over throwaway
+fixtures and asserts the `compileToSqlSelect` and `compileToFn` lowerings agree). No
+per-app migration/VIEW/contract/test boilerplate; drift surface #3 disappears.
 
 ### 4. Invert the reconciler: writer → source
 

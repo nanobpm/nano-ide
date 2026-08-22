@@ -14,6 +14,27 @@ import {
 import { planOperationScaffold } from "./scaffold/operations.ts";
 import { parseSpec } from "../openapi/spec.ts";
 
+/**
+ * Detect the indentation of a JSON document from its first indented line, so a rewrite can
+ * reuse it (`"\t"` or an N-space string) instead of hard-coding one style. Falls back to a tab
+ * — the scaffold's Biome default — when the file is empty/single-line or uses no indentation.
+ *
+ * Any indent — spaces or tabs — is clamped to 10 characters because `JSON.stringify` silently
+ * truncates a string `space` argument to 10; returning a wider prefix would promise a fidelity the
+ * serializer cannot honor (e.g. an 11+-tab manifest would be rewritten at a different width than
+ * its input). Tab indentation (the scaffold default) and any realistic width (2/4 spaces) are
+ * unaffected.
+ */
+export function detectJsonIndent(json: string): string {
+  // Anchor on any line terminator, not just `\n`, so the width is detected regardless of the
+  // manifest's line endings: LF (`\n`), CRLF (`\r\n`, where `\n` already precedes the indent),
+  // bare-CR old-Mac (`\r`), and LFCR (`\n\r`) all resolve to the indentation that follows.
+  const m = json.match(/[\r\n]([ \t]+)\S/);
+  if (!m) return "\t";
+  const indent = m[1];
+  return indent.length > 10 ? indent.slice(0, 10) : indent;
+}
+
 /** The manifest fields the scaffolder reads. */
 interface ScaffoldManifest {
   types?: Record<string, unknown>;
@@ -61,7 +82,11 @@ export async function scaffoldWorkers(opts: ScaffoldOptions): Promise<ScaffoldRu
   const manifestFile = opts.manifestFile ?? "nano.app.json";
   const manifestPath = joinPath(root, manifestFile);
 
-  const manifest: ScaffoldManifest = JSON.parse(await io.readText(manifestPath));
+  const manifestRaw = await io.readText(manifestPath);
+  const manifest: ScaffoldManifest = JSON.parse(manifestRaw);
+  // Preserve the manifest's own indentation when we patch it back (default tab, matching the
+  // scaffold's Biome config), so wiring a worker never reformats the file out from under lint.
+  const manifestIndent = detectJsonIndent(manifestRaw);
   const models = await readModels(root, io, manifest);
   const declaredTypeIds = Object.keys(manifest.types ?? {});
 
@@ -105,7 +130,7 @@ export async function scaffoldWorkers(opts: ScaffoldOptions): Promise<ScaffoldRu
       ...manifest,
       workers: [...(manifest.workers ?? []), ...wired],
     };
-    await io.writeText(manifestPath, `${JSON.stringify(withWorkers, null, 2)}\n`);
+    await io.writeText(manifestPath, `${JSON.stringify(withWorkers, null, manifestIndent)}\n`);
     manifestPatched = true;
   }
 

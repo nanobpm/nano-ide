@@ -214,6 +214,71 @@ export type {
   LineageStoreOptions,
 } from "./core/modules/lineage-store.ts";
 
+// ─────────────────────────────────────────── Read models ────────────────────────────────────────
+// The declare-once, compile-to-both derived read-model primitive (ADR 0065): a closed expression DSL
+// (`col`/`lit`/comparisons/`and`/`or`/`not`/`caseWhen`/`exists`) declared ONCE via `defineReadModel`,
+// compiled to BOTH a SQLite VIEW select-list (`compileToSqlSelect`) and an in-process TS function
+// (`compileToFn`) from the SAME AST, plus the framework-derived managed VIEW DDL and the parity guard
+// that replaces per-projection hand-written parity tests.
+//
+// SIBLING REGISTRATION POINTS (ADR 0065 rollout — see core/read-model.ts for the full seam docs):
+//   • `readModelRegistry`  — register a `defineReadModel(...)` result; the boot path (core/modules/
+//     workers.ts) applies its managed VIEW. The `writer-source-inversion` task registers here.
+//   • `projectionRegistry` — register a canonical engine-truth projection NAME usable in `exists(...)`.
+//     The `canonical-projections` task registers `urban_open_user_tasks` / `urban_instance_state`.
+export {
+  and,
+  assertReadModelParity,
+  assertSqlIdentifier,
+  caseWhen,
+  col,
+  compileToFn,
+  compileToSqlSelect,
+  defineReadModel,
+  deriveReadModelViewDdl,
+  eq,
+  exists,
+  gt,
+  gte,
+  lit,
+  lt,
+  lte,
+  neq,
+  not,
+  or,
+  pcol,
+  ProjectionRegistry,
+  projectionRegistry,
+  ReadModelRegistry,
+  readModelRegistry,
+  when,
+} from "./core/read-model.ts";
+export type {
+  AndExpr,
+  BaseRow,
+  CaseExpr,
+  ColExpr,
+  CompareExpr,
+  CompareOp,
+  DerivationFn,
+  ExistsExpr,
+  Expr,
+  Literal,
+  LitExpr,
+  NotExpr,
+  OrExpr,
+  ParityDb,
+  ParityOptions,
+  ParitySample,
+  ProjColExpr,
+  ProjectionRows,
+  ProjectionSource,
+  ReadModel,
+  ReadModelDecl,
+  SqlCompileOptions,
+  WhenClause,
+} from "./core/read-model.ts";
+
 // Phase — the framework-level *domain phase* primitive (issue #266): derive "which phase is this
 // instance in?" from the BPMN scope hierarchy + write-provenance (Tier 0, zero declaration), an
 // optional `nano:phase` override (Tier 1), and a lineage rollup for the epic frontier (Tier 2).

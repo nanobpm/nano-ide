@@ -14,7 +14,10 @@
 		{
 			"type": "text",
 			"id": "title",
-			"props": { "text": "__APP_NAME__", "variant": "heading" }
+			"props": {
+				"text": "__APP_NAME__",
+				"variant": "heading"
+			}
 		},
 		{
 			"type": "text",

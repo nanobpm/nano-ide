@@ -9,7 +9,7 @@ const HEADER =
   "// model-metadata accessor. Each `nano:meta` key/value the models declare becomes\n" +
   "// a checked `AppMeta` property, so `meta(key)` is typed and app-wide queryable\n" +
   "// without a second store. Do not edit — regenerated from the model.\n" +
-  "// eslint-disable\n\n" +
+  "\n" +
   "/** Every model-level metadata key the App's models declare (ADR 0040 §5). */\n";
 const ACCESSOR =
   "\n/** Read a model-level metadata value. A declared key is typed; a dynamic key\n" +
@@ -17,37 +17,37 @@ const ACCESSOR =
   "export function meta<K extends keyof AppMeta>(key: K): AppMeta[K];\n" +
   "export function meta(key: string): string | undefined;\n" +
   "export function meta(key: string): string | undefined {\n" +
-  "  return (appMeta as Record<string, string>)[key];\n" +
+  "  return Reflect.get(appMeta, key);\n" +
   "}\n";
 
 const GOLDEN_EMPTY = HEADER +
-  "export interface AppMeta {}\n\n" +
-  "export const appMeta: AppMeta = Object.create(null) as AppMeta;\n" +
+  "export type AppMeta = Record<never, never>;\n\n" +
+  "export const appMeta: AppMeta = Object.create(null);\n" +
   ACCESSOR;
 
 const GOLDEN_MULTI = HEADER +
   "export interface AppMeta {\n  classification: string;\n  owner: string;\n}\n\n" +
   "export const appMeta: AppMeta = (() => {\n" +
-  "  const m: Record<string, string> = Object.create(null);\n" +
-  '  m["classification"] = "internal";\n' +
-  '  m["owner"] = "ops";\n' +
-  "  return m as AppMeta;\n})();\n" +
+  "  const m: AppMeta = Object.create(null);\n" +
+  '  m.classification = "internal";\n' +
+  '  m.owner = "ops";\n' +
+  "  return m;\n})();\n" +
   ACCESSOR;
 
 const GOLDEN_NONIDENT = HEADER +
   'export interface AppMeta {\n  "data-classification": string;\n}\n\n' +
   "export const appMeta: AppMeta = (() => {\n" +
-  "  const m: Record<string, string> = Object.create(null);\n" +
+  "  const m: AppMeta = Object.create(null);\n" +
   '  m["data-classification"] = "pii";\n' +
-  "  return m as AppMeta;\n})();\n" +
+  "  return m;\n})();\n" +
   ACCESSOR;
 
 const GOLDEN_PROTO = HEADER +
   "export interface AppMeta {\n  __proto__: string;\n}\n\n" +
   "export const appMeta: AppMeta = (() => {\n" +
-  "  const m: Record<string, string> = Object.create(null);\n" +
+  "  const m: AppMeta = Object.create(null);\n" +
   '  m["__proto__"] = "danger";\n' +
-  "  return m as AppMeta;\n})();\n" +
+  "  return m;\n})();\n" +
   ACCESSOR;
 
 test("emitMeta emits the empty accessor byte-for-byte (matches console)", () => {
@@ -135,6 +135,6 @@ test("deriveMeta folds across models in path order (last write wins)", () => {
     { path: "processes/a.bpmn", xml: mk("a", "staging") },
   ];
   const content = deriveMeta(models)[0].content;
-  assert.match(content, /m\["env"\] = "prod";/);
+  assert.match(content, /m\.env = "prod";/);
   assert.doesNotMatch(content, /"staging"/);
 });

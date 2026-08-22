@@ -245,7 +245,11 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
   if (coverageEnabled) unobserveJobs = engine.observeJobs((jobType) => jobHits.add(jobType));
   // Anchor the virtual clock at the engine's clock so DataLayer timestamps and the
   // engine's own timeline share an origin; `advanceTime` keeps them in lockstep thereafter.
-  const scheduler = createManualScheduler(engine.now);
+  // Thread the engine's shutdown signal into the scheduler so a worker handler parked on
+  // `app.wait()` (a virtual timer no `advanceTime` will fire during teardown) is cancelled when
+  // `engine.close()` runs — otherwise its promise never settles and `close()`/`stop()` hangs
+  // (the virtual-timer sibling of the issue #446 real-time use-after-free).
+  const scheduler = createManualScheduler(engine.now, engine.shutdownSignal);
   const testHost = createTestHost({
     cwd: root,
     now: () => scheduler.now(),

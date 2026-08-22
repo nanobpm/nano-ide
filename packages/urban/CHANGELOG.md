@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.77.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.1...@nanobpm/urban-0.77.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **urban:** emit lint-clean nano-generated code; lint it in the scaffold ([#448](https://github.com/nanobpm/nano-ide/issues/448)) ([a19485d](https://github.com/nanobpm/nano-ide/commit/a19485d1730cdf27ae56d4e27c10acf215adb293))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * create-urban-app bumped from ^0.15.0 to ^0.15.1
+
 ## [0.77.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.0...@nanobpm/urban-0.77.1) (2026-08-22)
 
 

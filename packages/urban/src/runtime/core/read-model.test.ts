@@ -238,6 +238,38 @@ test("eq/neq coerce booleans like SQLite (1/0) so the TS backend cannot drift fr
   assert.equal(off({ flag: 0 }), true);
 });
 
+test("eq/neq compare bigint INTEGERs numerically so the TS backend cannot drift from the VIEW", () => {
+  // A 64-bit key can reach the TS backend as a `bigint`; it must equal the SQL literal `1`, not the
+  // string "1" — stringifying via `orderable` would make `1n === 1` false and drift from the VIEW.
+  const on = compileToFn(eq(col("k"), lit(1)));
+  assert.equal(on({ k: 1n }), true);
+  assert.equal(on({ k: 2n }), false);
+  const off = compileToFn(neq(col("k"), lit(1)));
+  assert.equal(off({ k: 1n }), false);
+  assert.equal(off({ k: 2n }), true);
+});
+
+test("CASE-WHEN coerces string conditions numerically like SQLite ('0'/'abc' false, '2abc' true)", async () => {
+  // SQLite evaluates a string in a boolean context by its leading numeric prefix, so a non-boolean
+  // column flowing into a CASE condition must coerce identically in TS or the two backends diverge.
+  const model = defineReadModel({
+    name: "flagword_read_model",
+    baseTable: "flagword_rows",
+    derive: { label: caseWhen([when(col("word"), lit("truthy"))], lit("falsy")) },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(model, db, [
+        { baseRow: { word: "0" } },
+        { baseRow: { word: "abc" } },
+        { baseRow: { word: "2abc" } },
+        { baseRow: { word: "1" } },
+        { baseRow: { word: "" } },
+      ]),
+    );
+  });
+});
+
 test("the parity guard PASSES for a boolean-equality derived column across both backends", async () => {
   const model = defineReadModel({
     name: "flags_read_model",

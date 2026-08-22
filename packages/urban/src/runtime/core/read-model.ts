@@ -164,8 +164,10 @@ export interface ProjectionSource {
   /** The stable DSL name used in `exists(name, …)`. */
   readonly name: string;
   /**
-   * The physical SQLite table/view the SQL backend reads for `EXISTS`. Defaults to {@link name}
-   * (canonical engine-truth projections are `_urban_`-prefixed tables named exactly `name`).
+   * The physical SQLite table/view the SQL backend reads for `EXISTS`. Defaults to {@link name} when
+   * the stable DSL name already matches the physical relation; a sidecar sets it explicitly when the
+   * two differ (e.g. a stable DSL name like `urban_instance_state` mapped onto an `_urban_`-prefixed
+   * engine-truth table).
    */
   readonly sqlTable?: string;
 }
@@ -342,19 +344,30 @@ function compareValues(op: CompareOp, left: unknown, right: unknown): boolean {
 }
 
 /** Narrow a scalar to an orderable primitive for `<`/`<=`/`>`/`>=`, matching SQLite affinity: numbers
- *  compare numerically, booleans as 0/1, everything else as its string form. Avoids unsafe casts. */
+ *  compare numerically, booleans as 0/1, `bigint` INTEGERs numerically (so `1n` and `1` don't drift),
+ *  everything else as its string form. Avoids unsafe casts. */
 function orderable(value: unknown): number | string {
   if (typeof value === "number") return value;
+  // SQLite INTEGERs can reach the TS backend as `bigint` (e.g. a 64-bit key in a base row); compare
+  // them numerically so `eq(col("k"), lit(1))` matches the SQL VIEW instead of stringifying to "1".
+  if (typeof value === "bigint") return Number(value);
   if (typeof value === "string") return value;
   if (typeof value === "boolean") return value ? 1 : 0;
   return String(value);
 }
 
-/** True in SQL's CASE-WHEN / boolean sense: non-null, non-zero, non-empty-ish. */
+/** True in SQL's CASE-WHEN / boolean sense, mirroring SQLite's numeric coercion: non-null, non-zero. */
 function truthy(value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (typeof value === "boolean") return value;
   if (typeof value === "number") return value !== 0;
+  if (typeof value === "bigint") return value !== 0n;
+  if (typeof value === "string") {
+    // SQLite coerces a string to a number in a boolean context (`CASE WHEN '0'`/`'abc'` are false,
+    // `'2abc'` is true via its leading numeric prefix). Mirror that so the TS backend cannot drift.
+    const numeric = Number.parseFloat(value);
+    return Number.isFinite(numeric) && numeric !== 0;
+  }
   return true;
 }
 

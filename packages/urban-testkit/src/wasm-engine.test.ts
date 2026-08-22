@@ -820,28 +820,30 @@ test("wasm: close() cancels a handler parked on a virtual-clock wait instead of 
   const engine = await createWasmEngineClient();
   const realSetTimeout = globalThis.setTimeout;
   let handlerSettled = false;
-  // Stand in for a worker parked on `app.wait()`: a promise ONLY the shutdown abort can settle —
-  // never a macrotask, never real time. That is exactly how the testkit scheduler backs `app.wait()`
-  // (a virtual timer), so it reproduces the close() hang without booting a whole app. Without the
-  // shutdown abort this promise never settles and close() below would hang forever.
-  await engine.registerWorker("virtual-wait", async () => {
-    try {
-      await new Promise<void>((_resolve, reject) => {
-        const signal = engine.shutdownSignal;
-        if (signal.aborted) {
-          reject(new Error("shutdown"));
-          return;
-        }
-        signal.addEventListener("abort", () => reject(new Error("shutdown")), { once: true });
-      });
-    } finally {
-      handlerSettled = true;
-    }
-  });
-  await engine.deployResources([
-    {
-      name: "virtual-wait.bpmn",
-      content: `<?xml version="1.0" encoding="UTF-8"?>
+  let closed = false;
+  try {
+    // Stand in for a worker parked on `app.wait()`: a promise ONLY the shutdown abort can settle —
+    // never a macrotask, never real time. That is exactly how the testkit scheduler backs `app.wait()`
+    // (a virtual timer), so it reproduces the close() hang without booting a whole app. Without the
+    // shutdown abort this promise never settles and close() below would hang forever.
+    await engine.registerWorker("virtual-wait", async () => {
+      try {
+        await new Promise<void>((_resolve, reject) => {
+          const signal = engine.shutdownSignal;
+          if (signal.aborted) {
+            reject(new Error("shutdown"));
+            return;
+          }
+          signal.addEventListener("abort", () => reject(new Error("shutdown")), { once: true });
+        });
+      } finally {
+        handlerSettled = true;
+      }
+    });
+    await engine.deployResources([
+      {
+        name: "virtual-wait.bpmn",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
              xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
              xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
@@ -863,27 +865,52 @@ test("wasm: close() cancels a handler parked on a virtual-clock wait instead of 
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
 </definitions>`,
-      contentType: "application/bpmn+xml",
-    },
-  ]);
+        contentType: "application/bpmn+xml",
+      },
+    ]);
 
-  // createInstance drains; the handler parks on the "virtual wait", so the drain returns with it
-  // in-flight (its completion has NOT run).
-  await engine.createInstance({ processDefinitionId: "virtual-wait" });
-  assert.equal(handlerSettled, false, "the handler must still be parked on its virtual wait here");
+    // createInstance drains; the handler parks on the "virtual wait", so the drain returns with it
+    // in-flight (its completion has NOT run).
+    await engine.createInstance({ processDefinitionId: "virtual-wait" });
+    assert.equal(handlerSettled, false, "the handler must still be parked on its virtual wait here");
 
-  // close() must abort shutdownSignal, cancelling the park, so it completes deterministically within
-  // a few real macrotasks (abort → wait rejects → handler unwinds → failJob → #inflight empties → free).
-  // No wall-clock waiting: a hang would leave closeSettled false and fail fast (rather than deadlock).
-  const closing = engine.close();
-  let closeSettled = false;
-  void closing.then(() => {
-    closeSettled = true;
-  });
-  for (let i = 0; i < 5; i++) {
-    await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+    // close() must abort shutdownSignal, cancelling the park, so it completes deterministically within
+    // a few real macrotasks (abort → wait rejects → handler unwinds → failJob → #inflight empties → free).
+    // No wall-clock waiting: a hang would leave closeSettled false and fail fast (rather than deadlock).
+    const closing = engine.close();
+    let closeSettled = false;
+    void closing.then(() => {
+      closeSettled = true;
+    });
+    for (let i = 0; i < 5; i++) {
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+    }
+    assert.ok(handlerSettled, "shutdown must cancel the virtual-clock park (not leave it hanging)");
+    assert.ok(closeSettled, "close() must complete once the virtual park is cancelled, not hang on it");
+    await closing;
+    closed = true;
+  } finally {
+    // The engine allocates native WASM memory. If an assertion above throws before close() completes,
+    // release it so the failing case does not leak the native handle into the rest of the suite.
+    // close() is idempotent (memoized shutdown run), so closing an already-closed engine is a no-op.
+    if (!closed) await engine.close();
   }
-  assert.ok(handlerSettled, "shutdown must cancel the virtual-clock park (not leave it hanging)");
-  assert.ok(closeSettled, "close() must complete once the virtual park is cancelled, not hang on it");
-  await closing;
+});
+
+// Regression (PR #447 review, wasm-engine.ts:554): close() is idempotent. The shutdown run is
+// memoized, so two concurrent close() calls (or a second after the first resolves) await the SAME
+// run instead of each reaching `#engine.free()` — freeing the same WASM handle twice throws in
+// wbindgen ("null pointer passed to rust"). Both concurrent calls, and a later sequential one, must
+// resolve to that single free().
+test("wasm: close() is idempotent and never double-frees the WASM handle (#447 review)", async () => {
+  const engine = await createWasmEngineClient();
+  const [a, b] = await Promise.allSettled([engine.close(), engine.close()]);
+  assert.equal(a.status, "fulfilled", "first close() must succeed");
+  assert.equal(
+    b.status,
+    "fulfilled",
+    `a concurrent second close() must not double-free${b.status === "rejected" ? `: ${b.reason}` : ""}`,
+  );
+  // A later, sequential close() awaits the same memoized (successful) run — also a no-op.
+  await engine.close();
 });

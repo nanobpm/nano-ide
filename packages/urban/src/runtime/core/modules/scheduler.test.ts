@@ -85,7 +85,29 @@ test("schedulerClock.wait rejects immediately (arming no timer) when the signal 
   assert.equal(armedCount, 0, "an already-aborted signal must reject without arming a timer");
 });
 
-// A generic teardown error backs a non-Error abort reason, so `wait()` still rejects (never resolves)
+// Regression (PR #447 review, scheduler.ts): this seam permits `setTimer` to fire its callback
+// SYNCHRONOUSLY (the `capturingScheduler` above does). When it does — and a shutdown `signal` is
+// present — the wait resolves before we would install the abort listener, so we must NOT install
+// one: attaching a listener to an already-settled promise leaks its closure until the signal fires
+// and later has shutdown clear an already-fired timer handle. A synchronously-resolved wait must
+// leave zero listeners on the signal and must not clear its (already-fired) handle on a later abort.
+test("schedulerClock.wait installs no abort listener when a signalled wait resolves synchronously", async () => {
+  const controller = new AbortController();
+  const cleared: unknown[] = [];
+  const sched: SchedulerDeps = {
+    now: () => 0,
+    signal: controller.signal,
+    setTimer: (fn) => {
+      fn(); // fire synchronously — the wait resolves before any listener could be installed
+      return 7;
+    },
+    clearTimer: (h) => cleared.push(h),
+  };
+  await schedulerClock(sched).wait(0);
+  // A leaked listener would fire here and clear the stale handle; the fix installs none.
+  controller.abort(new Error("shutting down"));
+  assert.deepEqual(cleared, [], "a synchronously-resolved wait must not install an abort listener");
+});
 // when the caller aborts with a bare value rather than an Error.
 test("schedulerClock.wait rejects with a generic teardown error when the abort reason is not an Error", async () => {
   const controller = new AbortController();

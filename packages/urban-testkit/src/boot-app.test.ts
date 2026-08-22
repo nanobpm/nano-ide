@@ -297,7 +297,6 @@ test("bootTestApp stop() cancels a worker parked on app.wait instead of hanging 
   const dir = await makeProbeFixture();
   const app = await bootTestApp(dir);
   let stopped = false;
-  const wallStart = Date.now();
   try {
     // Start the instance: the poll worker is dispatched and parks on its first app.wait(10s). No
     // virtual time passes, so it stays parked in-flight — the classic virtual-timer park.
@@ -307,7 +306,9 @@ test("bootTestApp stop() cancels a worker parked on app.wait instead of hanging 
 
     // stop() closes the engine mid-park; it must cancel the wait via the shutdown signal rather than
     // await a virtual timer no advanceTime will ever fire. A hang would blow the runner timeout; the
-    // real-time bound below additionally proves it did not silently burn wall-clock time.
+    // real-time bound below additionally proves it did not silently burn wall-clock time. Capture the
+    // clock immediately before stop() so the bound measures teardown, not the (unrelated) setup above.
+    const wallStart = Date.now();
     await app.stop();
     stopped = true;
     assert.ok(Date.now() - wallStart < 10_000, "stop() must not hang on the parked virtual wait");

@@ -83,15 +83,23 @@ export function schedulerClock(sched: SchedulerDeps): AppClock {
           return;
         }
         const delay = Number.isFinite(ms) && ms > 0 ? Math.min(ms, MAX_TIMER_DELAY_MS) : 0;
+        let settled = false;
         let onAbort: (() => void) | undefined;
         const handle = sched.setTimer(() => {
+          settled = true;
           if (onAbort && signal) signal.removeEventListener("abort", onAbort);
           resolve();
         }, delay);
         // When a shutdown signal is present, a mid-wait abort disarms the timer and rejects, so a
         // handler parked here unwinds at teardown instead of wedging its awaiter. Inert (no listener,
         // no behaviour change) on the live scheduler, which supplies no signal.
-        if (signal) {
+        //
+        // `settled` guards the synchronous-timer case: this seam permits `setTimer` to invoke its
+        // callback synchronously (the test `capturingScheduler` does exactly that), which resolves
+        // the wait *before* we get here. Installing an abort listener on that already-settled promise
+        // would leak its closure until the signal fires (and have shutdown clear an already-fired
+        // handle), so skip it entirely when the callback already ran.
+        if (signal && !settled) {
           onAbort = () => {
             sched.clearTimer(handle);
             reject(schedulerAbortError(signal));

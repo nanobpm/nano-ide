@@ -258,6 +258,12 @@ export class WasmEngineClient implements EngineClient {
    *  before `free()` (issue #446). */
   #closing = false;
   readonly #shutdown = new AbortController();
+  /** Memoized shutdown run (see {@link close}). `close()` is idempotent: the FIRST call starts the
+   *  one-and-only teardown and every later/concurrent call awaits this same promise, so the WASM
+   *  handle is `free()`d exactly once — two `close()` calls can never double-free it. A run that
+   *  FAILS to settle (engine left allocated, not freed) clears this so the caller can cancel/retry;
+   *  a successful run stays memoized so its `free()` is never re-invoked. */
+  #closeRun: Promise<void> | undefined;
 
   /** A shutdown {@link AbortSignal} that aborts when {@link close} begins. The test kit threads it
    *  into the scheduler backing `app.wait()`, so a worker handler parked on the virtual clock is
@@ -518,6 +524,19 @@ export class WasmEngineClient implements EngineClient {
   }
 
   async close(): Promise<void> {
+    // Idempotent teardown: memoize the single shutdown run so a second close() (concurrent, or after
+    // the first resolves) awaits the SAME promise instead of re-running `#settleInflight()` and a
+    // second `#engine.free()` on the same WASM handle (a double-free). A run that fails to settle
+    // deliberately leaves the engine allocated (see `#doClose`); clear the memo in that case so the
+    // caller can cancel/retry, but keep a successful run memoized so its `free()` is never re-invoked.
+    this.#closeRun ??= this.#doClose().catch((err) => {
+      this.#closeRun = undefined;
+      throw err;
+    });
+    return this.#closeRun;
+  }
+
+  async #doClose(): Promise<void> {
     // Enter the shutdown state up front (idempotent). `#closing` gates a concurrently-suspended
     // `drain()` from activating jobs on an engine that is about to be freed, and aborting `#shutdown`
     // cancels handlers parked on the app clock's `wait()` — a virtual timer no `advanceTime` will

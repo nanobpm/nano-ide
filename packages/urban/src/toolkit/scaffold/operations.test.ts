@@ -48,7 +48,21 @@ test("operation stub is lint-clean under the scaffold config: tab-indented, both
   for (const line of bodyLines) {
     assert.ok(line.startsWith("\t"), `body line is tab-indented, not space-indented: ${line}`);
   }
-  assert.match(stub, /app\.log\.warn\("operation not implemented", \{ operationId: "getInvoice", method: input\.req\.method \}\)/);
+  assert.match(
+    stub,
+    /app\.log\.warn\("operation not implemented", \{\n\t\toperationId: "getInvoice",\n\t\tmethod: input\.req\.method,\n\t\}\);/,
+  );
+  // Guard the same Biome-width defect class the reviewer flagged (nano-ide#454): the generated
+  // stub is linted by the scaffold's `operations/**/*.ts` include at Biome's default 80-column
+  // width (tab = 2 columns), so a single-line log call that overruns 80 makes `urban gen` emit a
+  // file `biome check` immediately reports as needing formatting. Assert every non-comment code
+  // line fits, so any future template change that reintroduces an over-wide line fails here.
+  for (const line of stub.split("\n")) {
+    if (line.trim().startsWith("//")) continue;
+    const leadingTabs = line.length - line.replace(/^\t+/, "").length;
+    const width = leadingTabs * 2 + (line.length - leadingTabs);
+    assert.ok(width <= 80, `generated code line exceeds Biome's 80-column width (${width}): ${line}`);
+  }
   // Guard the PII/credential-leak defect class (nano-ide#454): the stub must reference a
   // non-sensitive identifier, never serialize the whole validated `input` (which carries
   // params/query/body/req) into the NDJSON log line.

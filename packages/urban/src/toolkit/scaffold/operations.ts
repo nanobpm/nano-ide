@@ -54,7 +54,10 @@ export function renderOperationStub(operationId: string, dir: string = DEFAULT_O
     `\t// through the injected \`app\` API. Structured logs via \`app.log.info("…", { … })\` are\n` +
     `\t// auto-tagged with this request's { method, path, operationId } (ADR 0061).\n` +
     `\t// Return \`{ status?, headers?, body? }\` (or nothing → 204). Replace the two lines below.\n` +
-    `\tapp.log.warn("operation not implemented", { operationId: ${key}, method: input.req.method });\n` +
+    `\tapp.log.warn("operation not implemented", {\n` +
+    `\t\toperationId: ${key},\n` +
+    `\t\tmethod: input.req.method,\n` +
+    `\t});\n` +
     `\tthrow new NotImplemented(${key});\n` +
     `});\n`
   );

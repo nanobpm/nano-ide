@@ -706,7 +706,11 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
     sqlSelectFor,
     fnFor,
     evaluate: (baseRow, projections) => {
-      const out: Record<string, unknown> = {};
+      // Derived column names are user-controlled and only identifier-validated, so a name like
+      // `__proto__` must set a plain own property rather than trip the magic prototype setter a
+      // normal `{}` inherits from `Object.prototype` (same null-prototype treatment as the
+      // untrusted-key dictionaries elsewhere in this repo, e.g. `core/logger.ts`).
+      const out: Record<string, unknown> = Object.create(null);
       for (const c of columns) out[c] = fnFor(c)(baseRow, projections);
       return out;
     },
@@ -863,7 +867,7 @@ export function assertReadModelParity(
   // Validate the requested columns up front so an unknown name yields an actionable error rather than
   // a downstream `undefined` blowing up inside `collectColumns`/`fnFor`.
   for (const c of columns) {
-    if (!Object.hasOwn(model.decl.derive, c)) {
+    if (!Object.prototype.hasOwnProperty.call(model.decl.derive, c)) {
       throw new Error(`read model "${model.decl.name}" has no derived column "${c}" to check parity for`);
     }
   }

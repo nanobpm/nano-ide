@@ -437,6 +437,24 @@ test("defineReadModel rejects a name/base-table collision that differs only in c
   );
 });
 
+test("evaluate() writes derived columns as own properties on a null-prototype bag (no prototype pollution via a `__proto__` column)", () => {
+  // Derived column names are user-controlled and only identifier-validated, so `__proto__` is a legal
+  // name. On a plain `{}` bag, `out["__proto__"] = <value>` trips `Object.prototype`'s magic accessor
+  // instead of creating an own property; a null-prototype bag makes every name a safe own key. The
+  // computed key here defines a real own `__proto__` property on `derive` (a literal key would set the
+  // prototype instead).
+  const model = defineReadModel({
+    name: "proto_pollution_read_model",
+    baseTable: "tasks",
+    derive: { ["__proto__"]: col("x") },
+  });
+  const out = model.evaluate({ x: 42 }, {});
+  assert.equal(Object.getPrototypeOf(out), null, "output bag must have a null prototype");
+  assert.equal(out["__proto__"], 42, "the `__proto__` column must be stored as a real own property");
+  const probe: Record<string, unknown> = {};
+  assert.equal(probe["polluted"], undefined, "evaluate() must not pollute Object.prototype");
+});
+
 test("the read-model registry provisions every managed VIEW and rejects a conflicting redefinition", async () => {
   await withDb((db) => {
     const reg = new ReadModelRegistry();

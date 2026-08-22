@@ -26,7 +26,10 @@ import { parseSpec } from "../openapi/spec.ts";
  * unaffected.
  */
 export function detectJsonIndent(json: string): string {
-  const m = json.match(/\n([ \t]+)\S/);
+  // Anchor on any line terminator, not just `\n`, so the width is detected regardless of the
+  // manifest's line endings: LF (`\n`), CRLF (`\r\n`, where `\n` already precedes the indent),
+  // bare-CR old-Mac (`\r`), and LFCR (`\n\r`) all resolve to the indentation that follows.
+  const m = json.match(/[\r\n]([ \t]+)\S/);
   if (!m) return "\t";
   const indent = m[1];
   return indent.length > 10 ? indent.slice(0, 10) : indent;

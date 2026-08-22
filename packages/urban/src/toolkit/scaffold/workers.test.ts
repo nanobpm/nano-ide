@@ -83,6 +83,11 @@ test("detectJsonIndent reuses tab/space width but clamps to JSON.stringify's 10-
   const tabIndent = detectJsonIndent(wideTabs);
   assert.equal(tabIndent, "\t".repeat(10));
   assert.equal(JSON.stringify({ a: 1 }, null, tabIndent), JSON.stringify({ a: 1 }, null, wideTabs.match(/\n(\t+)/)?.[1]));
+  // Line-ending agnostic: the width must be detected regardless of terminator, or a space-indented
+  // Windows/old-Mac manifest would be rewritten at the tab fallback width instead of preserved.
+  assert.equal(detectJsonIndent('{\r\n  "a": 1\r\n}'), "  ", "CRLF space indent preserved");
+  assert.equal(detectJsonIndent('{\r  "a": 1\r}'), "  ", "bare-CR space indent preserved");
+  assert.equal(detectJsonIndent('{\n\r  "a": 1\n\r}'), "  ", "LFCR space indent preserved");
 });
 
 test("typed-out-only stub fills In with the open default", () => {

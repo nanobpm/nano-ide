@@ -670,6 +670,9 @@ test("wasm: close() surfaces a worker failure captured after the dispatching dra
       name: "late.bpmn",
       content: `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
              xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
              targetNamespace="http://nanobpm/testkit">
   <process id="late" isExecutable="true">
@@ -677,6 +680,15 @@ test("wasm: close() surfaces a worker failure captured after the dispatching dra
     <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="late"/></extensionElements></serviceTask>
     <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
   </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="late">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="150" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="t_di" bpmnElement="t"><dc:Bounds x="240" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="400" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f_di" bpmnElement="f"><di:waypoint x="186" y="118"/><di:waypoint x="240" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="340" y="118"/><di:waypoint x="400" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
 </definitions>`,
       contentType: "application/bpmn+xml",
     },
@@ -954,6 +966,9 @@ test("wasm: close() stays memoized after free() so a post-free failure never dou
       name: "late.bpmn",
       content: `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
              xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
              targetNamespace="http://nanobpm/testkit">
   <process id="late" isExecutable="true">
@@ -961,25 +976,70 @@ test("wasm: close() stays memoized after free() so a post-free failure never dou
     <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="late"/></extensionElements></serviceTask>
     <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
   </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="late">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="150" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="t_di" bpmnElement="t"><dc:Bounds x="240" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="400" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f_di" bpmnElement="f"><di:waypoint x="186" y="118"/><di:waypoint x="240" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="340" y="118"/><di:waypoint x="400" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
 </definitions>`,
       contentType: "application/bpmn+xml",
     },
   ]);
 
-  await engine.createInstance({ processDefinitionId: "late" });
-  releaseGate();
-  await macrotask();
-  await macrotask();
+  let settled = false;
+  try {
+    await engine.createInstance({ processDefinitionId: "late" });
+    releaseGate();
+    await macrotask();
+    await macrotask();
 
-  // First close() frees the engine, then surfaces the late in-flight failure (rejects *after* free()).
-  await assert.rejects(engine.close(), /late-completion-boom/, "first close() surfaces the late failure");
-  // Second close() must await the same memoized run and reject with the same error — NOT re-run
-  // `#doClose()` and re-`free()` the handle (which would reject with wbindgen's "null pointer passed to
-  // rust" double-free fault instead).
-  await assert.rejects(engine.close(), (err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    assert.match(message, /late-completion-boom/, "second close() must surface the memoized error");
-    assert.doesNotMatch(message, /null pointer passed to rust/, "second close() must not double-free");
-    return true;
+    // First close() frees the engine, then surfaces the late in-flight failure (rejects *after* free()).
+    await assert.rejects(engine.close(), /late-completion-boom/, "first close() surfaces the late failure");
+    // Second close() must await the same memoized run and reject with the same error — NOT re-run
+    // `#doClose()` and re-`free()` the handle (which would reject with wbindgen's "null pointer passed to
+    // rust" double-free fault instead).
+    await assert.rejects(engine.close(), (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      assert.match(message, /late-completion-boom/, "second close() must surface the memoized error");
+      assert.doesNotMatch(message, /null pointer passed to rust/, "second close() must not double-free");
+      return true;
+    });
+    settled = true;
+  } finally {
+    // The engine allocates native WASM memory. Release the gate so a parked handler unwinds, then — only
+    // if an assertion above threw before the close() assertions freed the handle — run a fallback close()
+    // to release it, so a failing case does not leak the native handle into the rest of the suite.
+    // Swallow its result: close() is memoized and (in this scenario) rejects with the late failure, and
+    // cleanup must never mask the real assertion error. On the success path free() already ran, so this
+    // is skipped entirely.
+    releaseGate();
+    if (!settled) await engine.close().catch(() => {});
+  }
+});
+
+// Regression (PR #447 review, wasm-engine.ts:559): `close()` publishes its memoized shutdown run BEFORE
+// invoking `#doClose()`. `#doClose()` synchronously aborts `#shutdown`, and `shutdownSignal` is PUBLIC,
+// so an abort listener can call `close()` again DURING that dispatch. The old `this.#closeRun ??=
+// this.#doClose()` evaluated `#doClose()` (aborting, dispatching the listener) BEFORE `??=` stored the
+// promise, so the re-entrant call saw an unset memo, started a SECOND `#doClose()`, and both reached
+// `free()` — the wbindgen "null pointer passed to rust" double-free. The re-entrant close() must instead
+// observe the in-progress run and await it.
+test("wasm: a shutdownSignal abort listener that re-enters close() must not double-free (#447 review)", async () => {
+  const engine = await createWasmEngineClient();
+  let reentrant: Promise<void> | undefined;
+  engine.shutdownSignal.addEventListener("abort", () => {
+    reentrant = engine.close();
   });
+  await assert.doesNotReject(
+    engine.close(),
+    "close() must not double-free when re-entered from a synchronous shutdownSignal abort listener",
+  );
+  await assert.doesNotReject(
+    reentrant ?? Promise.reject(new Error("the abort listener never re-entered close()")),
+    "the re-entrant close() must await the same memoized run, not start a second teardown that re-frees",
+  );
 });

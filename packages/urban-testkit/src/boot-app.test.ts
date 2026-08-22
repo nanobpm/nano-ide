@@ -305,13 +305,13 @@ test("bootTestApp stop() cancels a worker parked on app.wait instead of hanging 
     assert.ok(app.scheduler.pending() > 0, "the worker must be parked on a virtual app.wait timer");
 
     // stop() closes the engine mid-park; it must cancel the wait via the shutdown signal rather than
-    // await a virtual timer no advanceTime will ever fire. A hang would blow the runner timeout; the
-    // real-time bound below additionally proves it did not silently burn wall-clock time. Capture the
-    // clock immediately before stop() so the bound measures teardown, not the (unrelated) setup above.
-    const wallStart = Date.now();
+    // await a virtual timer no advanceTime will ever fire. A hang would blow the runner timeout.
     await app.stop();
     stopped = true;
-    assert.ok(Date.now() - wallStart < 10_000, "stop() must not hang on the parked virtual wait");
+    // Deterministic teardown postcondition (not a wall-clock bound): the shutdown signal must have
+    // cancelled the parked virtual timer, so the scheduler has no armed timers left. A stop() that
+    // truly hung would never reach this line — the test runner's own timeout catches that.
+    assert.equal(app.scheduler.pending(), 0, "stop() must cancel the parked virtual wait, leaving no armed timers");
   } finally {
     if (!stopped) await app.stop();
     await rm(dir, { recursive: true, force: true });

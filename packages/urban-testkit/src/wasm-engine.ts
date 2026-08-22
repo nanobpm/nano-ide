@@ -539,10 +539,26 @@ export class WasmEngineClient implements EngineClient {
     // so the caller can cancel/retry. But once `free()` has run (`#freed`), keep even a rejected run
     // memoized: `#doClose` can still reject *after* `free()` when `#throwInflightError()` surfaces a
     // late completion error, and re-running it would `free()` the already-freed handle a second time.
-    this.#closeRun ??= this.#doClose().catch((err) => {
-      if (!this.#freed) this.#closeRun = undefined;
-      throw err;
-    });
+    //
+    // Re-entrancy: `#doClose()` synchronously aborts `#shutdown`, and `shutdownSignal` is PUBLIC, so an
+    // abort listener can call `close()` again DURING that dispatch. A naive `this.#closeRun ??=
+    // this.#doClose()` evaluates `#doClose()` (which aborts, dispatching the listener) BEFORE the `??=`
+    // stores its promise, so the re-entrant call still sees `#closeRun === undefined`, starts a SECOND
+    // `#doClose()`, and both reach `free()` — the double-free the memo exists to prevent. Publish the
+    // memo (a deferred) BEFORE invoking `#doClose()` so the re-entrant call observes the in-progress run
+    // and awaits it. `#closing`/`#shutdown.abort()` stay synchronous inside `#doClose()`, unchanged.
+    if (this.#closeRun === undefined) {
+      let settle!: () => void;
+      let fail!: (err: unknown) => void;
+      this.#closeRun = new Promise<void>((resolve, reject) => {
+        settle = resolve;
+        fail = reject;
+      });
+      this.#doClose().then(settle, (err: unknown) => {
+        if (!this.#freed) this.#closeRun = undefined;
+        fail(err);
+      });
+    }
     return this.#closeRun;
   }
 

@@ -2601,7 +2601,10 @@ function baseRelativeUrl(url) {
 /** @param {any} path */
 function sameOriginPath(path) {
   if (typeof path !== "string") return "";
-  const cleaned = path.replace(/[\t\n\r]/g, "").trim();
+  // Browsers normalize backslashes to `/` in URLs, so `\\evil.example/tasks` (or
+  // `/\evil.example`) is parsed as protocol-relative `//evil.example/…`. Fold `\` → `/`
+  // before the scheme/`//` gates so a backslash can't smuggle a cross-origin target past them.
+  const cleaned = path.replace(/[\t\n\r]/g, "").replace(/\\/g, "/").trim();
   if (cleaned === "") return "";
   if (/^[a-z][a-z0-9+.-]*:/i.test(cleaned)) return ""; // any scheme → not a same-origin in-app path
   if (cleaned.startsWith("//")) return ""; // protocol-relative → different origin

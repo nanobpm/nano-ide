@@ -440,6 +440,11 @@ test("#436: sameOriginPath rebases in-app paths and rejects non-same-origin targ
   assert.equal(sameOriginPath("javascript:alert(1)"), "");
   assert.equal(sameOriginPath("data:text/html,x"), "");
   assert.equal(sameOriginPath("//evil.example/tasks"), "");
+  // Backslashes are folded to `/` before the gates (browsers normalize them), so a
+  // `\\host` or `/\host` value can't smuggle a protocol-relative cross-origin target past.
+  assert.equal(sameOriginPath("\\\\evil.example/tasks"), "");
+  assert.equal(sameOriginPath("/\\evil.example/tasks"), "");
+  assert.equal(sameOriginPath("\\/evil.example/tasks"), "");
   // Non-strings / blanks → "".
   assert.equal(sameOriginPath(""), "");
   assert.equal(sameOriginPath("   "), "");

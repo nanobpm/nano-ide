@@ -294,6 +294,19 @@ test("the parity guard ignores projections the model does not reference", async 
   });
 });
 
+test("the parity guard materialises a keyless sample row (DEFAULT VALUES, not skipped)", async () => {
+  // A constant-derived model referencing no base columns: a `{ baseRow: {} }` sample must still
+  // produce one VIEW row, else SQL returns 0 rows (undefined) while the TS fn returns the constant.
+  const model = defineReadModel({
+    name: "constant_read_model",
+    baseTable: "constant_rows",
+    derive: { label: lit("active") },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() => assertReadModelParity(model, db, [{ baseRow: {} }]));
+  });
+});
+
 test("an invalid SQL identifier is rejected at declaration time (injection guard)", () => {
   assert.throws(() => defineReadModel({ name: "bad name", baseTable: "t", derive: { c: lit(1) } }), /invalid/);
   assert.throws(() => defineReadModel({ name: "ok", baseTable: "t; DROP TABLE x", derive: { c: lit(1) } }), /invalid/);

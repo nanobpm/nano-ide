@@ -739,7 +739,13 @@ export function assertReadModelParity(
 
   const insertRow = (table: string, row: Record<string, unknown>): void => {
     const keys = Object.keys(row);
-    if (keys.length === 0) return;
+    if (keys.length === 0) {
+      // A keyless row (e.g. `{ baseRow: {} }`) still represents one input row: the fixture always
+      // carries at least a `_placeholder` column, so `DEFAULT VALUES` materialises it and the VIEW
+      // sees a row. Skipping it would leave the VIEW empty and fail parity for a non-parity reason.
+      db.run(`INSERT INTO ${quoteIdent(table)} DEFAULT VALUES;`);
+      return;
+    }
     const placeholders = keys.map(() => "?").join(", ");
     db.run(
       `INSERT INTO ${quoteIdent(table)} (${keys.map((k) => quoteIdent(k)).join(", ")}) VALUES (${placeholders});`,

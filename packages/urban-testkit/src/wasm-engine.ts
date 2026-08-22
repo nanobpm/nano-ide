@@ -11,6 +11,7 @@
 // worker runs autonomously exactly as it would against a live engine, but
 // deterministically and with no wall-clock waits.
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { TestEngine } from "@nanobpm/engine-wasm/readmodel";
 // The engine's derived read-model DTO types — the single source of truth for the
 // shapes its REST read channel returns (`searchUserTasks` / `searchProcessInstances` /
@@ -235,6 +236,14 @@ export class WasmEngineClient implements EngineClient {
    *  quick handler's effects stay visible after `settle()` exactly as before, while a parked one
    *  is simply left in-flight instead of deadlocking the drain on a clock that only moves later. */
   readonly #inflight = new Set<Promise<void>>();
+  /** Per-handler async context carrying the handler's OWN tracked promise (see {@link #track}). A
+   *  worker handler can itself call {@link close} (workers reach the engine through `AppApi`); its
+   *  tracked promise is then in {@link #inflight} while it awaits close(), yet can only settle AFTER
+   *  close() returns. {@link #settleInflight} reads this store to exclude the caller's own promise
+   *  from its settlement wait, so a handler-initiated close() drains its PEERS without dead-awaiting
+   *  itself (close() waiting on the handler that is waiting on close()). Empty for an external close()
+   *  (no handler on the stack), so that path is unchanged. */
+  readonly #handlerContext = new AsyncLocalStorage<{ own?: Promise<void> }>();
   /** Job keys whose handler is currently in-flight (dispatched, not yet settled). Advancing virtual
    *  time past a job's activation lock makes the engine re-offer a still-running job; this set lets
    *  {@link drain} skip spawning a duplicate handler for one the in-flight instance already owns. */
@@ -794,7 +803,7 @@ export class WasmEngineClient implements EngineClient {
           // below (so its effects are visible after `settle`); a handler parked on a *future*
           // virtual-clock `app.wait` is left in-flight for `advanceTime` to drive, instead of
           // deadlocking the drain on a clock that only moves later.
-          this.#track(jobKey, this.#runJob(worker, realWorker !== undefined, raw));
+          this.#track(jobKey, () => this.#runJob(worker, realWorker !== undefined, raw));
         }
       }
       // Let every handler dispatched this iteration run until it completes (its `completeJob` may
@@ -817,8 +826,14 @@ export class WasmEngineClient implements EngineClient {
    *  maps a handler throw onto the engine's completion surface internally, so a rejection here can
    *  only come from the engine completion call itself; capture it (deduped) so {@link drain} can
    *  rethrow it loudly rather than let it escape as an unhandled rejection. */
-  #track(jobKey: string, p: Promise<void>): void {
+  #track(jobKey: string, run: () => Promise<void>): void {
     if (jobKey !== "") this.#inflightJobKeys.add(jobKey);
+    // Run the handler inside a per-handler async context so a handler that calls close() can be
+    // identified by {@link #settleInflight} and excluded from its own settlement wait (the
+    // re-entrant self-await deadlock). `run()` starts `#runJob`; every async continuation of that
+    // handler — including a nested close() — inherits `store`.
+    const store: { own?: Promise<void> } = {};
+    const p = this.#handlerContext.run(store, run);
     // Assign `tracked` before the `.finally` closure can reference it: the callback only runs once
     // the promise settles (long after this statement completes), but an explicit let/assign makes
     // the evaluation order unambiguous rather than relying on the self-referential `const`.
@@ -832,6 +847,8 @@ export class WasmEngineClient implements EngineClient {
         this.#inflight.delete(tracked);
         if (jobKey !== "") this.#inflightJobKeys.delete(jobKey);
       });
+    // Publish the tracked promise into the handler's context so a nested close() can exclude it.
+    store.own = tracked;
     this.#inflight.add(tracked);
   }
 
@@ -859,13 +876,27 @@ export class WasmEngineClient implements EngineClient {
    *  a follow-on tracked handler behind; `Promise.allSettled` snapshots the set, so re-check until
    *  it is empty. Bounded by {@link MAX_DRAIN_ITERATIONS} so a pathological handler that perpetually
    *  re-creates in-flight work throws (leaving `#inflight` non-empty) rather than hanging teardown
-   *  forever — {@link close} treats that throw as "not settled" and pointedly does NOT free. */
+   *  forever — {@link close} treats that throw as "not settled" and pointedly does NOT free. A
+   *  handler that self-initiates close() is excluded from the wait (see the body) so it does not
+   *  dead-await itself. */
   async #settleInflight(): Promise<void> {
+    // A worker handler can itself call close() (workers reach the engine via `AppApi`), so the
+    // handler's OWN tracked promise sits in `#inflight` while it awaits close(). That promise can
+    // only settle AFTER close() returns, so waiting on it here would deadlock — close() awaiting the
+    // handler that is awaiting close() — and never reach the iteration cap (the promise is merely
+    // pending, not re-creating work). Exclude the caller's own tracked promise: a handler-initiated
+    // close() drains its PEERS to settlement but not itself. Re-read the context each pass because a
+    // handler that calls close() before its first await can reach here before {@link #track} has
+    // published `own`. For an external close() the store is absent and nothing is excluded — the
+    // original whole-set wait, unchanged.
     for (let i = 0; i < MAX_DRAIN_ITERATIONS; i++) {
-      if (this.#inflight.size === 0) break;
-      await Promise.allSettled([...this.#inflight]);
+      const own = this.#handlerContext.getStore()?.own;
+      const peers = [...this.#inflight].filter((p) => p !== own);
+      if (peers.length === 0) break;
+      await Promise.allSettled(peers);
     }
-    if (this.#inflight.size !== 0) {
+    const own = this.#handlerContext.getStore()?.own;
+    if ([...this.#inflight].some((p) => p !== own)) {
       throw new Error(
         `close() did not settle in-flight handlers after ${MAX_DRAIN_ITERATIONS} iterations ` +
           "(a worker handler perpetually re-creating in-flight work?)",
@@ -999,8 +1030,18 @@ export class WasmEngineClient implements EngineClient {
     if (!hasRealWorker) return;
     try {
       const out = await worker.handler(job);
+      // A handler can self-initiate teardown by calling close() (workers reach the engine through
+      // `AppApi`); close() then frees the engine while this handler is parked on its await. On resume
+      // the engine handle is gone, so completing the job would drive a freed pointer — the very issue
+      // #446 use-after-free. `#settleInflight` deliberately excludes this handler from its wait so a
+      // self-close does not deadlock; the price is that we must NOT touch the freed engine afterward.
+      if (this.#freed) return;
       this.#engine.completeJob(jobKey, JSON.stringify(out ?? {}));
     } catch (err) {
+      // Same guard on the failure path: a handler that self-closed and then threw has no live engine
+      // to fail the job against. (Only a self-closing handler can run past `free()`: `#settleInflight`
+      // awaits every OTHER in-flight handler before close() frees, so no peer is ever mid-flight here.)
+      if (this.#freed) return;
       this.#failFromError(raw, jobKey, err);
     }
   }

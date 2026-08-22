@@ -921,6 +921,90 @@ test("wasm: close() cancels a handler parked on a virtual-clock wait instead of 
   }
 });
 
+// Regression (PR #447 review, wasm-engine.ts:580 — facet 4): a worker handler can itself call
+// `await engine.close()` (workers reach the engine through `AppApi`). The handler's OWN tracked
+// promise is in `#inflight` while it awaits close(), but that promise can only settle once close()
+// returns — so a `#settleInflight()` that waits on the whole `#inflight` set dead-awaits itself:
+// close() waits for the handler, the handler waits for close(). It never hits the iteration cap
+// (the promise is merely pending, not re-creating work), it just hangs. close() now excludes the
+// caller's own tracked promise from its settlement wait, so a handler-initiated close() drains its
+// PEERS but not itself, and the companion `#freed` guard in `#runJob` stops the resumed handler
+// from completing its job on the freed engine (the issue #446 use-after-free). Deterministic: a
+// regression leaves `closeReturned` false and fails fast on the assertions below — it does not hang.
+test("wasm: a handler that calls engine.close() does not dead-await itself (#447 review, facet 4)", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  let closeReturned = false;
+  let handlerReturned = false;
+  let closed = false;
+  try {
+    // The handler self-initiates teardown: it awaits close() (as a real worker would when it reaches
+    // the engine via AppApi), then falls through to its normal return — the exact re-entrant path
+    // Copilot flagged. Before the fix `await engine.close()` never resolves, so neither flag flips.
+    await engine.registerWorker("self-close", async () => {
+      // Yield one real macrotask FIRST so this handler is fully registered in `#inflight` (the
+      // fire-and-forget `#track` completes only after the synchronous dispatch returns) before it
+      // self-initiates teardown. Only then does `await engine.close()` exercise the re-entrant path:
+      // the handler's own tracked promise is in the set `#settleInflight()` would otherwise wait on.
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+      await engine.close();
+      closeReturned = true;
+      handlerReturned = true;
+      return {};
+    });
+    await engine.deployResources([
+      {
+        name: "self-close.bpmn",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="self-close" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f" sourceRef="s" targetRef="t"/>
+    <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="self-close"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
+  </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="self-close">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="150" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="t_di" bpmnElement="t"><dc:Bounds x="240" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="400" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f_di" bpmnElement="f"><di:waypoint x="186" y="118"/><di:waypoint x="240" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="340" y="118"/><di:waypoint x="400" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>`,
+        contentType: "application/bpmn+xml",
+      },
+    ]);
+
+    // createInstance drains, which dispatches the handler; the handler calls close() from that
+    // in-flight context. Yield a few real macrotasks so the (now non-deadlocking) close() and the
+    // handler resumption both complete deterministically without any wall-clock waiting.
+    await engine.createInstance({ processDefinitionId: "self-close" });
+    for (let i = 0; i < 5; i++) {
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+    }
+    closed = true;
+    assert.ok(closeReturned, "a handler-initiated close() must resolve, not dead-await its own promise");
+    assert.ok(
+      handlerReturned,
+      "the handler must resume after its self-initiated close() (and not crash completing on the freed engine)",
+    );
+    // The memoized close() run is settled — a later external close() is a no-op, proving the engine
+    // was cleanly freed exactly once (no double-free, no hang).
+    await engine.close();
+  } finally {
+    // If an assertion above threw before the self-close ran, close idempotently so a failure does not
+    // leak the native WASM handle into the rest of the suite. close() is memoized, so this is a no-op
+    // once the handler already closed it.
+    if (!closed) await engine.close();
+  }
+});
+
 // Regression (PR #447 review, wasm-engine.ts:554): close() is idempotent. The shutdown run is
 // memoized, so two concurrent close() calls (or a second after the first resolves) await the SAME
 // run instead of each reaching `#engine.free()` — freeing the same WASM handle twice throws in

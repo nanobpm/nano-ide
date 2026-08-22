@@ -109,20 +109,32 @@ export class OpenUserTasksStore {
    */
   syncInstance(processInstanceKey: string, openTasks: readonly UserTaskSummary[]): void {
     if (!processInstanceKey) return;
-    const keep = new Set<string>();
-    for (const task of openTasks) {
-      if (!task.userTaskKey) continue;
-      keep.add(task.userTaskKey);
-      this.recordOpenTask(processInstanceKey, task);
-    }
-    const existing = this.#db.all<{ user_task_key: string }>(
-      `SELECT user_task_key FROM ${OPEN_USER_TASKS_TABLE} WHERE process_instance_key = ?`,
-      [processInstanceKey],
-    );
-    for (const row of existing) {
-      if (!keep.has(row.user_task_key)) {
-        this.#db.run(`DELETE FROM ${OPEN_USER_TASKS_TABLE} WHERE user_task_key = ?`, [row.user_task_key]);
+    // Wrap the insert+delete replace in a SAVEPOINT so the whole sync is atomic: no reader observes a
+    // transient mixed state mid-sync, and a mid-loop failure rolls back cleanly instead of leaving the
+    // instance with a torn open set. SAVEPOINT (not BEGIN) so this also composes when called inside an
+    // existing transaction, e.g. a reconciler poll that batches many instances.
+    this.#db.exec("SAVEPOINT urban_sync_open_tasks");
+    try {
+      const keep = new Set<string>();
+      for (const task of openTasks) {
+        if (!task.userTaskKey) continue;
+        keep.add(task.userTaskKey);
+        this.recordOpenTask(processInstanceKey, task);
       }
+      const existing = this.#db.all<{ user_task_key: string }>(
+        `SELECT user_task_key FROM ${OPEN_USER_TASKS_TABLE} WHERE process_instance_key = ?`,
+        [processInstanceKey],
+      );
+      for (const row of existing) {
+        if (!keep.has(row.user_task_key)) {
+          this.#db.run(`DELETE FROM ${OPEN_USER_TASKS_TABLE} WHERE user_task_key = ?`, [row.user_task_key]);
+        }
+      }
+      this.#db.exec("RELEASE urban_sync_open_tasks");
+    } catch (err) {
+      this.#db.exec("ROLLBACK TO urban_sync_open_tasks");
+      this.#db.exec("RELEASE urban_sync_open_tasks");
+      throw err;
     }
   }
 
@@ -135,11 +147,13 @@ export class OpenUserTasksStore {
   /** True iff the instance currently has any open user task — the "parked on a human" predicate. */
   hasOpenTask(processInstanceKey: string): boolean {
     if (!processInstanceKey) return false;
-    const rows = this.#db.all<{ n: number }>(
-      `SELECT COUNT(*) AS n FROM ${OPEN_USER_TASKS_TABLE} WHERE process_instance_key = ?`,
+    // Existence predicate: `SELECT 1 … LIMIT 1` short-circuits on the first matching row rather than
+    // counting every open task for the instance.
+    const rows = this.#db.all<{ one: number }>(
+      `SELECT 1 AS one FROM ${OPEN_USER_TASKS_TABLE} WHERE process_instance_key = ? LIMIT 1`,
       [processInstanceKey],
     );
-    return (rows[0]?.n ?? 0) > 0;
+    return rows.length > 0;
   }
 
   /** The projected open tasks for an instance, in insertion order. */

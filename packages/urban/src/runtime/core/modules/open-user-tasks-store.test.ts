@@ -128,6 +128,29 @@ test("clearInstance retires every open task for an instance", async () => {
   });
 });
 
+test("syncInstance is atomic — it composes inside an existing transaction and rolls back on failure", async () => {
+  await withStore((store, db) => {
+    // Composes inside an outer transaction (SAVEPOINT, not BEGIN): the whole replace commits as one unit.
+    db.exec("BEGIN");
+    store.syncInstance("pi-1", [task("ut-1"), task("ut-2")]);
+    db.exec("COMMIT");
+    assert.deepEqual(store.openTasks("pi-1").map((t) => t.userTaskKey).sort(), ["ut-1", "ut-2"]);
+
+    // A failure mid-sync must roll the whole operation back, leaving the prior open set intact rather
+    // than a torn partial state. A subclass that throws from recordOpenTask forces a mid-loop failure.
+    const boom = new Error("boom");
+    class ThrowingStore extends OpenUserTasksStore {
+      override recordOpenTask(): boolean {
+        throw boom;
+      }
+    }
+    const broken = new ThrowingStore(db, { clock: { now: () => 0 } });
+    assert.throws(() => broken.syncInstance("pi-1", [task("ut-9")]), boom);
+    // The prior open set is unchanged — nothing was half-written or half-deleted.
+    assert.deepEqual(store.openTasks("pi-1").map((t) => t.userTaskKey).sort(), ["ut-1", "ut-2"]);
+  });
+});
+
 test("the DSL projection name is stable and unprefixed (usable in `exists(...)`)", () => {
   assert.equal(OPEN_USER_TASKS_PROJECTION, "urban_open_user_tasks");
 });

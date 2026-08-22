@@ -60,7 +60,13 @@ interface InstanceStateDbRow {
 }
 
 function normalizeState(raw: string): ProcessInstanceState {
-  return raw === "COMPLETED" ? "COMPLETED" : raw === "TERMINATED" ? "TERMINATED" : "ACTIVE";
+  // Validate rather than coerce: silently mapping an unknown value to "ACTIVE" would let corrupted rows
+  // or an unhandled new engine state masquerade as ACTIVE and produce incorrect derived edges. Surface
+  // the bad data loudly instead.
+  if (raw === "ACTIVE" || raw === "COMPLETED" || raw === "TERMINATED") return raw;
+  throw new Error(
+    `${INSTANCE_STATE_TABLE} contains an unexpected state ${JSON.stringify(raw)} — refusing to coerce to ACTIVE (data corruption or an unhandled engine state)`,
+  );
 }
 
 /**

@@ -120,6 +120,18 @@ test("recordFromSnapshot records from an engine ProcessInstanceSnapshot", async 
   });
 });
 
+test("getState surfaces (throws on) an unexpected persisted state rather than masquerading it as ACTIVE", async () => {
+  await withStore((store, db) => {
+    // Simulate a corrupted row / an unhandled future engine state landing in the table.
+    db.run(
+      `INSERT INTO ${INSTANCE_STATE_TABLE} (process_instance_key, state, waiting_on_human, updated_at)
+       VALUES (?, ?, 0, ?)`,
+      ["pi-bad", "SOMETHING_ELSE", new Date(0).toISOString()],
+    );
+    assert.throws(() => store.getState("pi-bad"), /unexpected state/);
+  });
+});
+
 test("getState returns undefined for an unrecorded instance", async () => {
   await withStore((store) => {
     assert.equal(store.getState("unknown"), undefined);

@@ -12,6 +12,9 @@ import type { JobExecContext } from "../execContext.ts";
 import { readLineage } from "../lineage.ts";
 import { LineageStore } from "./lineage-store.ts";
 import { readModelRegistry } from "../read-model.ts";
+import { registerCanonicalProjections } from "./canonical-projections.ts";
+import { InstanceStateStore } from "./instance-state-store.ts";
+import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
 import { defaultScheduler, schedulerClock, type SchedulerDeps } from "./scheduler.ts";
 
 /** The subset of the engine SDK the LLM decision-rails need: evaluate a DMN decision,
@@ -158,6 +161,28 @@ function tryProvisionReadModelViews(app: AppApi, log: RuntimeContext["host"]["lo
   }
 }
 
+/**
+ * Provision the canonical engine-truth projection sidecars (ADR 0065, proposal point #1) on the app's
+ * DEFAULT data source — `_urban_open_user_tasks` and `_urban_instance_state`, the sources a read model
+ * `EXISTS`-derives its status edges from. Exactly the per-source boot path `tryLineageStore` uses: an
+ * app with no datasource provisions nothing, and a schema failure degrades to no projection tables
+ * rather than a failed worker mount. The DSL projection-name registration is done unconditionally by
+ * the caller (so read models compile even without a datasource); this only creates the physical tables.
+ */
+function tryProvisionCanonicalProjections(app: AppApi, log: RuntimeContext["host"]["log"]): void {
+  if (!app.data.hasDefaultSource()) {
+    log("debug", "canonical-projections: no default data source; projection tables not provisioned");
+    return;
+  }
+  try {
+    const { db } = app.data.source();
+    new OpenUserTasksStore(db).ensureSchema();
+    new InstanceStateStore(db).ensureSchema();
+  } catch (err) {
+    log("warn", "canonical-projections: failed to provision projection tables", { error: String(err) });
+  }
+}
+
 /** Record an activated job's lineage edge, never letting a projection write break the job. */
 function recordJobLineage(store: LineageStore, job: EngineJob, log: RuntimeContext["host"]["log"]): void {
   try {
@@ -218,6 +243,14 @@ export async function mountWorkers(
   // The framework read-model VIEWs (ADR 0065): apply every registered managed VIEW to the app's
   // default data source, the same per-source boot path lineage uses. A no-op until a sibling task
   // registers a read model into `readModelRegistry`.
+  //
+  // Register the canonical engine-truth projections (`urban_open_user_tasks`, `urban_instance_state`)
+  // FIRST and unconditionally: a read model's managed VIEW resolves each projection name to its
+  // physical `_urban_` table at DDL-compile time, so the name→table mapping must exist before
+  // `tryProvisionReadModelViews` compiles any VIEW that `EXISTS`-references a projection. Then
+  // provision the projection tables per source (absent-safe), and finally the read-model VIEWs.
+  registerCanonicalProjections();
+  tryProvisionCanonicalProjections(app, ctx.host.log);
   tryProvisionReadModelViews(app, ctx.host.log);
 
   // Cache module loads so a multi-type handler module is imported once.

@@ -279,7 +279,35 @@ export type {
   WhenClause,
 } from "./core/read-model.ts";
 
-// Phase — the framework-level *domain phase* primitive (issue #266): derive "which phase is this
+// Canonical engine-truth projection sidecars (ADR 0065, proposal point #1): two framework-owned,
+// per-source projections the DSL `exists(...)` derives over — `urban_open_user_tasks` (which instances
+// are parked on a human) and `urban_instance_state` (per-instance engine lifecycle state). Provisioned
+// next to the lineage sidecar in core/modules/workers.ts; registered into `projectionRegistry` under
+// their stable DSL names via `registerCanonicalProjections()`.
+export {
+  CANONICAL_PROJECTIONS,
+  registerCanonicalProjections,
+} from "./core/modules/canonical-projections.ts";
+export {
+  OPEN_USER_TASKS_PROJECTION,
+  OPEN_USER_TASKS_SCHEMA_SQL,
+  OPEN_USER_TASKS_TABLE,
+  OpenUserTasksStore,
+} from "./core/modules/open-user-tasks-store.ts";
+export type {
+  OpenUserTaskRow,
+  OpenUserTasksStoreOptions,
+} from "./core/modules/open-user-tasks-store.ts";
+export {
+  INSTANCE_STATE_PROJECTION,
+  INSTANCE_STATE_SCHEMA_SQL,
+  INSTANCE_STATE_TABLE,
+  InstanceStateStore,
+} from "./core/modules/instance-state-store.ts";
+export type {
+  InstanceStateRow,
+  InstanceStateStoreOptions,
+} from "./core/modules/instance-state-store.ts";
 // instance in?" from the BPMN scope hierarchy + write-provenance (Tier 0, zero declaration), an
 // optional `nano:phase` override (Tier 1), and a lineage rollup for the epic frontier (Tier 2).
 export {

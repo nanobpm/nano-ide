@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.78.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.4...@nanobpm/urban-0.78.0) (2026-08-22)
+
+
+### Features
+
+* **urban:** defineReadModel — declare-once, compile-to-both derived read models (ADR 0065) ([#455](https://github.com/nanobpm/nano-ide/issues/455)) ([277b162](https://github.com/nanobpm/nano-ide/commit/277b16272eb71a439a7d7648c97141b28e31ec92))
+
 ## [0.77.4](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.3...@nanobpm/urban-0.77.4) (2026-08-22)
 
 

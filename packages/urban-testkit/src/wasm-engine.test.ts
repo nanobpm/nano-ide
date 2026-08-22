@@ -1134,6 +1134,16 @@ test("wasm: engine operations fault cleanly after close() instead of driving a f
     "searchProcessInstances after close() must reject cleanly",
   );
   await assert.rejects(
+    () => engine.getForm({ formKey: "1" }),
+    usedAfterClose,
+    "getForm after close() must reject cleanly (its live-engine resolve is outside the malformed-key catch)",
+  );
+  await assert.rejects(
+    () => engine.registerWorker("nope", async () => ({})),
+    usedAfterClose,
+    "registerWorker after close() must reject cleanly, not resolve with a subscription on a freed engine",
+  );
+  await assert.rejects(
     () =>
       engine.deployResources([
         { name: "x.bpmn", content: "<definitions/>", contentType: "application/bpmn+xml" },

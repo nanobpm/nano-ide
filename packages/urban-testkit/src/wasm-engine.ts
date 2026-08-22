@@ -561,6 +561,13 @@ export class WasmEngineClient implements EngineClient {
     handler: JobHandler,
     options?: { workerName?: string; maxParallelJobs?: number; fetchVariables?: string[] },
   ): Promise<WorkerSubscription> {
+    // Gate registration on the same live-engine boundary every other public op uses (No Drift
+    // Surfaces): after close()/free() a fresh worker would be inserted into `#workers` (already
+    // cleared by `#doClose`) and — because `drain()` bails on `#closing` — the call would still
+    // resolve with a live-looking subscription that retains the handler on a freed engine. Touch
+    // `#liveEngine` for its freed-throw side effect so that misuse faults with the categorical
+    // "used after close()" error instead of leaking a subscription over a dead handle.
+    void this.#liveEngine;
     this.#workers.set(jobType, {
       handler,
       workerName: options?.workerName ?? `urban-testkit:${jobType}`,

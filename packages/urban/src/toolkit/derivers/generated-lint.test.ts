@@ -15,6 +15,18 @@ import {
 import { emitMeta } from "./meta.ts";
 import { emitMessageBindings, emitMessageBindingsRuntime } from "./messages.ts";
 import { emitWorkerBindings, emitWorkerBindingsRuntime } from "./worker-io.ts";
+import { emitApiBindings, emitApiController } from "./api.ts";
+import type { OpenApiDoc } from "../../openapi/spec.ts";
+
+// These guards spawn the scaffold's Biome *via Node* (`process.execPath <biome> check`). Under
+// `npm run test:deno` `process.execPath` is the Deno binary, so that spawn would launch Deno rather
+// than Biome and the lint command would fail spuriously. The generated output is runtime-independent
+// (it's plain text the emitters produce identically under either runtime), so running this guard once
+// under Node is sufficient — skip it under Deno instead of mis-spawning.
+const runtimeIsNode = !("Deno" in globalThis);
+const nodeOnly = {
+  skip: runtimeIsNode ? false : "Node-only: spawns Biome via process.execPath (Deno's execPath is not Node)",
+};
 
 // Defect-class guard (AGENTS.md "write a test guard for the defect class"): the emitters must
 // produce `nano-generated/` code that passes the `create-urban-app` scaffold's own Biome lint
@@ -75,16 +87,21 @@ function memIO(files: Record<string, string>): GenIO & { files: Record<string, s
 
 /** An OpenAPI surface whose operationIds exercise Biome's natural, case-sensitive import sort
  *  (`getAgentInstructions` < `getAgenticRegistry` < `getAgentSkill`; `item2` < `item10`) — the exact
- *  collation the controller's delegate imports must reproduce to pass `organizeImports`. */
+ *  collation the controller's delegate imports must reproduce to pass `organizeImports`. The
+ *  path→operationId assignment is deliberately *scrambled* relative to that collation: `collectOperations`
+ *  yields ops in sorted-path order (`/a`…`/e`), so the emitter's own `naturalCompare` sort — not the
+ *  input order — is what must reorder the imports into Biome's canonical sequence. A broken/removed
+ *  sort would leave them in path order and fail the `organizeImports` assist, so this input actually
+ *  regression-guards `naturalCompare` rather than passing on already-sorted data. */
 const OPENAPI = JSON.stringify({
   openapi: "3.0.0",
   info: { title: "guard", version: "1" },
   paths: {
-    "/a": { get: { operationId: "getAgentInstructions", responses: { "200": { description: "ok" } } } },
-    "/b": { get: { operationId: "getAgenticRegistry", responses: { "200": { description: "ok" } } } },
-    "/c": { get: { operationId: "getAgentSkill", responses: { "200": { description: "ok" } } } },
-    "/d": { get: { operationId: "item2", responses: { "200": { description: "ok" } } } },
-    "/e": { get: { operationId: "item10", responses: { "200": { description: "ok" } } } },
+    "/a": { get: { operationId: "item10", responses: { "200": { description: "ok" } } } },
+    "/b": { get: { operationId: "getAgentSkill", responses: { "200": { description: "ok" } } } },
+    "/c": { get: { operationId: "getAgentInstructions", responses: { "200": { description: "ok" } } } },
+    "/d": { get: { operationId: "getAgenticRegistry", responses: { "200": { description: "ok" } } } },
+    "/e": { get: { operationId: "item2", responses: { "200": { description: "ok" } } } },
   },
 });
 
@@ -152,7 +169,7 @@ function lintUnderScaffold(
   return spawnSync(process.execPath, [biomeBin, "check", "."], { cwd: work, encoding: "utf8" });
 }
 
-test("generated nano-generated/ code passes the scaffold's Biome lint ruleset", async () => {
+test("generated nano-generated/ code passes the scaffold's Biome lint ruleset", nodeOnly, async () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const templateDir = join(here, "..", "..", "..", "..", "create-urban-app", "template");
   const biomeBin = await resolveBiomeBin();
@@ -198,7 +215,7 @@ test("generated nano-generated/ code passes the scaffold's Biome lint ruleset", 
   }
 });
 
-test("every emitter branch (populated, empty, and the data-path runtime wrappers) is lint-clean", async () => {
+test("every emitter branch (populated, empty, and the data-path runtime wrappers) is lint-clean", nodeOnly, async () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const templateDir = join(here, "..", "..", "..", "..", "create-urban-app", "template");
   const biomeBin = await resolveBiomeBin();
@@ -233,6 +250,9 @@ test("every emitter branch (populated, empty, and the data-path runtime wrappers
     },
   ];
 
+  // An empty OpenAPI document (zero operations) → the empty-branch of the API emitters.
+  const EMPTY_SPEC: OpenApiDoc = { openapi: "3.0.0", info: { title: "empty", version: "1" }, paths: {} };
+
   const files: Record<string, string> = {
     // data-path runtime wrappers (the `as`-cast / keyed-accessor carriers):
     "workers.ts": emitWorkerBindingsRuntime(),
@@ -258,6 +278,14 @@ test("every emitter branch (populated, empty, and the data-path runtime wrappers
     "message-io-empty.d.ts": emitMessageBindings([], []),
     "meta-empty.ts": emitMeta([]),
     "domain-rows-empty.d.ts": emitDomainDts([]),
+    // a *multi-source* schema where one source has NO tables → the multi-source empty-source
+    // `Record<never, never>` fallback in `emitDomainDtsForSources` (domain.ts), which the
+    // single-/no-source `emitDomainDts([])` above never reaches:
+    "domain-rows-empty-source.d.ts": emitDomainModel([sources[0], { source: "audit", tables: [] }], "app", {}),
+    // an empty OpenAPI spec (zero operations) → the `ApiOperations = Record<never, never>` fallback
+    // (not an empty `interface`) and a delegate-less controller:
+    "api-io-empty.d.ts": emitApiBindings(EMPTY_SPEC),
+    "operations-empty.ts": emitApiController(EMPTY_SPEC),
   };
 
   const work = mkdtempSync(join(tmpdir(), "urban-genwrap-"));

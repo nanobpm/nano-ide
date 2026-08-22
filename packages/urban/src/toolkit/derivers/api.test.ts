@@ -108,6 +108,34 @@ test("emitApiController on an empty spec is a valid empty registry (never = {})"
   assert.match(out, /export const operations = \{\s*\} satisfies \{/);
 });
 
+test("emitApiBindings on an empty spec emits the Record<never, never> ApiOperations fallback (not an empty interface)", () => {
+  const empty: OpenApiDoc = { openapi: "3.0.0", paths: {} };
+  const out = emitApiBindings(empty);
+  assert.match(out, /export type ApiOperationId = never;/);
+  // A generated `.ts` file is now linted in the scaffold, where `interface ApiOperations {}` would
+  // trip `suspicious/noEmptyInterface`; the empty spec must degrade to the non-empty-safe alias.
+  assert.match(out, /export type ApiOperations = Record<never, never>;/);
+  assert.doesNotMatch(out, /interface ApiOperations/);
+});
+
+test("emitApiController orders imports by true numeric value for digit runs beyond IEEE-754 precision", () => {
+  // 16- vs 17-digit runs: `Number()` collapses these to the same float (and can yield NaN), so a
+  // float-subtraction sort would treat them as equal and leave order to chance. The 17-digit run is
+  // numerically larger and must sort last regardless.
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    paths: {
+      "/b": { get: { operationId: "op10000000000000001", responses: { "200": {} } } },
+      "/a": { get: { operationId: "op9999999999999999", responses: { "200": {} } } },
+    },
+  };
+  const out = emitApiController(doc, "handlers");
+  const iShort = out.indexOf("op9999999999999999.ts");
+  const iLong = out.indexOf("op10000000000000001.ts");
+  assert.ok(iShort >= 0 && iLong >= 0, out);
+  assert.ok(iShort < iLong, `16-digit run must sort before the larger 17-digit run:\n${out}`);
+});
+
 test("emitApiController throws on a duplicate operationId (would silently overwrite a map key)", () => {
   const dupe: OpenApiDoc = {
     openapi: "3.0.0",

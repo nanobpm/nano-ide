@@ -52,8 +52,14 @@ function naturalCompare(a: string, b: string): number {
     const cb = bx[i];
     if (ca === undefined || cb === undefined) break;
     if (isDigitRun(ca) && isDigitRun(cb)) {
-      const diff = Number(ca) - Number(cb);
-      if (diff !== 0) return diff;
+      // Compare digit runs by numeric value *without* floating-point loss: strip leading zeros,
+      // then a longer run is the larger number, else compare the equal-length digits lexically.
+      // (`Number(ca) - Number(cb)` collapses 17+-digit runs to the same IEEE-754 value and yields
+      //  `NaN` beyond `Number.MAX_SAFE_INTEGER`, both of which break the total order `sort` needs.)
+      const na = ca.replace(/^0+/, "");
+      const nb = cb.replace(/^0+/, "");
+      if (na.length !== nb.length) return na.length < nb.length ? -1 : 1;
+      if (na !== nb) return na < nb ? -1 : 1;
       if (ca !== cb) return ca < cb ? -1 : 1; // equal value, differing leading zeros
     } else if (ca !== cb) {
       const la = ca.toLowerCase();
@@ -303,6 +309,13 @@ export function emitApiBindings(doc: OpenApiDoc, surfaceEject = false): string {
     })
     .join("\n");
 
+  // With generated `.ts` now linted in the scaffold, an empty operation set must NOT emit an empty
+  // `interface ApiOperations {}` (`suspicious/noEmptyInterface`); fall back to the same non-empty-safe
+  // `Record<never, never>` used elsewhere (its `keyof` is `never`, matching `ApiOperationId = never`).
+  const apiOperations = ops.length > 0
+    ? `export interface ApiOperations {\n${mapEntries}\n}\n`
+    : `export type ApiOperations = Record<never, never>;\n`;
+
   return (
     header +
     (componentDecls ? `${componentDecls}\n\n` : "") +
@@ -310,7 +323,7 @@ export function emitApiBindings(doc: OpenApiDoc, surfaceEject = false): string {
     `/** Every declared operationId (ADR 0058): the delegate key set. */\n` +
     `export type ApiOperationId = ${idUnion};\n\n` +
     `/** Request/response contract per operationId. */\n` +
-    `export interface ApiOperations {\n${mapEntries}\n}\n`
+    apiOperations
   );
 }
 

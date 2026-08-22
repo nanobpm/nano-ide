@@ -10,9 +10,12 @@
 			"db/**",
 			"pages/**",
 			"*.json",
-			"!nano-generated",
+			"nano-generated/**/*.ts",
 			"!node_modules"
 		]
+	},
+	"formatter": {
+		"includes": ["**", "!nano-generated/**"]
 	},
 	"linter": {
 		"enabled": true,
@@ -24,7 +27,7 @@
 			"db/**",
 			"pages/**",
 			"*.json",
-			"!nano-generated",
+			"nano-generated/**/*.ts",
 			"!node_modules"
 		],
 		"rules": {

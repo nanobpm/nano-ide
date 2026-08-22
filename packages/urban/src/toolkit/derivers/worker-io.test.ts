@@ -72,7 +72,7 @@ test("emitWorkerBindings falls back to string union + no import when nothing is 
   const out = emitWorkerBindings([{ taskType: "orders.notify" }], []);
   assert.match(out, /export type WorkerTaskType = "orders.notify";/);
   assert.doesNotMatch(out, /import type \{ DomainTypes \}/);
-  assert.match(out, /export interface WorkerInputs \{\}/);
+  assert.match(out, /export type WorkerInputs = Record<never, never>;/);
 });
 
 test("emitWorkerBindings unions distinct envelopes bound to one taskType (shared handler)", () => {

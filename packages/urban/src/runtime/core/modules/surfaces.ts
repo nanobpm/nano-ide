@@ -218,12 +218,13 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
         const pik = req.query.get("processInstanceKey") ?? undefined;
         const assignee = req.query.get("assignee") ?? undefined;
         const candidateGroup = req.query.get("candidateGroup") ?? undefined;
-        // Constrain the inbox to open (answerable) tasks. Without a state filter the engine
-        // returns tasks in every state (CREATED/COMPLETED/CANCELED/...), so already-answered
-        // or withdrawn tasks would surface as if actionable — completing one then fails with
-        // "User task ... is not active". See nanobpm/nano-ide#248.
-        const tasks = await app.engine.searchUserTasks({
-          state: "CREATED",
+        // Constrain the inbox to open (answerable) tasks via openUserTasks — the accessor that
+        // pins state="CREATED" for us. A bare searchUserTasks returns tasks in every state
+        // (CREATED/COMPLETED/CANCELED/...), so already-answered or withdrawn tasks would surface
+        // as if actionable — completing one then fails with "User task ... is not active".
+        // Deriving the pin from openUserTasks (rather than re-pinning state here) keeps the
+        // definition of "open" single-sourced. See nanobpm/nano-ide#248.
+        const tasks = await app.engine.openUserTasks({
           ...(pik ? { processInstanceKey: pik } : {}),
           ...(assignee ? { assignee } : {}),
           ...(candidateGroup ? { candidateGroup } : {}),

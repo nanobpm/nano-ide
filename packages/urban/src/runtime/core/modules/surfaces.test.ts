@@ -185,7 +185,7 @@ test("/api/tasks surfaces the resolved form linkage", async () => {
   let seenFilter: unknown;
   const engine: EngineClient = {
     ...fakeEngine,
-    searchUserTasks: async (filter) => {
+    openUserTasks: async (filter) => {
       seenFilter = filter;
       return [
         { userTaskKey: "1", elementId: "approve", formKey: "form-123" },
@@ -195,33 +195,41 @@ test("/api/tasks surfaces the resolved form linkage", async () => {
   };
   const { tasks } = inboxRoutes(engine);
   const res = await call(tasks, { query: "processInstanceKey=pi-9" });
-  assert.deepEqual(seenFilter, { state: "CREATED", processInstanceKey: "pi-9" });
+  assert.deepEqual(seenFilter, { processInstanceKey: "pi-9" });
   const parsed = JSON.parse(String(res.body));
   assert.equal(parsed[0].formKey, "form-123");
   assert.equal(parsed[1].formKey, undefined);
 });
 
-test("/api/tasks constrains the search to open (CREATED) tasks", async () => {
+test("/api/tasks constrains the search to open tasks via openUserTasks", async () => {
   let seenFilter: unknown;
+  let openCalled = false;
   const engine: EngineClient = {
     ...fakeEngine,
-    searchUserTasks: async (filter) => {
+    // A regression to a bare searchUserTasks (which does not pin state="CREATED") must fail
+    // loudly rather than silently surface answered/canceled tasks (nanobpm/nano-ide#248).
+    searchUserTasks: async () => {
+      throw new Error("inbox must use openUserTasks, not a bare searchUserTasks");
+    },
+    openUserTasks: async (filter) => {
+      openCalled = true;
       seenFilter = filter;
       return [];
     },
   };
   const { tasks } = inboxRoutes(engine);
   await call(tasks);
-  // No processInstanceKey supplied, but the inbox must still pin state=CREATED so that
-  // already-answered/canceled tasks never surface as answerable (nanobpm/nano-ide#248).
-  assert.deepEqual(seenFilter, { state: "CREATED" });
+  // No processInstanceKey supplied; the inbox routes through openUserTasks, which pins the
+  // open (CREATED) invariant for us, so the handler forwards only selectors (none here).
+  assert.equal(openCalled, true);
+  assert.deepEqual(seenFilter, {});
 });
 
 test("/api/tasks forwards assignee and candidateGroup to the engine (nanobpm/nano-ide#438)", async () => {
   let seenFilter: unknown;
   const engine: EngineClient = {
     ...fakeEngine,
-    searchUserTasks: async (filter) => {
+    openUserTasks: async (filter) => {
       seenFilter = filter;
       return [];
     },
@@ -229,9 +237,9 @@ test("/api/tasks forwards assignee and candidateGroup to the engine (nanobpm/nan
   const { tasks } = inboxRoutes(engine);
   await call(tasks, { query: "assignee=demo-reviewer&candidateGroup=reviewers&processInstanceKey=pi-9" });
   // A manifest ui.path like /tasks?assignee=… must scope the inbox to that reviewer/group on a
-  // shared engine — the handler forwards both alongside the state/processInstanceKey pins.
+  // shared engine — the handler forwards both alongside the processInstanceKey selector (the
+  // open/CREATED pin is openUserTasks' responsibility, not repeated here).
   assert.deepEqual(seenFilter, {
-    state: "CREATED",
     processInstanceKey: "pi-9",
     assignee: "demo-reviewer",
     candidateGroup: "reviewers",
@@ -242,7 +250,7 @@ test("/api/tasks omits assignee/candidateGroup when absent (unscoped inbox uncha
   let seenFilter: unknown;
   const engine: EngineClient = {
     ...fakeEngine,
-    searchUserTasks: async (filter) => {
+    openUserTasks: async (filter) => {
       seenFilter = filter;
       return [];
     },
@@ -250,7 +258,23 @@ test("/api/tasks omits assignee/candidateGroup when absent (unscoped inbox uncha
   const { tasks } = inboxRoutes(engine);
   await call(tasks, { query: "assignee=demo-reviewer" });
   // Only the supplied param is forwarded; candidateGroup stays off so its key never appears.
-  assert.deepEqual(seenFilter, { state: "CREATED", assignee: "demo-reviewer" });
+  assert.deepEqual(seenFilter, { assignee: "demo-reviewer" });
+});
+
+test("/api/tasks omits assignee when only candidateGroup is present (symmetric scoping)", async () => {
+  let seenFilter: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    openUserTasks: async (filter) => {
+      seenFilter = filter;
+      return [];
+    },
+  };
+  const { tasks } = inboxRoutes(engine);
+  await call(tasks, { query: "candidateGroup=reviewers" });
+  // Symmetric to the assignee-only case: only the supplied param is forwarded, so assignee's
+  // key never appears when scoping the inbox to a candidate group alone.
+  assert.deepEqual(seenFilter, { candidateGroup: "reviewers" });
 });
 
 test("inbox client forwards the surface query string to /api/tasks (nanobpm/nano-ide#438)", async () => {

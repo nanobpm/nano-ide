@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PAGE_NODE_TYPES } from "../core/page-nodes.ts";
-import { RENDERERS, renderText, renderAppView, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell } from "./runtime.browser.js";
+import { RENDERERS, renderText, renderAppView, navLink, sameOriginPath, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell } from "./runtime.browser.js";
 
 // ── Minimal fake DOM ────────────────────────────────────────────────────────
 // Just enough of the Element/Document surface that el()/renderText touch:
@@ -346,6 +346,110 @@ test("#338: navLink badge degrades to no pill (never a broken nav) when the fetc
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(pill.hidden, true, "a failed fetch leaves the pill hidden");
   assert.equal(pill.textContent, "");
+});
+
+// ── #436: same-origin cross-surface nav (a { path } item) ───────────────────
+// A pages-surface nav item can now point at another mounted surface by a relative
+// same-origin path (e.g. "/tasks" → the taskInbox surface): an in-page, same-tab
+// link, rebased onto the app mount root so it survives the console App-View proxy
+// prefix. This is distinct from { page } (an in-app #/<page> hash) and { href }
+// (an external new-tab http(s) link).
+
+test("#436: navLink({ path }) renders a same-origin, same-tab link rebased onto the mount root", (t) => {
+  t.after(installFakeDom());
+  const link = navLink({ label: "Tasks", path: "/tasks" });
+  assert.ok(link, "expected a nav link for a { path } item");
+  assert.equal(link.tagName, "A");
+  // Root-absolute "/tasks" is rebased to a document-relative "tasks" so it inherits
+  // the mount root (and thus the console proxy prefix) rather than escaping to origin.
+  assert.equal(link.getAttribute("href"), "tasks");
+  // Same-tab, same-origin: NOT an external hand-off — no new-tab / noopener chrome.
+  assert.equal(link.getAttribute("target"), null, "cross-surface nav stays in the same tab");
+  assert.equal(link.getAttribute("rel"), null, "no rel=noopener on a same-origin link");
+  const label = findByClass(link, "pc-nav-label");
+  assert.ok(label && label.textContent === "Tasks");
+});
+
+test("#436: navLink({ path }) falls back to the path as its label when none is given", (t) => {
+  t.after(installFakeDom());
+  const link = navLink({ path: "/tasks" });
+  assert.ok(link);
+  const label = findByClass(link, "pc-nav-label");
+  assert.ok(label && label.textContent === "/tasks", "label defaults to the raw path");
+});
+
+test("#436: a { page } item still wins over a { path } (in-app hash route has precedence)", (t) => {
+  t.after(installFakeDom());
+  const link = navLink({ label: "Home", page: "home", path: "/tasks" });
+  assert.ok(link);
+  assert.equal(link.getAttribute("href"), "#/home", "page hash route takes precedence over path");
+  assert.equal(link.getAttribute("target"), null);
+});
+
+test("#436: a same-origin { path } wins over an external { href } (in-app link preferred)", (t) => {
+  t.after(installFakeDom());
+  const link = navLink({ label: "Tasks", path: "/tasks", href: "https://example.test/tasks" });
+  assert.ok(link);
+  assert.equal(link.getAttribute("href"), "tasks", "the same-origin path is used, not the external href");
+  assert.equal(link.getAttribute("target"), null, "so it stays same-tab, not a new-tab external link");
+});
+
+test("#436: a scheme/protocol-relative { path } is rejected and falls through to the { href } handling", (t) => {
+  t.after(installFakeDom());
+  // A hostile/mistaken path carrying a scheme must NOT become a same-tab link — it
+  // is rejected as not-same-origin and the item falls through to the hardened
+  // new-tab external-href branch.
+  const link = navLink({ label: "Evil", path: "javascript:alert(1)", href: "https://example.test/ok" });
+  assert.ok(link);
+  assert.equal(link.getAttribute("href"), "https://example.test/ok");
+  assert.equal(link.getAttribute("target"), "_blank");
+  assert.equal(link.getAttribute("rel"), "noopener noreferrer");
+});
+
+test("#436: with no label and a rejected { path }, the default label matches the { href } actually used", (t) => {
+  t.after(installFakeDom());
+  // No explicit label: the path is rejected (unsafe scheme) and we fall through to
+  // the external href. The default label MUST reflect the href we navigate to, never
+  // the discarded path — otherwise the visible text lies about the link target.
+  const link = navLink({ path: "javascript:alert(1)", href: "https://example.test/ok" });
+  assert.ok(link);
+  assert.equal(link.getAttribute("href"), "https://example.test/ok");
+  const label = findByClass(link, "pc-nav-label");
+  assert.ok(label && label.textContent === "https://example.test/ok", "label defaults to the href actually used, not the rejected path");
+});
+
+test("#436: a { path } item with only an unsafe scheme and no href renders nothing", (t) => {
+  t.after(installFakeDom());
+  assert.equal(navLink({ label: "Evil", path: "javascript:alert(1)" }), null);
+  assert.equal(navLink({ label: "Ext", path: "//evil.example/tasks" }), null);
+});
+
+test("#436: sameOriginPath rebases in-app paths and rejects non-same-origin targets", () => {
+  // Root-absolute → rebased onto the mount root (survives the console proxy prefix).
+  assert.equal(sameOriginPath("/tasks"), "tasks");
+  assert.equal(sameOriginPath("/tasks/inbox"), "tasks/inbox");
+  // Already document-relative → left as-is.
+  assert.equal(sameOriginPath("tasks"), "tasks");
+  assert.equal(sameOriginPath("./tasks"), "./tasks");
+  // Embedded ASCII tab/newline is stripped before the scheme gate (browsers strip
+  // it before parsing), so `java\tscript:` can't sneak past as a "relative" path.
+  assert.equal(sameOriginPath("java\tscript:alert(1)"), "");
+  // Any scheme / protocol-relative host is not a same-origin in-app path.
+  assert.equal(sameOriginPath("https://example.test/tasks"), "");
+  assert.equal(sameOriginPath("http://example.test/tasks"), "");
+  assert.equal(sameOriginPath("javascript:alert(1)"), "");
+  assert.equal(sameOriginPath("data:text/html,x"), "");
+  assert.equal(sameOriginPath("//evil.example/tasks"), "");
+  // Backslashes are folded to `/` before the gates (browsers normalize them), so a
+  // `\\host` or `/\host` value can't smuggle a protocol-relative cross-origin target past.
+  assert.equal(sameOriginPath("\\\\evil.example/tasks"), "");
+  assert.equal(sameOriginPath("/\\evil.example/tasks"), "");
+  assert.equal(sameOriginPath("\\/evil.example/tasks"), "");
+  // Non-strings / blanks → "".
+  assert.equal(sameOriginPath(""), "");
+  assert.equal(sameOriginPath("   "), "");
+  assert.equal(sameOriginPath(null), "");
+  assert.equal(sameOriginPath(42), "");
 });
 
 test("#338: applyNavBadge honours hideWhenZero and mirrors the count into the accessible name", (t) => {

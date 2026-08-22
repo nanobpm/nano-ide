@@ -102,8 +102,7 @@ defineReadModel("feature_read_model", {
 })
 ```
 
-The `derive` entries are a small, closed **expression DSL** (compare / `CASE` / `EXISTS`
-over base columns + the canonical projections). Urban compiles each entry to **both**:
+The `derive` entries are expressed in a small, closed **expression DSL** (the snippet above is illustrative pseudocode; the real API is DSL nodes rather than arbitrary TypeScript). Urban compiles each entry to **both**:
 
 - the **SQLite VIEW** select-list (`compileToSqlSelect` → the `CASE` / correlated
   `EXISTS`), so the existing flat page-filter DSL can still filter and sort on the derived
@@ -112,7 +111,7 @@ over base columns + the canonical projections). Urban compiles each entry to **b
   retiring the hand-written `deriveStage` oracle).
 
 Because both fall out of one declaration, drift surface #2 disappears by construction —
-there is nothing to keep in lockstep. A closed expression DSL (not arbitrary TS) is what
+there is nothing to keep in lockstep. A closed expression DSL (rather than arbitrary TS)
 makes compilation to SQL tractable and total; it covers the stage/attention/list_bucket
 shape we actually have.
 

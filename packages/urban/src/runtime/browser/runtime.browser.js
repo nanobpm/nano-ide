@@ -2385,32 +2385,54 @@ function renderDataGrid(node) {
 }
 
 // A navigation node — a horizontal menu bar (variant "bar", default) or a
-// vertical side rail (variant "rail"). Each item links either to another page
-// ({ label, page } -> an in-app #/<page> hash link, highlighted when it's the
-// current page) or to an external URL ({ label, href } -> a hardened new-tab
-// link; only http(s) is honoured). With items:"auto" (or omitted) the nav
-// lists every page from the /app/pages index, using each page's title. An item
-// may also carry a `badge` ({ source, table, filter, tone, refreshMs,
-// hideWhenZero }) that renders a live count pill from the /app/data gateway.
+// vertical side rail (variant "rail"). Each item links to one of three targets,
+// in precedence order:
+//   1. { label, page }  → an in-app #/<page> hash link within THIS (pages)
+//      surface, highlighted when it's the current page.
+//   2. { label, path }  → a same-origin, same-tab link to another mounted
+//      surface by relative path (e.g. "/tasks" → the taskInbox surface). The
+//      path is resolved against the app's mount root via baseRelativeUrl, so a
+//      root-absolute "/tasks" survives the Nano console's path-prefixed App-View
+//      proxy (/console/app-view/<name>/tasks) instead of escaping to the console
+//      origin. Only same-origin values are honoured here — a scheme
+//      (http(s)/javascript:/…) or protocol-relative "//host" is rejected (""),
+//      falling through to the {href} case, so `path` can never smuggle an
+//      external or executable-scheme target into a same-tab link. This is the
+//      only link form that composes multi-surface apps into a coherent,
+//      proxy-safe navigable whole (nanobpm/nano-ide#436).
+//   3. { label, href }  → a hardened external new-tab link; only http(s) is
+//      honoured.
+// With items:"auto" (or omitted) the nav lists every page from the /app/pages
+// index, using each page's title. An item may also carry a `badge` ({ source,
+// table, filter, tone, refreshMs, hideWhenZero }) that renders a live count pill
+// from the /app/data gateway.
 /** @param {any} item
  * @returns {HTMLAnchorElement|null}
  */
 function navLink(item) {
   const isPage = safePageId(item.page);
-  const isExt = !isPage && typeof item.href === "string" && /^https?:\/\//i.test(item.href);
-  if (!isPage && !isExt) return null;
+  // A same-origin relative path to another mounted surface (e.g. "/tasks"),
+  // rebased onto the app mount root so it survives the console proxy prefix.
+  const rel = isPage ? "" : sameOriginPath(item.path);
+  const isRel = !isPage && rel !== "";
+  const isExt = !isPage && !isRel && typeof item.href === "string" && /^https?:\/\//i.test(item.href);
+  if (!isPage && !isRel && !isExt) return null;
   /** @type {Record<string, any>} */
   const attrs = { class: "pc-nav-link" };
   if (isPage) {
     attrs.href = "#/" + encodeURIComponent(item.page);
     if (item.page === CURRENT) { attrs.class += " active"; attrs["aria-current"] = "page"; }
+  } else if (isRel) {
+    // Same-origin, same-tab: no target=_blank — this is in-app cross-surface
+    // navigation, not an external hand-off.
+    attrs.href = rel;
   } else {
     attrs.href = item.href; attrs.target = "_blank"; attrs.rel = "noopener noreferrer";
   }
   /** @type {Array<Node|string>} */
   const kids = [];
   if (item.icon != null) kids.push(el("span", { class: "pc-nav-icon" }, String(item.icon)));
-  const labelText = String(item.label != null ? item.label : (item.page || item.href));
+  const labelText = String(item.label != null ? item.label : (item.page || item.path || item.href));
   kids.push(el("span", { class: "pc-nav-label" }, labelText));
   const link = el("a", attrs, ...kids);
   // A nav item may carry a live count badge sourced from a datasource (e.g. the
@@ -2558,6 +2580,28 @@ function baseRelativeUrl(url) {
   if (cleaned.startsWith("//")) return cleaned; // protocol-relative
   if (cleaned.startsWith("/")) return cleaned.slice(1); // root-absolute → document-relative (rebase onto mount root)
   return cleaned; // already relative
+}
+
+// Resolve a same-origin, in-app relative path (e.g. a nav item's { path: "/tasks" }
+// targeting another mounted surface) onto the app's mount root, so it survives the
+// console App-View proxy prefix — the SAME rebasing rule as baseRelativeUrl (the
+// single source of truth for "strip one leading slash to rebase onto the mount
+// root"). Unlike baseRelativeUrl (whose output is an <iframe> src that may legally
+// be an http(s) URL), a cross-surface nav link must stay SAME-ORIGIN and same-tab:
+// a scheme (http(s):, and — defence in depth — javascript:/data:/… ) or a
+// protocol-relative "//host" is NOT an in-app path, so it is rejected ("") and the
+// caller falls through to the hardened new-tab {href} handling. Whitespace is
+// stripped/trimmed FIRST (browsers strip ASCII tab/newline before parsing a URL, so
+// `/ta\tsks` must be judged on its cleaned form) so the scheme gate can't be
+// bypassed by embedded whitespace.
+/** @param {any} path */
+function sameOriginPath(path) {
+  if (typeof path !== "string") return "";
+  const cleaned = path.replace(/[\t\n\r]/g, "").trim();
+  if (cleaned === "") return "";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(cleaned)) return ""; // any scheme → not a same-origin in-app path
+  if (cleaned.startsWith("//")) return ""; // protocol-relative → different origin
+  return baseRelativeUrl(cleaned); // rebase root-absolute onto the mount root (shared rule)
 }
 
 // `appView` (ADR 0057 / #416): mount an embedded App View — an <iframe> hosting a
@@ -2798,4 +2842,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, renderAppView, navLink, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, renderAppView, navLink, sameOriginPath, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };

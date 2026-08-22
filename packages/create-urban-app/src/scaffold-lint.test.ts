@@ -48,9 +48,17 @@ const combos: Array<{ label: string; opts: Omit<ScaffoldOptions, "dir"> }> = [
   { label: "code/full", opts: { name: "Effect Demo", id: "effect-demo", style: "code" } },
   { label: "code/headless", opts: { name: "Effect Demo", id: "effect-demo", style: "code", preset: "headless" } },
   { label: "code/deno", opts: { name: "Effect Demo", id: "effect-demo", style: "code", deno: true } },
+  {
+    label: "code/headless/deno",
+    opts: { name: "Effect Demo", id: "effect-demo", style: "code", preset: "headless", deno: true },
+  },
   { label: "model/full", opts: { name: "Effect Demo", id: "effect-demo", style: "model" } },
   { label: "model/headless", opts: { name: "Effect Demo", id: "effect-demo", style: "model", preset: "headless" } },
   { label: "model/deno", opts: { name: "Effect Demo", id: "effect-demo", style: "model", deno: true } },
+  {
+    label: "model/headless/deno",
+    opts: { name: "Effect Demo", id: "effect-demo", style: "model", preset: "headless", deno: true },
+  },
   {
     label: "model/full/long-id",
     opts: {

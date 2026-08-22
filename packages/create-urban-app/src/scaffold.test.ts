@@ -319,8 +319,8 @@ test("scaffold wires @nanobpm/urban-testkit as a devDependency with a runnable s
     const res = await scaffold({ name: "Kit App", dir, style });
 
     const pkg = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
-    // The testkit ships the `assertThat*` DSL from 0.11.0 (which pulls engine-wasm ^0.7.0 in
-    // transitively); pin to a current release so scaffolded apps are born using the DSL.
+    // The testkit ships the `assertThat*` DSL (which pulls engine-wasm ^0.7.0 in
+    // transitively); pin to the current 0.12.11 release so scaffolded apps are born using the DSL.
     assert.equal(
       pkg.devDependencies?.["@nanobpm/urban-testkit"],
       "^0.12.11",

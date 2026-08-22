@@ -106,7 +106,7 @@ export function renderWorkerStub(
     `\t// Reach app state and services through the injected \`app\` API.\n` +
     `\t// Structured logs: \`app.log.info("done", { … })\` — auto-tagged with this job's\n` +
     `\t// { jobKey, jobType, processInstanceKey, elementId } (ADR 0061).\n` +
-    `\tapp.log.warn("worker not implemented", { variables: job.variables });\n` +
+    `\tapp.log.warn("worker not implemented", { jobKey: job.jobKey });\n` +
     `\tthrow new Error(${JSON.stringify(`worker not implemented: ${taskType}`)});\n` +
     `};\n` +
     `\n` +

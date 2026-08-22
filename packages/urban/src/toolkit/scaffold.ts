@@ -18,10 +18,17 @@ import { parseSpec } from "../openapi/spec.ts";
  * Detect the indentation of a JSON document from its first indented line, so a rewrite can
  * reuse it (`"\t"` or an N-space string) instead of hard-coding one style. Falls back to a tab
  * — the scaffold's Biome default — when the file is empty/single-line or uses no indentation.
+ *
+ * A space-based indent is clamped to 10 characters because `JSON.stringify` silently truncates a
+ * string `space` argument to 10; returning a wider prefix would promise a fidelity the serializer
+ * cannot honor. Tab indentation (the scaffold default) and any realistic width (2/4 spaces) are
+ * unaffected.
  */
 export function detectJsonIndent(json: string): string {
   const m = json.match(/\n([ \t]+)\S/);
-  return m ? m[1] : "\t";
+  if (!m) return "\t";
+  const indent = m[1];
+  return indent.startsWith(" ") && indent.length > 10 ? indent.slice(0, 10) : indent;
 }
 
 /** The manifest fields the scaffolder reads. */

@@ -7,7 +7,7 @@ import {
   type ScaffoldWorker,
 } from "./workers.ts";
 import type { ModelSource } from "../derivers/worker-io.ts";
-import { scaffoldWorkers } from "../scaffold.ts";
+import { detectJsonIndent, scaffoldWorkers } from "../scaffold.ts";
 import type { GenIO } from "../gen.ts";
 
 // A service task with a data-envelope in/out contract; `type` is the taskType, and the
@@ -64,7 +64,19 @@ test("stub is lint-clean under the scaffold config: tab-indented, both params re
   for (const line of bodyLines) {
     assert.ok(line.startsWith("\t"), `body line is tab-indented, not space-indented: ${line}`);
   }
-  assert.match(stub, /app\.log\.warn\("worker not implemented", \{ variables: job\.variables \}\)/);
+  assert.match(stub, /app\.log\.warn\("worker not implemented", \{ jobKey: job\.jobKey \}\)/);
+});
+
+test("detectJsonIndent reuses tab/space width but clamps to JSON.stringify's 10-char cap", () => {
+  assert.equal(detectJsonIndent('{\n\t"a": 1\n}'), "\t");
+  assert.equal(detectJsonIndent('{\n  "a": 1\n}'), "  ");
+  assert.equal(detectJsonIndent("{}"), "\t", "no indentation falls back to a tab");
+  // JSON.stringify silently truncates a string `space` to 10 chars, so a wider space indent must
+  // be clamped rather than promising a fidelity the serializer cannot honor.
+  const wide = `{\n${" ".repeat(12)}"a": 1\n}`;
+  const indent = detectJsonIndent(wide);
+  assert.equal(indent, " ".repeat(10));
+  assert.equal(JSON.stringify({ a: 1 }, null, indent), JSON.stringify({ a: 1 }, null, wide.match(/\n( +)/)?.[1]));
 });
 
 test("typed-out-only stub fills In with the open default", () => {

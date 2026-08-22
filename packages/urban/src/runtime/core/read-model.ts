@@ -218,6 +218,12 @@ export class ProjectionRegistry {
   names(): string[] {
     return [...this.#byName.keys()];
   }
+
+  /** Reset all registrations. Mirrors {@link ReadModelRegistry.clear} so tests and dev harnesses can
+   *  restore this process-wide singleton to a deterministic empty state (isolation across test runs). */
+  clear(): void {
+    this.#byName.clear();
+  }
 }
 
 /**

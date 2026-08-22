@@ -328,14 +328,40 @@ test("the parity guard resolves projection tables through options.sql and valida
 });
 
 test("the process-wide projectionRegistry is idempotent and rejects a conflicting redefinition", () => {
-  projectionRegistry.register({ name: "urban_open_user_tasks" });
-  // Same registration is a no-op.
-  assert.doesNotThrow(() => projectionRegistry.register({ name: "urban_open_user_tasks" }));
-  assert.ok(projectionRegistry.has("urban_open_user_tasks"));
-  assert.throws(
-    () => projectionRegistry.register({ name: "urban_open_user_tasks", sqlTable: "something_else" }),
-    /already registered/,
-  );
+  try {
+    projectionRegistry.register({ name: "urban_open_user_tasks" });
+    // Same registration is a no-op.
+    assert.doesNotThrow(() => projectionRegistry.register({ name: "urban_open_user_tasks" }));
+    assert.ok(projectionRegistry.has("urban_open_user_tasks"));
+    assert.throws(
+      () => projectionRegistry.register({ name: "urban_open_user_tasks", sqlTable: "something_else" }),
+      /already registered/,
+    );
+  } finally {
+    // Reset the process-wide singleton so this test cannot leak registrations into others.
+    projectionRegistry.clear();
+  }
+});
+
+test("projectionRegistry.clear() resets all registrations for deterministic test isolation", () => {
+  try {
+    projectionRegistry.register({ name: "proj_clear_a", sqlTable: "tbl_a" });
+    projectionRegistry.register({ name: "proj_clear_b", sqlTable: "tbl_b" });
+    assert.ok(projectionRegistry.has("proj_clear_a"));
+    assert.ok(projectionRegistry.has("proj_clear_b"));
+
+    projectionRegistry.clear();
+
+    assert.equal(projectionRegistry.has("proj_clear_a"), false);
+    assert.equal(projectionRegistry.has("proj_clear_b"), false);
+    assert.deepEqual(projectionRegistry.names(), []);
+    // Falls back to the name itself once cleared (same as an unregistered name).
+    assert.equal(projectionRegistry.sqlTableFor("proj_clear_a"), "proj_clear_a");
+    // Cleared registry accepts a fresh, previously-conflicting registration.
+    assert.doesNotThrow(() => projectionRegistry.register({ name: "proj_clear_a", sqlTable: "tbl_different" }));
+  } finally {
+    projectionRegistry.clear();
+  }
 });
 
 test("the read-model registry provisions every managed VIEW and rejects a conflicting redefinition", async () => {
@@ -599,27 +625,32 @@ test("the parity guard rejects two projections mapped to one physical table with
   // A mapping bug: two DSL projection names resolving to ONE physical table would make the guard
   // CREATE (then drop/insert) that table twice and fail for a non-parity reason. It must reject up
   // front with an actionable error (idempotent registrations, so safe to re-run).
-  projectionRegistry.register({ name: "dup_proj_a", sqlTable: "dup_shared_table" });
-  projectionRegistry.register({ name: "dup_proj_b", sqlTable: "dup_shared_table" });
-  const model = defineReadModel({
-    name: "dup_table_read_model",
-    baseTable: "dup_rows",
-    derive: {
-      label: caseWhen(
-        [
-          when(exists("dup_proj_a", eq(pcol("k"), col("k"))), lit("a")),
-          when(exists("dup_proj_b", eq(pcol("k"), col("k"))), lit("b")),
-        ],
-        lit("none"),
-      ),
-    },
-  });
-  await withDb((db) => {
-    assert.throws(
-      () => assertReadModelParity(model, db, [{ baseRow: { k: "x" } }]),
-      /maps projections "dup_proj_a" and "dup_proj_b" to the same physical table "dup_shared_table"/,
-    );
-  });
+  try {
+    projectionRegistry.register({ name: "dup_proj_a", sqlTable: "dup_shared_table" });
+    projectionRegistry.register({ name: "dup_proj_b", sqlTable: "dup_shared_table" });
+    const model = defineReadModel({
+      name: "dup_table_read_model",
+      baseTable: "dup_rows",
+      derive: {
+        label: caseWhen(
+          [
+            when(exists("dup_proj_a", eq(pcol("k"), col("k"))), lit("a")),
+            when(exists("dup_proj_b", eq(pcol("k"), col("k"))), lit("b")),
+          ],
+          lit("none"),
+        ),
+      },
+    });
+    await withDb((db) => {
+      assert.throws(
+        () => assertReadModelParity(model, db, [{ baseRow: { k: "x" } }]),
+        /maps projections "dup_proj_a" and "dup_proj_b" to the same physical table "dup_shared_table"/,
+      );
+    });
+  } finally {
+    // Reset the process-wide singleton so this test cannot leak registrations into others.
+    projectionRegistry.clear();
+  }
 });
 
 test("the parity guard ignores projections the model does not reference", async () => {

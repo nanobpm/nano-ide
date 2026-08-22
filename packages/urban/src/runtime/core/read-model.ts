@@ -406,12 +406,15 @@ function compareOrderable(left: number | bigint | string, right: number | bigint
   const leftText = typeof left === "string";
   const rightText = typeof right === "string";
 
-  // Mixed numeric-vs-text: SQLite orders by storage class (NULL < INTEGER/REAL < TEXT), and the managed
-  // VIEW compares these values WITHOUT numeric-affinity coercion (its base/fixture columns carry no
-  // declared affinity), so a numeric value always sorts BEFORE a text value and is never equal to one —
-  // even a numeric-looking one like "42". Return that definite ordering directly: coercing the numeric
-  // side through `Number()` (as a naive fallback would) truncates a 64-bit `bigint` and could collapse
-  // distinct keys, reintroducing SQL/TS drift for both equality and ordering.
+  // Mixed numeric-vs-text. This TS backend mirrors the VIEW as exercised by the parity guard, whose
+  // TEMP fixtures declare NO column affinity: with affinity-free operands SQLite orders purely by
+  // storage class (NULL < INTEGER/REAL < TEXT) and applies no numeric-affinity coercion, so a numeric
+  // value always sorts BEFORE a text value and is never equal to one — even a numeric-looking "42".
+  // (A real base table that declared an INTEGER/TEXT affinity WOULD coerce across classes; the guard's
+  // affinity-free fixtures are what pins the two backends to this deterministic, coercion-free ordering.)
+  // Return that definite ordering directly: coercing the numeric side through `Number()` (as a naive
+  // fallback would) truncates a 64-bit `bigint` and could collapse distinct keys, reintroducing SQL/TS
+  // drift for both equality and ordering.
   if (leftText !== rightText) return leftText ? 1 : -1;
 
   // Both TEXT → SQLite BINARY collation (byte / code-unit comparison).

@@ -64,8 +64,8 @@ per-source sidecar with a boot migration and a drift-guard test).
 ## Decision
 
 Introduce a framework primitive in `@nanobpm/urban` — **reconciling read models** — with
-three parts. Modeled on ADR 0063: canonical projections + one declaration + framework-owned
-plumbing.
+four parts. Modeled on ADR 0063: canonical projections + one declaration + framework-owned
+plumbing + the reconciler inversion.
 
 ### 1. Canonical engine-truth projections (promote, don't hand-roll)
 

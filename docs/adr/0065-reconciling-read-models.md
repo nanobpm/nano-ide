@@ -93,9 +93,9 @@ defineReadModel("feature_read_model", {
   base: "feature_runs",
   derive: {
     attention: (row, engine) =>
-      engine.hasOpenUserTask("feature", row.feature_key, "feature-blocked")     ? "blocked"
-      : engine.hasOpenUserTask("feature", row.feature_key, "feature-escalation") ? "⚠"
-      : null,
+      engine.hasOpenUserTask("feature", row.feature_key, "feature-blocked") ? "blocked"
+        : engine.hasOpenUserTask("feature", row.feature_key, "feature-escalation") ? "⚠"
+        : null,
     stage: (row) => /* … */,
     list_bucket: (row) => /* … */,
   },

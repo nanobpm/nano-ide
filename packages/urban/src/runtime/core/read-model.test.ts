@@ -17,6 +17,7 @@ import {
   exists,
   gt,
   lit,
+  lt,
   neq,
   not,
   or,
@@ -341,6 +342,69 @@ test("the read-model registry provisions every managed VIEW and rejects a confli
     assert.equal(row.display_status, "completed");
   });
 });
+
+test("the read-model registry treats declarations that differ only in derive key order as identical", () => {
+  // The registry compares viewDdl() strings for idempotency; column order must be canonicalised (sorted)
+  // so two equivalent declarations don't get flagged as a conflicting redefinition (advisory :599).
+  const forward = defineReadModel({
+    name: "order_read_model",
+    baseTable: "order_rows",
+    derive: { alpha: gt(col("a"), lit(1)), beta: gt(col("b"), lit(2)) },
+  });
+  const reversed = defineReadModel({
+    name: "order_read_model",
+    baseTable: "order_rows",
+    derive: { beta: gt(col("b"), lit(2)), alpha: gt(col("a"), lit(1)) },
+  });
+  assert.equal(forward.viewDdl(), reversed.viewDdl(), "key insertion order must not change the VIEW DDL");
+  const reg = new ReadModelRegistry();
+  reg.register(forward);
+  assert.doesNotThrow(() => reg.register(reversed), "reordered-but-equivalent redefinition is a no-op");
+});
+
+test("compareOrderable orders a 64-bit numeric key BEFORE a numeric-looking TEXT value without truncation", () => {
+  // A 64-bit key reaching the TS backend as `bigint`, compared to a TEXT literal, must follow SQLite's
+  // storage-class ordering (INTEGER/REAL < TEXT) — the numeric value is "less", never equal — WITHOUT
+  // coercing the bigint through Number() (which would collapse distinct keys). See advisory on line 409.
+  const big = 9007199254740993n; // 2^53 + 1 — not representable as a JS number
+  const twoP53 = 9007199254740992n; // 2^53 — Number() maps `big` onto this
+  const text = "9007199254740992";
+  // A numeric key is never equal to a text value, even one that "looks like" the same integer.
+  assert.equal(compileToFn(eq(col("k"), lit(text)))({ k: big }), false);
+  assert.equal(compileToFn(eq(col("k"), lit(text)))({ k: twoP53 }), false);
+  assert.equal(compileToFn(neq(col("k"), lit(text)))({ k: big }), true);
+  // The numeric key sorts BEFORE the text value (lt true, gt false) — a definite ordering, not NaN.
+  assert.equal(compileToFn(lt(col("k"), lit(text)))({ k: big }), true);
+  assert.equal(compileToFn(gt(col("k"), lit(text)))({ k: big }), false);
+  // Symmetric: the TEXT value sorts AFTER the numeric key (text > numeric).
+  assert.equal(compileToFn(gt(lit(text), col("k")))({ k: big }), true);
+  // Distinct 64-bit keys must not collapse when both are compared to the same text value.
+  assert.equal(compileToFn(lt(col("k"), lit(text)))({ k: twoP53 }), true);
+});
+
+test("the parity guard agrees with the SQL VIEW for a numeric key compared to a TEXT literal", async () => {
+  // End-to-end: the managed VIEW compares an (untyped) numeric column to a numeric-looking text literal
+  // by storage class, and the TS backend must match — including for 64-bit keys past 2^53.
+  const model = defineReadModel({
+    name: "keytext_read_model",
+    baseTable: "keytext_rows",
+    derive: {
+      eq_text: eq(col("k"), lit("9007199254740992")),
+      lt_text: lt(col("k"), lit("9007199254740992")),
+      gt_text: gt(col("k"), lit("9007199254740992")),
+    },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(model, db, [
+        { baseRow: { k: 9007199254740993n } },
+        { baseRow: { k: 9007199254740992n } },
+        { baseRow: { k: 5n } },
+      ]),
+    );
+  });
+});
+
 
 test("eq/neq coerce booleans like SQLite (1/0) so the TS backend cannot drift from the VIEW", () => {
   // `lit(true)` compiles to SQL `1`; strict `===` would make `1 === true` false and diverge.

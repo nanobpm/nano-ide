@@ -355,7 +355,7 @@ function compareValues(op: CompareOp, left: unknown, right: unknown): boolean {
     case "eq":
       return cmp === 0;
     case "neq":
-      // A NaN (incomparable, e.g. a number against a non-numeric string) is "not equal" → true.
+      // A NaN (incomparable, e.g. NaN against a real number) is "not equal" → true.
       return cmp !== 0;
     case "lt":
       return cmp < 0;
@@ -384,23 +384,34 @@ function orderable(value: unknown): number | bigint | string {
 
 /** Three-way compare two {@link orderable} scalars the way SQLite's WHERE/ORDER BY would, WITHOUT
  *  truncating 64-bit `bigint` keys through `Number()`. Returns a negative/zero/positive number, or
- *  `NaN` when the operands are incomparable (e.g. a number against a non-numeric string) — callers
- *  treat that as "not equal, not ordered", mirroring SQLite's numeric-vs-text affinity split. */
+ *  `NaN` only when two real numbers are genuinely incomparable (a `NaN` operand) — callers treat that
+ *  as "not equal, not ordered". */
 function compareOrderable(left: number | bigint | string, right: number | bigint | string): number {
-  // A `bigint` in play and NEITHER operand a string → stay in the integer domain and compare exactly,
-  // so keys past Number.MAX_SAFE_INTEGER don't round together. (A string operand falls through to the
-  // coercing path below, preserving the pre-existing number-vs-text behaviour.)
-  const bigintDomain =
-    (typeof left === "bigint" || typeof right === "bigint") &&
-    typeof left !== "string" &&
-    typeof right !== "string";
-  if (bigintDomain) {
-    const lb = asExactBigInt(left);
-    const rb = asExactBigInt(right);
-    if (lb !== undefined && rb !== undefined) return lb < rb ? -1 : lb > rb ? 1 : 0;
+  const leftText = typeof left === "string";
+  const rightText = typeof right === "string";
+
+  // Mixed numeric-vs-text: SQLite orders by storage class (NULL < INTEGER/REAL < TEXT), and the managed
+  // VIEW compares these values WITHOUT numeric-affinity coercion (its base/fixture columns carry no
+  // declared affinity), so a numeric value always sorts BEFORE a text value and is never equal to one —
+  // even a numeric-looking one like "42". Return that definite ordering directly: coercing the numeric
+  // side through `Number()` (as a naive fallback would) truncates a 64-bit `bigint` and could collapse
+  // distinct keys, reintroducing SQL/TS drift for both equality and ordering.
+  if (leftText !== rightText) return leftText ? 1 : -1;
+
+  // Both TEXT → SQLite BINARY collation (byte / code-unit comparison).
+  if (leftText && rightText) {
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
   }
-  // Fall back to JS's native comparison. Any `bigint` reaching here pairs with a non-integer number or
-  // a string, where exact integer comparison is moot; coerce it to a number so the operands share a type.
+
+  // Both numeric → stay in the integer domain when both are integral, so keys past
+  // Number.MAX_SAFE_INTEGER don't round together.
+  const lb = asExactBigInt(left);
+  const rb = asExactBigInt(right);
+  if (lb !== undefined && rb !== undefined) return lb < rb ? -1 : lb > rb ? 1 : 0;
+  // A `bigint` reaching here pairs with a non-integer real, where exact integer comparison is moot;
+  // coerce it to a number so the operands share a type.
   const l = typeof left === "bigint" ? Number(left) : left;
   const r = typeof right === "bigint" ? Number(right) : right;
   if (l < r) return -1;
@@ -596,7 +607,12 @@ function collectColumns(
 export function defineReadModel(decl: ReadModelDecl): ReadModel {
   assertSqlIdentifier("read model name", decl.name);
   assertSqlIdentifier("base table", decl.baseTable);
-  const columns = Object.keys(decl.derive);
+  // Canonicalise the derived-column order (sort by name) so the managed VIEW DDL is independent of the
+  // declaration object's key insertion order. `ReadModelRegistry.register` compares `viewDdl()` strings
+  // for idempotency/conflict detection, so two declarations that differ only in `derive` key order must
+  // produce byte-identical DDL — otherwise they would be flagged as conflicting definitions of the same
+  // read model. Columns are accessed by name, so their SELECT order carries no semantic meaning.
+  const columns = Object.keys(decl.derive).sort();
   if (columns.length === 0) {
     throw new Error(`read model "${decl.name}" declares no derived columns`);
   }

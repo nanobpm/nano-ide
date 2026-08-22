@@ -221,10 +221,76 @@ test("the read-model registry provisions every managed VIEW and rejects a confli
     db.exec(`CREATE TABLE tasks (id TEXT, process_instance_key TEXT, state TEXT, priority INTEGER);`);
     db.exec(`CREATE TABLE urban_open_user_tasks (process_instance_key TEXT);`);
     reg.ensureViews(db);
-    reg.ensureViews(db); // IF NOT EXISTS → safe to re-run
+    reg.ensureViews(db); // drop-and-recreate → safe to re-run
     db.run(`INSERT INTO tasks VALUES (?, ?, ?, ?)`, ["t1", "pi-1", "done", 9]);
     const row = db.all<{ display_status: string }>(`SELECT display_status FROM tasks_display`)[0];
     assert.equal(row.display_status, "completed");
+  });
+});
+
+test("eq/neq coerce booleans like SQLite (1/0) so the TS backend cannot drift from the VIEW", () => {
+  // `lit(true)` compiles to SQL `1`; strict `===` would make `1 === true` false and diverge.
+  const on = compileToFn(eq(col("flag"), lit(true)));
+  assert.equal(on({ flag: 1 }), true);
+  assert.equal(on({ flag: 0 }), false);
+  const off = compileToFn(neq(col("flag"), lit(true)));
+  assert.equal(off({ flag: 1 }), false);
+  assert.equal(off({ flag: 0 }), true);
+});
+
+test("the parity guard PASSES for a boolean-equality derived column across both backends", async () => {
+  const model = defineReadModel({
+    name: "flags_read_model",
+    baseTable: "flag_rows",
+    derive: { is_on: eq(col("flag"), lit(true)) },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(model, db, [{ baseRow: { flag: 1 } }, { baseRow: { flag: 0 } }]),
+    );
+  });
+});
+
+test("ensureViews replaces a stale VIEW body (managed provisioning, not IF NOT EXISTS)", async () => {
+  await withDb((db) => {
+    db.exec(`CREATE TABLE tasks (id TEXT, process_instance_key TEXT, state TEXT, priority INTEGER);`);
+    db.exec(`CREATE TABLE urban_open_user_tasks (process_instance_key TEXT);`);
+    // A stale VIEW from an older definition already exists under the managed name.
+    db.exec(`CREATE VIEW tasks_display AS SELECT 'stale' AS display_status;`);
+    const reg = new ReadModelRegistry();
+    reg.register(taskReadModel);
+    reg.ensureViews(db);
+    db.run(`INSERT INTO tasks VALUES (?, ?, ?, ?)`, ["t1", "pi-1", "done", 9]);
+    const row = db.all<{ display_status: string }>(`SELECT display_status FROM tasks_display`)[0];
+    assert.equal(row.display_status, "completed"); // stale body was dropped and replaced
+  });
+});
+
+test("the parity guard rejects an unknown column with an actionable error", async () => {
+  await withDb((db) => {
+    assert.throws(
+      () =>
+        assertReadModelParity(
+          taskReadModel,
+          db,
+          [{ baseRow: { process_instance_key: "pi-1", state: "done", priority: 9 } }],
+          { columns: ["not_a_column"] },
+        ),
+      /no derived column "not_a_column"/,
+    );
+  });
+});
+
+test("the parity guard ignores projections the model does not reference", async () => {
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(taskReadModel, db, [
+        {
+          baseRow: { process_instance_key: "pi-1", state: "done", priority: 9 },
+          projections: { urban_open_user_tasks: [], unrelated_projection: [{ foo: "bar" }] },
+        },
+      ]),
+    );
   });
 });
 

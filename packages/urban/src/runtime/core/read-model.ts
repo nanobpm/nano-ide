@@ -323,10 +323,13 @@ function compareValues(op: CompareOp, left: unknown, right: unknown): boolean {
   const nullish = left === null || left === undefined || right === null || right === undefined;
   if (nullish) return false;
   switch (op) {
+    // Equality runs through the SAME scalar coercion as ordering so the TS backend matches SQLite:
+    // booleans compile to 1/0 in SQL (see sqlLiteral), so `eq(col("x"), lit(true))` must be true when
+    // `x` is 1. Strict `===` would make `1 === true` false and silently drift from the SQL VIEW.
     case "eq":
-      return left === right;
+      return orderable(left) === orderable(right);
     case "neq":
-      return left !== right;
+      return orderable(left) !== orderable(right);
     case "lt":
       return orderable(left) < orderable(right);
     case "lte":
@@ -608,10 +611,16 @@ export class ReadModelRegistry {
   }
 
   /** Apply every registered model's managed VIEW to a database (the boot-path entry point). Safe to
-   *  call repeatedly (VIEWs use `IF NOT EXISTS`); referenced base/projection tables need not exist
-   *  yet — SQLite only resolves a VIEW's body when it is queried. */
+   *  call repeatedly and it is truly MANAGED: each VIEW is dropped and recreated so a changed
+   *  read-model definition in code always replaces a stale VIEW body (a plain `CREATE VIEW IF NOT
+   *  EXISTS` would leave the SQL backend running an old definition, reintroducing backend drift).
+   *  Referenced base/projection tables need not exist yet — SQLite only resolves a VIEW's body when
+   *  it is queried. */
   ensureViews(db: { exec(sql: string): void }, options?: SqlCompileOptions): void {
-    for (const model of this.#byName.values()) db.exec(model.viewDdl(options));
+    for (const model of this.#byName.values()) {
+      db.exec(`DROP VIEW IF EXISTS ${quoteIdent(model.decl.name)};`);
+      db.exec(model.viewDdl(options));
+    }
   }
 
   clear(): void {
@@ -680,6 +689,14 @@ export function assertReadModelParity(
   const onMismatch = options.onMismatch ?? defaultOnMismatch;
   const columns = options.columns ?? Object.keys(model.decl.derive);
 
+  // Validate the requested columns up front so an unknown name yields an actionable error rather than
+  // a downstream `undefined` blowing up inside `collectColumns`/`fnFor`.
+  for (const c of columns) {
+    if (!Object.hasOwn(model.decl.derive, c)) {
+      throw new Error(`read model "${model.decl.name}" has no derived column "${c}" to check parity for`);
+    }
+  }
+
   // Collect the union of base columns and per-projection columns across all samples, so the fixture
   // tables carry every referenced column. Seed from the AST first so a projection referenced by an
   // `exists` predicate always has its correlated columns even when a sample supplies no rows for it.
@@ -690,9 +707,11 @@ export function assertReadModelParity(
   for (const s of samples) {
     for (const k of Object.keys(s.baseRow)) baseCols.add(k);
     for (const [pname, rows] of Object.entries(s.projections ?? {})) {
-      const set = projCols.get(pname) ?? new Set<string>();
+      // Only widen fixtures for projections the model actually references; a sample may carry extra
+      // projections the read model never reads, and those get no fixture table (see insert loop below).
+      const set = projCols.get(pname);
+      if (!set) continue;
       for (const r of rows) for (const k of Object.keys(r)) set.add(k);
-      projCols.set(pname, set);
     }
   }
 
@@ -734,7 +753,10 @@ export function assertReadModelParity(
     for (const table of projectionTables.values()) db.run(`DELETE FROM ${quoteIdent(table)};`);
     insertRow(baseTable, sample.baseRow);
     for (const [pname, rows] of Object.entries(sample.projections ?? {})) {
-      const table = projectionTables.get(pname) ?? projectionRegistry.sqlTableFor(pname);
+      // Ignore projections the model never references — no fixture table exists for them, and they
+      // cannot affect any derived column, so inserting would fail the guard for a non-parity reason.
+      const table = projectionTables.get(pname);
+      if (!table) continue;
       for (const r of rows) insertRow(table, r);
     }
 

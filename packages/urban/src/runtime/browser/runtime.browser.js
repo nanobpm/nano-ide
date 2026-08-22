@@ -2432,7 +2432,11 @@ function navLink(item) {
   /** @type {Array<Node|string>} */
   const kids = [];
   if (item.icon != null) kids.push(el("span", { class: "pc-nav-icon" }, String(item.icon)));
-  const labelText = String(item.label != null ? item.label : (item.page || item.path || item.href));
+  // Default the label from the target actually used, not a fixed page>path>href
+  // fallback: when `path` is rejected and we fell through to `href`, the label
+  // must reflect the href we navigate to, never the discarded `path`.
+  const defaultLabel = isPage ? item.page : (isRel ? item.path : item.href);
+  const labelText = String(item.label != null ? item.label : defaultLabel);
   kids.push(el("span", { class: "pc-nav-label" }, labelText));
   const link = el("a", attrs, ...kids);
   // A nav item may carry a live count badge sourced from a datasource (e.g. the

@@ -406,6 +406,18 @@ test("#436: a scheme/protocol-relative { path } is rejected and falls through to
   assert.equal(link.getAttribute("rel"), "noopener noreferrer");
 });
 
+test("#436: with no label and a rejected { path }, the default label matches the { href } actually used", (t) => {
+  t.after(installFakeDom());
+  // No explicit label: the path is rejected (unsafe scheme) and we fall through to
+  // the external href. The default label MUST reflect the href we navigate to, never
+  // the discarded path — otherwise the visible text lies about the link target.
+  const link = navLink({ path: "javascript:alert(1)", href: "https://example.test/ok" });
+  assert.ok(link);
+  assert.equal(link.getAttribute("href"), "https://example.test/ok");
+  const label = findByClass(link, "pc-nav-label");
+  assert.ok(label && label.textContent === "https://example.test/ok", "label defaults to the href actually used, not the rejected path");
+});
+
 test("#436: a { path } item with only an unsafe scheme and no href renders nothing", (t) => {
   t.after(installFakeDom());
   assert.equal(navLink({ label: "Evil", path: "javascript:alert(1)" }), null);

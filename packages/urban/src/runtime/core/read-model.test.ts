@@ -249,6 +249,24 @@ test("EXISTS aliases the projection relation distinctly from the base alias so c
   assert.match(collide, /FROM "__urban_proj_0" AS "___urban_proj_0" WHERE COALESCE\(\("___urban_proj_0"\."k" = "__urban_proj_0"\."k"\), 0\)/);
 });
 
+test("projection alias avoids a base alias that collides only by case (SQLite idents are case-insensitive)", () => {
+  // SQLite compares identifiers case-insensitively, so "__URBAN_PROJ_0" and "__urban_proj_0" are the
+  // SAME relation. The reserved projection alias must still be prefixed away from such a base alias,
+  // or `col(...)` inside EXISTS would correlate to the projection row instead of the outer base row.
+  const collide = compileToSqlSelect(exists("p", eq(pcol("k"), col("k"))), {
+    baseAlias: "__URBAN_PROJ_0",
+    resolveProjectionTable: () => "p",
+  });
+  assert.match(collide, /FROM "p" AS "___urban_proj_0" WHERE COALESCE\(\("___urban_proj_0"\."k" = "__URBAN_PROJ_0"\."k"\), 0\)/);
+});
+
+test("a base alias that is not a SQL identifier is rejected at compile time", () => {
+  assert.throws(
+    () => compileToSqlSelect(col("k"), { baseAlias: 'evil"; DROP TABLE t; --' }),
+    /invalid base alias/,
+  );
+});
+
 test("nested EXISTS bind each pcol(...) to its own projection via depth-indexed aliases", () => {
   const sql = compileToSqlSelect(
     exists("outer", and(eq(pcol("ok"), col("bk")), exists("inner", eq(pcol("ik"), col("bk"))))),

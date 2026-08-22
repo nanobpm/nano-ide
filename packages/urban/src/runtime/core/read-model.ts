@@ -237,6 +237,14 @@ export interface SqlCompileOptions {
 }
 
 const DEFAULT_BASE_ALIAS = "base";
+/**
+ * Resolve and validate the base-table alias. A caller-provided `baseAlias` is interpolated straight
+ * into DDL/SQL, so it must be a real identifier — validating here is the single source of truth for
+ * every call site (VIEW DDL + derivation compile).
+ */
+function resolveBaseAlias(alias: string | undefined): string {
+  return assertSqlIdentifier("base alias", alias ?? DEFAULT_BASE_ALIAS);
+}
 
 /** A conservative SQL identifier guard — we interpolate names directly into DDL/SQL. */
 const SQL_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -275,16 +283,18 @@ function sqlLiteral(value: Literal): string {
  * {@link compileToFn} produces cannot diverge.
  */
 export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}): string {
-  const baseAlias = options.baseAlias ?? DEFAULT_BASE_ALIAS;
+  const baseAlias = resolveBaseAlias(options.baseAlias);
   const resolveTable = options.resolveProjectionTable ?? ((n: string) => projectionRegistry.sqlTableFor(n));
 
   // Reserved alias for the EXISTS projection relation, derived so it can never equal `baseAlias`: a
   // projection whose physical table name happens to match the base alias would otherwise shadow the
   // outer base row inside the sub-select, silently breaking `col(...)` correlation. Depth-indexed so
   // nested EXISTS predicates each bind `pcol(...)` to their own projection, not the innermost one.
+  // SQLite compares identifiers case-insensitively, so a `baseAlias` that differs only by case (e.g.
+  // "__URBAN_PROJ_0") would still collide with the reserved alias — guard case-insensitively.
   const projAliasAt = (depth: number): string => {
     let alias = `__urban_proj_${depth}`;
-    while (alias === baseAlias) alias = `_${alias}`;
+    while (alias.toLowerCase() === baseAlias.toLowerCase()) alias = `_${alias}`;
     return alias;
   };
 
@@ -640,7 +650,7 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
   };
 
   const viewDdl = (options?: SqlCompileOptions): string => {
-    const baseAlias = options?.baseAlias ?? DEFAULT_BASE_ALIAS;
+    const baseAlias = resolveBaseAlias(options?.baseAlias);
     const selectBase = decl.selectBaseColumns !== false;
     const derived = columns.map((c) => `${sqlSelectFor(c, options)} AS ${quoteIdent(c)}`);
     const selectList = [...(selectBase ? [`${quoteIdent(baseAlias)}.*`] : []), ...derived].join(",\n  ");

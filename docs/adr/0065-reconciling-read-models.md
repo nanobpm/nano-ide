@@ -159,7 +159,7 @@ retires drift surface #1 at its source.
 
 1. **Now:** land nanobpm/nano-workforce#458 — the instance fix for the live symptom (nanobpm/nano-workforce#422).
 2. **First framework step (PR-sized, highest leverage):** the declare-once → compile-to-both
-   expression DSL, applied to nwf's existing three read models (feature/plan). Kills drift
+   expression DSL, applied to nwf's existing read models (feature/plan). Kills drift
    surface #2 on real surfaces; lowest risk, highest proof value; no engine-truth changes yet.
 3. Promote `user_tasks` → the canonical `urban_open_user_tasks` projection; re-point the read
    models at it (removes drift surface #1's *source* for the attention/wait edges).

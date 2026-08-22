@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.12.12](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.12.11...@nanobpm/urban-testkit-0.12.12) (2026-08-22)
+
+
+### Bug Fixes
+
+* **urban-testkit:** close() awaits in-flight handlers before free() (use-after-free) ([#447](https://github.com/nanobpm/nano-ide/issues/447)) ([eadca4e](https://github.com/nanobpm/nano-ide/commit/eadca4e8d73b00c2717f0a7523ec38f5d868d29c))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @nanobpm/urban bumped from >=0.77.2 to >=0.77.3
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.50.0 to >=0.77.3
+
+## [0.12.11](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.12.10...@nanobpm/urban-testkit-0.12.11) (2026-08-22)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @nanobpm/urban bumped from >=0.77.1 to >=0.77.2
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.50.0 to >=0.77.2
+
 ## [0.12.10](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.12.9...@nanobpm/urban-testkit-0.12.10) (2026-08-22)
 
 

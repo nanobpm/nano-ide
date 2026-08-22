@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.77.3](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.2...@nanobpm/urban-0.77.3) (2026-08-22)
+
+
+### Bug Fixes
+
+* **urban-testkit:** close() awaits in-flight handlers before free() (use-after-free) ([#447](https://github.com/nanobpm/nano-ide/issues/447)) ([eadca4e](https://github.com/nanobpm/nano-ide/commit/eadca4e8d73b00c2717f0a7523ec38f5d868d29c))
+
+## [0.77.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.1...@nanobpm/urban-0.77.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **urban:** emit lint-clean nano-generated code; lint it in the scaffold ([#448](https://github.com/nanobpm/nano-ide/issues/448)) ([a19485d](https://github.com/nanobpm/nano-ide/commit/a19485d1730cdf27ae56d4e27c10acf215adb293))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * create-urban-app bumped from ^0.15.0 to ^0.15.1
+
 ## [0.77.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.0...@nanobpm/urban-0.77.1) (2026-08-22)
 
 

@@ -286,3 +286,34 @@ test("bootTestApp bounds a time-bounded worker by advanceTime (virtual time, not
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("bootTestApp stop() cancels a worker parked on app.wait instead of hanging (#446 follow-up)", async () => {
+  // Regression (issue #446 follow-up): a worker parked mid-`app.wait()` sits on a VIRTUAL timer that
+  // only `advanceTime` fires. If `stop()` (→ `engine.close()`) is called before that timer's due
+  // instant, the handler never settles on its own, so close()'s `#settleInflight()` used to await it
+  // forever and teardown hung until the test-runner timeout. The engine's shutdown signal, threaded
+  // into the scheduler backing `app.wait()`, now cancels that park at teardown: the wait rejects, the
+  // handler unwinds, and stop() returns. Proven end-to-end through the real app boot + teardown path.
+  const dir = await makeProbeFixture();
+  const app = await bootTestApp(dir);
+  let stopped = false;
+  try {
+    // Start the instance: the poll worker is dispatched and parks on its first app.wait(10s). No
+    // virtual time passes, so it stays parked in-flight — the classic virtual-timer park.
+    await app.engine.createInstance({ processDefinitionId: "probe" });
+    await app.settle();
+    assert.ok(app.scheduler.pending() > 0, "the worker must be parked on a virtual app.wait timer");
+
+    // stop() closes the engine mid-park; it must cancel the wait via the shutdown signal rather than
+    // await a virtual timer no advanceTime will ever fire. A hang would blow the runner timeout.
+    await app.stop();
+    stopped = true;
+    // Deterministic teardown postcondition (not a wall-clock bound): the shutdown signal must have
+    // cancelled the parked virtual timer, so the scheduler has no armed timers left. A stop() that
+    // truly hung would never reach this line — the test runner's own timeout catches that.
+    assert.equal(app.scheduler.pending(), 0, "stop() must cancel the parked virtual wait, leaving no armed timers");
+  } finally {
+    if (!stopped) await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

@@ -59,7 +59,7 @@ function api(path,opts){return fetch(BASE+path,opts).then(r=>{if(!r.ok)return r.
 function loadTasks(){
   formEl.replaceChildren();
   tasksEl.replaceChildren(el('li',{},'loading…'));
-  return api('/api/tasks').then(ts=>{
+  return api('/api/tasks'+location.search).then(ts=>{
     tasksEl.replaceChildren();
     if(!ts.length){tasksEl.appendChild(el('li',{},'No open tasks.'));return;}
     for(const t of ts){
@@ -216,6 +216,8 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       source: "surface:taskInbox",
       handler: async (req) => {
         const pik = req.query.get("processInstanceKey") ?? undefined;
+        const assignee = req.query.get("assignee") ?? undefined;
+        const candidateGroup = req.query.get("candidateGroup") ?? undefined;
         // Constrain the inbox to open (answerable) tasks. Without a state filter the engine
         // returns tasks in every state (CREATED/COMPLETED/CANCELED/...), so already-answered
         // or withdrawn tasks would surface as if actionable — completing one then fails with
@@ -223,6 +225,8 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
         const tasks = await app.engine.searchUserTasks({
           state: "CREATED",
           ...(pik ? { processInstanceKey: pik } : {}),
+          ...(assignee ? { assignee } : {}),
+          ...(candidateGroup ? { candidateGroup } : {}),
         });
         return json(tasks);
       },

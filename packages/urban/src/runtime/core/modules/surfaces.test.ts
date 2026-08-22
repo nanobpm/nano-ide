@@ -217,6 +217,53 @@ test("/api/tasks constrains the search to open (CREATED) tasks", async () => {
   assert.deepEqual(seenFilter, { state: "CREATED" });
 });
 
+test("/api/tasks forwards assignee and candidateGroup to the engine (nanobpm/nano-ide#438)", async () => {
+  let seenFilter: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    searchUserTasks: async (filter) => {
+      seenFilter = filter;
+      return [];
+    },
+  };
+  const { tasks } = inboxRoutes(engine);
+  await call(tasks, { query: "assignee=demo-reviewer&candidateGroup=reviewers&processInstanceKey=pi-9" });
+  // A manifest ui.path like /tasks?assignee=… must scope the inbox to that reviewer/group on a
+  // shared engine — the handler forwards both alongside the state/processInstanceKey pins.
+  assert.deepEqual(seenFilter, {
+    state: "CREATED",
+    processInstanceKey: "pi-9",
+    assignee: "demo-reviewer",
+    candidateGroup: "reviewers",
+  });
+});
+
+test("/api/tasks omits assignee/candidateGroup when absent (unscoped inbox unchanged)", async () => {
+  let seenFilter: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    searchUserTasks: async (filter) => {
+      seenFilter = filter;
+      return [];
+    },
+  };
+  const { tasks } = inboxRoutes(engine);
+  await call(tasks, { query: "assignee=demo-reviewer" });
+  // Only the supplied param is forwarded; candidateGroup stays off so its key never appears.
+  assert.deepEqual(seenFilter, { state: "CREATED", assignee: "demo-reviewer" });
+});
+
+test("inbox client forwards the surface query string to /api/tasks (nanobpm/nano-ide#438)", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // A scoped surface path (e.g. /tasks?assignee=…) reaches the iframe as location.search; the
+  // client must append it so the handler sees the scope. Guard the drift closed.
+  assert.ok(
+    rendered.includes("'/api/tasks'+location.search") || rendered.includes("'/api/tasks' + location.search"),
+    "client forwards location.search onto the /api/tasks fetch",
+  );
+});
+
 test("/api/form resolves a linked form's schema", async () => {
   let seen: unknown;
   const schema = { type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "name", label: "Name" }] };

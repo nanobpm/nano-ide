@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.2](https://github.com/nanobpm/nano-ide/compare/create-urban-app-0.15.1...create-urban-app-0.15.2) (2026-08-22)
+
+
+### Bug Fixes
+
+* **create-urban-app:** scaffolded app is lint-green out of the box ([#454](https://github.com/nanobpm/nano-ide/issues/454)) ([945fabf](https://github.com/nanobpm/nano-ide/commit/945fabfafda7acd1dfac5d34c02dbd441e01aa51))
+
 ## [0.15.1](https://github.com/nanobpm/nano-ide/compare/create-urban-app-0.15.0...create-urban-app-0.15.1) (2026-08-22)
 
 

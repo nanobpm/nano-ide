@@ -297,6 +297,24 @@ export class WasmEngineClient implements EngineClient {
    *  exists to prevent), whereas a pre-free rejection may clear it for a legitimate retry. */
   #freed = false;
 
+  /** The live engine handle, or a thrown error once {@link close} has {@link TestEngine.free freed}
+   *  it. EVERY public {@link EngineClient} operation reaches the engine through this accessor so a
+   *  call made *after* close() — most importantly by a worker handler that self-initiated teardown
+   *  (`await app.close()`) and then keeps using `AppApi.engine` (e.g. `publishMessage`,
+   *  `createInstance`) — faults with a clear, catchable error instead of driving the freed WASM
+   *  handle (the opaque "null pointer passed to rust" issue #446 use-after-free). The `#freed` guard
+   *  in `#runJob` only covers a resumed handler's final `completeJob`/`failJob`; this closes the same
+   *  hole categorically across the whole EngineClient surface. Internal drain/`#settleInflight`/
+   *  `#runJob` paths keep touching `#engine` directly on purpose: they run *before* `free()` (and
+   *  carry their own `#freed` guards), so they must be able to complete the last in-flight handlers. */
+  get #liveEngine(): TestEngine {
+    if (this.#freed) {
+      throw new Error(
+        "WasmEngineClient: engine used after close() — the engine has been freed and can no longer service requests",
+      );
+    }
+    return this.#engine;
+  }
 
   /** A shutdown {@link AbortSignal} that aborts when {@link close} begins. The test kit threads it
    *  into the scheduler backing `app.wait()`, so a worker handler parked on the virtual clock is
@@ -331,7 +349,7 @@ export class WasmEngineClient implements EngineClient {
     // Any *other* generic resource likewise has no read surface here. Every non-executable resource
     // is inert to the BPMN parser here.
     for (const r of resources) {
-      if (isEngineModel(r)) this.#engine.deploy(this.#rewriteForChildProcessMocks(r.content));
+      if (isEngineModel(r)) this.#liveEngine.deploy(this.#rewriteForChildProcessMocks(r.content));
     }
     // Match `SdkEngineClient.deployResources`: the deployment accepts every resource, so the
     // `deployed` count is the total — a form (or any non-executable asset) still counts as
@@ -345,7 +363,7 @@ export class WasmEngineClient implements EngineClient {
     awaitCompletion?: boolean;
   }): Promise<{ processInstanceKey: string; variables?: Record<string, unknown> }> {
     const snap = this.#parseObj(
-      this.#engine.createInstance(
+      this.#liveEngine.createInstance(
         input.processDefinitionId,
         // Auto-thread the `_urban.lineage` envelope via the same shared step the live
         // SdkEngineClient uses (No Drift Surfaces), so lineage is observable in-harness (issue #254).
@@ -366,7 +384,7 @@ export class WasmEngineClient implements EngineClient {
   }
 
   async cancelInstance(input: { processInstanceKey: string }): Promise<void> {
-    this.#engine.cancelInstance(input.processInstanceKey);
+    this.#liveEngine.cancelInstance(input.processInstanceKey);
     await this.drain();
   }
 
@@ -375,7 +393,7 @@ export class WasmEngineClient implements EngineClient {
     correlationKey?: string;
     variables?: Record<string, unknown>;
   }): Promise<void> {
-    this.#engine.correlateMessage(
+    this.#liveEngine.correlateMessage(
       input.name,
       input.correlationKey ?? "",
       JSON.stringify(applyAmbientLineage(input.variables)),
@@ -399,7 +417,7 @@ export class WasmEngineClient implements EngineClient {
     // (`@nanobpm/engine-wasm/readmodel-types`) — the single source of truth for the row shape —
     // so `items` is a typed `UserTaskResult[]` rather than a hand-scraped `Record` bag.
     const body: UserTaskSearchQueryResult = JSON.parse(
-      this.#engine.searchUserTasks(
+      this.#liveEngine.searchUserTasks(
         JSON.stringify(filter?.state ? { state: filter.state } : {}),
       ),
     );
@@ -472,6 +490,10 @@ export class WasmEngineClient implements EngineClient {
     // that is treated below as "no such form" (null), not propagated.
     const key = present(input.formKey) ?? present(input.formId);
     if (key == null) return null;
+    // Resolve the live engine BEFORE the try below: a used-after-close fault must surface as a loud
+    // error, not be swallowed by the "malformed key → no such form (null)" catch that wraps the
+    // `getFormByKey` call itself.
+    const engine = this.#liveEngine;
     // The engine addresses a form by a numeric deploy key and *throws* on a malformed key (e.g. an
     // authored id passed through as the fallback). Mirror `SdkEngineClient.getForm`, which treats a
     // failed fetch as "no such form" and returns null rather than propagating. Parse through the
@@ -479,7 +501,7 @@ export class WasmEngineClient implements EngineClient {
     // (JSON string), `formKey`, `formId`, and `version` fields are the single source of truth.
     let body: FormResult | null;
     try {
-      body = JSON.parse(this.#engine.getFormByKey(key));
+      body = JSON.parse(engine.getFormByKey(key));
     } catch {
       return null;
     }
@@ -494,7 +516,7 @@ export class WasmEngineClient implements EngineClient {
     userTaskKey: string,
     variables?: Record<string, unknown>,
   ): Promise<void> {
-    this.#engine.completeUserTask(userTaskKey, JSON.stringify(variables ?? {}));
+    this.#liveEngine.completeUserTask(userTaskKey, JSON.stringify(variables ?? {}));
     await this.drain();
   }
 
@@ -514,7 +536,7 @@ export class WasmEngineClient implements EngineClient {
     // `ProcessInstanceSearchQueryResult` DTO (`@nanobpm/engine-wasm/readmodel-types`) so each
     // row is a typed `ProcessInstanceResult` rather than a hand-scraped `Record` bag.
     const body: ProcessInstanceSearchQueryResult = JSON.parse(
-      this.#engine.searchProcessInstances("{}"),
+      this.#liveEngine.searchProcessInstances("{}"),
     );
     const out: ProcessInstanceSnapshot[] = [];
     // Same untyped-JSON defence as `searchUserTasks`: `searchRows` guards the body and drops
@@ -733,13 +755,13 @@ export class WasmEngineClient implements EngineClient {
   /** Advance the virtual clock by `ms`, firing due timers, then drain workers so
    *  any jobs the timers created are served. */
   async advanceTime(ms: number): Promise<void> {
-    this.#engine.advanceTime(ms);
+    this.#liveEngine.advanceTime(ms);
     await this.drain();
   }
 
   /** The current virtual clock (ms). */
   get now(): number {
-    return this.#engine.now;
+    return this.#liveEngine.now;
   }
 
   /**
@@ -795,6 +817,17 @@ export class WasmEngineClient implements EngineClient {
       if (this.#closing) return;
       let activatedAny = false;
       for (const jobType of this.#dispatchableJobTypes()) {
+        // Batch-level shutdown guard (companion to the loop-top `#closing` guard above, which only
+        // stops the NEXT pass). A handler dispatched EARLIER in THIS synchronous pass can self-initiate
+        // teardown — `await app.close()` runs close()'s synchronous head (setting `#closing`, aborting
+        // `#shutdown`, and snapshotting `#inflight` in `#settleInflight()`) before it yields — so by the
+        // time this loop advances to the next jobType/job, `#closing` is already true. Without bailing
+        // here, this pass would `activateJobs` and `#track` MORE handlers onto an engine whose
+        // `#settleInflight()` already declared quiescence (it saw only the excluded self-closer), and
+        // `free()` would then run with those later handlers still in-flight — the very issue #446
+        // use-after-free the settle barrier exists to prevent. Everything already dispatched this pass
+        // is in `#inflight` and awaited by close() before `free()`, so bailing strands nothing.
+        if (this.#closing) return;
         // A synthetic child-process job type has no registered worker and is resolved on its own
         // dedicated path (call-activity outcome / native pass-through), never as a worker.
         // Classify by membership in the minted set (not a prefix test) AND the absence of a real
@@ -814,6 +847,10 @@ export class WasmEngineClient implements EngineClient {
           ),
         );
         for (const raw of jobs) {
+          // Same batch-level guard, now per-job: a handler dispatched a moment ago in THIS same
+          // `jobs` array can have synchronously self-closed, flipping `#closing` mid-batch. Stop
+          // dispatching the remaining jobs so none is `#track`ed onto an engine being freed.
+          if (this.#closing) return;
           if (isChildProcess) {
             activatedAny = true;
             this.#runChildProcessJob(jobType, raw);
@@ -1072,6 +1109,9 @@ export class WasmEngineClient implements EngineClient {
       // the engine handle is gone, so completing the job would drive a freed pointer — the very issue
       // #446 use-after-free. `#settleInflight` deliberately excludes every close-awaiter from its wait
       // so a self-close does not deadlock; the price is that we must NOT touch the freed engine after.
+      // (Any OTHER engine call a resumed self-closer makes — `publishMessage`, `createInstance`, … —
+      // is guarded categorically by the `#liveEngine` accessor, which throws after `free()`; this
+      // narrow `#freed` return only silences the job's own final `completeJob`.)
       if (this.#freed) return;
       this.#engine.completeJob(jobKey, JSON.stringify(out ?? {}));
     } catch (err) {
@@ -1103,7 +1143,7 @@ export class WasmEngineClient implements EngineClient {
   }
 
   #snapshot(): Record<string, unknown> {
-    return this.#parseObj(this.#engine.snapshot());
+    return this.#parseObj(this.#liveEngine.snapshot());
   }
 
   #instanceVariables(key: string): Record<string, unknown> {

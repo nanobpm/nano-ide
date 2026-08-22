@@ -1090,6 +1090,151 @@ test("wasm: two handlers can both call engine.close() without dead-awaiting each
   }
 });
 
+// Regression (PR #447 review, wasm-engine.ts:1075 — self-close use-after-free, categorical): the
+// `#freed` guard in `#runJob` only silences a resumed self-closing handler's own final `completeJob`.
+// A handler that self-closes and then keeps using `AppApi.engine` — `publishMessage`, `createInstance`,
+// a read, … — would still drive the freed WASM handle (the opaque "null pointer passed to rust" #446
+// use-after-free). Every public EngineClient op now reaches the engine through `#liveEngine`, which
+// throws a clear error once freed. This tests that surface directly at the client boundary (a resumed
+// handler's throw is swallowed by `#runJob`, so exercising it via the public API is the observable
+// path): after close(), every operation must reject/throw with a "used after close()" error rather
+// than crash on the released handle. Deterministic — no wall-clock, no in-flight handlers.
+test("wasm: engine operations fault cleanly after close() instead of driving a freed handle (#447 review)", async () => {
+  const engine = await createWasmEngineClient();
+  await engine.close();
+  const usedAfterClose = /used after close\(\)/;
+  await assert.rejects(
+    () => engine.createInstance({ processDefinitionId: "nope" }),
+    usedAfterClose,
+    "createInstance after close() must reject cleanly, not fault the freed handle",
+  );
+  await assert.rejects(
+    () => engine.publishMessage({ name: "m" }),
+    usedAfterClose,
+    "publishMessage after close() must reject cleanly",
+  );
+  await assert.rejects(
+    () => engine.cancelInstance({ processInstanceKey: "1" }),
+    usedAfterClose,
+    "cancelInstance after close() must reject cleanly",
+  );
+  await assert.rejects(
+    () => engine.completeUserTask("1"),
+    usedAfterClose,
+    "completeUserTask after close() must reject cleanly",
+  );
+  await assert.rejects(
+    () => engine.searchUserTasks(),
+    usedAfterClose,
+    "searchUserTasks after close() must reject cleanly",
+  );
+  await assert.rejects(
+    () => engine.searchProcessInstances(),
+    usedAfterClose,
+    "searchProcessInstances after close() must reject cleanly",
+  );
+  await assert.rejects(
+    () =>
+      engine.deployResources([
+        { name: "x.bpmn", content: "<definitions/>", contentType: "application/bpmn+xml" },
+      ]),
+    usedAfterClose,
+    "deployResources of an executable model after close() must reject cleanly",
+  );
+  assert.throws(() => engine.snapshot(), usedAfterClose, "snapshot after close() must throw cleanly");
+  assert.throws(() => engine.now, usedAfterClose, "now after close() must throw cleanly");
+});
+
+// Regression (PR #447 review, suppressed wasm-engine.ts:835 — batch teardown ordering + suppressed
+// wasm-engine.test.ts:949 — synchronous self-close). A single drain pass can activate SEVERAL jobs in
+// one `activateJobs` batch (here: a parallel gateway forks to two service tasks of the same type). If
+// the FIRST job's handler self-closes SYNCHRONOUSLY — calling `await engine.close()` as its first act,
+// so close()'s synchronous head flips `#closing` before the handler yields — the drain loop must NOT
+// keep dispatching the remaining jobs in that batch: `#settleInflight()` has already snapshotted
+// `#inflight` seeing only the excluded self-closer, so a later-dispatched peer would be left in-flight
+// when `free()` runs (a #446 use-after-free). This also exercises the `#track` publish-before-run
+// ordering: a synchronous self-close only works if the handler's own tracked promise is already in
+// `#inflight` (as `store.own`) before `run()` executes. Deterministic: without the batch guard the
+// second job is dispatched (`peerDispatched` flips) and fails the assertion; with it, it never is.
+test("wasm: a synchronous self-close stops dispatching the rest of its drain batch (#447 review, facet 835)", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  let dispatches = 0;
+  let peerDispatched = false;
+  let closeReturned = false;
+  let closed = false;
+  try {
+    // Both forked service tasks share this type, so one `activateJobs("fan", …)` returns both jobs and
+    // the drain dispatches them back-to-back in one synchronous pass. The FIRST dispatch self-closes
+    // synchronously (its first statement is `await engine.close()`); a SECOND dispatch — which must not
+    // happen once close() has begun — records that it leaked through.
+    await engine.registerWorker("fan", async () => {
+      dispatches += 1;
+      if (dispatches === 1) {
+        await engine.close();
+        closeReturned = true;
+        return {};
+      }
+      peerDispatched = true;
+      return {};
+    }, { maxParallelJobs: 10 });
+    await engine.deployResources([
+      {
+        name: "fan.bpmn",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="fan" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f0" sourceRef="s" targetRef="g"/>
+    <parallelGateway id="g"/>
+    <sequenceFlow id="fa" sourceRef="g" targetRef="ta"/>
+    <sequenceFlow id="fb" sourceRef="g" targetRef="tb"/>
+    <serviceTask id="ta"><extensionElements><zeebe:taskDefinition type="fan"/></extensionElements></serviceTask>
+    <serviceTask id="tb"><extensionElements><zeebe:taskDefinition type="fan"/></extensionElements></serviceTask>
+    <sequenceFlow id="fa2" sourceRef="ta" targetRef="e"/>
+    <sequenceFlow id="fb2" sourceRef="tb" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="fan">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="150" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="g_di" bpmnElement="g"><dc:Bounds x="240" y="95" width="50" height="50"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="ta_di" bpmnElement="ta"><dc:Bounds x="340" y="40" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="tb_di" bpmnElement="tb"><dc:Bounds x="340" y="150" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="500" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f0_di" bpmnElement="f0"><di:waypoint x="186" y="118"/><di:waypoint x="240" y="120"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fa_di" bpmnElement="fa"><di:waypoint x="290" y="120"/><di:waypoint x="340" y="80"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fb_di" bpmnElement="fb"><di:waypoint x="290" y="120"/><di:waypoint x="340" y="190"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fa2_di" bpmnElement="fa2"><di:waypoint x="440" y="80"/><di:waypoint x="500" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="fb2_di" bpmnElement="fb2"><di:waypoint x="440" y="190"/><di:waypoint x="500" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>`,
+        contentType: "application/bpmn+xml",
+      },
+    ]);
+    await engine.createInstance({ processDefinitionId: "fan" });
+    for (let i = 0; i < 5; i++) {
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+    }
+    closed = true;
+    assert.ok(closeReturned, "the synchronously self-closing handler's close() must resolve");
+    assert.ok(
+      !peerDispatched,
+      "once a handler self-closed mid-batch, no further job in that batch may be dispatched onto the closing engine",
+    );
+    // Clean single free(): a later external close() is a memoized no-op.
+    await engine.close();
+  } finally {
+    if (!closed) await engine.close();
+  }
+});
+
 // Regression (PR #447 review, wasm-engine.ts:554): close() is idempotent. The shutdown run is
 // memoized, so two concurrent close() calls (or a second after the first resolves) await the SAME
 // run instead of each reaching `#engine.free()` — freeing the same WASM handle twice throws in

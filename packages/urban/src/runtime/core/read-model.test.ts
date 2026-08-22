@@ -327,6 +327,29 @@ test("the parity guard resolves projection tables through options.sql and valida
   });
 });
 
+test("the parity guard rejects a projection resolving to the base table's physical name (would collide with the base fixture)", async () => {
+  // A projection that resolves to the SAME physical table as the base table would make the guard build
+  // (and later drop/insert) one fixture table twice — once as the base, once as the projection — failing
+  // with a confusing SQLite "table already exists" error. The guard must reject it up front with an
+  // actionable message, mirroring the many-to-one projection-table check.
+  const model = defineReadModel({
+    name: "base_collision_read_model",
+    baseTable: "rows",
+    derive: {
+      has_match: caseWhen([when(exists("p", eq(pcol("k"), col("k"))), lit(1))], lit(0)),
+    },
+  });
+  await withDb((db) => {
+    assert.throws(
+      () =>
+        assertReadModelParity(model, db, [{ baseRow: { k: "x" }, projections: { p: [{ k: "x" }] } }], {
+          sql: { resolveProjectionTable: () => "rows" },
+        }),
+      /maps projection "p" to its base table "rows"/,
+    );
+  });
+});
+
 test("the process-wide projectionRegistry is idempotent and rejects a conflicting redefinition", () => {
   try {
     projectionRegistry.register({ name: "urban_open_user_tasks" });
@@ -362,6 +385,20 @@ test("projectionRegistry.clear() resets all registrations for deterministic test
   } finally {
     projectionRegistry.clear();
   }
+});
+
+test("defineReadModel rejects a read model whose name equals its base table (SQLite forbids a VIEW and table sharing a name)", () => {
+  // SQLite cannot hold a VIEW and a table under one name, so provisioning such a read model would fail
+  // opaquely with a raw SQL error at `ensureViews`. Reject it at declaration time with an actionable one.
+  assert.throws(
+    () =>
+      defineReadModel({
+        name: "shared_name",
+        baseTable: "shared_name",
+        derive: { c: col("x") },
+      }),
+    /cannot share its name with its base table "shared_name"/,
+  );
 });
 
 test("the read-model registry provisions every managed VIEW and rejects a conflicting redefinition", async () => {

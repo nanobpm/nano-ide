@@ -634,6 +634,16 @@ function collectColumns(
 export function defineReadModel(decl: ReadModelDecl): ReadModel {
   assertSqlIdentifier("read model name", decl.name);
   assertSqlIdentifier("base table", decl.baseTable);
+  // SQLite forbids a VIEW and a table sharing one name, so a read model whose managed VIEW name equals
+  // its base table would fail opaquely at provisioning (`ReadModelRegistry.ensureViews`) with a raw SQL
+  // error. Reject it here, at declaration time, with an actionable message instead.
+  if (decl.name === decl.baseTable) {
+    throw new Error(
+      `read model "${decl.name}" cannot share its name with its base table "${decl.baseTable}"; ` +
+        `SQLite forbids a VIEW and a table having the same name, so the managed VIEW would fail to ` +
+        `provision — give the read model a distinct name`,
+    );
+  }
   // Canonicalise the derived-column order (sort by name) so the managed VIEW DDL is independent of the
   // declaration object's key insertion order. `ReadModelRegistry.register` compares `viewDdl()` strings
   // for idempotency/conflict detection, so two declarations that differ only in `derive` key order must
@@ -883,6 +893,16 @@ export function assertReadModelParity(
   const tableOwner = new Map<string, string>();
   for (const name of model.projectionNames) {
     const table = assertSqlIdentifier("projection table", resolveTable(name));
+    // A projection resolving to the base table's physical name is a mapping bug: the guard fabricates an
+    // isolated fixture per relation, so it would `CREATE TEMP TABLE` (and later drop/insert) the base
+    // table twice and fail for a non-parity reason. Reject it up front (mirrors the many-to-one check).
+    if (table === baseTable) {
+      throw new Error(
+        `read model "${model.decl.name}" maps projection "${name}" to its base table "${baseTable}"; ` +
+          `each projection needs a distinct sqlTable so the parity guard can build an isolated fixture ` +
+          `for it`,
+      );
+    }
     // Two distinct projection names resolving to ONE physical table is a mapping bug: the guard would
     // otherwise `CREATE TABLE` (and later drop/insert) that table twice and fail for a non-parity
     // reason. Reject it up front with an actionable error instead (mirrors the column check above).

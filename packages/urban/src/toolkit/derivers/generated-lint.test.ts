@@ -6,6 +6,15 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runGen, type GenIO } from "../gen.ts";
+import {
+  emitDomainBindings,
+  emitDomainDts,
+  emitDomainModel,
+  type SourceSchema,
+} from "./domain.ts";
+import { emitMeta } from "./meta.ts";
+import { emitMessageBindings, emitMessageBindingsRuntime } from "./messages.ts";
+import { emitWorkerBindings, emitWorkerBindingsRuntime } from "./worker-io.ts";
 
 // Defect-class guard (AGENTS.md "write a test guard for the defect class"): the emitters must
 // produce `nano-generated/` code that passes the `create-urban-app` scaffold's own Biome lint
@@ -85,7 +94,7 @@ const BPMN = `<bpmn:process id="p" xmlns:bpmn="x" xmlns:zeebe="y"><bpmn:serviceT
 
 /** A populated app (workers + domain types + declared metadata + an API surface) and an empty app
  *  (no workers/types/messages) — together they cover both the populated (`interface X { ... }`) and
- *  the empty (`Record<string, never>`) branches of every emitter. */
+ *  the empty (`Record<never, never>`) branches of every emitter reachable through `runGen`. */
 const FIXTURES: Record<string, Record<string, string>> = {
   populated: {
     "/app/nano.app.json": JSON.stringify({
@@ -108,17 +117,50 @@ const FIXTURES: Record<string, Record<string, string>> = {
   },
 };
 
+/** Resolve the scaffold's own Biome binary — the exact linter a scaffolded app runs. */
+async function resolveBiomeBin(): Promise<string> {
+  return fileURLToPath(await import.meta.resolve("@biomejs/biome/bin/biome"));
+}
+
+/** Lint `dirs` under `work` with the scaffold template's *exact* ruleset (plugin included), scoped
+ *  to the generated dirs and with the formatter disabled — the generated code is intentionally
+ *  console/deno-styled (ADR 0053 byte-parity), which the scaffold scopes away from its formatter, so
+ *  the guard tracks lint-rule + import-organizing (assist) cleanliness only. */
+function lintUnderScaffold(
+  work: string,
+  templateDir: string,
+  biomeBin: string,
+  dirs: string[],
+): { status: number | null; stdout: string; stderr: string } {
+  const templateBiome = JSON.parse(readFileSync(join(templateDir, "biome.json"), "utf8"));
+  // Copy the scaffold's GritQL plugin (bans `as` assertions) next to the config so its relative
+  // path resolves, then reuse the template's exact ruleset — force-scoped to the generated dirs so
+  // the guard tracks the scaffold standard without depending on the template's own `includes`.
+  cpSync(join(templateDir, "plugins"), join(work, "plugins"), { recursive: true });
+  const config = {
+    ...templateBiome,
+    $schema: undefined,
+    root: true,
+    files: { includes: dirs.map((d) => `${d}/**/*.ts`) },
+    formatter: { enabled: false },
+    linter: { ...templateBiome.linter, includes: dirs.map((d) => `${d}/**/*.ts`) },
+  };
+  writeFileSync(join(work, "biome.json"), `${JSON.stringify(config, null, "\t")}\n`);
+  // Run with cwd = work so Biome auto-discovers this `root: true` config (which also stops it
+  // walking up into any ancestor config). Passing --config-path *and* a path under it would load
+  // the config twice and error with "nested root configuration", so we rely on discovery.
+  return spawnSync(process.execPath, [biomeBin, "check", "."], { cwd: work, encoding: "utf8" });
+}
+
 test("generated nano-generated/ code passes the scaffold's Biome lint ruleset", async () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const templateDir = join(here, "..", "..", "..", "..", "create-urban-app", "template");
-  const templateBiome = JSON.parse(readFileSync(join(templateDir, "biome.json"), "utf8"));
-  const biomeBin = fileURLToPath(
-    await import.meta.resolve("@biomejs/biome/bin/biome"),
-  );
+  const biomeBin = await resolveBiomeBin();
 
   const work = mkdtempSync(join(tmpdir(), "urban-genlint-"));
   try {
     const dirs: string[] = [];
+    const perFixture: Record<string, number> = {};
     let tsFileCount = 0;
     for (const [name, files] of Object.entries(FIXTURES)) {
       const io = memIO({ ...files });
@@ -126,43 +168,113 @@ test("generated nano-generated/ code passes the scaffold's Biome lint ruleset", 
       const outDir = join(work, name);
       mkdirSync(outDir, { recursive: true });
       dirs.push(name);
+      perFixture[name] = 0;
       for (const artifact of res.artifacts) {
         if (!/\.ts$/.test(artifact.path)) continue; // .ts + .d.ts, skip .sql/.json/.md
         const fileName = artifact.path.split("/").pop();
         if (!fileName) continue;
         writeFileSync(join(outDir, fileName), io.files[`/app/${artifact.path}`]);
+        perFixture[name]++;
         tsFileCount++;
       }
     }
 
-    // Copy the scaffold's GritQL plugin (bans `as` assertions) next to the config so its relative
-    // path resolves, then reuse the template's exact ruleset — force-scoped to the generated dirs so
-    // the guard tracks the scaffold standard without depending on the template's own `includes`.
-    cpSync(join(templateDir, "plugins"), join(work, "plugins"), { recursive: true });
-    // The guard asserts lint-rule + import-organizing (assist) cleanliness, not formatting: the
-    // generated code is intentionally console/deno-styled (ADR 0053 byte-parity), which the scaffold
-    // scopes away from its formatter. Disabling the formatter here mirrors that intent and keeps the
-    // guard focused on the emitter's real responsibility.
-    const config = {
-      ...templateBiome,
-      $schema: undefined,
-      root: true,
-      files: { includes: dirs.map((d) => `${d}/**/*.ts`) },
-      formatter: { enabled: false },
-      linter: { ...templateBiome.linter, includes: dirs.map((d) => `${d}/**/*.ts`) },
-    };
-    writeFileSync(join(work, "biome.json"), `${JSON.stringify(config, null, "\t")}\n`);
+    // A fixture that silently produced no TypeScript artifacts would make the whole guard vacuous
+    // (Biome would report `Checked 0 files` yet still satisfy `>= 0`). Assert each fixture emitted a
+    // nonzero set *before* trusting Biome's own file count.
+    for (const [name, count] of Object.entries(perFixture)) {
+      assert.ok(count > 0, `fixture "${name}" produced no TypeScript artifacts — the guard is vacuous`);
+    }
 
-    // Run with cwd = work so Biome auto-discovers this `root: true` config (which also stops it
-    // walking up into any ancestor config). Passing --config-path *and* a path under it would load
-    // the config twice and error with "nested root configuration", so we rely on discovery.
-    const run = spawnSync(process.execPath, [biomeBin, "check", "."], { cwd: work, encoding: "utf8" });
+    const run = lintUnderScaffold(work, templateDir, biomeBin, dirs);
 
     // The guard is only meaningful if Biome actually inspected the generated files — a mis-scoped
     // config that silently checks nothing must not pass vacuously.
     const checked = /Checked (\d+) files/.exec(run.stdout);
     assert.ok(checked && Number(checked[1]) >= tsFileCount, `Biome did not check the generated files:\n${run.stdout}`);
     assert.equal(run.status, 0, `Biome flagged generated code:\n${run.stdout}\n${run.stderr}`);
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+});
+
+test("every emitter branch (populated, empty, and the data-path runtime wrappers) is lint-clean", async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const templateDir = join(here, "..", "..", "..", "..", "create-urban-app", "template");
+  const biomeBin = await resolveBiomeBin();
+
+  // `runGen` emits only the `*.d.ts` type maps + the API runtime. The *data path* (`urban data`,
+  // `dataops.ts`) additionally materializes the runtime wrappers `workers.ts`, `messages.ts`, and the
+  // single-/multi-source `domain.ts` bindings into `nano-generated/`, so the scaffold's
+  // `nano-generated/**/*.ts` lint scope covers them too. Those wrappers carry the pass-through
+  // `as`-casts (and, multi-source, a keyed accessor) that only this plugin/assist ruleset can catch —
+  // exercise them here alongside every populated and empty (`Record<never, never>`) emitter branch so
+  // a regression in any of them fails at this guard, not only in a scaffolded user's project.
+  const sources: SourceSchema[] = [
+    {
+      source: "app",
+      tables: [{
+        name: "customers",
+        kind: "table",
+        columns: [{ name: "id", type: "INTEGER", notNull: true, primaryKey: true }],
+        indexes: [],
+        foreignKeys: [],
+      }],
+    },
+    {
+      source: "analytics",
+      tables: [{
+        name: "events",
+        kind: "table",
+        columns: [{ name: "id", type: "INTEGER", notNull: true, primaryKey: true }],
+        indexes: [],
+        foreignKeys: [],
+      }],
+    },
+  ];
+
+  const files: Record<string, string> = {
+    // data-path runtime wrappers (the `as`-cast / keyed-accessor carriers):
+    "workers.ts": emitWorkerBindingsRuntime(),
+    "messages.ts": emitMessageBindingsRuntime(),
+    "domain-single.ts": emitDomainBindings([sources[0]], "app"),
+    "domain-multi.ts": emitDomainBindings(sources, "app"),
+    // populated emitter branches:
+    "worker-io-populated.d.ts": emitWorkerBindings(
+      [{ taskType: "review", inputType: "Order", outputType: "Order", headerKeys: ["priority", "x-flag"] }],
+      ["Order"],
+    ),
+    "message-io-populated.d.ts": emitMessageBindings([{ messageName: "approved", inputType: "Order" }], ["Order"]),
+    "meta-populated.ts": emitMeta([
+      { key: "classification", value: "internal" },
+      { key: "data-classification", value: "pii" },
+    ]),
+    "domain-rows-populated.d.ts": emitDomainModel(sources, "app", {
+      greeting: { fields: { who: { type: "string" } } },
+      EmptyThing: { fields: {} }, // a declared type with no fields → the `Record<never, never>` registry fallback
+    }),
+    // empty emitter branches (the `Record<never, never>` fallbacks):
+    "worker-io-empty.d.ts": emitWorkerBindings([], []),
+    "message-io-empty.d.ts": emitMessageBindings([], []),
+    "meta-empty.ts": emitMeta([]),
+    "domain-rows-empty.d.ts": emitDomainDts([]),
+  };
+
+  const work = mkdtempSync(join(tmpdir(), "urban-genwrap-"));
+  try {
+    const outDir = join(work, "gen");
+    mkdirSync(outDir, { recursive: true });
+    for (const [name, content] of Object.entries(files)) writeFileSync(join(outDir, name), content);
+
+    const run = lintUnderScaffold(work, templateDir, biomeBin, ["gen"]);
+
+    const expected = Object.keys(files).length;
+    const checked = /Checked (\d+) files/.exec(run.stdout);
+    assert.ok(
+      checked && Number(checked[1]) >= expected,
+      `Biome did not check every branch/wrapper file (expected >= ${expected}):\n${run.stdout}`,
+    );
+    assert.equal(run.status, 0, `Biome flagged a generated emitter branch:\n${run.stdout}\n${run.stderr}`);
   } finally {
     rmSync(work, { recursive: true, force: true });
   }

@@ -89,11 +89,15 @@ export function emitMeta(metas: MetaDecl[]): string {
     "// without a second store. Do not edit — regenerated from the model.\n\n";
   const iface = keys.length > 0
     ? `export interface AppMeta {\n${keys.map((k) => `  ${propKey(k)}: string;`).join("\n")}\n}\n`
-    : `export type AppMeta = Record<string, never>;\n`;
+    : `export type AppMeta = Record<never, never>;\n`;
+  // Dot-access satisfies Biome's `useLiteralKeys`, but `__proto__` must stay a computed key: dot
+  // access would trip `noProto` and (off a null-prototype dict) change semantics.
+  const assignTarget = (k: string) =>
+    isIdent(k) && k !== "__proto__" ? `m.${k}` : `m[${JSON.stringify(k)}]`;
   const constDecl = keys.length > 0
     ? `export const appMeta: AppMeta = (() => {\n` +
       `  const m: AppMeta = Object.create(null);\n` +
-      keys.map((k) => `  m[${JSON.stringify(k)}] = ${JSON.stringify(folded[k])};`).join("\n") +
+      keys.map((k) => `  ${assignTarget(k)} = ${JSON.stringify(folded[k])};`).join("\n") +
       `\n  return m;\n})();\n`
     : `export const appMeta: AppMeta = Object.create(null);\n`;
   const accessor =

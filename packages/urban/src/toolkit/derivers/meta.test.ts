@@ -21,7 +21,7 @@ const ACCESSOR =
   "}\n";
 
 const GOLDEN_EMPTY = HEADER +
-  "export type AppMeta = Record<string, never>;\n\n" +
+  "export type AppMeta = Record<never, never>;\n\n" +
   "export const appMeta: AppMeta = Object.create(null);\n" +
   ACCESSOR;
 
@@ -29,8 +29,8 @@ const GOLDEN_MULTI = HEADER +
   "export interface AppMeta {\n  classification: string;\n  owner: string;\n}\n\n" +
   "export const appMeta: AppMeta = (() => {\n" +
   "  const m: AppMeta = Object.create(null);\n" +
-  '  m["classification"] = "internal";\n' +
-  '  m["owner"] = "ops";\n' +
+  '  m.classification = "internal";\n' +
+  '  m.owner = "ops";\n' +
   "  return m;\n})();\n" +
   ACCESSOR;
 
@@ -135,6 +135,6 @@ test("deriveMeta folds across models in path order (last write wins)", () => {
     { path: "processes/a.bpmn", xml: mk("a", "staging") },
   ];
   const content = deriveMeta(models)[0].content;
-  assert.match(content, /m\["env"\] = "prod";/);
+  assert.match(content, /m\.env = "prod";/);
   assert.doesNotMatch(content, /"staging"/);
 });

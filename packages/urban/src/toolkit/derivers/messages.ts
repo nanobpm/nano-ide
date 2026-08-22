@@ -113,7 +113,7 @@ export function emitMessageBindings(
 
   const payloadsIface = payloads.length > 0
     ? `export interface MessagePayloads {\n${payloads.join("\n")}\n}\n`
-    : `export type MessagePayloads = Record<string, never>;\n`;
+    : `export type MessagePayloads = Record<never, never>;\n`;
 
   return `${header}\n` +
     importTypes +
@@ -182,9 +182,9 @@ export function emitMessageBindingsRuntime(): string {
     "// Re-exports the worker SDK's `publishMessage` and overrides it with a\n" +
     "// messageName-keyed typed signature (variables typed from the message's declared\n" +
     "// envelope). Erased to a pass-through at runtime. Do not edit.\n\n" +
-    `import { publishMessage as publishMessageRaw } from "./worker-sdk.ts";\n` +
+    `import type { MessageName, MessagePayloads, MessageVars } from "./${MESSAGE_BINDINGS_DTS}";\n` +
     `import type { PublishMessageOptions, PublishMessageResult } from "./worker-sdk.ts";\n` +
-    `import type { MessageName, MessagePayloads, MessageVars } from "./${MESSAGE_BINDINGS_DTS}";\n\n` +
+    `import { publishMessage as publishMessageRaw } from "./worker-sdk.ts";\n\n` +
     `export type { PublishMessageOptions, PublishMessageResult } from "./worker-sdk.ts";\n\n` +
     `type PayloadFor<K extends MessageName> = K extends keyof MessagePayloads ? MessagePayloads[K] : MessageVars;\n\n` +
     `/**\n` +
@@ -197,6 +197,7 @@ export function emitMessageBindingsRuntime(): string {
     `  name: K,\n` +
     `  opts?: PublishMessageOptions<PayloadFor<K> & object>,\n` +
     `): Promise<PublishMessageResult> {\n` +
+    `  // biome-ignore lint/plugin: generic-to-raw erasure at the message-SDK boundary; the wire stays untyped JSON (ADR 0040 slice 2).\n` +
     `  return publishMessageRaw(name, opts as unknown as PublishMessageOptions);\n` +
     `}\n`;
 }

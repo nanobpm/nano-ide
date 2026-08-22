@@ -191,13 +191,13 @@ export function emitWorkerBindings(
 
   const inputsIface = inputs.length > 0
     ? `export interface WorkerInputs {\n${inputs.join("\n")}\n}\n`
-    : `export type WorkerInputs = Record<string, never>;\n`;
+    : `export type WorkerInputs = Record<never, never>;\n`;
   const outputsIface = outputs.length > 0
     ? `export interface WorkerOutputs {\n${outputs.join("\n")}\n}\n`
-    : `export type WorkerOutputs = Record<string, never>;\n`;
+    : `export type WorkerOutputs = Record<never, never>;\n`;
   const headersIface = headers.length > 0
     ? `export interface WorkerHeaders {\n${headers.join("\n")}\n}\n`
-    : `export type WorkerHeaders = Record<string, never>;\n`;
+    : `export type WorkerHeaders = Record<never, never>;\n`;
 
   return `${header}\n` +
     importTypes +
@@ -373,9 +373,9 @@ export function emitWorkerBindingsRuntime(): string {
     "// typed signature (job.variables, job.customHeaders + result typed from the\n" +
     "// worker's declared input/output/header contract). Erased to a pass-through at\n" +
     "// runtime. Do not edit.\n\n" +
-    `import { defineWorker as defineWorkerRaw } from "./worker-sdk.ts";\n` +
+    `import type { WorkerHdrs, WorkerHeaders, WorkerInputs, WorkerOutputs, WorkerTaskType, WorkerVars } from "./${WORKER_BINDINGS_DTS}";\n` +
     `import type { WorkerOptions } from "./worker-sdk.ts";\n` +
-    `import type { WorkerInputs, WorkerOutputs, WorkerHeaders, WorkerTaskType, WorkerVars, WorkerHdrs } from "./${WORKER_BINDINGS_DTS}";\n\n` +
+    `import { defineWorker as defineWorkerRaw } from "./worker-sdk.ts";\n\n` +
     `export * from "./worker-sdk.ts";\n\n` +
     `type InFor<K extends WorkerTaskType> = K extends keyof WorkerInputs ? WorkerInputs[K] : WorkerVars;\n` +
     `type OutFor<K extends WorkerTaskType> = K extends keyof WorkerOutputs ? WorkerOutputs[K] : WorkerVars;\n` +
@@ -390,6 +390,7 @@ export function emitWorkerBindingsRuntime(): string {
     `export function defineWorker<K extends WorkerTaskType>(\n` +
     `  opts: { type: K } & WorkerOptions<InFor<K> & object, OutFor<K> & object, HdrFor<K> & object>,\n` +
     `): void {\n` +
+    `  // biome-ignore lint/plugin: generic-to-raw erasure at the worker-SDK boundary; the wire stays untyped JSON (ADR 0033 §3).\n` +
     `  defineWorkerRaw(opts as unknown as WorkerOptions);\n` +
     `}\n`;
 }

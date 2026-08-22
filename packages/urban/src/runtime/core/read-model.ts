@@ -592,6 +592,7 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
 
   const projSet = new Set<string>();
   for (const c of columns) collectProjectionNames(decl.derive[c], projSet);
+  for (const name of projSet) assertSqlIdentifier("projection name", name);
 
   const sqlSelectFor = (column: string, options?: SqlCompileOptions): string => {
     const expr = decl.derive[column];

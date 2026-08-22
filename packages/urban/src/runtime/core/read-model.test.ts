@@ -419,4 +419,15 @@ test("the parity guard materialises a keyless sample row (DEFAULT VALUES, not sk
 test("an invalid SQL identifier is rejected at declaration time (injection guard)", () => {
   assert.throws(() => defineReadModel({ name: "bad name", baseTable: "t", derive: { c: lit(1) } }), /invalid/);
   assert.throws(() => defineReadModel({ name: "ok", baseTable: "t; DROP TABLE x", derive: { c: lit(1) } }), /invalid/);
+  // A projection name referenced via exists(...) must be validated at declaration time too, so a bad
+  // name fails immediately here rather than later at registry.register / view-apply time.
+  assert.throws(
+    () =>
+      defineReadModel({
+        name: "ok",
+        baseTable: "t",
+        derive: { c: exists("bad projection", eq(pcol("x"), lit(1))) },
+      }),
+    /invalid/,
+  );
 });

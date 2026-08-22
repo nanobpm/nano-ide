@@ -1,6 +1,6 @@
 # ADR 0065 — Reconciling read models (declare-once derived views over engine truth)
 
-Status: Proposed
+Status: Accepted
 Date: 2026-08-22
 Relates to: ADR 0053 (derivation is a shared library — the principle this generalizes),
 ADR 0055 (the Urban runtime absorbs app surfaces — where this primitive lives),

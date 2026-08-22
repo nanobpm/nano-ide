@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.76.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.75.1...@nanobpm/urban-0.76.0) (2026-08-22)
+
+
+### Features
+
+* **urban:** scope taskInbox by assignee / candidateGroup ([#439](https://github.com/nanobpm/nano-ide/issues/439)) ([45e8b6e](https://github.com/nanobpm/nano-ide/commit/45e8b6e70535bdef59b43681ee530ad3b8d17f34))
+
 ## [0.75.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.75.0...@nanobpm/urban-0.75.1) (2026-08-22)
 
 

@@ -307,3 +307,63 @@ test("every emitter branch (populated, empty, and the data-path runtime wrappers
     rmSync(work, { recursive: true, force: true });
   }
 });
+
+/** Lint files laid out at `nano-generated/` using the template's `biome.json` *as shipped* — its own
+ *  `files`/`linter.includes` and its formatter (enabled, with the `!nano-generated/**` exclusion),
+ *  only flipping `root` (so Biome doesn't discover the monorepo's root config) and dropping the
+ *  node_modules-relative `$schema`. Scoping the check to `nano-generated` lets Biome discover this
+ *  config from `cwd` while checking only the generated tree. `lintUnderScaffold` above deliberately
+ *  re-scopes `includes` and disables the formatter, so it can't catch a template regression that drops
+ *  the `nano-generated/**` lint include or the formatter's `!nano-generated/**` exclusion — this can. */
+function lintWithTemplateConfigVerbatim(
+  work: string,
+  templateDir: string,
+  biomeBin: string,
+): { status: number | null; stdout: string; stderr: string } {
+  const templateBiome = JSON.parse(readFileSync(join(templateDir, "biome.json"), "utf8"));
+  cpSync(join(templateDir, "plugins"), join(work, "plugins"), { recursive: true });
+  const config = { ...templateBiome, $schema: undefined, root: true };
+  writeFileSync(join(work, "biome.json"), `${JSON.stringify(config, null, "\t")}\n`);
+  return spawnSync(process.execPath, [biomeBin, "check", "nano-generated"], { cwd: work, encoding: "utf8" });
+}
+
+test("both scaffold templates lint (and format-exclude) nano-generated/ code with their biome.json as shipped", nodeOnly, async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const biomeBin = await resolveBiomeBin();
+
+  // Deliberately console/deno-styled (2-space, quoted keys, `as`-cast carriers) generated output: it
+  // is lint-clean under the scaffold ruleset yet *not* Biome's default (tab) format — so if a template
+  // ever dropped its formatter `!nano-generated/**` exclusion, `biome check` would report a format diff
+  // here and fail, and if it dropped the `nano-generated/**` lint include Biome would check 0 files.
+  const generated: Record<string, string> = {
+    "workers.ts": emitWorkerBindingsRuntime(),
+    "messages.ts": emitMessageBindingsRuntime(),
+  };
+
+  for (const template of ["template", "template-code-first"]) {
+    const templateDir = join(here, "..", "..", "..", "..", "create-urban-app", template);
+    const work = mkdtempSync(join(tmpdir(), `urban-tmpl-${template}-`));
+    try {
+      const genDir = join(work, "nano-generated");
+      mkdirSync(genDir, { recursive: true });
+      for (const [name, content] of Object.entries(generated)) writeFileSync(join(genDir, name), content);
+
+      const run = lintWithTemplateConfigVerbatim(work, templateDir, biomeBin);
+
+      // The template's own `nano-generated/**/*.ts` include must actually pick the files up — a
+      // dropped include would leave Biome checking 0 files while still exiting 0 (vacuous pass).
+      const checked = /Checked (\d+) files/.exec(run.stdout);
+      assert.ok(
+        checked && Number(checked[1]) >= Object.keys(generated).length,
+        `[${template}] template biome.json did not lint nano-generated/ via its own includes:\n${run.stdout}`,
+      );
+      assert.equal(
+        run.status,
+        0,
+        `[${template}] template biome.json flagged (lint) or reformatted generated code:\n${run.stdout}\n${run.stderr}`,
+      );
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }
+});

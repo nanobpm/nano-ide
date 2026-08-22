@@ -18,6 +18,8 @@ import {
   gt,
   lit,
   neq,
+  not,
+  or,
   pcol,
   ProjectionRegistry,
   projectionRegistry,
@@ -180,7 +182,40 @@ test("compileToFn / compileToSqlSelect are driven from the same AST (single-decl
   assert.equal(fn({ a: 1, b: 5 }), true);
   assert.equal(fn({ a: 1, b: 2 }), false);
   assert.equal(fn({ a: 0, b: 5 }), false);
-  assert.equal(compileToSqlSelect(expr), `(("base"."a" = 1) AND ("base"."b" > 2))`);
+  // Comparisons and the AND are COALESCE'd to 0 so a NULL operand can't make SQL yield NULL where the
+  // TS backend yields false (see the NULL-parity test below); the AST is still the single source.
+  assert.equal(
+    compileToSqlSelect(expr),
+    `COALESCE((COALESCE(("base"."a" = 1), 0) AND COALESCE(("base"."b" > 2), 0)), 0)`,
+  );
+});
+
+test("both backends agree on NULL inputs: SQL NULL propagation is COALESCE'd to the TS 'NULL → false' rule", async () => {
+  // SQLite propagates NULL through comparisons and AND/OR/NOT (`a = NULL` → NULL, `NOT NULL` → NULL),
+  // but the TS backend collapses any nullish operand to false (compareValues/truthy). Without the
+  // COALESCE guards in compileToSqlSelect the two backends would silently diverge on a NULL base value.
+  const model = defineReadModel({
+    name: "null_parity_read_model",
+    baseTable: "null_rows",
+    derive: {
+      eq_is_true: eq(col("a"), lit(1)),
+      neq_is_true: neq(col("a"), lit(1)),
+      and_is_true: and(eq(col("a"), lit(1)), gt(col("b"), lit(2))),
+      or_is_true: or(eq(col("a"), lit(1)), gt(col("b"), lit(2))),
+      not_is_true: not(eq(col("a"), lit(1))),
+    },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(model, db, [
+        { baseRow: { a: null, b: null } },
+        { baseRow: { a: null, b: 5 } },
+        { baseRow: { a: 1, b: null } },
+        { baseRow: { a: 1, b: 5 } },
+        { baseRow: { a: 2, b: 1 } },
+      ]),
+    );
+  });
 });
 
 test("EXISTS references a projection by name; the projection registry resolves the physical table", () => {

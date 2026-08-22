@@ -290,13 +290,23 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
         }
         return `${quoteIdent(projTable)}.${quoteIdent(node.name)}`;
       case "compare":
-        return `(${walk(node.left, projTable)} ${SQL_COMPARE[node.op]} ${walk(node.right, projTable)})`;
+        // SQLite comparisons against NULL yield NULL, but the TS backend (compareValues) collapses any
+        // nullish operand to `false`/0. COALESCE the SQL result to 0 so both backends agree on NULL inputs.
+        return `COALESCE((${walk(node.left, projTable)} ${SQL_COMPARE[node.op]} ${walk(node.right, projTable)}), 0)`;
       case "and":
-        return node.clauses.length ? `(${node.clauses.map((c) => walk(c, projTable)).join(" AND ")})` : "1";
+        // `NULL AND 0`/`NULL OR 0` can yield NULL in SQLite, but the TS backend coerces each clause through
+        // `truthy(...)` (NULL → false), so COALESCE the boolean expression to 0 to keep the 0/1 domain aligned.
+        return node.clauses.length
+          ? `COALESCE((${node.clauses.map((c) => walk(c, projTable)).join(" AND ")}), 0)`
+          : "1";
       case "or":
-        return node.clauses.length ? `(${node.clauses.map((c) => walk(c, projTable)).join(" OR ")})` : "0";
+        return node.clauses.length
+          ? `COALESCE((${node.clauses.map((c) => walk(c, projTable)).join(" OR ")}), 0)`
+          : "0";
       case "not":
-        return `(NOT ${walk(node.expr, projTable)})`;
+        // `NOT NULL` is NULL in SQLite, while the TS backend returns `!truthy(NULL)` → true. Compile as
+        // `NOT COALESCE(x, 0)` so `not(NULL)` is 1 in both backends under the shared "NULL → false" rule.
+        return `(NOT COALESCE(${walk(node.expr, projTable)}, 0))`;
       case "case": {
         const whens = node.whens
           .map((w) => `WHEN ${walk(w.when, projTable)} THEN ${walk(w.then, projTable)}`)

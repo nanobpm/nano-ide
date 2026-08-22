@@ -710,6 +710,9 @@ test("wasm: close() surfaces a worker failure captured after the dispatching dra
 test("wasm: close() awaits a real-time in-flight handler to settlement before free() (no use-after-free)", async () => {
   const engine = await createWasmEngineClient();
   let closed = false;
+  // Hoisted above the try so the finally can release the gate (unwedging a handler parked on it)
+  // even if an assertion inside the try throws before the normal release path runs.
+  let releaseGate = () => {};
   try {
     const realSetTimeout = globalThis.setTimeout;
     // A deferred gate the handler parks on, plus a `started` handshake so the precondition below is
@@ -717,9 +720,8 @@ test("wasm: close() awaits a real-time in-flight handler to settlement before fr
     // on a 25 ms real timer, which a paused/overloaded CI event loop could let fire before
     // `createInstance()` finished its macrotask yields, flipping `handlerFinished` early and failing
     // this test even though `close()` was correct. `#quiesce()`'s macrotask fixpoint cannot observe
-    // the gate (it is released by a *real* timer, i.e. real-time async work), so the drain returns
+    // the gate (it is released only by explicit code, i.e. real-time async work), so the drain returns
     // with the handler still in-flight — exactly the issue #446 condition close() must handle.
-    let releaseGate = () => {};
     const gate = new Promise<void>((r) => {
       releaseGate = r;
     });
@@ -769,22 +771,39 @@ test("wasm: close() awaits a real-time in-flight handler to settlement before fr
     await started; // deterministic handshake: the handler is now parked in-flight
     assert.equal(handlerFinished, false, "the handler must still be parked on its gate here");
 
-    // Release the gate on a *real* timer so it fires while close() is awaiting settlement — the
-    // real-time await the macrotask fixpoint cannot see. Scheduling then immediately calling close()
-    // runs synchronously, so the 25 ms timer cannot fire before close() begins: the handler is
-    // guaranteed in-flight when close() starts, and close() must not free the engine until it has
-    // settled — otherwise the handler resumes and calls `completeJob` on a freed engine ("null
-    // pointer passed to rust").
-    realSetTimeout(releaseGate, 25);
-    await engine.close();
+    // Start close() while the handler is parked in-flight. close() must await the handler's *actual*
+    // promise (real-time async work the macrotask fixpoint cannot see), so it cannot return until the
+    // gate is released. Prove that deterministically — no wall-clock timer, so a paused/overloaded
+    // event loop cannot race the release ahead of the assertion: yield real macrotasks so close()
+    // reaches (and stays blocked on) its settlement await, then assert close() is still pending and
+    // the handler still parked *before* releasing the gate.
+    const closing = engine.close();
+    let closeSettled = false;
+    void closing.then(() => {
+      closeSettled = true;
+    });
+    // Two real-macrotask yields guarantee close() has reached its `#settleInflight()` await (a
+    // microtask hop past the synchronous engine.close() call) without depending on any elapsed time.
+    await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+    await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
+    assert.equal(handlerFinished, false, "close() must not resume the handler before it settles");
+    assert.equal(closeSettled, false, "close() must still be awaiting the in-flight handler");
+
+    // Release the gate: the handler now settles, and only then may close() free the engine and return.
+    releaseGate();
+    await closing;
     closed = true;
     assert.ok(
       handlerFinished,
       "close() must await the in-flight real-time handler to settlement before free()",
     );
   } finally {
-    // The engine allocates native WASM memory; if any assertion above throws before close()
-    // succeeded, free it here so a failure does not also leak the engine into the rest of the run.
+    // The engine allocates native WASM memory. Release the gate first so any handler still parked on
+    // it unblocks — otherwise a failing assertion above would wedge this close() on the unresolved
+    // gate forever (close() awaits the parked handler's real promise). releaseGate() is idempotent,
+    // so releasing an already-released gate is a no-op. Then close (idempotently) so a failure does
+    // not also leak the native engine into the rest of the run.
+    releaseGate();
     if (!closed) await engine.close();
   }
 });

@@ -163,6 +163,24 @@ test("inbox page renders the client-side form fetch + renderer", async () => {
   assert.ok(!/const\s+variables\s*=\s*\{\}/.test(rendered), "client must not collect untrusted keys into a plain {} object");
 });
 
+test("inbox client script parses — no template-literal backslash collapse", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // Extract every inline <script> body and assert each parses. A backslash-bearing regex
+  // written inside the page's template literal (e.g. `/\/+$/`) collapses to `//…` at emit
+  // time, turning the rest of the statement into a line comment and breaking the parse
+  // (issue #433). `new Function(body)` throws on any such SyntaxError.
+  const scripts = rendered
+    .split("<script>")
+    .slice(1)
+    .map((chunk) => chunk.split("</scr" + "ipt>")[0]);
+  assert.ok(scripts.length > 0, "inbox page has at least one inline script");
+  for (const body of scripts) {
+    assert.ok(!body.includes("//+$/"), "trailing-slash-strip regex collapsed to a line comment");
+    assert.doesNotThrow(() => new Function(body), "inline client script must parse");
+  }
+});
+
 test("/api/tasks surfaces the resolved form linkage", async () => {
   let seenFilter: unknown;
   const engine: EngineClient = {

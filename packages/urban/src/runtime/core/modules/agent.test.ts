@@ -5,7 +5,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mountAgent } from "./agent.ts";
 import type { RuntimeContext } from "../context.ts";
-import type { EngineClient, HostContext, HttpRequest, HttpResponse } from "../host.ts";
+import type { EngineClient, HostContext, HttpResponse } from "../host.ts";
+import type { Route } from "../router.ts";
 
 const fakeEngine: EngineClient = {
   deployResources: async () => ({ deployed: 0 }),
@@ -44,14 +45,16 @@ function ctxWithFiles(files: Record<string, string>): RuntimeContext {
   return { root: ".", manifest: { schemaVersion: 1, id: "app", name: "App" }, host, engine: fakeEngine };
 }
 
-async function call(route: { handler: (req: HttpRequest) => HttpResponse | Promise<HttpResponse> }): Promise<HttpResponse> {
-  return route.handler({
+async function call(route: Route): Promise<HttpResponse> {
+  const res = await route.handler({
     method: "GET",
     path: "/",
     query: new URLSearchParams(),
     headers: new Headers(),
     text: async () => "",
   });
+  assert.ok(res, "handler should not decline");
+  return res;
 }
 
 const routeAt = (ctx: RuntimeContext, path: string) => {

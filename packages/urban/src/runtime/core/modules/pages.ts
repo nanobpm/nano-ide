@@ -11,7 +11,8 @@
 //   GET  /              (+ /app/runtime.js)         → the schema-driven browser renderer
 //   GET  /app/pages/<id>                            → the page's page.json
 //   GET  /app/data/<source>/<table>[?where&order]   → rows (filtered/ordered, whitelisted)
-//   GET  /{embed,standalone}.html /mount.js /cockpit.css → appView sidecars (from pagesDir, #420)
+//   GET  /{embed,standalone}.html /mount.js /cockpit.css → flat appView sidecars (from pagesDir, #420)
+//   GET  /<subdir>/<asset>                          → nested appView sidecars (pages/<subdir>/…, #442)
 //   GET  /dist/<path>                               → the app dist/ bundle the sidecars reference
 //   POST /app/actions/start/<process>               → engine.createInstance
 //   POST /app/actions/cancel                        → engine.cancelInstance
@@ -107,7 +108,10 @@ function javascript(
 // document then pulls `./cockpit.css`, `./mount.js`, and (via its import-map)
 // `../dist/…`. A DEPLOYED app served none of these, so the src 404'd and the cockpit
 // iframe loaded nothing (#416's user-facing "nothing shows in the Cockpit"). These are
-// the root-served sidecar files, mapped 1:1 onto `pagesDir/<name>`. The `dist/` tree the
+// the root-served sidecar files, mapped 1:1 onto `pagesDir/<name>`. An app that ships
+// MORE than one `appView` gives each its own SUBDIR sidecar (`./cockpit/embed.html`,
+// `./board/embed.html`, …) — those are served by the nested prefix route below (#442);
+// this flat set stays as the single-appView back-compat case (#420). The `dist/` tree the
 // import-map references is served separately under the `/dist/` prefix below.
 const SIDECAR_ASSETS = ["embed.html", "standalone.html", "mount.js", "cockpit.css"] as const;
 
@@ -538,6 +542,44 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
       } catch (e) {
         return json({ error: errorMessage(e) }, 502);
       }
+    },
+  });
+
+  // ── nested (multi-appView) sidecars (#442) ──────────────────────────────
+  // An app with more than one `appView` cannot share the four FLAT sidecar names above:
+  // each view ships its own SUBDIR sidecar — e.g. `pages/cockpit.page.json` →
+  // `./cockpit/embed.html`, `pages/board.page.json` → `./board/embed.html`. The renderer's
+  // `baseRelativeUrl(p.embed)` rebases those onto the mount root, so the browser fetches
+  // `/cockpit/embed.html`, `/board/mount.js`, … — every one of which #420's flat 4-name
+  // serve 404'd. Serve the `pagesDir` as a TREE, mapping `/<subpath>` onto
+  // `pagesDir/<subpath>` with the SAME traversal guard as the `/dist/` route (mirroring it).
+  // It is a `/`-prefix route, so to avoid a root catch-all silently swallowing `/healthz`,
+  // the app's own trigger routes, or any other route, the handler DECLINES (returns
+  // undefined → the router falls through to the next route, see `RouteHandler`) whenever it
+  // cannot serve a real nested asset:
+  //   • a bare single-segment path (`/healthz`, the flat sidecars) — owned by its own exact
+  //     route / the runtime's liveness route, never this tree;
+  //   • an unsafe subpath (`..`/absolute/percent-escaped/backslash) — traversal-rejected
+  //     before it reaches the filesystem;
+  //   • a miss (no such file) — so a same-path route registered AFTER the pages surface (a
+  //     trigger, the appended `/healthz`) still resolves instead of being masked by a 404.
+  // Registered LAST among the pages routes so every exact/prefix pages route above wins first.
+  routes.push({
+    method: "GET",
+    path: "/",
+    prefix: true,
+    source: "surface:pages",
+    handler: async (req) => {
+      const rest = req.path.slice(1); // drop the leading "/"
+      // Only a SUBDIR asset (has a `/`) belongs to this tree; a single-segment path is left
+      // to its own exact route / the appended `/healthz` liveness route.
+      if (!rest.includes("/")) return undefined;
+      const safe = safeAssetSubpath(rest);
+      if (safe === null) return undefined; // traversal/escape → decline (never touch the FS)
+      const res = await serveAsset(readAsset, `${pagesDir}/${safe}`);
+      // A miss declines rather than 404s, so a later same-path route (e.g. a trigger) can
+      // still claim it; the router's own default 404 covers a genuinely absent asset.
+      return res.status === 404 ? undefined : res;
     },
   });
 

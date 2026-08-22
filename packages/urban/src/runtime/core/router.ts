@@ -4,12 +4,25 @@
 
 import type { HttpHandler, HttpRequest, HttpResponse } from "./host.ts";
 
+/**
+ * A route handler that may DECLINE a matched request by returning `undefined`
+ * (or a promise of it). The router then treats the route as if it had not matched
+ * and continues to the next route (fall-through). This lets a broad prefix route —
+ * e.g. the pages surface's nested static serve at `/` — claim only the requests it
+ * can actually satisfy (a real, safe asset) and let everything else (`/healthz`, an
+ * app's own trigger routes registered *after* it) resolve to their own handlers,
+ * instead of a root catch-all silently swallowing them. A handler that returns a
+ * concrete `HttpResponse` (including a 404) still short-circuits as before, so this
+ * is backwards-compatible with every existing handler (none return `undefined`).
+ */
+export type RouteHandler = (req: HttpRequest) => Promise<HttpResponse | undefined> | HttpResponse | undefined;
+
 export interface Route {
   method: string;
   path: string;
   /** When true, match any path that starts with `path`. */
   prefix?: boolean;
-  handler: HttpHandler;
+  handler: RouteHandler;
   /** For diagnostics / inspect(). */
   source?: string;
 }
@@ -61,7 +74,13 @@ function matches(route: Route, req: HttpRequest): boolean {
 export function makeRouter(routes: Route[]): HttpHandler {
   return async (req: HttpRequest): Promise<HttpResponse> => {
     for (const route of routes) {
-      if (matches(route, req)) return route.handler(req);
+      if (matches(route, req)) {
+        // A handler may DECLINE by returning `undefined` (see RouteHandler): treat the
+        // route as unmatched and keep looking, so a broad prefix serve can't shadow a
+        // later exact route (`/healthz`, a trigger) it didn't actually satisfy.
+        const res = await route.handler(req);
+        if (res !== undefined) return res;
+      }
     }
     return text("not found", 404);
   };

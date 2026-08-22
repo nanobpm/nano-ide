@@ -1823,3 +1823,130 @@ test("the static asset routes do not shadow the app's own routes or /healthz", a
   const home = await router(req("GET", "/"));
   assert.match(home.body ?? "", /data-home="home"/);
 });
+
+// ── nested (multi-appView) sidecar serving (#442) ──────────────────────────
+// An app with two-or-more appViews ships each view's sidecar under its own subdir
+// (`./cockpit/embed.html`, `./board/embed.html`); #420's flat 4-name serve 404'd every
+// one. These pin the generalized nested prefix serve of `pages/<subpath>` (and that it
+// still declines — never a root catch-all — so `/healthz` / triggers keep resolving).
+
+test("GET /<subdir>/embed.html serves the nested appView sidecar", async () => {
+  const router = buildWithAssets({
+    "pages/cockpit/embed.html": "<!doctype html><title>cockpit</title>",
+    "pages/board/embed.html": "<!doctype html><title>board</title>",
+  });
+  const cockpit = await router(req("GET", "/cockpit/embed.html"));
+  assert.equal(cockpit.status, 200);
+  assert.match(cockpit.headers?.["content-type"] ?? "", /text\/html/);
+  assert.match(cockpit.body ?? "", /<title>cockpit<\/title>/);
+  const board = await router(req("GET", "/board/embed.html"));
+  assert.equal(board.status, 200);
+  assert.match(board.body ?? "", /<title>board<\/title>/);
+});
+
+test("all nested subdir sidecar assets are served with correct content types", async () => {
+  const router = buildWithAssets({
+    "pages/cockpit/embed.html": "<html>embed</html>",
+    "pages/cockpit/standalone.html": "<html>standalone</html>",
+    "pages/cockpit/mount.js": "export const mountCockpit = () => {};",
+    "pages/cockpit/cockpit.css": "body{margin:0}",
+    "pages/delivery-graphs/embed.html": "<html>dg</html>",
+  });
+  const cases: [string, RegExp][] = [
+    ["/cockpit/embed.html", /text\/html/],
+    ["/cockpit/standalone.html", /text\/html/],
+    ["/cockpit/mount.js", /text\/javascript/],
+    ["/cockpit/cockpit.css", /text\/css/],
+    // A hyphenated multi-appView page id (the merlin repro) resolves too.
+    ["/delivery-graphs/embed.html", /text\/html/],
+  ];
+  for (const [path, ct] of cases) {
+    const res = await router(req("GET", path));
+    assert.equal(res.status, 200, `${path} should 200`);
+    assert.match(res.headers?.["content-type"] ?? "", ct, `${path} content-type`);
+  }
+});
+
+test("the flat single-appView sidecar back-compat still serves (#420) alongside nested", async () => {
+  // The root `pages/embed.html` case #420 shipped must keep working: an app with exactly
+  // one appView (no subdir) is unaffected by the nested generalization.
+  const router = buildWithAssets({
+    "pages/embed.html": "<html>flat</html>",
+    "pages/cockpit/embed.html": "<html>nested</html>",
+  });
+  const flat = await router(req("GET", "/embed.html"));
+  assert.equal(flat.status, 200);
+  assert.match(flat.body ?? "", /flat/);
+  const nested = await router(req("GET", "/cockpit/embed.html"));
+  assert.equal(nested.status, 200);
+  assert.match(nested.body ?? "", /nested/);
+});
+
+test("a missing nested sidecar 404s instead of throwing", async () => {
+  const router = buildWithAssets({ "pages/cockpit/embed.html": "<html>ok</html>" });
+  const res = await router(req("GET", "/board/embed.html"));
+  assert.equal(res.status, 404);
+});
+
+test("a nested-serve path traversal attempt is rejected (never reaches the filesystem)", async () => {
+  // The `pages/` tree reuses the SAME sub-path guard as `/dist/`: any `..` / absolute /
+  // percent-escaped / backslash / doubled-slash segment must be rejected before a read.
+  let readAttempts = 0;
+  const { engine } = fakeEngine();
+  const router = makeRouter(
+    createPagesRoutes(
+      { pagesDir: "pages", homePage: "home", sourceName: "app" },
+      {
+        db: fakeDb(),
+        engine,
+        readPage: async () => JSON.stringify({ title: "Home", nodes: [] }),
+        readAsset: async (path: string) => {
+          readAttempts++;
+          return `bytes of ${path}`;
+        },
+        listPages: async () => ["home"],
+      },
+    ),
+  );
+  for (const evil of ["/cockpit/../secret.json", "/a/../../secret", "/cockpit/%2e%2e/secret", "/cockpit//etc"]) {
+    const res = await router(req("GET", evil));
+    assert.equal(res.status, 404, `${evil} must 404`);
+  }
+  assert.equal(readAttempts, 0, "no traversal path may reach the asset reader");
+});
+
+test("the nested serve declines (does not shadow) a same-path trigger route registered after it", async () => {
+  // The nested serve is a `/`-prefix route registered before the triggers surface. A miss
+  // must DECLINE (fall through) so a trigger at `/webhooks/deploy` still resolves, rather
+  // than being masked by the pages tree's 404. A root catch-all would silently swallow it.
+  const routes = createPagesRoutes(
+    { pagesDir: "pages", homePage: "home", sourceName: "app" },
+    {
+      db: fakeDb(),
+      engine: fakeEngine().engine,
+      readPage: async () => JSON.stringify({ title: "Home", nodes: [] }),
+      readAsset: async (path: string) => {
+        // Only the real nested sidecar exists; every other path is a miss.
+        if (path === "pages/cockpit/embed.html") return "<html>cockpit</html>";
+        throw new Error(`no such file: ${path}`);
+      },
+      listPages: async () => ["home"],
+    },
+  );
+  const router = makeRouter([
+    ...routes,
+    {
+      method: "GET",
+      path: "/webhooks/deploy",
+      handler: () => ({ status: 202, headers: { "content-type": "application/json" }, body: JSON.stringify({ queued: true }) }),
+    },
+  ]);
+  // The real nested sidecar is served by the pages tree.
+  const sidecar = await router(req("GET", "/cockpit/embed.html"));
+  assert.equal(sidecar.status, 200);
+  assert.match(sidecar.body ?? "", /cockpit/);
+  // The multi-segment trigger path is NOT shadowed — the nested serve declines the miss.
+  const hook = await router(req("GET", "/webhooks/deploy"));
+  assert.equal(hook.status, 202);
+  assert.deepEqual(JSON.parse(hook.body ?? "{}"), { queued: true });
+});

@@ -4,9 +4,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { mountSurfaces } from "./surfaces.ts";
-import type { EngineClient, HostContext, HttpRequest, HttpResponse } from "../host.ts";
+import type { EngineClient, HostContext, HttpResponse } from "../host.ts";
 import { DataLayer } from "./datasource.ts";
 import { createLogger } from "../logger.ts";
+import type { Route } from "../router.ts";
 
 function ctxWith(surfaces: Record<string, unknown>): Parameters<typeof mountSurfaces>[0] {
   const host: HostContext = {
@@ -63,7 +64,7 @@ const fakeApp: Parameters<typeof mountSurfaces>[1] = {
   log: createLogger(() => {}),
 };
 
-async function render(route: { handler: (req: HttpRequest) => HttpResponse | Promise<HttpResponse> }): Promise<string> {
+async function render(route: Route): Promise<string> {
   const res = await route.handler({
     method: "GET",
     path: "/",
@@ -71,6 +72,7 @@ async function render(route: { handler: (req: HttpRequest) => HttpResponse | Pro
     headers: new Headers(),
     text: async () => "",
   });
+  assert.ok(res, "handler should not decline");
   return String(res.body);
 }
 
@@ -118,16 +120,18 @@ function appWith(engine: EngineClient): Parameters<typeof mountSurfaces>[1] {
 
 /** Invoke a route handler with an optional query string and POST body. */
 async function call(
-  route: { handler: (req: HttpRequest) => HttpResponse | Promise<HttpResponse> },
+  route: Route,
   opts: { method?: string; query?: string; body?: string } = {},
 ): Promise<HttpResponse> {
-  return route.handler({
+  const res = await route.handler({
     method: opts.method ?? "GET",
     path: "/",
     query: new URLSearchParams(opts.query ?? ""),
     headers: new Headers(),
     text: async () => opts.body ?? "",
   });
+  assert.ok(res, "handler should not decline");
+  return res;
 }
 
 function inboxRoutes(engine: EngineClient) {

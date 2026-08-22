@@ -77,6 +77,12 @@ test("detectJsonIndent reuses tab/space width but clamps to JSON.stringify's 10-
   const indent = detectJsonIndent(wide);
   assert.equal(indent, " ".repeat(10));
   assert.equal(JSON.stringify({ a: 1 }, null, indent), JSON.stringify({ a: 1 }, null, wide.match(/\n( +)/)?.[1]));
+  // The 10-char cap is not space-only: an overlong *tab* indent must clamp too, or the rewrite
+  // would silently differ from an 11+-tab input (JSON.stringify truncates any string `space`).
+  const wideTabs = `{\n${"\t".repeat(12)}"a": 1\n}`;
+  const tabIndent = detectJsonIndent(wideTabs);
+  assert.equal(tabIndent, "\t".repeat(10));
+  assert.equal(JSON.stringify({ a: 1 }, null, tabIndent), JSON.stringify({ a: 1 }, null, wideTabs.match(/\n(\t+)/)?.[1]));
 });
 
 test("typed-out-only stub fills In with the open default", () => {

@@ -78,3 +78,29 @@ test("completeUserTaskResponse 400s on a missing userTaskKey or malformed body â
   assert.equal((await completeUserTaskResponse(engine, "{ not json")).status, 400);
   assert.equal(called, false);
 });
+
+test("completeUserTaskResponse 400s on non-object variables â€” no completion attempted", async () => {
+  let called = false;
+  const engine: Pick<EngineClient, "completeUserTask"> = {
+    async completeUserTask() {
+      called = true;
+    },
+  };
+  for (const variables of [1, "x", true, [], null]) {
+    const res = await completeUserTaskResponse(engine, JSON.stringify({ userTaskKey: "ut-1", variables }));
+    assert.equal(res.status, 400, `variables=${JSON.stringify(variables)} should 400`);
+  }
+  assert.equal(called, false);
+});
+
+test("completeUserTaskResponse allows an omitted variables (undefined)", async () => {
+  const calls: { key: string; variables?: Record<string, unknown> }[] = [];
+  const engine: Pick<EngineClient, "completeUserTask"> = {
+    async completeUserTask(key, variables) {
+      calls.push({ key, variables });
+    },
+  };
+  const res = await completeUserTaskResponse(engine, JSON.stringify({ userTaskKey: "ut-2" }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(calls, [{ key: "ut-2", variables: undefined }]);
+});

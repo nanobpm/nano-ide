@@ -38,7 +38,9 @@ export async function resolveFormResponse(
 /**
  * The shared user-task completion endpoint. Parses `{ userTaskKey, variables }`
  * from the request body and completes the task via `EngineClient.completeUserTask`.
- * A missing/blank `userTaskKey` 400s; a malformed body 400s. Used by both the
+ * A missing/blank `userTaskKey` 400s; a malformed body 400s; a present but
+ * non-object `variables` (number, string, array, `null`) 400s so the completion
+ * contract stays well-defined at this shared seam. Used by both the
  * taskInbox surface and the pages grid's engine-form detail so the completion
  * contract can't drift between them.
  */
@@ -53,6 +55,12 @@ export async function completeUserTaskResponse(
     return json({ error: "invalid JSON body" }, 400);
   }
   if (!body.userTaskKey) return json({ error: "userTaskKey required" }, 400);
-  await engine.completeUserTask(body.userTaskKey, body.variables);
+  const { variables } = body;
+  if (
+    variables !== undefined &&
+    (typeof variables !== "object" || variables === null || Array.isArray(variables))
+  )
+    return json({ error: "variables must be a JSON object" }, 400);
+  await engine.completeUserTask(body.userTaskKey, variables);
   return json({ ok: true });
 }

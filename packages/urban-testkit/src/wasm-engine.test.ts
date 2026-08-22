@@ -1005,6 +1005,91 @@ test("wasm: a handler that calls engine.close() does not dead-await itself (#447
   }
 });
 
+// Regression (PR #447 review, suppressed advisory wasm-engine.ts:571 — facet 4, two-handler
+// variant): TWO handlers can each `await engine.close()` while both are in-flight. The first is the
+// initiator (`#doClose` runs in ITS context); the second re-enters the memoized run and just awaits
+// `#closeRun`. A single "exclude the caller's own promise" rule only drops the initiator, so
+// `#settleInflight()` — running in the initiator's context — still waits on the SECOND handler's
+// tracked promise, which can only settle after close() returns: a two-party deadlock the one-handler
+// regression above cannot catch. close() now records EVERY handler that enters it as a close-awaiter
+// and `#settleInflight()` excludes all of them, waking a mid-await pass when a peer parks on close().
+// Deterministic: a regression leaves the flags false and fails fast on the assertions — it does not
+// hang. Both handlers therefore drain their genuine peers but never each other.
+test("wasm: two handlers can both call engine.close() without dead-awaiting each other (#447 review, facet 4)", async () => {
+  const engine = await createWasmEngineClient();
+  const realSetTimeout = globalThis.setTimeout;
+  const macrotask = () => new Promise<void>((r) => realSetTimeout(r, 0));
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let w1Returned = false;
+  let w2Returned = false;
+  let closed = false;
+  const model = (id: string, type: string) => ({
+    name: `${id}.bpmn`,
+    content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="${id}" isExecutable="true">
+    <startEvent id="s"/><sequenceFlow id="f" sourceRef="s" targetRef="t"/>
+    <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="${type}"/></extensionElements></serviceTask>
+    <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
+  </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="${id}">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="150" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="t_di" bpmnElement="t"><dc:Bounds x="240" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="400" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f_di" bpmnElement="f"><di:waypoint x="186" y="118"/><di:waypoint x="240" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="340" y="118"/><di:waypoint x="400" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>`,
+    contentType: "application/bpmn+xml",
+  });
+  try {
+    // Both handlers park on a shared barrier FIRST so both are fully tracked in `#inflight` (with
+    // `store.own` published), then each self-initiates teardown. Whichever resumes first is the
+    // close() initiator; the other re-enters the memoized run — the exact two-party path.
+    await engine.registerWorker("close-1", async () => {
+      await barrier;
+      await engine.close();
+      w1Returned = true;
+      return {};
+    });
+    await engine.registerWorker("close-2", async () => {
+      await barrier;
+      await engine.close();
+      w2Returned = true;
+      return {};
+    });
+    await engine.deployResources([model("p1", "close-1"), model("p2", "close-2")]);
+    // One drain each: the handler parks on the barrier, so drain quiesces and returns with it in
+    // flight. After both are parked, release the barrier so both call close() in the same flush.
+    await engine.createInstance({ processDefinitionId: "p1" });
+    await engine.createInstance({ processDefinitionId: "p2" });
+    release();
+    // Yield a few real macrotasks so both close() calls and both handler resumptions settle
+    // deterministically. A regression deadlocks here (neither flag flips) and fails fast below.
+    for (let i = 0; i < 10; i++) await macrotask();
+    closed = true;
+    assert.ok(w1Returned, "the initiating handler's close() must resolve, not dead-await a peer");
+    assert.ok(w2Returned, "the peer handler that re-entered close() must resolve, not deadlock");
+    // The single memoized run is settled: an external close() is now a no-op over the freed engine.
+    await engine.close();
+  } finally {
+    if (!closed) {
+      release();
+      await engine.close();
+    }
+  }
+});
+
 // Regression (PR #447 review, wasm-engine.ts:554): close() is idempotent. The shutdown run is
 // memoized, so two concurrent close() calls (or a second after the first resolves) await the SAME
 // run instead of each reaching `#engine.free()` — freeing the same WASM handle twice throws in

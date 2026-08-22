@@ -32,7 +32,7 @@ Two derivation layers, named in nanobpm/nano-workforce#439:
 | Fixed as a class? | **No** — still imperatively written | Partly — nanobpm/nano-workforce#412 made it a VIEW, not a stored column |
 
 L2 got a *class* technique (nanobpm/nano-workforce#412: a projection is a SQLite VIEW, never a stored column),
-but two drift surfaces survive even after that win, and nanobpm/nano-workforce#422 is the proof:
+but three drift surfaces survive even after that win, and nanobpm/nano-workforce#422 is the proof:
 
 1. **The base `status` (L1) is still maintained imperatively.** Workers write it, and the
    `instanceTracking` reconciler writes it too — `onTerminated.set → abandoned`,
@@ -142,8 +142,12 @@ retires drift surface #1 at its source.
   contract entry, the parity guard, and drift-freedom for free — no hand-wired SQL/TS
   mirror, no write path to leave stale.
 - The three residual drift surfaces named above are each closed structurally rather than
-  alarmed: #2 by compile-to-both, #3 by framework-emitted plumbing, #1 by
-  writer→source inversion.
+  left to be alarmed by a hand-written test: #2 by compile-to-both, #3 by
+  framework-emitted plumbing, #1 by writer→source inversion. A parity guard still ships
+  (part 3), but its role changes: it is no longer the app-authored lockstep test between
+  two hand-maintained SQL/TS copies (which *was* drift surface #2) — it becomes a
+  framework-owned regression guard that the two lowerings the compiler emits from the one
+  declaration agree, protecting the compiler rather than papering over duplication.
 - `parentProcessInstanceKey` / Magikcraft/nano-bpm#808 slots into `urban_instance_state` later without an API
   change (same weak/strong pattern as ADR 0063).
 - Migration risk is bounded: existing per-app VIEWs (nwf migrations 073/075) are

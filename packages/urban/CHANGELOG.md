@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.79.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.78.0...@nanobpm/urban-0.79.0) (2026-08-22)
+
+
+### Features
+
+* **urban:** canonical engine-truth projection sidecars — urban_open_user_tasks + urban_instance_state (ADR 0065 [#1](https://github.com/nanobpm/nano-ide/issues/1)) ([#460](https://github.com/nanobpm/nano-ide/issues/460)) ([ddafa47](https://github.com/nanobpm/nano-ide/commit/ddafa471cb939845fc953e0cc4681348c700ac43))
+
 ## [0.78.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.4...@nanobpm/urban-0.78.0) (2026-08-22)
 
 

@@ -709,22 +709,39 @@ test("wasm: close() surfaces a worker failure captured after the dispatching dra
 // fixpoint, then asserts close() waited for it to finish before returning.
 test("wasm: close() awaits a real-time in-flight handler to settlement before free() (no use-after-free)", async () => {
   const engine = await createWasmEngineClient();
-  const realSetTimeout = globalThis.setTimeout;
-  // A wall-clock delay longer than the couple of setTimeout(0) macrotasks `#quiesce()` flushes, so
-  // the handler is still parked when the fixpoint stabilises — exactly the real-time await the
-  // macrotask fixpoint cannot observe.
-  const realDelay = (ms: number) => new Promise<void>((r) => realSetTimeout(r, ms));
-  let handlerFinished = false;
-  await engine.registerWorker("slow-realtime", async () => {
-    await realDelay(25);
-    handlerFinished = true;
-    return {};
-  });
-  await engine.deployResources([
-    {
-      name: "slow-realtime.bpmn",
-      content: `<?xml version="1.0" encoding="UTF-8"?>
+  let closed = false;
+  try {
+    const realSetTimeout = globalThis.setTimeout;
+    // A deferred gate the handler parks on, plus a `started` handshake so the precondition below is
+    // a deterministic signal rather than a wall-clock race: an earlier version gated the precondition
+    // on a 25 ms real timer, which a paused/overloaded CI event loop could let fire before
+    // `createInstance()` finished its macrotask yields, flipping `handlerFinished` early and failing
+    // this test even though `close()` was correct. `#quiesce()`'s macrotask fixpoint cannot observe
+    // the gate (it is released by a *real* timer, i.e. real-time async work), so the drain returns
+    // with the handler still in-flight — exactly the issue #446 condition close() must handle.
+    let releaseGate = () => {};
+    const gate = new Promise<void>((r) => {
+      releaseGate = r;
+    });
+    let signalStarted = () => {};
+    const started = new Promise<void>((r) => {
+      signalStarted = r;
+    });
+    let handlerFinished = false;
+    await engine.registerWorker("slow-realtime", async () => {
+      signalStarted();
+      await gate;
+      handlerFinished = true;
+      return {};
+    });
+    await engine.deployResources([
+      {
+        name: "slow-realtime.bpmn",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
              xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
              targetNamespace="http://nanobpm/testkit">
   <process id="slow-realtime" isExecutable="true">
@@ -732,21 +749,42 @@ test("wasm: close() awaits a real-time in-flight handler to settlement before fr
     <serviceTask id="t"><extensionElements><zeebe:taskDefinition type="slow-realtime"/></extensionElements></serviceTask>
     <sequenceFlow id="f2" sourceRef="t" targetRef="e"/><endEvent id="e"/>
   </process>
+  <bpmndi:BPMNDiagram id="diagram">
+    <bpmndi:BPMNPlane id="plane" bpmnElement="slow-realtime">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="150" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="t_di" bpmnElement="t"><dc:Bounds x="240" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="400" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f_di" bpmnElement="f"><di:waypoint x="186" y="118"/><di:waypoint x="240" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="340" y="118"/><di:waypoint x="400" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
 </definitions>`,
-      contentType: "application/bpmn+xml",
-    },
-  ]);
+        contentType: "application/bpmn+xml",
+      },
+    ]);
 
-  // createInstance drains; the handler parks on the real-timer, so the drain returns with it
-  // in-flight (its `completeJob` has NOT run yet).
-  await engine.createInstance({ processDefinitionId: "slow-realtime" });
-  assert.equal(handlerFinished, false, "the handler must still be parked on its real-timer here");
+    // createInstance drains; the handler signals `started` then parks on the gate, so the drain
+    // returns with it in-flight (its `completeJob` has NOT run yet).
+    await engine.createInstance({ processDefinitionId: "slow-realtime" });
+    await started; // deterministic handshake: the handler is now parked in-flight
+    assert.equal(handlerFinished, false, "the handler must still be parked on its gate here");
 
-  // close() must not free the engine until this real-time handler has fully settled — otherwise the
-  // handler resumes and calls `completeJob` on a freed engine ("null pointer passed to rust").
-  await engine.close();
-  assert.ok(
-    handlerFinished,
-    "close() must await the in-flight real-time handler to settlement before free()",
-  );
+    // Release the gate on a *real* timer so it fires while close() is awaiting settlement — the
+    // real-time await the macrotask fixpoint cannot see. Scheduling then immediately calling close()
+    // runs synchronously, so the 25 ms timer cannot fire before close() begins: the handler is
+    // guaranteed in-flight when close() starts, and close() must not free the engine until it has
+    // settled — otherwise the handler resumes and calls `completeJob` on a freed engine ("null
+    // pointer passed to rust").
+    realSetTimeout(releaseGate, 25);
+    await engine.close();
+    closed = true;
+    assert.ok(
+      handlerFinished,
+      "close() must await the in-flight real-time handler to settlement before free()",
+    );
+  } finally {
+    // The engine allocates native WASM memory; if any assertion above throws before close()
+    // succeeded, free it here so a failure does not also leak the engine into the rest of the run.
+    if (!closed) await engine.close();
+  }
 });

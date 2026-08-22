@@ -263,6 +263,16 @@ export function assertSqlIdentifier(kind: string, name: string): string {
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
+/**
+ * Fold a (validated, ASCII) SQL identifier to its canonical case. SQLite compares identifiers
+ * case-insensitively, so names differing only in case (`"TASKS"` vs `"tasks"`) denote the SAME
+ * object; every identifier equality check and dedup key in this module MUST fold through here or it
+ * will miss such collisions and fail opaquely later at provisioning. `SQL_IDENT` restricts
+ * identifiers to ASCII `[A-Za-z0-9_]`, so `toLowerCase()` matches SQLite's ASCII case folding exactly.
+ */
+function foldSqlIdentifier(name: string): string {
+  return name.toLowerCase();
+}
 
 const SQL_COMPARE: Record<CompareOp, string> = {
   eq: "=",
@@ -300,7 +310,7 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
   // "__URBAN_PROJ_0") would still collide with the reserved alias — guard case-insensitively.
   const projAliasAt = (depth: number): string => {
     let alias = `__urban_proj_${depth}`;
-    while (alias.toLowerCase() === baseAlias.toLowerCase()) alias = `_${alias}`;
+    while (foldSqlIdentifier(alias) === foldSqlIdentifier(baseAlias)) alias = `_${alias}`;
     return alias;
   };
 
@@ -636,8 +646,9 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
   assertSqlIdentifier("base table", decl.baseTable);
   // SQLite forbids a VIEW and a table sharing one name, so a read model whose managed VIEW name equals
   // its base table would fail opaquely at provisioning (`ReadModelRegistry.ensureViews`) with a raw SQL
-  // error. Reject it here, at declaration time, with an actionable message instead.
-  if (decl.name === decl.baseTable) {
+  // error. Reject it here, at declaration time, with an actionable message instead. Fold case first:
+  // SQLite matches identifiers case-insensitively, so `name: "TASKS"` still collides with `baseTable: "tasks"`.
+  if (foldSqlIdentifier(decl.name) === foldSqlIdentifier(decl.baseTable)) {
     throw new Error(
       `read model "${decl.name}" cannot share its name with its base table "${decl.baseTable}"; ` +
         `SQLite forbids a VIEW and a table having the same name, so the managed VIEW would fail to ` +
@@ -896,7 +907,8 @@ export function assertReadModelParity(
     // A projection resolving to the base table's physical name is a mapping bug: the guard fabricates an
     // isolated fixture per relation, so it would `CREATE TEMP TABLE` (and later drop/insert) the base
     // table twice and fail for a non-parity reason. Reject it up front (mirrors the many-to-one check).
-    if (table === baseTable) {
+    // Case-fold: SQLite treats `"Tasks"` and `"tasks"` as the same physical table.
+    if (foldSqlIdentifier(table) === foldSqlIdentifier(baseTable)) {
       throw new Error(
         `read model "${model.decl.name}" maps projection "${name}" to its base table "${baseTable}"; ` +
           `each projection needs a distinct sqlTable so the parity guard can build an isolated fixture ` +
@@ -906,7 +918,9 @@ export function assertReadModelParity(
     // Two distinct projection names resolving to ONE physical table is a mapping bug: the guard would
     // otherwise `CREATE TABLE` (and later drop/insert) that table twice and fail for a non-parity
     // reason. Reject it up front with an actionable error instead (mirrors the column check above).
-    const owner = tableOwner.get(table);
+    // Key the ownership map by the case-folded table so `"Foo"` and `"foo"` are recognised as one.
+    const tableKey = foldSqlIdentifier(table);
+    const owner = tableOwner.get(tableKey);
     if (owner !== undefined && owner !== name) {
       throw new Error(
         `read model "${model.decl.name}" maps projections "${owner}" and "${name}" to the same ` +
@@ -914,7 +928,7 @@ export function assertReadModelParity(
           `can build an isolated fixture for it`,
       );
     }
-    tableOwner.set(table, name);
+    tableOwner.set(tableKey, name);
     projectionTables.set(name, table);
   }
 

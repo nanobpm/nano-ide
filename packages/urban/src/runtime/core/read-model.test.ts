@@ -350,6 +350,27 @@ test("the parity guard rejects a projection resolving to the base table's physic
   });
 });
 
+test("the parity guard rejects a projection whose physical name matches the base table only by case", async () => {
+  // SQLite folds identifiers, so a projection resolving to "ROWS" is the SAME physical table as the base
+  // "rows" and would make the guard build one fixture twice. The case-fold in the guard must catch it.
+  const model = defineReadModel({
+    name: "base_case_collision_read_model",
+    baseTable: "rows",
+    derive: {
+      has_match: caseWhen([when(exists("p", eq(pcol("k"), col("k"))), lit(1))], lit(0)),
+    },
+  });
+  await withDb((db) => {
+    assert.throws(
+      () =>
+        assertReadModelParity(model, db, [{ baseRow: { k: "x" }, projections: { p: [{ k: "x" }] } }], {
+          sql: { resolveProjectionTable: () => "ROWS" },
+        }),
+      /maps projection "p" to its base table "rows"/,
+    );
+  });
+});
+
 test("the process-wide projectionRegistry is idempotent and rejects a conflicting redefinition", () => {
   try {
     projectionRegistry.register({ name: "urban_open_user_tasks" });
@@ -398,6 +419,21 @@ test("defineReadModel rejects a read model whose name equals its base table (SQL
         derive: { c: col("x") },
       }),
     /cannot share its name with its base table "shared_name"/,
+  );
+});
+
+test("defineReadModel rejects a name/base-table collision that differs only in case (SQLite folds identifiers)", () => {
+  // SQLite matches identifiers case-insensitively, so a VIEW named "TASKS" still collides with a table
+  // "tasks". The declaration-time guard must case-fold or the collision would slip through to opaque
+  // failure at `ensureViews`.
+  assert.throws(
+    () =>
+      defineReadModel({
+        name: "TASKS",
+        baseTable: "tasks",
+        derive: { c: col("x") },
+      }),
+    /cannot share its name with its base table "tasks"/,
   );
 });
 
@@ -778,6 +814,37 @@ test("the parity guard rejects two projections mapped to one physical table with
       assert.throws(
         () => assertReadModelParity(model, db, [{ baseRow: { k: "x" } }]),
         /maps projections "dup_proj_a" and "dup_proj_b" to the same physical table "dup_shared_table"/,
+      );
+    });
+  } finally {
+    // Reset the process-wide singleton so this test cannot leak registrations into others.
+    projectionRegistry.clear();
+  }
+});
+
+test("the parity guard rejects two projections whose physical tables match only by case", async () => {
+  // SQLite folds identifiers, so "Dup_Shared" and "dup_shared" are ONE physical table. The many-to-one
+  // dedup keys by the case-folded name, so this collision must be rejected up front just like an exact one.
+  try {
+    projectionRegistry.register({ name: "dupcase_proj_a", sqlTable: "Dup_Shared" });
+    projectionRegistry.register({ name: "dupcase_proj_b", sqlTable: "dup_shared" });
+    const model = defineReadModel({
+      name: "dupcase_table_read_model",
+      baseTable: "dupcase_rows",
+      derive: {
+        label: caseWhen(
+          [
+            when(exists("dupcase_proj_a", eq(pcol("k"), col("k"))), lit("a")),
+            when(exists("dupcase_proj_b", eq(pcol("k"), col("k"))), lit("b")),
+          ],
+          lit("none"),
+        ),
+      },
+    });
+    await withDb((db) => {
+      assert.throws(
+        () => assertReadModelParity(model, db, [{ baseRow: { k: "x" } }]),
+        /maps projections "dupcase_proj_a" and "dupcase_proj_b" to the same physical table/,
       );
     });
   } finally {

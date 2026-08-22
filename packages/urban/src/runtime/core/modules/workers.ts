@@ -11,6 +11,7 @@ import { runInJobContext } from "../execContext.ts";
 import type { JobExecContext } from "../execContext.ts";
 import { readLineage } from "../lineage.ts";
 import { LineageStore } from "./lineage-store.ts";
+import { readModelRegistry } from "../read-model.ts";
 import { defaultScheduler, schedulerClock, type SchedulerDeps } from "./scheduler.ts";
 
 /** The subset of the engine SDK the LLM decision-rails need: evaluate a DMN decision,
@@ -135,6 +136,28 @@ function tryLineageStore(app: AppApi, log: RuntimeContext["host"]["log"]): Linea
   }
 }
 
+/**
+ * Apply every managed read-model VIEW registered in the process-wide `readModelRegistry` to the app's
+ * DEFAULT data source (ADR 0065, surface #3). A `defineReadModel(...)` declaration compiles to a
+ * managed SQLite VIEW; provisioning it here — the same per-source boot path `tryLineageStore` uses —
+ * means an app (or a canonical-projection sidecar) that registers a read model gets its VIEW created
+ * for free, with no hand-written migration. The registry is empty until a sibling task registers into
+ * it, so this is a silent no-op in the base framework. Absent- and error-safe like lineage: an app
+ * with no datasource provisions nothing, and a VIEW-provisioning failure never breaks a worker mount.
+ */
+function tryProvisionReadModelViews(app: AppApi, log: RuntimeContext["host"]["log"]): void {
+  if (readModelRegistry.all().length === 0) return;
+  if (!app.data.hasDefaultSource()) {
+    log("debug", "read-models: no default data source; managed VIEW provisioning skipped");
+    return;
+  }
+  try {
+    readModelRegistry.ensureViews(app.data.source().db);
+  } catch (err) {
+    log("warn", "read-models: failed to provision managed VIEWs", { error: String(err) });
+  }
+}
+
 /** Record an activated job's lineage edge, never letting a projection write break the job. */
 function recordJobLineage(store: LineageStore, job: EngineJob, log: RuntimeContext["host"]["log"]): void {
   try {
@@ -191,6 +214,11 @@ export async function mountWorkers(
   // edge its instance carries, so intent→progress lineage materialises for free. Absent when the
   // app configures no default data source.
   const lineageStore = tryLineageStore(app, ctx.host.log);
+
+  // The framework read-model VIEWs (ADR 0065): apply every registered managed VIEW to the app's
+  // default data source, the same per-source boot path lineage uses. A no-op until a sibling task
+  // registers a read model into `readModelRegistry`.
+  tryProvisionReadModelViews(app, ctx.host.log);
 
   // Cache module loads so a multi-type handler module is imported once.
   const moduleCache = new Map<string, Record<string, unknown>>();

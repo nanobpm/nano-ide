@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.77.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.77.0...@nanobpm/urban-0.77.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **urban:** serve nested multi-appView sidecars from the pages tree ([#442](https://github.com/nanobpm/nano-ide/issues/442)) ([#443](https://github.com/nanobpm/nano-ide/issues/443)) ([538e864](https://github.com/nanobpm/nano-ide/commit/538e8649c788f6ab358590cdcfa25657c8ccf99f))
+
 ## [0.77.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.76.0...@nanobpm/urban-0.77.0) (2026-08-22)
 
 

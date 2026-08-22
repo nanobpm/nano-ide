@@ -96,7 +96,8 @@ export function renderWorkerStub(
   return (
     `// Handler stub for the \`${taskType}\` service task, scaffolded from the model (ADR 0056).\n` +
     `// This file is yours to edit — \`urban gen\` will never overwrite it. Implement the body\n` +
-    `// below (use \`app.data.table(...)\` for state) and delete the throw.\n` +
+    `// below (use \`app.data.table(...)\` for state), replacing the guard warn + throw so the\n` +
+    `// "worker not implemented" warning does not survive into a working handler.\n` +
     `import type { AppJobHandler } from "@nanobpm/urban/worker";\n` +
     generatedImport +
     `\n` +

@@ -34,6 +34,23 @@ test("renderOperationStub adjusts the generated-import depth for a nested api.di
   assert.match(stub, /import \{ defineOperation \} from "\.\.\/\.\.\/nano-generated\/operations\.ts";/);
 });
 
+test("operation stub is lint-clean under the scaffold config: tab-indented, both params referenced", () => {
+  // Guards the same two failure modes as the worker stub (nano-ide#454): the scaffold's Biome
+  // config formats with tabs and enables correctness/noUnusedFunctionParameters, so a
+  // space-indented body or an unused `input`/`app` makes a freshly generated operation fail the
+  // app's own `biome check`. Body lines must be tab-indented and both params read before the
+  // author fills in the body.
+  const stub = renderOperationStub("getInvoice");
+  const bodyLines = stub
+    .split("\n")
+    .filter((l) => l.startsWith(" ") || l.startsWith("\t"));
+  assert.ok(bodyLines.length > 0, "the stub has an indented body");
+  for (const line of bodyLines) {
+    assert.ok(line.startsWith("\t"), `body line is tab-indented, not space-indented: ${line}`);
+  }
+  assert.match(stub, /app\.log\.warn\("operation not implemented", \{ operationId: "getInvoice", input \}\)/);
+});
+
 test("planOperationScaffold plans one stub per declared operationId", () => {
   const plans = planOperationScaffold(doc);
   const byId = Object.fromEntries(plans.map((p) => [p.operationId, p.handlerPath]));

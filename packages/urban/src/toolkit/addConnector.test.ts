@@ -67,6 +67,24 @@ test("addConnector wires a pack-backed worker + a connection into nano.app.json"
   });
 });
 
+test("addConnector preserves the manifest's existing indentation (no lint reformat)", async () => {
+  // Regression (nano-ide#454): the scaffold's Biome config formats nano.app.json with tabs, so a
+  // hard-coded 2-space rewrite here would turn `npm run lint` red the moment a connector is
+  // enabled in a fresh app. addConnector must round-trip the manifest's own indentation, like
+  // `urban gen` does via detectJsonIndent.
+  const tabManifest = `${JSON.stringify({ schemaVersion: 1, id: "t", name: "T" }, null, "\t")}\n`;
+  const io = memIO({ ...baseFiles(), "app/nano.app.json": tabManifest });
+  await addConnector({ root: "app", pkg: PKG, io });
+  const written = io.files["app/nano.app.json"];
+  assert.match(written, /\n\t"workers"/, "tab indentation is preserved");
+  assert.doesNotMatch(written, /\n {2}"workers"/, "no 2-space indentation was introduced");
+
+  const twoSpace = `${JSON.stringify({ schemaVersion: 1, id: "t", name: "T" }, null, 2)}\n`;
+  const io2 = memIO({ ...baseFiles(), "app/nano.app.json": twoSpace });
+  await addConnector({ root: "app", pkg: PKG, io: io2 });
+  assert.match(io2.files["app/nano.app.json"], /\n {2}"workers"/, "2-space indentation is preserved");
+});
+
 test("addConnector is idempotent — re-running does not duplicate entries", async () => {
   const io = memIO(baseFiles());
   await addConnector({ root: "app", pkg: PKG, io });

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.75.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.75.0...@nanobpm/urban-0.75.1) (2026-08-22)
+
+
+### Bug Fixes
+
+* **urban:** repair taskInbox client-script backslash collapse ([#434](https://github.com/nanobpm/nano-ide/issues/434)) ([7095cd0](https://github.com/nanobpm/nano-ide/commit/7095cd0112f090fdcfab215f465eb15772da2de5))
+
 ## [0.75.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.74.1...@nanobpm/urban-0.75.0) (2026-08-21)
 
 

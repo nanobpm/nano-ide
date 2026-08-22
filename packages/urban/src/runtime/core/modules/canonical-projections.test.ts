@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { afterEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -26,6 +26,12 @@ import {
 } from "./canonical-projections.ts";
 import { INSTANCE_STATE_TABLE, InstanceStateStore } from "./instance-state-store.ts";
 import { OPEN_USER_TASKS_TABLE, OpenUserTasksStore } from "./open-user-tasks-store.ts";
+
+// This suite registers into the process-wide `projectionRegistry` singleton; clear it after every
+// test so registrations never leak into later tests and make the suite order-dependent.
+afterEach(() => {
+  projectionRegistry.clear();
+});
 
 // A read model that derives an instance's status edge PURELY from the two canonical projections:
 //   terminated → "abandoned"  (terminated wins), else open user task → "awaiting_operator", else the

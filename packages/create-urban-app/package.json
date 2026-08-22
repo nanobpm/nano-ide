@@ -49,6 +49,7 @@
     "test": "node --test --experimental-strip-types \"src/**/*.test.ts\""
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.10",
     "@types/node": "^22.20.1",
     "typescript": "^5.9.3",
     "yaml": "^2.9.0"

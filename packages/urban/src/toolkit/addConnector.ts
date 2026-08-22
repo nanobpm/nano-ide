@@ -14,6 +14,7 @@
 
 import type { GenIO } from "./gen.ts";
 import { errorMessage, isRecord } from "../runtime/core/guards.ts";
+import { detectJsonIndent } from "./scaffold.ts";
 
 /** A config field a pack declares (subset of ext-types `ConfigField`). */
 interface PackConfigField {
@@ -116,13 +117,15 @@ export async function addConnector(opts: AddConnectorOptions): Promise<AddConnec
   if (!(await io.exists(appManifestPath))) {
     throw new Error(`no ${manifestFile} at ${appManifestPath} — run this inside an Urban app.`);
   }
+  let appRaw: string;
   let app: {
     workers?: { taskType?: string; connector?: string; connection?: string; handler?: string; llm?: string }[];
     connections?: Record<string, Record<string, unknown>>;
     [k: string]: unknown;
   };
   try {
-    app = JSON.parse(await io.readText(appManifestPath));
+    appRaw = await io.readText(appManifestPath);
+    app = JSON.parse(appRaw);
   } catch (err) {
     throw new Error(`failed to parse ${appManifestPath}: ${errorMessage(err)}`);
   }
@@ -223,7 +226,10 @@ export async function addConnector(opts: AddConnectorOptions): Promise<AddConnec
     wired.push({ taskType: spec.type, alreadyPresent: false });
   }
 
-  await io.writeText(appManifestPath, JSON.stringify(app, null, 2) + "\n");
+  // Preserve the manifest's own indentation (default tab, matching the scaffold's Biome config)
+  // so enabling a connector never reformats nano.app.json out from under `npm run lint` — the same
+  // fidelity `urban gen` gives via detectJsonIndent, kept as the single source of truth.
+  await io.writeText(appManifestPath, `${JSON.stringify(app, null, detectJsonIndent(appRaw))}\n`);
 
   return {
     packId: pack.id,

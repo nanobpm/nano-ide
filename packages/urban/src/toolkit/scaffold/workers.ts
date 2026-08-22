@@ -87,23 +87,28 @@ export function renderWorkerStub(
   else if (typedOut) generic = `<Record<string, unknown>, WorkerOutputs[${key}]>`;
 
   const varsNote = typedIn
-    ? `  // \`job.variables\` is typed as WorkerInputs[${key}].`
-    : `  // \`job.variables\` is an open Record<string, unknown> (no declared input type).`;
+    ? `\t// \`job.variables\` is typed as WorkerInputs[${key}].`
+    : `\t// \`job.variables\` is an open Record<string, unknown> (no declared input type).`;
 
+  // The stub arrives lint-clean under the scaffold's own Biome config: tab-indented, and
+  // referencing both `job` and `app` (via the warn line) so `noUnusedFunctionParameters`
+  // does not fire before the author has filled in the body.
   return (
     `// Handler stub for the \`${taskType}\` service task, scaffolded from the model (ADR 0056).\n` +
     `// This file is yours to edit — \`urban gen\` will never overwrite it. Implement the body\n` +
-    `// below (use \`app.data.table(...)\` for state) and delete the throw.\n` +
+    `// below (use \`app.data.table(...)\` for state), replacing the guard warn + throw so the\n` +
+    `// "worker not implemented" warning does not survive into a working handler.\n` +
     `import type { AppJobHandler } from "@nanobpm/urban/worker";\n` +
     generatedImport +
     `\n` +
     `const handler: AppJobHandler${generic} = async (job, app) => {\n` +
     varsNote +
     `\n` +
-    `  // Reach app state and services through the injected \`app\` API.\n` +
-    `  // Structured logs: \`app.log.info("done", { … })\` — auto-tagged with this job's\n` +
-    `  // { jobKey, jobType, processInstanceKey, elementId } (ADR 0061).\n` +
-    `  throw new Error(${JSON.stringify(`worker not implemented: ${taskType}`)});\n` +
+    `\t// Reach app state and services through the injected \`app\` API.\n` +
+    `\t// Structured logs: \`app.log.info("done", { … })\` — auto-tagged with this job's\n` +
+    `\t// { jobKey, jobType, processInstanceKey, elementId } (ADR 0061).\n` +
+    `\tapp.log.warn("worker not implemented", { jobKey: job.jobKey });\n` +
+    `\tthrow new Error(${JSON.stringify(`worker not implemented: ${taskType}`)});\n` +
     `};\n` +
     `\n` +
     `export default handler;\n`

@@ -44,16 +44,21 @@ export function renderOperationStub(operationId: string, dir: string = DEFAULT_O
     `// (ADR 0059). This file is yours to edit — \`urban gen\` will never overwrite it. The\n` +
     `// generated controller (nano-generated/controller.ts) imports this default export and\n` +
     `// type-checks it against the spec, so the signature cannot drift. Implement the body below\n` +
-    `// (the validated \`{ req, params, query, body }\` input + the injected \`app\`) and delete the throw.\n` +
+    `// (the validated \`{ req, params, query, body }\` input + the injected \`app\`), replacing the\n` +
+    `// guard warn + throw.\n` +
     `import { NotImplemented } from "@nanobpm/urban";\n` +
     `import { defineOperation } from ${JSON.stringify(`${up}nano-generated/operations.ts`)};\n` +
     `\n` +
     `export default defineOperation(${key}, async (input, app) => {\n` +
-    `  // \`input\` is the validated request (params/query/body/req); reach app state + services\n` +
-    `  // through the injected \`app\` API. Structured logs via \`app.log.info("…", { … })\` are\n` +
-    `  // auto-tagged with this request's { method, path, operationId } (ADR 0061).\n` +
-    `  // Return \`{ status?, headers?, body? }\` (or nothing → 204).\n` +
-    `  throw new NotImplemented(${key});\n` +
+    `\t// \`input\` is the validated request (params/query/body/req); reach app state + services\n` +
+    `\t// through the injected \`app\` API. Structured logs via \`app.log.info("…", { … })\` are\n` +
+    `\t// auto-tagged with this request's { method, path, operationId } (ADR 0061).\n` +
+    `\t// Return \`{ status?, headers?, body? }\` (or nothing → 204). Replace the two lines below.\n` +
+    `\tapp.log.warn("operation not implemented", {\n` +
+    `\t\toperationId: ${key},\n` +
+    `\t\tmethod: input.req.method,\n` +
+    `\t});\n` +
+    `\tthrow new NotImplemented(${key});\n` +
     `});\n`
   );
 }

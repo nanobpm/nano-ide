@@ -7,6 +7,9 @@
 //
 // Run it with `npm test` (Node) or `deno task test` (Deno).
 
-import { createWasmEngineClient, runEngineClientContract } from "@nanobpm/urban-testkit";
+import {
+	createWasmEngineClient,
+	runEngineClientContract,
+} from "@nanobpm/urban-testkit";
 
 runEngineClientContract("wasm", () => createWasmEngineClient());

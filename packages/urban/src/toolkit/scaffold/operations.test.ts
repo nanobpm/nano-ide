@@ -34,6 +34,49 @@ test("renderOperationStub adjusts the generated-import depth for a nested api.di
   assert.match(stub, /import \{ defineOperation \} from "\.\.\/\.\.\/nano-generated\/operations\.ts";/);
 });
 
+test("operation stub is lint-clean under the scaffold config: tab-indented, both params referenced", () => {
+  // Guards the same two failure modes as the worker stub (nano-ide#454): the scaffold's Biome
+  // config formats with tabs and enables correctness/noUnusedFunctionParameters, so a
+  // space-indented body or an unused `input`/`app` makes a freshly generated operation fail the
+  // app's own `biome check`. Body lines must be tab-indented and both params read before the
+  // author fills in the body.
+  const stub = renderOperationStub("getInvoice");
+  const bodyLines = stub
+    .split("\n")
+    .filter((l) => l.startsWith(" ") || l.startsWith("\t"));
+  assert.ok(bodyLines.length > 0, "the stub has an indented body");
+  for (const line of bodyLines) {
+    assert.ok(line.startsWith("\t"), `body line is tab-indented, not space-indented: ${line}`);
+  }
+  assert.match(
+    stub,
+    /app\.log\.warn\("operation not implemented", \{\n\t\toperationId: "getInvoice",\n\t\tmethod: input\.req\.method,\n\t\}\);/,
+  );
+  // Guard the same Biome-width defect class the reviewer flagged (nano-ide#454): the generated
+  // stub is linted by the scaffold's `operations/**/*.ts` include at Biome's default 80-column
+  // width (tab = 2 columns), so a single-line log call that overruns 80 makes `urban gen` emit a
+  // file `biome check` immediately reports as needing formatting. Assert every non-comment code
+  // line fits, so any future template change that reintroduces an over-wide line fails here.
+  for (const line of stub.split("\n")) {
+    if (line.trim().startsWith("//")) continue;
+    const leadingTabs = line.length - line.replace(/^\t+/, "").length;
+    const width = leadingTabs * 2 + (line.length - leadingTabs);
+    assert.ok(width <= 80, `generated code line exceeds Biome's 80-column width (${width}): ${line}`);
+  }
+  // Guard the PII/credential-leak defect class (nano-ide#454): the stub must reference a
+  // non-sensitive identifier, never serialize the whole validated `input` (which carries
+  // params/query/body/req) into the NDJSON log line.
+  assert.doesNotMatch(stub, /app\.log\.warn\([^)]*,\s*input\s*\}/);
+});
+
+test("operation stub logs a non-sensitive identifier, not the raw input payload", () => {
+  // Red/Green guard for the operation-stub log-leak: an unedited 501 handler must not emit the
+  // validated request body/params/query (potential credentials or PII) to structured logs.
+  const stub = renderOperationStub("createInvoice");
+  assert.doesNotMatch(stub, /,\s*input\s*\}\)/);
+  assert.match(stub, /method: input\.req\.method/);
+});
+
 test("planOperationScaffold plans one stub per declared operationId", () => {
   const plans = planOperationScaffold(doc);
   const byId = Object.fromEntries(plans.map((p) => [p.operationId, p.handlerPath]));

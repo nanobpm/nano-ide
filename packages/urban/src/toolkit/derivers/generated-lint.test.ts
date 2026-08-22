@@ -149,7 +149,7 @@ function lintUnderScaffold(
   biomeBin: string,
   dirs: string[],
 ): { status: number | null; stdout: string; stderr: string } {
-  const templateBiome = JSON.parse(readFileSync(join(templateDir, "biome.json"), "utf8"));
+  const templateBiome = JSON.parse(readFileSync(join(templateDir, "_biome.json"), "utf8"));
   // Copy the scaffold's GritQL plugin (bans `as` assertions) next to the config so its relative
   // path resolves, then reuse the template's exact ruleset — force-scoped to the generated dirs so
   // the guard tracks the scaffold standard without depending on the template's own `includes`.
@@ -320,7 +320,7 @@ function lintWithTemplateConfigVerbatim(
   templateDir: string,
   biomeBin: string,
 ): { status: number | null; stdout: string; stderr: string } {
-  const templateBiome = JSON.parse(readFileSync(join(templateDir, "biome.json"), "utf8"));
+  const templateBiome = JSON.parse(readFileSync(join(templateDir, "_biome.json"), "utf8"));
   cpSync(join(templateDir, "plugins"), join(work, "plugins"), { recursive: true });
   const config = { ...templateBiome, $schema: undefined, root: true };
   writeFileSync(join(work, "biome.json"), `${JSON.stringify(config, null, "\t")}\n`);

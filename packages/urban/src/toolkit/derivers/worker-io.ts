@@ -182,8 +182,7 @@ export function emitWorkerBindings(
     "// The bridge from the process model to the worker type system: each declared\n" +
     "// worker's `taskType` maps to the TS type of its input payload (`job.variables`)\n" +
     "// and result, so the typed `defineWorker` types a handler by its job type. Do\n" +
-    "// not edit — regenerated from the manifest. Erased to plain JS at compile.\n" +
-    "// eslint-disable\n";
+    "// not edit — regenerated from the manifest. Erased to plain JS at compile.\n";
 
   const needsRegistry = inputs.length > 0 || outputs.length > 0;
   const importTypes = needsRegistry
@@ -192,13 +191,13 @@ export function emitWorkerBindings(
 
   const inputsIface = inputs.length > 0
     ? `export interface WorkerInputs {\n${inputs.join("\n")}\n}\n`
-    : `export interface WorkerInputs {}\n`;
+    : `export type WorkerInputs = Record<string, never>;\n`;
   const outputsIface = outputs.length > 0
     ? `export interface WorkerOutputs {\n${outputs.join("\n")}\n}\n`
-    : `export interface WorkerOutputs {}\n`;
+    : `export type WorkerOutputs = Record<string, never>;\n`;
   const headersIface = headers.length > 0
     ? `export interface WorkerHeaders {\n${headers.join("\n")}\n}\n`
-    : `export interface WorkerHeaders {}\n`;
+    : `export type WorkerHeaders = Record<string, never>;\n`;
 
   return `${header}\n` +
     importTypes +
@@ -373,8 +372,7 @@ export function emitWorkerBindingsRuntime(): string {
     "// Re-exports the worker SDK and overrides `defineWorker` with a taskType-keyed\n" +
     "// typed signature (job.variables, job.customHeaders + result typed from the\n" +
     "// worker's declared input/output/header contract). Erased to a pass-through at\n" +
-    "// runtime. Do not edit.\n" +
-    "// eslint-disable\n\n" +
+    "// runtime. Do not edit.\n\n" +
     `import { defineWorker as defineWorkerRaw } from "./worker-sdk.ts";\n` +
     `import type { WorkerOptions } from "./worker-sdk.ts";\n` +
     `import type { WorkerInputs, WorkerOutputs, WorkerHeaders, WorkerTaskType, WorkerVars, WorkerHdrs } from "./${WORKER_BINDINGS_DTS}";\n\n` +

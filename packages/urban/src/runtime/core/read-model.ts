@@ -514,10 +514,10 @@ export function compileToFn(expr: Expr): DerivationFn {
       case "lit":
         return node.value;
       case "col":
-        return baseRow[node.name] ?? null;
+        return lookupColumn(baseRow, node.name);
       case "pcol":
         if (!projRow) throw new Error(`pcol("${node.name}") evaluated outside an EXISTS projection context`);
-        return projRow[node.name] ?? null;
+        return lookupColumn(projRow, node.name);
       case "compare":
         return compareValues(
           node.op,
@@ -545,6 +545,22 @@ export function compileToFn(expr: Expr): DerivationFn {
     }
   };
   return (baseRow, projections = {}) => evalNode(expr, baseRow, projections);
+}
+
+/** Resolve a column value the way SQLite resolves an identifier: an exact-key match first, then a
+ *  case-insensitive fallback. SQLite folds ASCII identifier case even for quoted identifiers, so the
+ *  VIEW's `col("Status")` binds to a table declared with column `status`; a plain case-sensitive JS
+ *  `row["Status"]` would miss it and return null, breaking VIEW/TS parity on the no-edge fallback and on
+ *  `keyField` correlation. Fold here so both backends read the same column. (A table cannot declare two
+ *  columns differing only in case, so the fallback is unambiguous.) Returns `null` for a missing column,
+ *  preserving the previous `?? null` contract. */
+function lookupColumn(row: Record<string, unknown>, name: string): unknown {
+  if (Object.hasOwn(row, name)) return row[name] ?? null;
+  const folded = name.toLowerCase();
+  for (const key of Object.keys(row)) {
+    if (key.toLowerCase() === folded) return row[key] ?? null;
+  }
+  return null;
 }
 
 // ───────────────────────────────────────── defineReadModel ───────────────────────────────────────

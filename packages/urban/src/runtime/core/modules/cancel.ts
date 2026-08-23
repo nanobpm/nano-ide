@@ -46,19 +46,22 @@ type CancelApi = Pick<AppApi, "engine" | "data" | "log">;
  *
  * Outcome rules:
  *  - `cancelInstance` returns without throwing → the engine accepted the termination (a committed
- *    204); trust it even if the read model still lags at ACTIVE.
+ *    204); trust it even if the read model still lags at ACTIVE or has already cleaned the instance
+ *    up ("gone"), and record the terminal source for the key so the derived view flips at once.
  *  - `cancelInstance` throws but the instance reads back positively terminal (TERMINATED/COMPLETED)
- *    → the cancel was effectively idempotent; treat as success. Only a TERMINATED read records a
- *    terminal source here (see below); a COMPLETED read intentionally records nothing.
+ *    → the cancel was effectively idempotent; treat as success. A TERMINATED read records a terminal
+ *    source here; a COMPLETED read intentionally records nothing.
  *  - `cancelInstance` throws and the read is NOT positively terminal — still ACTIVE, or "gone"
  *    (absent from the read model, which after an engine restart can transiently lack a live
  *    instance) → an honest failure: report it and do NOT record anything (the instance may still be
  *    running). A throw is not a committed cancel, and absence from the read model is not proof of
  *    termination, so success is never inferred from it.
  *
- * Record only on `TERMINATED`: a COMPLETED instance's terminal outcome is owned by the app's own
- * finalize logic, and a gone/ACTIVE instance has nothing to record here. When the app declares no
- * `instanceTracking` bindings there is nothing to reconcile, so the projection feed is skipped.
+ * Record when the cancellation is CONFIRMED — an accepted (non-throwing) cancel of any non-COMPLETED
+ * readback (ACTIVE lag / gone / TERMINATED), or a throw that reads back TERMINATED. A COMPLETED
+ * instance's terminal outcome is owned by the app's own finalize logic, so it records nothing. When
+ * the app declares no `instanceTracking` bindings there is nothing to reconcile, so the feed is
+ * skipped.
  */
 export async function cancelInstanceReconciling(
   api: CancelApi,
@@ -95,7 +98,17 @@ export async function cancelInstanceReconciling(
   }
 
   let reconciled = 0;
-  if (state === "TERMINATED" && bindings.length > 0) {
+  // Record the terminal source whenever the cancellation is CONFIRMED — not only on a positively
+  // TERMINATED readback. An accepted (non-throwing) `cancelInstance` is a committed 204: the instance
+  // WILL terminate, even if the read model still lags at ACTIVE or the engine has already cleaned the
+  // instance up ("gone"). A throw that nonetheless reads back TERMINATED is idempotently confirmed too.
+  // Excluded: COMPLETED (its terminal outcome is owned by the app's own finalize logic) and the honest-
+  // failure case (a throw with a non-terminal read), which already returned ok:false above. Without
+  // recording on the accepted-but-lagging read, a committed cancel returned ok:true / reconciled:0 and
+  // the derived view stayed on the stored worker status until a poll caught up — and NEVER, if the
+  // engine no longer exposes the instance for the poll to observe (issue: accepted-cancel/read-lag).
+  const cancelConfirmed = !threw || state === "TERMINATED";
+  if (cancelConfirmed && state !== "COMPLETED" && bindings.length > 0) {
     // Record through the SAME `reconcileTerminatedKey` the poll path uses, over the app's own
     // projection stores, so cancel and poll can never drift. It is internally absent-safe and never
     // throws through — a projection-write failure logs a warn and returns 0 rather than turning a

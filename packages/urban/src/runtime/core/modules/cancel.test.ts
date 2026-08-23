@@ -225,6 +225,28 @@ test("a failed cancel with a still-ACTIVE instance is an honest failure and reco
   }
 });
 
+test("an accepted cancel that still reads ACTIVE (engine lag) records the terminal source", async () => {
+  // The engine accepted the 204 but its query store still lags at ACTIVE. The cancel IS committed, so
+  // the terminal source must be recorded now — otherwise the derived view stays on the stored worker
+  // status until a poll catches up (and never, if the instance is later cleaned up). accepted-cancel/lag.
+  const { engine } = cancelEngine({
+    states: { "100": "ACTIVE" },
+    onCancel: () => {}, // accepted (204); state deliberately NOT flipped, to model read-model lag
+  });
+  const h = await withHarness(engine);
+  try {
+    const r = await cancelInstanceReconciling(h.api, [PR_BINDING], "100");
+    assert.equal(r.ok, true);
+    assert.equal(r.state, "ACTIVE");
+    assert.equal(r.reconciled, 1);
+    assert.equal(projectedState(h.db, "100"), "TERMINATED");
+    const row = await h.table.get("100");
+    assert.equal(row?.status, "converging"); // base row untouched (source-not-writer)
+  } finally {
+    await h.close();
+  }
+});
+
 test("a COMPLETED instance is not recorded (the app's finalize logic owns that outcome)", async () => {
   const { engine } = cancelEngine({
     states: { "100": "COMPLETED" },
@@ -244,9 +266,9 @@ test("a COMPLETED instance is not recorded (the app's finalize logic owns that o
   }
 });
 
-test("a gone/unknown instance is idempotent success with no reconcile", async () => {
+test("an accepted cancel that reads back gone (engine cleanup) records the terminal source", async () => {
   const { engine } = cancelEngine({
-    states: {}, // the engine has no record of this key
+    states: {}, // the engine no longer exposes the key (already cleaned up)
     onCancel: () => {},
   });
   const h = await withHarness(engine);
@@ -254,7 +276,11 @@ test("a gone/unknown instance is idempotent success with no reconcile", async ()
     const r = await cancelInstanceReconciling(h.api, [PR_BINDING], "999999");
     assert.equal(r.ok, true);
     assert.equal(r.state, "gone");
-    assert.equal(r.reconciled, 0);
+    // The accepted 204 is a committed termination, so record the terminal source even though the read
+    // model no longer exposes the instance — otherwise the derived view could never leave the stored
+    // worker status (the poll cannot observe a gone instance either). accepted-cancel/read-lag.
+    assert.equal(r.reconciled, 1);
+    assert.equal(projectedState(h.db, "999999"), "TERMINATED");
   } finally {
     await h.close();
   }
@@ -330,7 +356,10 @@ test("an accepted cancel whose verify read fails is trusted (gone) — the 204 c
     const r = await cancelInstanceReconciling(h.api, [PR_BINDING], "100");
     assert.equal(r.ok, true);
     assert.equal(r.state, "gone");
-    assert.equal(r.reconciled, 0);
+    // Accepted 204 → committed termination; record the terminal source even though the verify read
+    // could not confirm it (read-model lag / cleanup must not strand the derived status).
+    assert.equal(r.reconciled, 1);
+    assert.equal(projectedState(h.db, "100"), "TERMINATED");
     assert.ok(h.logs.some((l) => l.level === "warn"));
   } finally {
     await h.close();

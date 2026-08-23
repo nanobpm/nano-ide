@@ -234,6 +234,60 @@ test("both backends agree on NULL inputs: SQL NULL propagation is COALESCE'd to 
   });
 });
 
+test("compileToFn resolves col/pcol identifiers case-insensitively (SQLite identifier folding)", () => {
+  // SQLite folds identifier case even for quoted identifiers, so `col("Status")` in the VIEW binds to a
+  // column DECLARED `status`. The TS backend must fold too — a case-sensitive `row["Status"]` returns
+  // null and silently diverges from the VIEW on the no-edge fallback and on keyField correlation.
+  assert.equal(compileToFn(col("Status"))({ status: "abandoned" }), "abandoned"); // folds to declared column
+  assert.equal(compileToFn(col("status"))({ status: "abandoned" }), "abandoned"); // exact match still works
+  assert.equal(compileToFn(col("Missing"))({ status: "x" }), null); // a truly-absent column → null (not a fold)
+  // pcol inside EXISTS folds too, so keyField correlation matches the VIEW's join.
+  const corr = compileToFn(exists("p", eq(pcol("Process_Instance_Key"), col("Key"))));
+  assert.equal(corr({ key: "pi-1" }, { p: [{ process_instance_key: "pi-1" }] }), true);
+  assert.equal(corr({ key: "pi-1" }, { p: [{ process_instance_key: "pi-2" }] }), false);
+});
+
+test("mixed-case col/pcol identifiers: the VIEW and TS backends agree (VIEW/TS parity on the no-edge fallback)", async () => {
+  // End-to-end guard for the case-fold fix: author a model with mixed-case identifiers over lowercase
+  // columns and confirm the SQLite VIEW and the TS backend derive the SAME value — including the
+  // parity-critical no-edge fallback that passes the stored status through.
+  const mixed: ReadModel = defineReadModel({
+    name: "mixed_case_display",
+    baseTable: "widgets",
+    derive: {
+      effective: caseWhen(
+        [
+          when(
+            exists("urban_open_user_tasks", eq(pcol("Process_Instance_Key"), col("Process_Key"))),
+            lit("awaiting_operator"),
+          ),
+        ],
+        col("Status"), // no-edge fallback → the stored status, read via a mixed-case identifier
+      ),
+    },
+  });
+  await withDb((db) => {
+    db.exec(`CREATE TABLE widgets (id TEXT, process_key TEXT, status TEXT);`);
+    db.exec(`CREATE TABLE urban_open_user_tasks (process_instance_key TEXT);`);
+    db.exec(mixed.viewDdl());
+    db.run(`INSERT INTO widgets VALUES (?, ?, ?)`, ["w1", "pi-1", "dispatched"]); // no open task → fallback
+    db.run(`INSERT INTO widgets VALUES (?, ?, ?)`, ["w2", "pi-2", "dispatched"]);
+    db.run(`INSERT INTO urban_open_user_tasks VALUES (?)`, ["pi-2"]); // w2 waiting on a human
+    // SQL backend: the VIEW resolves the mixed-case identifiers against the lowercase columns.
+    const sqlRows = db
+      .all<{ id: string; effective: string }>(`SELECT id, effective FROM mixed_case_display ORDER BY id`)
+      .map((r) => ({ ...r }));
+    assert.deepEqual(sqlRows, [
+      { id: "w1", effective: "dispatched" }, // no-edge fallback → stored status (the parity-critical path)
+      { id: "w2", effective: "awaiting_operator" },
+    ]);
+    // TS backend: base/projection rows arrive keyed as SQLite stored them (lowercase).
+    const projections = { urban_open_user_tasks: [{ process_instance_key: "pi-2" }] };
+    assert.equal(mixed.evaluate({ id: "w1", process_key: "pi-1", status: "dispatched" }, projections).effective, "dispatched");
+    assert.equal(mixed.evaluate({ id: "w2", process_key: "pi-2", status: "dispatched" }, projections).effective, "awaiting_operator");
+  });
+});
+
 test("EXISTS references a projection by name; the projection registry resolves the physical table", () => {
   const reg = new ProjectionRegistry();
   reg.register({ name: "urban_instance_state", sqlTable: "_urban_instance_state" });

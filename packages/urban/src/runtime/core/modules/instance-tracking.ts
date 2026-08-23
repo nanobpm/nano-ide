@@ -245,8 +245,20 @@ async function reconcileOnce(
   // moved it out of the active set; the inversion deliberately does not). The projection is the
   // authoritative settled-set, so exclude those keys from both the engine query and the wait-on-human
   // probe below — a pure efficiency win (the re-feed was already an idempotent no-op).
-  const settled = (key: string): boolean =>
-    projections?.instanceState.getState(key)?.state === TERMINATED_STATE;
+  // `settled` drives a projection `getState` — a real SQL round trip (SELECT … WHERE
+  // process_instance_key = ?) — and is consulted for the same key up to three times per pass (the
+  // live-key filter here, then the wait-on-human `humanKeySet` build and its projected-open scan). The
+  // settled set cannot change mid-pass except for keys THIS pass terminates, and those are already
+  // excluded downstream via `terminatedKeys`, so caching the first result per key is behaviour-preserving
+  // and caps the projection at one query per distinct key (bounding a large-backlog pass's SQL fan-out).
+  const settledCache = new Map<string, boolean>();
+  const settled = (key: string): boolean => {
+    const cached = settledCache.get(key);
+    if (cached !== undefined) return cached;
+    const value = projections?.instanceState.getState(key)?.state === TERMINATED_STATE;
+    settledCache.set(key, value);
+    return value;
+  };
   const liveKeys = keys.filter((key) => !settled(key));
 
   const snapshots = liveKeys.length > 0

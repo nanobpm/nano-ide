@@ -928,6 +928,36 @@ test("does not retire a default view claimed by another status-bearing binding o
   await h.close();
 });
 
+test("memoizes the settled-state projection lookup — one settled getState per key per pass", async () => {
+  // pi1 is tracked AND probed waiting-on-human, so the pass-level `settled` predicate is consulted for it
+  // twice (the live-key filter and the humanKeySet build), each an un-memoized getState SQL round trip.
+  // The per-pass cache collapses those to one; `reconcileWaitingHumanKey`'s separate terminal-recheck
+  // getState is an intentional freshness read, so the memoized total for pi1 is exactly two (1 + 1).
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: "hi" });
+  });
+  // Count getState-shaped SELECTs against the instance-state projection. A function Proxy preserves the
+  // generic `all` signature (no cast) while its apply trap tallies the matching queries in place — the
+  // projection stores share this same db handle, so their getState calls route through the trap.
+  let getStateQueries = 0;
+  h.db.all = new Proxy(h.db.all, {
+    apply(target, _thisArg, args) {
+      const sql = args[0];
+      if (typeof sql === "string" && sql.includes(INSTANCE_STATE_TABLE) && sql.includes("WHERE process_instance_key = ?")) {
+        getStateQueries += 1;
+      }
+      return Reflect.apply(target, h.db, args);
+    },
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ onWaitingHuman: { set: { status: "awaiting_operator" } } })], sched);
+  await sched.advance(1000);
+  assert.equal(getStateQueries, 2); // 1 memoized `settled` + 1 terminal-recheck (un-memoized: 3)
+  await handle.stop();
+  await h.close();
+});
+
 function mount(h: Harness, bindings: InstanceTracking[], sched: SchedulerDeps) {
   h.api.manifest.instanceTracking = bindings;
   return mountInstanceTracking(

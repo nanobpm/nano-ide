@@ -707,6 +707,16 @@ export interface ReadModel {
     projections?: ProjectionRows,
     lookupRows?: Record<string, ReadonlyArray<Record<string, unknown>>>,
   ): Record<string, unknown>;
+  /** Resolve each declared rollup lookup's single matching group row for `baseRow` (match on the join
+   *  keys, fill declared defaults), producing the {@link LookupRows} a {@link DerivationFn} reads via
+   *  {@link rcol}. The single source of the lookup-resolution rule: {@link evaluate} and the parity guard
+   *  both call this so they can never drift. Throws if a lookup's candidate set yields MORE than one
+   *  match for the join key — the lookup is required to be single-valued (its join covers the rollup's
+   *  full group key), so multiple matches would fan out in SQL while TS silently picked one. */
+  resolveLookups(
+    baseRow: BaseRow,
+    lookupRows: Record<string, ReadonlyArray<Record<string, unknown>>>,
+  ): LookupRows;
   /** The managed `CREATE VIEW` DDL (seam (a) applies this at boot). Pass `{ temp: true }` to emit a
    *  `CREATE TEMP VIEW` in SQLite's TEMP schema (used by the parity guard so it never touches the
    *  application's real objects); the SELECT body is byte-identical either way. */
@@ -962,9 +972,20 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
     const resolved: LookupRows = {};
     for (const lk of lookups) {
       const candidates = lookupRows[lk.as] ?? [];
-      const match = candidates.find((r) =>
+      const matches = candidates.filter((r) =>
         lk.on.every((p) => compareValues("eq", lookupColumn(baseRow, p.base), lookupColumn(r, p.rollup))),
       );
+      // The join covers the rollup's full group key, so a well-formed rollup yields at most one row per
+      // key. More than one match means the candidate set is not single-valued: SQL's LEFT JOIN would fan
+      // out to multiple rows while this TS resolver would silently keep one — the exact drift the parity
+      // guard exists to prevent. Fail loudly instead.
+      if (matches.length > 1) {
+        throw new Error(
+          `read model "${decl.name}" rollup lookup "${lk.as}" matched ${matches.length} rows for the ` +
+            `join key — a lookup must be single-valued (its join covers the rollup's full group key)`,
+        );
+      }
+      const match = matches[0];
       // Build one resolved row over EVERY rollup output column so `rcol` reads a stable object; a
       // missing/NULL value falls back to the declared default (the `COALESCE(alias.col, default)` twin).
       const row: Record<string, unknown> = Object.create(null);
@@ -983,6 +1004,7 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
     projectionNames: [...projSet],
     sqlSelectFor,
     fnFor,
+    resolveLookups: resolveLookupRows,
     evaluate: (baseRow, projections, lookupRows) => {
       // Derived column names are user-controlled and only identifier-validated, so a name like
       // `__proto__` must set a plain own property rather than trip the magic prototype setter a
@@ -1331,23 +1353,10 @@ export function assertReadModelParity(
       );
       const sqlRow = sqlRows[0] ?? {};
       // Resolve each rollup lookup's single matching row (match on the join keys, fill declared
-      // defaults) so the TS backend reads the same columns the VIEW's LEFT JOIN materialises. Done here
-      // (rather than via `model.evaluate`) so a test that overrides `model.fnFor` to inject drift still
-      // drives the compared TS value.
-      const resolvedLookups: LookupRows = {};
-      for (const lk of lookups) {
-        const candidates = sample.lookups?.[lk.as] ?? [];
-        const match = candidates.find((r) =>
-          lk.on.every((p) => compareValues("eq", lookupColumn(sample.baseRow, p.base), lookupColumn(r, p.rollup))),
-        );
-        const row: Record<string, unknown> = Object.create(null);
-        for (const name of lk.rollup.outputColumns) {
-          const raw = match ? lookupColumn(match, name) : null;
-          const dflt = lk.defaults?.[name];
-          row[name] = raw === null || raw === undefined ? (dflt === undefined ? null : dflt) : raw;
-        }
-        resolvedLookups[lk.as] = row;
-      }
+      // defaults) via the model's OWN resolver — the single source of the lookup-resolution rule (incl.
+      // the single-valued/no-fan-out guard). Done here (rather than via `model.evaluate`) so a test that
+      // overrides `model.fnFor` to inject drift still drives the compared TS value.
+      const resolvedLookups = model.resolveLookups(sample.baseRow, sample.lookups ?? {});
       for (const c of columns) {
         const sqlValue = normaliseSqlValue(sqlRow[c]);
         const fnValue = normaliseSqlValue(model.fnFor(c)(sample.baseRow, sample.projections, resolvedLookups));

@@ -306,6 +306,21 @@ test("a bare fnFor call on an rcol column fails loudly (must resolve lookups via
   );
 });
 
+test("a rollup lookup with MORE than one candidate match throws (single-valued, no silent fan-out)", () => {
+  // The join covers the rollup's full group key, so at most one row matches. Two matching candidate rows
+  // would fan out in SQL's LEFT JOIN while the TS resolver silently kept one — detect and fail loudly.
+  assert.throws(
+    () =>
+      planDelivery.resolveLookups({ plan_key: "p1", status: "done" }, {
+        c: [
+          { plan_key: "p1", prs_opened: 2, prs_merged: 2, prs_in_flight: 0 },
+          { plan_key: "p1", prs_opened: 9, prs_merged: 0, prs_in_flight: 9 },
+        ],
+      }),
+    /matched 2 rows for the join key/,
+  );
+});
+
 test("a read model can carry TWO distinct rollup lookups (plan_read_model shape)", async () => {
   const planSummary = defineReadModel({
     name: "plan_summary_rm",

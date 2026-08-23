@@ -398,3 +398,344 @@ test("instanceTracking with a valid positive pollMs has no pollMs issue", () => 
   });
   assert.deepEqual(issues, []);
 });
+
+// ── readModel (ADR 0065, the writer→source inversion) ───────────────────────────────────────────
+// The new `instanceTracking.readModel` validation surface: identifier shape, base-table/statusField
+// collisions (folded case-insensitively, matching SQLite), and duplicate managed-VIEW names across
+// bindings. These lock the author-time guard to the VIEW-provisioning behavior it stands in for.
+
+test("a valid instanceTracking.readModel override has no issues", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        activeStatuses: ["planning"],
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "plans_status", statusColumn: "effective_status" },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("a non-object readModel is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: "nope",
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].readModel"));
+});
+
+test("a non-identifier readModel.view / statusColumn is flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "has space", statusColumn: "1bad" },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].readModel.view"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].readModel.statusColumn"));
+});
+
+test("readModel.view colliding with the base table is flagged case-insensitively", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "Plans" }, // folds to the base table name
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].readModel.view"));
+});
+
+test("a reserved-prefix readModel.view is flagged (hidden from the datasource surface)", () => {
+  // A `_urban_*` / `_nano_*` / `sqlite_*` view provisions fine but is filtered out of gateway.schema(),
+  // so a page reads `unknown table`. Reject it at author time, on the explicit override, case-insensitively.
+  for (const view of ["_urban_status", "_NANO_status", "sqlite_meta"]) {
+    const issues = collectManifestIssues({
+      ...valid,
+      instanceTracking: [
+        {
+          table: "plans",
+          keyField: "process_key",
+          statusField: "status",
+          onTerminated: { set: { status: "abandoned" } },
+          readModel: { view },
+        },
+      ],
+    });
+    assert.ok(
+      issues.some((i) => i.path === "instanceTracking[0].readModel.view"),
+      `expected reserved view "${view}" to be flagged`,
+    );
+  }
+});
+
+test("a reserved-prefix default VIEW (from a reserved base table) is flagged on `table`", () => {
+  // With no override the VIEW defaults to `<table>__tracking`; a `_urban_*` base table therefore yields a
+  // reserved default view name. The issue is attributed to `table` since there is no explicit view.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "_urban_plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].table"));
+});
+
+test("a reserved base table with a NON-reserved explicit view is flagged on `table` (issue #452 review)", () => {
+  // The reserved-VIEW guard only inspects the effective VIEW NAME. A binding
+  // `table: "_urban_instance_state", readModel: { view: "tracking" }` slips past it: the published
+  // `tracking` VIEW is non-reserved (so gateway.schema() exposes it) yet SELECTs the runtime's hidden
+  // sidecar rows. Tracking a reserved runtime table is never legitimate — reject it on `table`.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "_urban_instance_state",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "tracking" },
+      },
+    ],
+  });
+  assert.ok(
+    issues.some((i) => i.path === "instanceTracking[0].table" && i.message.includes("reserved prefix")),
+    "expected a reserved base-table issue on `table`",
+  );
+});
+
+test("non-identifier table / keyField / statusField are flagged (they compile into VIEW SQL)", () => {
+  // `table`/`keyField`/`statusField` are interpolated into the derived VIEW's DDL and predicates, so a
+  // non-identifier (e.g. `external-orders`) that historically only passed the non-empty check would
+  // validate yet throw at VIEW construction. Enforce the identifier rule at author time (No Drift).
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "external-orders",
+        keyField: "process key",
+        statusField: "the.status",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].table"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].keyField"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].statusField"));
+});
+
+test("a STATUS-LESS instanceTracking binding accepts a non-identifier table/keyField (no VIEW is built)", () => {
+  // A binding with no `statusField` provisions no derived VIEW; it only feeds projections and is polled
+  // through `api.data.table()`, whose `Table<T>` gateway `quoteIdent`s the base table + key column. So a
+  // hyphenated/spaced name like `external-orders` / `process key` works and MUST NOT be rejected here —
+  // the SQL_IDENT rule applies only when a VIEW is actually built (No Drift with provisioning).
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "external-orders",
+        keyField: "process key",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(!issues.some((i) => i.path === "instanceTracking[0].table"));
+  assert.ok(!issues.some((i) => i.path === "instanceTracking[0].keyField"));
+});
+
+test("an unknown key inside readModel is flagged (additionalProperties: false)", () => {
+  // A typo like `statusColum` would silently fall back to the default derived column while the page reads
+  // the wrong field. Mirror the `network` block's unknown-key rejection.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "plans_board", statusColum: "eff_status" },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].readModel.statusColum"));
+});
+
+test("readModel.statusColumn colliding with statusField is flagged case-insensitively", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { statusColumn: "Status" }, // folds to statusField -> stored column shadows the derived one
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].readModel.statusColumn"));
+});
+
+test("two bindings folding to the same managed-VIEW name are flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+      {
+        // Same base table, no distinct override → both default to `plans__tracking`.
+        table: "plans",
+        keyField: "other_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[1].readModel.view"));
+});
+
+test("two bindings whose readModel.view differ only by case are flagged", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "shared_status" },
+      },
+      {
+        table: "orders",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "Shared_Status" }, // folds to the first binding's view
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[1].readModel.view"));
+});
+
+test("distinct managed-VIEW names across bindings on the same table have no view collision", () => {
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "plans_a" },
+      },
+      {
+        table: "plans",
+        keyField: "other_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "plans_b" },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("statusField folding to the default derived column (no override) is flagged", () => {
+  // With no `readModel.statusColumn`, the VIEW derives under the default `derived_status`. A binding
+  // whose `statusField` IS `derived_status` therefore collides with the default derived column exactly
+  // as an explicit override would — SQLite keeps the stored base column and the derived read is stale.
+  // This is the omitted-override path the runtime would otherwise only discover at boot.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "Derived_Status", // folds to the default derived column name
+        onTerminated: { set: { Derived_Status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].statusField"));
+});
+
+test("an explicit readModel.statusColumn that differs from the default derived column is not falsely flagged", () => {
+  // statusField == default derived column, but an explicit override moves the derived column elsewhere:
+  // no collision, so the omitted-override guard must NOT fire.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "derived_status",
+        onTerminated: { set: { derived_status: "abandoned" } },
+        readModel: { statusColumn: "effective_status" },
+      },
+    ],
+  });
+  assert.deepEqual(issues, []);
+});
+
+test("a managed VIEW name colliding with another binding's base table is flagged", () => {
+  // SQLite shares one namespace for tables and views: a managed VIEW named `orders` (binding 0) collides
+  // with binding 1's base table `orders`, so `CREATE VIEW` would fail at boot and binding 0 loses its
+  // derived surface. Reject it at author time.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "orders" }, // folds to binding[1]'s base table
+      },
+      {
+        table: "orders",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(
+    issues.some(
+      (i) => i.path === "instanceTracking[0].readModel.view" && i.message.includes("base table"),
+    ),
+  );
+});

@@ -261,13 +261,36 @@ function resolveBaseAlias(alias: string | undefined): string {
   return assertSqlIdentifier("base alias", alias ?? DEFAULT_BASE_ALIAS);
 }
 
-/** A conservative SQL identifier guard — we interpolate names directly into DDL/SQL. */
-const SQL_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A conservative SQL identifier guard — we interpolate names directly into DDL/SQL. This is the
+ *  single source of truth for "is this a legal identifier"; the manifest validator imports it (rather
+ *  than re-declaring the regex) so a name accepted at author time is accepted at VIEW provisioning too
+ *  (No Drift Surfaces — a divergence would let a manifest validate but fail at boot). */
+export const SQL_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** True iff `name` is a legal SQL identifier per {@link SQL_IDENT}. The boolean twin of
+ *  {@link assertSqlIdentifier}, for callers (e.g. the manifest validator) that collect issues rather
+ *  than throw. */
+export function isSqlIdentifier(name: string): boolean {
+  return SQL_IDENT.test(name);
+}
 export function assertSqlIdentifier(kind: string, name: string): string {
   if (!SQL_IDENT.test(name)) {
     throw new Error(`invalid ${kind} "${name}": must match ${SQL_IDENT.source}`);
   }
   return name;
+}
+/** Object-name prefixes reserved for engine/runtime internals. Tables and views whose names begin
+ *  with one of these are Nano bookkeeping (`_urban_*` / `_nano_*`) or SQLite internals (`sqlite_*`):
+ *  the provenance recorder skips them (`modules/datasource.ts`) and the datasource `schema()` surface
+ *  filters them out (`modules/gateway.ts`), so they are invisible to `/app/data`, DB Manager, and forms.
+ *  This is the single source of truth for that prefix set (No Drift Surfaces — a manifest that provisions
+ *  a `_urban_*` VIEW would otherwise validate yet be unreadable by the documented pages surface). */
+export const RESERVED_OBJECT_PREFIXES = ["_urban_", "_nano_", "sqlite_"] as const;
+/** True iff `name` begins with a {@link RESERVED_OBJECT_PREFIXES} prefix. Case-insensitive, matching
+ *  SQLite's ASCII identifier folding (a `_URBAN_x` table resolves to the same reserved object as
+ *  `_urban_x`), so a reserved name cannot slip through by casing. */
+export function isReservedObjectName(name: string): boolean {
+  const folded = name.toLowerCase();
+  return RESERVED_OBJECT_PREFIXES.some((p) => folded.startsWith(p));
 }
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
@@ -491,10 +514,10 @@ export function compileToFn(expr: Expr): DerivationFn {
       case "lit":
         return node.value;
       case "col":
-        return baseRow[node.name] ?? null;
+        return lookupColumn(baseRow, node.name);
       case "pcol":
         if (!projRow) throw new Error(`pcol("${node.name}") evaluated outside an EXISTS projection context`);
-        return projRow[node.name] ?? null;
+        return lookupColumn(projRow, node.name);
       case "compare":
         return compareValues(
           node.op,
@@ -522,6 +545,22 @@ export function compileToFn(expr: Expr): DerivationFn {
     }
   };
   return (baseRow, projections = {}) => evalNode(expr, baseRow, projections);
+}
+
+/** Resolve a column value the way SQLite resolves an identifier: an exact-key match first, then a
+ *  case-insensitive fallback. SQLite folds ASCII identifier case even for quoted identifiers, so the
+ *  VIEW's `col("Status")` binds to a table declared with column `status`; a plain case-sensitive JS
+ *  `row["Status"]` would miss it and return null, breaking VIEW/TS parity on the no-edge fallback and on
+ *  `keyField` correlation. Fold here so both backends read the same column. (A table cannot declare two
+ *  columns differing only in case, so the fallback is unambiguous.) Returns `null` for a missing column,
+ *  preserving the previous `?? null` contract. */
+export function lookupColumn(row: Record<string, unknown>, name: string): unknown {
+  if (Object.hasOwn(row, name)) return row[name] ?? null;
+  const folded = name.toLowerCase();
+  for (const key of Object.keys(row)) {
+    if (key.toLowerCase() === folded) return row[key] ?? null;
+  }
+  return null;
 }
 
 // ───────────────────────────────────────── defineReadModel ───────────────────────────────────────

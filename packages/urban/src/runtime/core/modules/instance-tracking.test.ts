@@ -9,29 +9,39 @@ import { makeGateway } from "./gateway.ts";
 import type { Table } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import type { AppApi } from "../context.ts";
-import type { EngineClient, ProcessInstanceSnapshot, UserTaskFilter, UserTaskSummary } from "../host.ts";
+import type { EngineClient, ProcessInstanceSnapshot, SqliteDb, UserTaskFilter, UserTaskSummary } from "../host.ts";
 import type { InstanceTracking } from "../manifest.ts";
 import {
   DEFAULT_INSTANCE_TRACKING_POLL_MS,
   mountInstanceTracking,
+  reconcileTerminatedKey,
+  reconcileWaitingHumanKey,
+  tryInstanceProjections,
   WAITING_HUMAN_PROBE_CONCURRENCY,
 } from "./instance-tracking.ts";
+import { defineInstanceTrackingReadModel } from "./instance-status-read-model.ts";
+import { INSTANCE_STATE_TABLE } from "./instance-state-store.ts";
+import { OPEN_USER_TASKS_TABLE } from "./open-user-tasks-store.ts";
+import { assertReadModelParity, defineReadModel, lit, readModelRegistry } from "../read-model.ts";
 import { MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
 import { fakeScheduler } from "./scheduler.test-utils.ts";
 
-// A real-timer flush drains the entire pending microtask chain (find → engine → update)
-// each time a fake timer fires — deeper than a fixed number of `await Promise.resolve()`s.
-const realSetTimeout = globalThis.setTimeout;
-const flush = () => new Promise<void>((r) => realSetTimeout(r, 0));
+// ADR 0065 — the instanceTracking writer→source inversion. The reconciler no longer WRITES a derivable
+// status column on the base row; it FEEDS engine truth into the canonical projections
+// (`_urban_instance_state`, `_urban_open_user_tasks`) and the effective status is DERIVED by the managed
+// `<table>__tracking` VIEW's `derived_status` column. These tests therefore assert on the DERIVED value
+// and the projection state — never a base-row mutation (the base `status` is left untouched for the
+// app's own workers).
 
 /** An EngineClient driven by a fixed map of processInstanceKey → state (for searchProcessInstances)
  *  and an optional map of processInstanceKey → number-of-open-user-tasks (for openUserTasks, the
  *  wait-on-human edge). Records the keys asked for on each call. `openUserTasks` models the engine
- *  truth the reconciler derives `awaiting_operator` from — only *open* (CREATED) tasks count, so a
+ *  truth the reconciler feeds `urban_open_user_tasks` from — only *open* (CREATED) tasks count, so a
  *  key absent from `openTasks` (or mapped to 0) reports no parked human. */
 function fakeEngine(
   states: Record<string, ProcessInstanceSnapshot["state"]>,
   openTasks: Record<string, number> = {},
+  failOpenTaskKeys: ReadonlySet<string> = new Set(),
 ): {
   engine: EngineClient;
   queries: string[][];
@@ -63,6 +73,11 @@ function fakeEngine(
     async openUserTasks(filter?: UserTaskFilter): Promise<UserTaskSummary[]> {
       const key = filter?.processInstanceKey;
       userTaskQueries.push(key);
+      // A key in `failOpenTaskKeys` models a permanently-failing engine probe (issue #452 review):
+      // one such key must not reject the whole `Promise.all` batch and starve the rest of the backlog.
+      if (key !== undefined && failOpenTaskKeys.has(key)) {
+        throw new Error(`openUserTasks probe permanently failing for ${key}`);
+      }
       const n = key ? (openTasks[key] ?? 0) : 0;
       return Array.from({ length: n }, (_unused, i): UserTaskSummary => ({
         userTaskKey: `${key}-t${i}`,
@@ -84,6 +99,7 @@ function fakeEngine(
 interface Harness {
   api: AppApi;
   table: Table<PlanRow>;
+  db: SqliteDb;
   dir: string;
   close: () => Promise<void>;
   logs: { level: string; msg: string }[];
@@ -136,6 +152,7 @@ async function withHarness(
   return {
     api,
     table: tbl,
+    db,
     dir,
     logs,
     close: async () => {
@@ -158,7 +175,45 @@ const planBinding = (over: Partial<InstanceTracking> = {}): InstanceTracking => 
   ...over,
 });
 
-test("reconciles an active row whose instance is TERMINATED", async () => {
+// ── Derived-status / projection query helpers (the inversion's read surface) ────────────────────
+
+/** The DERIVED effective status for a key, read from the managed `<table>__tracking` VIEW's
+ *  `derived_status` column — the value the operator page reads post-inversion. Returns the values for
+ *  every base row sharing the key (a non-unique keyField maps to several rows). */
+function derived(h: Harness, key: string, view = "plans__tracking", keyField = "process_key"): string[] {
+  const rows = h.db.all<{ derived_status: string }>(
+    `SELECT derived_status FROM ${view} WHERE ${keyField} = ? ORDER BY plan_key`,
+    [key],
+  );
+  return rows.map((r) => r.derived_status);
+}
+
+/** The single derived status for a key (asserts exactly one base row). */
+function derivedOne(h: Harness, key: string, view = "plans__tracking"): string | undefined {
+  const all = derived(h, key, view);
+  return all[0];
+}
+
+/** The recorded engine lifecycle state for a key in the `_urban_instance_state` projection, or
+ *  undefined when the key was never recorded (never terminated). */
+function projectedState(h: Harness, key: string): string | undefined {
+  const rows = h.db.all<{ state: string }>(
+    `SELECT state FROM ${INSTANCE_STATE_TABLE} WHERE process_instance_key = ?`,
+    [key],
+  );
+  return rows[0]?.state;
+}
+
+/** The number of open user tasks projected for a key in `_urban_open_user_tasks`. */
+function projectedOpenTasks(h: Harness, key: string): number {
+  const rows = h.db.all<{ n: number }>(
+    `SELECT COUNT(*) AS n FROM ${OPEN_USER_TASKS_TABLE} WHERE process_instance_key = ?`,
+    [key],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+test("derives the terminal status for an active row whose instance is TERMINATED (no base write)", async () => {
   const { engine } = fakeEngine({ pi1: "TERMINATED" });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: "hi" });
@@ -166,14 +221,18 @@ test("reconciles an active row whose instance is TERMINATED", async () => {
   const sched = fakeScheduler();
   const handle = mount(h, [planBinding()], sched);
   await sched.advance(1000);
+  // The derived status flips; the base row is UNTOUCHED (source-not-writer).
+  assert.equal(derivedOne(h, "pi1"), "abandoned");
   const row = await h.table.get("pi1");
-  assert.equal(row?.status, "abandoned");
-  assert.equal(row?.note, null);
+  assert.equal(row?.status, "dispatched"); // base status never rewritten
+  assert.equal(row?.note, "hi"); // secondary column never rewritten either
+  // …and the terminal fact was recorded into the canonical projection.
+  assert.equal(projectedState(h, "pi1"), "TERMINATED");
   await handle.stop();
   await h.close();
 });
 
-test("leaves an active row whose instance is still ACTIVE untouched", async () => {
+test("derives the stored status for an active row whose instance is still ACTIVE", async () => {
   const { engine } = fakeEngine({ pi1: "ACTIVE" });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: "hi" });
@@ -181,13 +240,13 @@ test("leaves an active row whose instance is still ACTIVE untouched", async () =
   const sched = fakeScheduler();
   const handle = mount(h, [planBinding()], sched);
   await sched.advance(1000);
-  const row = await h.table.get("pi1");
-  assert.equal(row?.status, "dispatched");
+  assert.equal(derivedOne(h, "pi1"), "dispatched"); // no terminal edge ⇒ passes the stored value through
+  assert.equal(projectedState(h, "pi1"), undefined); // ACTIVE is not recorded
   await handle.stop();
   await h.close();
 });
 
-test("does NOT reconcile a COMPLETED instance (a finalize worker owns that row)", async () => {
+test("does NOT record a COMPLETED instance (a finalize worker owns that outcome)", async () => {
   const { engine, queries } = fakeEngine({ pi1: "COMPLETED" });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: "hi" });
@@ -195,8 +254,8 @@ test("does NOT reconcile a COMPLETED instance (a finalize worker owns that row)"
   const sched = fakeScheduler();
   const handle = mount(h, [planBinding()], sched);
   await sched.advance(1000);
-  const row = await h.table.get("pi1");
-  assert.equal(row?.status, "dispatched"); // untouched
+  assert.equal(derivedOne(h, "pi1"), "dispatched"); // not terminal-derived
+  assert.equal(projectedState(h, "pi1"), undefined); // COMPLETED never recorded here
   // and it did ask the engine, filtered to TERMINATED
   assert.deepEqual(queries, [["pi1"]]);
   await handle.stop();
@@ -248,7 +307,9 @@ test("re-arms after each tick and stops cleanly", async () => {
   await h.close();
 });
 
-test("without statusField/activeStatuses, polls every row", async () => {
+test("without statusField, polls every row and records each terminal instance into the projection", async () => {
+  // With no statusField there is no single column to derive, so NO VIEW is provisioned — but the
+  // reconciler still feeds engine truth into the canonical instance-state projection.
   const { engine, queries } = fakeEngine({ pi1: "TERMINATED", pi2: "TERMINATED" });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "abandoned", note: null });
@@ -259,13 +320,13 @@ test("without statusField/activeStatuses, polls every row", async () => {
   const handle = mount(h, [binding], sched);
   await sched.advance(1000);
   assert.deepEqual(queries[0]?.sort(), ["pi1", "pi2"]);
-  // both got reconciled (already-abandoned p1 is a no-op change, p2 flips)
-  assert.equal((await h.table.get("pi2"))?.status, "abandoned");
+  assert.equal(projectedState(h, "pi1"), "TERMINATED");
+  assert.equal(projectedState(h, "pi2"), "TERMINATED");
   await handle.stop();
   await h.close();
 });
 
-test("terminalStatuses: reconciles a TERMINATED row in an un-enumerated non-terminal status (the allow-list regression)", async () => {
+test("terminalStatuses: derives the terminal status for a TERMINATED row in an un-enumerated non-terminal status (the allow-list regression)", async () => {
   // The row's status ("awaiting_operator") is listed in NEITHER activeStatuses nor terminalStatuses
   // — the exact drift an allow-list misses. A fail-open terminalStatuses selector still polls it.
   const { engine, queries } = fakeEngine({ pi1: "TERMINATED" });
@@ -277,8 +338,7 @@ test("terminalStatuses: reconciles a TERMINATED row in an un-enumerated non-term
   const handle = mount(h, [binding], sched);
   await sched.advance(1000);
   assert.deepEqual(queries, [["pi1"]]); // it WAS polled despite not being in any enumerated list
-  const row = await h.table.get("pi1");
-  assert.equal(row?.status, "abandoned"); // …and reconciled
+  assert.equal(derivedOne(h, "pi1"), "abandoned"); // …and derives to terminal
   await handle.stop();
   await h.close();
 });
@@ -311,7 +371,7 @@ test("terminalStatuses wins when a binding somehow declares both selectors (fail
   const handle = mount(h, [binding], sched);
   await sched.advance(1000);
   assert.deepEqual(queries, [["pi1"]]); // polled via the terminalStatuses selector
-  assert.equal((await h.table.get("pi1"))?.status, "abandoned");
+  assert.equal(derivedOne(h, "pi1"), "abandoned");
   await handle.stop();
   await h.close();
 });
@@ -405,12 +465,11 @@ for (const bad of [0, -1000, Number.NaN]) {
   });
 }
 
-
 // ── Wait-on-human edge (onWaitingHuman, issue #355) ────────────────────────────────────────────
 
 // A binding that reconciles both engine-truth edges: terminal (onTerminated) and wait-on-human
 // (onWaitingHuman). terminalStatuses (fail-open) keeps every non-abandoned row polled so a stale
-// worker-written transient status (converging/merging/running) is still reconciled to awaiting.
+// worker-written transient status (converging/merging/running) still derives to awaiting.
 const waitingBinding = (over: Partial<InstanceTracking> = {}): InstanceTracking => ({
   table: "plans",
   keyField: "process_key",
@@ -424,7 +483,8 @@ const waitingBinding = (over: Partial<InstanceTracking> = {}): InstanceTracking 
 
 test("derives awaiting_operator for a row whose instance has an open user task (forward)", async () => {
   // The row carries a STALE worker-written transient status; the instance is parked at a user task.
-  // One reconcile pass must read it back as awaiting_operator — derived, not written.
+  // One reconcile pass must read it back as awaiting_operator — DERIVED over the fed projection,
+  // never written to the base row.
   const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "converging", note: null });
@@ -432,16 +492,17 @@ test("derives awaiting_operator for a row whose instance has an open user task (
   const sched = fakeScheduler();
   const handle = mount(h, [waitingBinding()], sched);
   await sched.advance(1000);
-  assert.equal((await h.table.get("pi1"))?.status, "awaiting_operator");
+  assert.equal(derivedOne(h, "pi1"), "awaiting_operator");
+  assert.equal((await h.table.get("pi1"))?.status, "converging"); // base untouched
+  assert.equal(projectedOpenTasks(h, "pi1"), 1); // the open task was fed into the projection
   await handle.stop();
   await h.close();
 });
 
-test("leaves the worker-owned transient status when the instance has NO open user task (backward)", async () => {
-  // No open user task and not terminated ⇒ the reconciler must not force awaiting_operator; the
-  // worker-owned transient status survives. This is the "must not remain awaiting_operator once the
-  // task completes" leg: a just-answered instance (task completed, worker wrote converging) is not
-  // re-latched to awaiting_operator.
+test("derives the worker-owned transient status when the instance has NO open user task (backward)", async () => {
+  // No open user task and not terminated ⇒ the derived edge must NOT be awaiting_operator; the
+  // worker-owned transient status shows through. This is the "must not remain awaiting_operator once
+  // the task completes" leg.
   const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 0 });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "converging", note: null });
@@ -449,15 +510,16 @@ test("leaves the worker-owned transient status when the instance has NO open use
   const sched = fakeScheduler();
   const handle = mount(h, [waitingBinding()], sched);
   await sched.advance(1000);
-  assert.equal((await h.table.get("pi1"))?.status, "converging");
+  assert.equal(derivedOne(h, "pi1"), "converging");
+  assert.equal(projectedOpenTasks(h, "pi1"), 0);
   await handle.stop();
   await h.close();
 });
 
 test("re-escalation after an answer re-flips to awaiting_operator on the next poll (instance A)", async () => {
   // The re-escalation-after-answer defect (nano-workforce#318): the row sits at converging after an
-  // answer; a re-escalation opens a NEW user task. Because the status is DERIVED every tick, the
-  // next poll re-flips it to awaiting_operator by construction — no bespoke poller, no stuck state.
+  // answer; a re-escalation opens a NEW user task. Because the status is DERIVED every tick over the
+  // live projection, the next poll re-flips it to awaiting_operator by construction.
   const openTasks: Record<string, number> = { pi1: 0 }; // answered: task completed, none open
   const { engine } = fakeEngine({ pi1: "ACTIVE" }, openTasks);
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
@@ -466,17 +528,47 @@ test("re-escalation after an answer re-flips to awaiting_operator on the next po
   const sched = fakeScheduler();
   const handle = mount(h, [waitingBinding()], sched);
   await sched.advance(1000);
-  assert.equal((await h.table.get("pi1"))?.status, "converging"); // still converging: no open task
+  assert.equal(derivedOne(h, "pi1"), "converging"); // still converging: no open task
   openTasks.pi1 = 1; // re-escalation: a new user task opens
   await sched.advance(1000);
-  assert.equal((await h.table.get("pi1"))?.status, "awaiting_operator"); // re-flipped
+  assert.equal(derivedOne(h, "pi1"), "awaiting_operator"); // re-flipped
+  await handle.stop();
+  await h.close();
+});
+
+test("#422: an answered escalation reads NON-stale by construction (tearing is gone)", async () => {
+  // nano-workforce#422 — the tearing the inversion removes. Under the OLD writer the derivable
+  // `status` was STORED, so an answered escalation (its user task retired) still showed a stale ⚠
+  // (awaiting_operator) until a bespoke self-heal poll re-wrote it. With the derivation over the LIVE
+  // open-task projection, once `syncInstance([])` retires the task the EXISTS goes false on the very
+  // next read — there is no stored column left to tear.
+  const openTasks: Record<string, number> = { pi1: 1 }; // escalated: one open user task
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, openTasks);
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "converging", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [waitingBinding()], sched);
+  await sched.advance(1000);
+  assert.equal(derivedOne(h, "pi1"), "awaiting_operator"); // escalated ⇒ parked on a human
+  assert.equal(projectedOpenTasks(h, "pi1"), 1);
+
+  // The operator answers/closes the escalation — the engine no longer reports an open task.
+  openTasks.pi1 = 0;
+  await sched.advance(1000);
+  // The derived read model MUST NOT still read awaiting_operator. The retired task was cleared from
+  // the projection, so the edge is false — non-stale WITHOUT any compensating write.
+  assert.notEqual(derivedOne(h, "pi1"), "awaiting_operator");
+  assert.equal(derivedOne(h, "pi1"), "converging");
+  assert.equal(projectedOpenTasks(h, "pi1"), 0); // the answered task was retired from the projection
   await handle.stop();
   await h.close();
 });
 
 test("terminated wins over an open user task (precedence)", async () => {
-  // A terminated instance that also (transiently) reports an open user task must reconcile to the
-  // terminal patch, never awaiting_operator — onTerminated has precedence.
+  // A terminated instance that also (transiently) reports an open user task must derive to the
+  // terminal status, never awaiting_operator — onTerminated has precedence, and the terminal record
+  // retires the open tasks at the source too.
   const { engine, userTaskQueries } = fakeEngine({ pi1: "TERMINATED" }, { pi1: 1 });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "converging", note: "x" });
@@ -484,17 +576,17 @@ test("terminated wins over an open user task (precedence)", async () => {
   const sched = fakeScheduler();
   const handle = mount(h, [waitingBinding()], sched);
   await sched.advance(1000);
-  const row = await h.table.get("pi1");
-  assert.equal(row?.status, "abandoned");
-  assert.equal(row?.note, null);
+  assert.equal(derivedOne(h, "pi1"), "abandoned");
+  assert.equal(projectedState(h, "pi1"), "TERMINATED");
+  assert.equal(projectedOpenTasks(h, "pi1"), 0); // terminal record cleared any open tasks
   assert.deepEqual(userTaskQueries, []); // terminated key was excluded before the openUserTasks probe
   await handle.stop();
   await h.close();
 });
 
-test("does not re-write or re-log a row already at awaiting_operator (quiet-idempotent)", async () => {
-  // A long-parked instance is re-polled every tick. The wait-on-human writer must be a no-op when
-  // the row already carries the patch, so it does not re-log on every poll.
+test("does not log per-poll for a long-parked awaiting_operator instance (quiet feed)", async () => {
+  // A long-parked instance is re-polled every tick. Feeding the projection is idempotent and must not
+  // emit a per-poll info/warn log (the derived edge is recomputed silently on read).
   const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "awaiting_operator", note: null });
@@ -503,9 +595,9 @@ test("does not re-write or re-log a row already at awaiting_operator (quiet-idem
   const handle = mount(h, [waitingBinding()], sched);
   await sched.advance(1000);
   await sched.advance(1000);
-  assert.equal((await h.table.get("pi1"))?.status, "awaiting_operator");
-  const awaitingLogs = h.logs.filter((l) => l.msg.includes("awaiting operator"));
-  assert.equal(awaitingLogs.length, 0); // no-op patch never logged
+  assert.equal(derivedOne(h, "pi1"), "awaiting_operator");
+  const noisy = h.logs.filter((l) => l.msg.includes("awaiting") || (l.level !== "debug" && l.msg.includes("open user tasks")));
+  assert.equal(noisy.length, 0); // idempotent feed never logs
   await handle.stop();
   await h.close();
 });
@@ -519,16 +611,16 @@ test("a binding without onWaitingHuman never probes open user tasks (edge is opt
   const handle = mount(h, [planBinding()], sched); // planBinding has no onWaitingHuman
   await sched.advance(1000);
   assert.deepEqual(userTaskQueries, []); // never probed
-  assert.equal((await h.table.get("pi1"))?.status, "dispatched"); // untouched
+  assert.equal(derivedOne(h, "pi1"), "dispatched"); // derives to the stored status; no wait-on-human edge
+  assert.equal((await h.table.get("pi1"))?.status, "dispatched"); // base untouched
   await handle.stop();
   await h.close();
 });
 
-test("reconciles EVERY row sharing a non-unique key, even when one is already patched (multi-row)", async () => {
-  // `keyField` (process_key) is NOT unique here, and table.update patches ALL matching rows. The
-  // quiet-idempotence check must consider every matching row, not a single get() (LIMIT 1): with two
-  // rows on the same process_key — one already awaiting_operator, one still converging — a LIMIT-1
-  // probe that hits the patched row would skip the write and strand the other. Both must converge.
+test("derives awaiting_operator for EVERY row sharing a non-unique key (multi-row)", async () => {
+  // `keyField` (process_key) is NOT unique here. Post-inversion the projection is fed ONCE per key and
+  // the derived VIEW joins every base row on that key to it — so both rows sharing pi1 derive to the
+  // same edge, regardless of their (untouched) stored status. No per-row write to strand.
   const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
   const h = await withHarness(engine, PLANS_DDL, async (t) => {
     await t.insert({ plan_key: "p1", process_key: "pi1", status: "awaiting_operator", note: null });
@@ -537,18 +629,17 @@ test("reconciles EVERY row sharing a non-unique key, even when one is already pa
   const sched = fakeScheduler();
   const handle = mount(h, [waitingBinding()], sched);
   await sched.advance(1000);
+  assert.deepEqual(derived(h, "pi1"), ["awaiting_operator", "awaiting_operator"]);
+  // The base rows keep their (distinct) stored statuses — nothing was written.
   const rows = await h.table.find({ process_key: "pi1" });
-  assert.deepEqual(
-    rows.map((r) => r.status).sort(),
-    ["awaiting_operator", "awaiting_operator"],
-  );
+  assert.deepEqual(rows.map((r) => r.status).sort(), ["awaiting_operator", "converging"]);
   await handle.stop();
   await h.close();
 });
 
-test("reconciles every parked key across multiple probe batches (bounded-parallel probing)", async () => {
+test("feeds every parked key across multiple probe batches (bounded-parallel probing)", async () => {
   // More active keys than WAITING_HUMAN_PROBE_CONCURRENCY forces multiple probe batches. Every key
-  // with an open user task must still be probed and reconciled — the batching must not drop keys.
+  // must still be probed and fed — the batching must not drop keys.
   const total = WAITING_HUMAN_PROBE_CONCURRENCY * 2 + 3; // spans three batches
   const states: Record<string, ProcessInstanceSnapshot["state"]> = {};
   const openTasks: Record<string, number> = {};
@@ -570,8 +661,446 @@ test("reconciles every parked key across multiple probe batches (bounded-paralle
   assert.deepEqual([...userTaskQueries].sort(), Object.keys(states).sort());
   for (let i = 0; i < total; i++) {
     const expected = i % 2 === 1 ? "awaiting_operator" : "converging";
-    assert.equal((await h.table.get(`pi${i}`))?.status, expected, `pi${i}`);
+    assert.equal(derivedOne(h, `pi${i}`), expected, `pi${i}`);
   }
+  await handle.stop();
+  await h.close();
+});
+
+// ── Read-model parity: the SQL VIEW backend and the TS function backend agree ───────────────────
+
+test("the derived status read model's SQL and TS backends stay in parity", async () => {
+  // The two backends fall out of the SAME AST; `assertReadModelParity` builds TEMP projection fixtures
+  // and checks the compiled VIEW and the in-process function agree over sample rows — the guard that
+  // replaces a hand-written per-edge parity test.
+  const { engine } = fakeEngine({});
+  const h = await withHarness(engine, PLANS_DDL, async () => {});
+  const model = defineInstanceTrackingReadModel(waitingBinding());
+  assert.ok(model, "waitingBinding has a statusField ⇒ a model");
+  assertReadModelParity(
+    model,
+    h.db,
+    [
+      // terminal edge true → derives abandoned
+      {
+        baseRow: { process_key: "k1", status: "converging" },
+        projections: {
+          urban_instance_state: [{ process_instance_key: "k1", state: "TERMINATED" }],
+          urban_open_user_tasks: [],
+        },
+      },
+      // wait-on-human edge true, not terminated → derives awaiting_operator
+      {
+        baseRow: { process_key: "k2", status: "converging" },
+        projections: {
+          urban_instance_state: [],
+          urban_open_user_tasks: [{ process_instance_key: "k2", user_task_key: "t" }],
+        },
+      },
+      // both true → terminated wins (precedence)
+      {
+        baseRow: { process_key: "k3", status: "converging" },
+        projections: {
+          urban_instance_state: [{ process_instance_key: "k3", state: "TERMINATED" }],
+          urban_open_user_tasks: [{ process_instance_key: "k3", user_task_key: "t" }],
+        },
+      },
+      // neither → the stored status shows through
+      {
+        baseRow: { process_key: "k4", status: "running" },
+        projections: { urban_instance_state: [], urban_open_user_tasks: [] },
+      },
+    ],
+  );
+  await h.close();
+});
+
+// ── Efficiency + retirement edges (ADR 0065 review round) ───────────────────────────────────────
+
+test("a settled TERMINATED key is not re-queried and does not re-log on subsequent polls", async () => {
+  // Once recorded TERMINATED the base row keeps its (unchanged) status, so it would keep passing the
+  // selector; the reconciler must skip the settled key on later ticks — no repeat engine query, no repeat
+  // `recorded terminated instance` log, no inflated `reconciled` (fixes the one-log-per-settled-per-tick).
+  const { engine, queries } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched);
+  await sched.advance(1000);
+  await sched.advance(1000);
+  await sched.advance(1000);
+  assert.deepEqual(queries, [["pi1"]]); // queried once; settled thereafter, never re-queried
+  const terminalLogs = h.logs.filter((l) => l.msg.includes("recorded terminated instance"));
+  assert.equal(terminalLogs.length, 1); // logged exactly once, not per tick
+  await handle.stop();
+  await h.close();
+});
+
+// A binding that both derives the wait-on-human edge AND uses a fail-CLOSED `activeStatuses` allow-list —
+// the exact combination whose retirement gap the review flagged (a key answered off the allow-list would
+// strand its open-task projection).
+const activeWaitingBinding = (over: Partial<InstanceTracking> = {}): InstanceTracking => ({
+  table: "plans",
+  keyField: "process_key",
+  statusField: "status",
+  activeStatuses: ["dispatched"],
+  onTerminated: { set: { status: "abandoned" } },
+  onWaitingHuman: { set: { status: "awaiting_operator" } },
+  pollMs: 1000,
+  ...over,
+});
+
+test("retires a stale open-task projection for a key that left the activeStatuses allow-list", async () => {
+  // Instance parked on a human while `dispatched` (in the allow-list) → projected open. The app then
+  // answers: the task closes AND the worker flips the row to a non-active status, so the row no longer
+  // passes `activeStatuses`. Without retiring projected keys independently of the allow-list, the open-task
+  // row would linger and the VIEW keep deriving awaiting_operator — a fresh nano-workforce#422 tear.
+  const openTasks: Record<string, number> = { pi1: 1 };
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, openTasks);
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [activeWaitingBinding()], sched);
+  await sched.advance(1000);
+  assert.equal(projectedOpenTasks(h, "pi1"), 1); // parked: projected open
+  assert.equal(derivedOne(h, "pi1"), "awaiting_operator");
+
+  // Answer: task closed AND worker moved the row OUT of the active set.
+  openTasks.pi1 = 0;
+  await h.table.update("pi1", { status: "done" });
+  await sched.advance(1000);
+  assert.equal(projectedOpenTasks(h, "pi1"), 0); // retired even though the row left activeStatuses
+  await handle.stop();
+  await h.close();
+});
+
+test("skips the derived VIEW when its status column collides with an existing base column", async () => {
+  // The VIEW selects `base.*` then `${statusColumn} AS ...`; a base column already named the same
+  // (here the default `derived_status`) would make SQLite keep the STORED column and shadow the derived
+  // one, so a page reading it sees a stale value. Provisioning must detect the collision, skip the VIEW,
+  // and warn — rather than publish a VIEW that silently defeats the derivation.
+  const ddl =
+    "CREATE TABLE plans (plan_key TEXT PRIMARY KEY, process_key TEXT, status TEXT NOT NULL, note TEXT, derived_status TEXT)";
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, ddl, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched); // default statusColumn = derived_status ⇒ collides
+  await sched.advance(1000);
+  const views = h.db.all<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type='view' AND name='plans__tracking'",
+  );
+  assert.equal(views.length, 0); // VIEW was NOT created
+  assert.ok(h.logs.some((l) => l.level === "warn" && l.msg.includes("collides with an existing")));
+  await handle.stop();
+  await h.close();
+});
+
+test("reconcileWaitingHumanKey does not re-project a settled TERMINATED instance (cancel-during-poll race)", async () => {
+  // The wait-on-human probe `await`s the engine, yielding the event loop; a concurrent cancel can record
+  // the instance TERMINATED and retire its tasks WHILE the probe is in flight. Re-inserting the (now
+  // stale) open tasks would strand a row the terminal path already cleared — the key is then classified
+  // settled and never re-probed, a permanent stale projection row. The terminal recheck must refuse.
+  const { engine } = fakeEngine({});
+  const h = await withHarness(engine, PLANS_DDL, async () => {});
+  const projections = tryInstanceProjections(h.api);
+  assert.ok(projections);
+  // A concurrent cancel recorded TERMINATED (and cleared any tasks) mid-probe.
+  reconcileTerminatedKey(h.api, projections, "pi1");
+  assert.equal(projectedState(h, "pi1"), "TERMINATED");
+  // The in-flight probe now tries to feed a stale open task; the guard drops it (returns 0, no row).
+  const fed = reconcileWaitingHumanKey(h.api, projections, "pi1", [{ userTaskKey: "pi1-t0" }]);
+  assert.equal(fed, 0);
+  assert.equal(projectedOpenTasks(h, "pi1"), 0);
+  await h.close();
+});
+
+test("retires a stale managed VIEW when a binding no longer declares a statusField", async () => {
+  // A manifest change that drops `statusField` leaves the binding with nothing derivable. An earlier
+  // boot's managed VIEW must be RETIRED, or its stale derived surface stays discoverable/readable while
+  // the runtime believes it provisioned nothing.
+  const { engine } = fakeEngine({});
+  const h = await withHarness(engine, PLANS_DDL, async () => {});
+  h.db.exec('CREATE VIEW main."plans__tracking" AS SELECT * FROM plans;'); // a previous boot's VIEW
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ statusField: undefined, activeStatuses: undefined })], sched);
+  const views = h.db.all<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type='view' AND name='plans__tracking'",
+  );
+  assert.equal(views.length, 0); // stale VIEW retired
+  await handle.stop();
+  await h.close();
+});
+
+test("skips provisioning when a non-view object already holds the managed VIEW name", async () => {
+  // A real table sharing the managed-view name shadows it: `DROP VIEW IF EXISTS` can't remove a table and
+  // `CREATE VIEW IF NOT EXISTS` then silently no-ops, so a page would read the wrong object while the mount
+  // looked successful. Provisioning must refuse (warn + skip) and leave the real table untouched.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  h.db.exec('CREATE TABLE "plans__tracking" (x TEXT)'); // an undeclared real table squats the name
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched);
+  await sched.advance(1000);
+  const obj = h.db.all<{ type: string }>("SELECT type FROM sqlite_master WHERE name='plans__tracking'");
+  assert.equal(obj.length, 1);
+  assert.equal(obj[0].type, "table"); // untouched — not dropped, not shadowed by a VIEW
+  assert.ok(h.logs.some((l) => l.level === "warn" && l.msg.includes("non-view object")));
+  await handle.stop();
+  await h.close();
+});
+
+test("detects a non-view shadow case-insensitively (SQLite folds object names)", async () => {
+  // SQLite resolves object names case-insensitively, so a real table `plans__tracking` shadows a
+  // configured view `PLANS__TRACKING` at DROP/CREATE time. A binary `=` name check would miss the
+  // shadow and let `CREATE VIEW IF NOT EXISTS` silently no-op against the existing table; the guard
+  // must fold case (COLLATE NOCASE) so it refuses (warn + skip) and leaves the real table untouched.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  h.db.exec('CREATE TABLE "plans__tracking" (x TEXT)'); // lowercase real table squats the name
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ readModel: { view: "PLANS__TRACKING" } })], sched); // cased override
+  await sched.advance(1000);
+  const obj = h.db.all<{ type: string }>("SELECT type FROM sqlite_master WHERE name='plans__tracking'");
+  assert.equal(obj.length, 1);
+  assert.equal(obj[0].type, "table"); // untouched — not dropped, not shadowed by a VIEW
+  assert.ok(h.logs.some((l) => l.level === "warn" && l.msg.includes("non-view object")));
+  await handle.stop();
+  await h.close();
+});
+
+test("mounts a binding with custom readModel.view + statusColumn and serves the override target", async () => {
+  // The public page path: a binding with BOTH overrides must provision the CUSTOM view/column (not the
+  // default `plans__tracking`/`derived_status`) and derive the effective status into that column.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ readModel: { view: "plans_board", statusColumn: "eff_status" } })], sched);
+  await sched.advance(1000);
+  // The custom view exists and its custom column carries the derived status…
+  const rows = h.db.all<{ eff_status: string }>("SELECT eff_status FROM plans_board WHERE process_key = ?", ["pi1"]);
+  assert.equal(rows[0]?.eff_status, "abandoned");
+  // …and the DEFAULT view name was NOT provisioned (the override target is honored, not both).
+  const dflt = h.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='view' AND name='plans__tracking'");
+  assert.equal(dflt[0]?.n, 0);
+  await handle.stop();
+  await h.close();
+});
+
+test("resolves the onTerminated patch key case-insensitively against statusField", async () => {
+  // SQL column identifiers fold case, but `set[statusField]` is a case-sensitive JS lookup. A binding
+  // with `statusField: "Status"` and `onTerminated.set: { status: "abandoned" }` must still emit the
+  // terminal edge (fold the key) — otherwise the derivation silently falls through to the base column.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ statusField: "Status", onTerminated: { set: { status: "abandoned" } } })], sched);
+  await sched.advance(1000);
+  assert.equal(derivedOne(h, "pi1"), "abandoned"); // terminal WHEN emitted despite the case mismatch
+  await handle.stop();
+  await h.close();
+});
+
+test("does not retire a default view claimed by another status-bearing binding on the same table", async () => {
+  // A status-bearing binding and a STATUS-LESS binding on the same table share the default
+  // `plans__tracking` name. The status-less binding's retire path must NOT drop the view the owner
+  // provisions (iteration-order dependent). Status-bearing first is the order that exposes the bug.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(
+    h,
+    [planBinding(), planBinding({ statusField: undefined, activeStatuses: undefined })],
+    sched,
+  );
+  await sched.advance(1000);
+  const view = h.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='view' AND name='plans__tracking'");
+  assert.equal(view[0]?.n, 1); // survived — not retired by the status-less sibling
+  assert.equal(derivedOne(h, "pi1"), "abandoned");
+  await handle.stop();
+  await h.close();
+});
+
+test("memoizes the settled-state projection lookup — one settled getState per key per pass", async () => {
+  // pi1 is tracked AND probed waiting-on-human, so the pass-level `settled` predicate is consulted for it
+  // twice (the live-key filter and the humanKeySet build), each an un-memoized getState SQL round trip.
+  // The per-pass cache collapses those to one; `reconcileWaitingHumanKey`'s separate terminal-recheck
+  // getState is an intentional freshness read, so the memoized total for pi1 is exactly two (1 + 1).
+  const { engine } = fakeEngine({ pi1: "ACTIVE" }, { pi1: 1 });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: "hi" });
+  });
+  // Count getState-shaped SELECTs against the instance-state projection. A function Proxy preserves the
+  // generic `all` signature (no cast) while its apply trap tallies the matching queries in place — the
+  // projection stores share this same db handle, so their getState calls route through the trap.
+  let getStateQueries = 0;
+  h.db.all = new Proxy(h.db.all, {
+    apply(target, _thisArg, args) {
+      const sql = args[0];
+      if (typeof sql === "string" && sql.includes(INSTANCE_STATE_TABLE) && sql.includes("WHERE process_instance_key = ?")) {
+        getStateQueries += 1;
+      }
+      return Reflect.apply(target, h.db, args);
+    },
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ onWaitingHuman: { set: { status: "awaiting_operator" } } })], sched);
+  await sched.advance(1000);
+  assert.equal(getStateQueries, 2); // 1 memoized `settled` + 1 terminal-recheck (un-memoized: 3)
+  await handle.stop();
+  await h.close();
+});
+
+test("a failing openUserTasks probe does not starve other keys in later batches (issue #452 review)", async () => {
+  // `Promise.all` rejects the whole batch on one probe failure, and batches are awaited sequentially, so
+  // before the fix a permanently-failing key in the FIRST batch prevented every key in later batches from
+  // ever being probed/synced. With B+1 keys (B = probe concurrency) the failing key sits in batch 1 and
+  // one healthy key (`okLast`) sits in batch 2 — it must still get its open task synced, and the pass must
+  // NOT surface as a whole-pass "reconcile failed" error (only a per-key probe warn).
+  const C = WAITING_HUMAN_PROBE_CONCURRENCY;
+  const keys = ["fail", ...Array.from({ length: C }, (_u, i) => `ok${i}`)];
+  const okLast = `ok${C - 1}`; // the sole batch-2 key (keys = [fail, ok0..ok{C-1}] ⇒ batch2 = [ok{C-1}])
+  const states: Record<string, ProcessInstanceSnapshot["state"]> = {};
+  const openTasks: Record<string, number> = {};
+  for (const k of keys) {
+    states[k] = "ACTIVE"; // none terminal ⇒ all are probed for the wait-on-human edge
+    if (k !== "fail") openTasks[k] = 1; // every healthy key has one parked human task to sync
+  }
+  const { engine } = fakeEngine(states, openTasks, new Set(["fail"]));
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    // Seed "fail" first so it lands in batch 1 (humanKeySet preserves base-row/insertion order).
+    let idx = 0;
+    for (const k of keys) {
+      await t.insert({ plan_key: `p${idx++}`, process_key: k, status: "dispatched", note: null });
+    }
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ onWaitingHuman: { set: { status: "awaiting_operator" } } })], sched);
+  await sched.advance(1000);
+  // The batch-2 healthy key was still probed and its projection synced despite the batch-1 failure.
+  assert.equal(projectedOpenTasks(h, okLast), 1);
+  // Isolation is per-key: a probe warn is logged, but the pass itself did not fail wholesale.
+  assert.ok(h.logs.some((l) => l.level === "warn" && /probe failed/.test(l.msg)));
+  assert.ok(!h.logs.some((l) => l.level === "error" && /reconcile failed/.test(l.msg)));
+  await handle.stop();
+  await h.close();
+});
+
+test("retires a prior boot's managed VIEW when the projection feed becomes unavailable (issue #452 review)", async () => {
+  // If projection-store provisioning fails on a later mount (after an earlier boot published the VIEW),
+  // the whole provisioning pass used to be skipped, leaving the derived VIEW readable over an
+  // unavailable/stale projection. It must instead be RETIRED — an honest missing surface, not a silent
+  // stale one.
+  const { engine } = fakeEngine({ pi1: "ACTIVE" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const viewExists = (): number =>
+    h.db.all<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='view' AND name='plans__tracking'",
+    )[0]?.n ?? 0;
+  const sched1 = fakeScheduler();
+  const first = mount(h, [planBinding()], sched1);
+  assert.equal(viewExists(), 1); // earlier boot published the managed VIEW
+  await first.stop();
+
+  // Make the next mount's projection setup fail: throw only for the instance-state `ensureSchema` DDL so
+  // `tryInstanceProjections` returns undefined, while the retire path's `DROP VIEW` still executes.
+  h.db.exec = new Proxy(h.db.exec, {
+    apply(target, _thisArg, args) {
+      const sql = args[0];
+      if (typeof sql === "string" && sql.includes(INSTANCE_STATE_TABLE)) {
+        throw new Error("simulated projection schema provisioning failure");
+      }
+      return Reflect.apply(target, h.db, args);
+    },
+  });
+  const sched2 = fakeScheduler();
+  const second = mount(h, [planBinding()], sched2);
+  assert.equal(viewExists(), 0); // retired — no longer serving a value over an unavailable projection
+  await second.stop();
+  await h.close();
+});
+
+test("extracts candidate keys with case-insensitive keyField resolution (issue #452 review)", async () => {
+  // SQLite folds identifier case, so a binding `keyField: "Process_Key"` over a `process_key` column
+  // correlates in the derived VIEW. Candidate extraction must fold the SAME way (via the shared
+  // `lookupColumn`): a case-sensitive `row["Process_Key"]` would read undefined and feed NO keys, so
+  // neither terminal nor waiting-human status could derive despite a valid, provisioned VIEW.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ keyField: "Process_Key" })], sched);
+  await sched.advance(1000);
+  assert.equal(projectedState(h, "pi1"), "TERMINATED"); // the key was extracted and fed to the projection
+  assert.equal(derivedOne(h, "pi1"), "abandoned"); // …so the derived status flipped
+  await handle.stop();
+  await h.close();
+});
+
+test("skips provisioning a managed VIEW whose name collides with a registered read model (issue #452 review)", async () => {
+  // Tracking VIEWs are provisioned OUTSIDE the `readModelRegistry`. If an app registers a model whose
+  // name equals a configured `readModel.view`, an unconditional DROP+CREATE here would silently clobber
+  // that registered derivation (the registry's own conflict detection never sees it). Refuse instead.
+  const prior = readModelRegistry.all();
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  try {
+    readModelRegistry.register(
+      defineReadModel({ name: "plans__tracking", baseTable: "plans", derive: { marker: lit("registered") } }),
+    );
+    const sched = fakeScheduler();
+    const handle = mount(h, [planBinding()], sched);
+    // The tracking mount must NOT have created its VIEW over the registered name…
+    const trackingView = h.db.all<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='view' AND name='plans__tracking'",
+    )[0]?.n ?? 0;
+    assert.equal(trackingView, 0);
+    // …and it must have said why.
+    const warned = h.logs.some(
+      (l) => l.level === "warn" && l.msg.includes("collides with a registered read model"),
+    );
+    assert.ok(warned, "expected a registry-collision warning");
+    await handle.stop();
+  } finally {
+    readModelRegistry.clear();
+    for (const m of prior) readModelRegistry.register(m);
+    await h.close();
+  }
+});
+
+test("reconcile is a silent no-op (no error log) when no default data source is configured (issue #452 review)", async () => {
+  // A binding mounted with `mount.data: false` has no default source: provisioning already no-ops. The
+  // timer still arms, so `reconcileOnce` must early-return instead of falling through to
+  // `api.data.table(...)` (which THROWS with no default) and logging `reconcile failed` every interval.
+  const { engine } = fakeEngine({});
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  h.api.data = new DataLayer(new Map(), undefined, {}); // no default source configured
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched);
+  await sched.advance(1000);
+  await sched.advance(1000); // a per-interval throw would have logged on each tick
+  const fails = h.logs.filter((l) => l.level === "error" && l.msg.includes("reconcile failed"));
+  assert.equal(fails.length, 0);
   await handle.stop();
   await h.close();
 });

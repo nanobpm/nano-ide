@@ -9,9 +9,17 @@ import { makeGateway } from "./gateway.ts";
 import type { Table } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import type { AppApi } from "../context.ts";
-import type { EngineClient, ProcessInstanceSnapshot } from "../host.ts";
+import type { EngineClient, ProcessInstanceSnapshot, SqliteDb } from "../host.ts";
 import type { InstanceTracking } from "../manifest.ts";
 import { cancelInstanceReconciling } from "./cancel.ts";
+import { INSTANCE_STATE_TABLE } from "./instance-state-store.ts";
+
+// ADR 0065 — the instanceTracking writer→source inversion. Cancel no longer WRITES a terminal patch on
+// the base row; it records the terminal fact into the canonical `_urban_instance_state` projection
+// through the SAME `reconcileTerminatedKey` the poll reconciler uses (so cancel and poll cannot drift),
+// and the terminal status is DERIVED from the projection by the read model. These tests therefore assert
+// on the recorded projection state and `reconciled` (1 = terminal source recorded) — never a base-row
+// mutation.
 
 type State = ProcessInstanceSnapshot["state"];
 
@@ -27,8 +35,9 @@ interface PrRow {
   status: string;
 }
 
-// The pull_requests binding: an ACTIVE row flips to `abandoned` (and drops the process pointer)
-// when its instance terminates — the exact patch the poll reconciler applies.
+// The pull_requests binding: an ACTIVE row derives to `abandoned` when its instance terminates — the
+// value the derived terminal edge resolves to (no longer a stored patch). Cancel feeds the projection;
+// the read model derives the status.
 const PR_BINDING: InstanceTracking = {
   table: "pull_requests",
   keyField: "process_key",
@@ -85,6 +94,7 @@ function cancelEngine(opts: {
 interface Harness {
   api: AppApi;
   table: Table<PrRow>;
+  db: SqliteDb;
   logs: { level: string; msg: string }[];
   close: () => Promise<void>;
 }
@@ -120,6 +130,7 @@ async function withHarness(engine: EngineClient, seedStatus = "converging"): Pro
   return {
     api,
     table,
+    db,
     logs,
     close: async () => {
       db.close();
@@ -128,7 +139,22 @@ async function withHarness(engine: EngineClient, seedStatus = "converging"): Pro
   };
 }
 
-test("terminating a tracked instance reconciles its row immediately", async () => {
+/** The recorded engine lifecycle state for a key in the `_urban_instance_state` projection, or
+ *  undefined when it was never recorded. The projection table is created lazily by cancel's own
+ *  `ensureSchema`; return undefined if it does not exist yet (nothing was ever recorded). */
+function projectedState(db: SqliteDb, key: string): string | undefined {
+  try {
+    const rows = db.all<{ state: string }>(
+      `SELECT state FROM ${INSTANCE_STATE_TABLE} WHERE process_instance_key = ?`,
+      [key],
+    );
+    return rows[0]?.state;
+  } catch {
+    return undefined; // projection table not provisioned ⇒ nothing recorded
+  }
+}
+
+test("terminating a tracked instance records its terminal source immediately (no base write)", async () => {
   // cancelInstance succeeds (no throw) and the engine commits the termination.
   const { engine, cancels } = cancelEngine({
     states: { "100": "ACTIVE" },
@@ -143,19 +169,21 @@ test("terminating a tracked instance reconciles its row immediately", async () =
     assert.equal(r.ok, true);
     assert.equal(r.state, "TERMINATED");
     assert.equal(r.reconciled, 1);
+    // The terminal fact was recorded into the canonical projection …
+    assert.equal(projectedState(h.db, "100"), "TERMINATED");
+    // … and the base row was left UNTOUCHED (source-not-writer); the derived read model surfaces the
+    // terminal status without a stored write.
     const row = await h.table.get("100");
-    assert.equal(row, undefined); // process_key was cleared to null, so no row keyed by "100"
-    const byPr = (await h.table.all()).find((x) => x.pr_key === "pr-1");
-    assert.equal(byPr?.status, "abandoned");
-    assert.equal(byPr?.process_key, null);
+    assert.equal(row?.status, "converging");
+    assert.equal(row?.process_key, "100");
   } finally {
     await h.close();
   }
 });
 
-test("a cancel that throws but reads back TERMINATED is idempotent success + reconciles", async () => {
+test("a cancel that throws but reads back TERMINATED is idempotent success + records the source", async () => {
   // The instance was already terminated; the engine rejects a second cancel, but the verify read
-  // confirms it is gone — treat as success and still reconcile the (stale-active) row.
+  // confirms it is gone — treat as success and still record the terminal source.
   const { engine } = cancelEngine({
     states: { "100": "TERMINATED" },
     onCancel: () => {
@@ -168,14 +196,13 @@ test("a cancel that throws but reads back TERMINATED is idempotent success + rec
     assert.equal(r.ok, true);
     assert.equal(r.state, "TERMINATED");
     assert.equal(r.reconciled, 1);
-    const byPr = (await h.table.all()).find((x) => x.pr_key === "pr-1");
-    assert.equal(byPr?.status, "abandoned");
+    assert.equal(projectedState(h.db, "100"), "TERMINATED");
   } finally {
     await h.close();
   }
 });
 
-test("a failed cancel with a still-ACTIVE instance is an honest failure and touches no row", async () => {
+test("a failed cancel with a still-ACTIVE instance is an honest failure and records nothing", async () => {
   const { engine } = cancelEngine({
     states: { "100": "ACTIVE" },
     onCancel: () => {
@@ -189,15 +216,38 @@ test("a failed cancel with a still-ACTIVE instance is an honest failure and touc
     assert.equal(r.state, "ACTIVE");
     assert.equal(r.reconciled, 0);
     assert.match(r.error ?? "", /permission denied/);
+    assert.equal(projectedState(h.db, "100"), undefined); // instance still running — nothing recorded
     const row = await h.table.get("100");
-    assert.equal(row?.status, "converging"); // untouched — instance still running
+    assert.equal(row?.status, "converging"); // untouched
     assert.ok(h.logs.some((l) => l.level === "error"));
   } finally {
     await h.close();
   }
 });
 
-test("a COMPLETED instance is not reconciled (the app's finalize logic owns that row)", async () => {
+test("an accepted cancel that still reads ACTIVE (engine lag) records the terminal source", async () => {
+  // The engine accepted the 204 but its query store still lags at ACTIVE. The cancel IS committed, so
+  // the terminal source must be recorded now — otherwise the derived view stays on the stored worker
+  // status until a poll catches up (and never, if the instance is later cleaned up). accepted-cancel/lag.
+  const { engine } = cancelEngine({
+    states: { "100": "ACTIVE" },
+    onCancel: () => {}, // accepted (204); state deliberately NOT flipped, to model read-model lag
+  });
+  const h = await withHarness(engine);
+  try {
+    const r = await cancelInstanceReconciling(h.api, [PR_BINDING], "100");
+    assert.equal(r.ok, true);
+    assert.equal(r.state, "ACTIVE");
+    assert.equal(r.reconciled, 1);
+    assert.equal(projectedState(h.db, "100"), "TERMINATED");
+    const row = await h.table.get("100");
+    assert.equal(row?.status, "converging"); // base row untouched (source-not-writer)
+  } finally {
+    await h.close();
+  }
+});
+
+test("a COMPLETED instance is not recorded (the app's finalize logic owns that outcome)", async () => {
   const { engine } = cancelEngine({
     states: { "100": "COMPLETED" },
     onCancel: () => {}, // engine accepts the request; instance had already completed
@@ -208,16 +258,17 @@ test("a COMPLETED instance is not reconciled (the app's finalize logic owns that
     assert.equal(r.ok, true);
     assert.equal(r.state, "COMPLETED");
     assert.equal(r.reconciled, 0);
+    assert.equal(projectedState(h.db, "100"), undefined); // COMPLETED never recorded here
     const row = await h.table.get("100");
-    assert.equal(row?.status, "converging"); // left for the finalize worker, not clobbered
+    assert.equal(row?.status, "converging"); // left for the finalize worker
   } finally {
     await h.close();
   }
 });
 
-test("a gone/unknown instance is idempotent success with no reconcile", async () => {
+test("an accepted cancel that reads back gone (engine cleanup) records the terminal source", async () => {
   const { engine } = cancelEngine({
-    states: {}, // the engine has no record of this key
+    states: {}, // the engine no longer exposes the key (already cleaned up)
     onCancel: () => {},
   });
   const h = await withHarness(engine);
@@ -225,13 +276,21 @@ test("a gone/unknown instance is idempotent success with no reconcile", async ()
     const r = await cancelInstanceReconciling(h.api, [PR_BINDING], "999999");
     assert.equal(r.ok, true);
     assert.equal(r.state, "gone");
-    assert.equal(r.reconciled, 0);
+    // The accepted 204 is a committed termination, so record the terminal source even though the read
+    // model no longer exposes the instance — otherwise the derived view could never leave the stored
+    // worker status (the poll cannot observe a gone instance either). accepted-cancel/read-lag.
+    assert.equal(r.reconciled, 1);
+    assert.equal(projectedState(h.db, "999999"), "TERMINATED");
   } finally {
     await h.close();
   }
 });
 
-test("a TERMINATED instance with no matching binding row reconciles nothing", async () => {
+test("records the terminal source even when no base row matches (the projection is binding-independent)", async () => {
+  // Post-inversion the terminal fact is recorded into the canonical projection for the cancelled key
+  // regardless of which base rows reference it — the projection is the engine-truth store, and the
+  // derived read model only surfaces the fact for rows that point at the key (none here). This agrees
+  // with the poll path (both record TERMINATED for the same key), so they cannot drift.
   const { engine } = cancelEngine({
     states: { "555": "TERMINATED" },
     onCancel: () => {},
@@ -242,37 +301,47 @@ test("a TERMINATED instance with no matching binding row reconciles nothing", as
     const r = await cancelInstanceReconciling(h.api, [PR_BINDING], "555");
     assert.equal(r.ok, true);
     assert.equal(r.state, "TERMINATED");
-    assert.equal(r.reconciled, 0);
+    assert.equal(r.reconciled, 1);
+    assert.equal(projectedState(h.db, "555"), "TERMINATED");
     const row = await h.table.get("100");
-    assert.equal(row?.status, "converging");
+    assert.equal(row?.status, "converging"); // the unrelated tracked row is untouched
   } finally {
     await h.close();
   }
 });
 
-test("a reconcile write failure does not fail the cancel (the engine already terminated it)", async () => {
+test("cancel succeeds and records nothing when there is no default data source (absent-safe)", async () => {
+  // The projection feed is a sidecar on the app's own data source. With no default source there is
+  // nothing to record into — but a successful engine termination must STILL be reported as a success:
+  // a projection feed must never break a cancel. `reconcileTerminatedKey` is absent-safe (returns 0).
   const { engine } = cancelEngine({
     states: { "100": "ACTIVE" },
     onCancel: (key, states) => {
       states[key] = "TERMINATED";
     },
   });
-  const h = await withHarness(engine);
+  const dir = await mkdtemp(join(tmpdir(), "urban-cancel-nosrc-"));
+  const logs: { level: string; msg: string }[] = [];
+  const data = new DataLayer(new Map(), undefined, {}); // no default source configured
+  const api: AppApi = {
+    manifest: { schemaVersion: 1, id: "app", name: "App" },
+    data,
+    engine,
+    env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
+    log: createLogger((level, msg) => {
+      logs.push({ level, msg });
+    }),
+  };
   try {
-    // A binding pointing at a table that does not exist makes the reconcile UPDATE throw.
-    const badBinding: InstanceTracking = {
-      table: "does_not_exist",
-      keyField: "process_key",
-      onTerminated: { set: { status: "abandoned" } },
-    };
-    const r = await cancelInstanceReconciling(h.api, [badBinding], "100");
-    assert.equal(r.ok, true); // engine termination succeeded — the cancel is a success
+    const r = await cancelInstanceReconciling(api, [PR_BINDING], "100");
+    assert.equal(r.ok, true); // the engine termination committed — a success
     assert.equal(r.state, "TERMINATED");
-    assert.equal(r.reconciled, 0);
-    assert.ok(r.error); // the reconcile failure is surfaced, not swallowed
-    assert.ok(h.logs.some((l) => l.level === "error"));
+    assert.equal(r.reconciled, 0); // nothing to record into
+    assert.equal(r.error, undefined); // absent-safe: not surfaced as an error
   } finally {
-    await h.close();
+    await rm(dir, { recursive: true, force: true });
   }
 });
 
@@ -287,7 +356,10 @@ test("an accepted cancel whose verify read fails is trusted (gone) — the 204 c
     const r = await cancelInstanceReconciling(h.api, [PR_BINDING], "100");
     assert.equal(r.ok, true);
     assert.equal(r.state, "gone");
-    assert.equal(r.reconciled, 0);
+    // Accepted 204 → committed termination; record the terminal source even though the verify read
+    // could not confirm it (read-model lag / cleanup must not strand the derived status).
+    assert.equal(r.reconciled, 1);
+    assert.equal(projectedState(h.db, "100"), "TERMINATED");
     assert.ok(h.logs.some((l) => l.level === "warn"));
   } finally {
     await h.close();
@@ -309,6 +381,7 @@ test("a thrown cancel whose verify read also fails is reported as an honest fail
     assert.equal(r.state, "ACTIVE");
     assert.equal(r.reconciled, 0);
     assert.match(r.error ?? "", /transport error/);
+    assert.equal(projectedState(h.db, "100"), undefined);
     const row = await h.table.get("100");
     assert.equal(row?.status, "converging");
   } finally {
@@ -336,8 +409,9 @@ test("a thrown cancel whose verify read comes back empty (gone) is an unverified
     assert.equal(r.state, "gone");
     assert.equal(r.reconciled, 0);
     assert.match(r.error ?? "", /fetch failed/);
+    assert.equal(projectedState(h.db, "100"), undefined); // never record a possibly-live run as terminal
     const row = await h.table.get("100");
-    assert.equal(row?.status, "converging"); // never flip a possibly-live run to a terminal status
+    assert.equal(row?.status, "converging");
     assert.ok(h.logs.some((l) => l.level === "error"));
   } finally {
     await h.close();

@@ -55,24 +55,57 @@ export type InstanceTracking = SchemaInstanceTracking & {
    *  is polled (fail-open). Requires `statusField`; mutually exclusive with `activeStatuses`. */
   readonly terminalStatuses?: readonly string[];
   /**
-   * The reconciliation applied to a row whose instance is **parked waiting on a human** — the
-   * wait-state twin of {@link SchemaInstanceTracking.onTerminated} (issue #355). An instance is
-   * waiting on a human *iff* it has an open user task, so the runtime derives this edge from
-   * engine truth (`openUserTasks`) rather than from a written column: on each poll, an active,
-   * non-terminated row whose instance has any open user task has this patch applied (typically
-   * `status = "awaiting_operator"`). Terminated wins over waiting-human (the {@link
-   * SchemaInstanceTracking.onTerminated} edge is applied first and excludes the key from this
-   * pass); a row with neither a terminated instance nor an open user task is left untouched, so
-   * the worker-owned transient status (running / converging / merging) survives.
+   * The reconciliation for a row whose instance is **parked waiting on a human** — the wait-state
+   * twin of {@link SchemaInstanceTracking.onTerminated} (issue #355). An instance is waiting on a
+   * human *iff* it has an open user task, so the runtime derives this edge from engine truth
+   * (`openUserTasks`); terminated wins over waiting-human, and a row with neither is left carrying
+   * its worker-owned transient status (running / converging / merging).
+   *
+   * Since ADR 0065 (the writer→source inversion, #439-L1 / #318) this is a DERIVED, not a stored,
+   * edge: the reconciler no longer writes `set` into the base row with `table.update`. Instead it
+   * feeds the canonical `urban_open_user_tasks` projection, and the read model derives the effective
+   * status from it via `defineReadModel` — so an answered escalation re-flips by construction and the
+   * stored-derived tearing of nano-workforce#422 cannot recur. `set[statusField]` now supplies the
+   * VALUE the derived wait-on-human edge resolves to (rather than a patch); any secondary columns in
+   * `set` are no longer written (a VIEW cannot reset a stored column). See {@link readModel}.
    *
    * Optional and, like `terminalStatuses`, bridged locally until the canonical schema
    * (`@nanobpm/nano-app-schema`) folds it in; drop this augmentation and re-export once the dep
    * bump lands (No Drift Surfaces).
    */
   readonly onWaitingHuman?: {
-    /** Column → literal value patch written to a row whose instance has an open user task
-     *  (e.g. set the status to a "waiting on human" value). */
+    /** Column → literal patch. Its `statusField` entry supplies the VALUE the derived wait-on-human
+     *  edge resolves to (an instance with an open user task ⇒ this status); no longer a stored write.
+     *  Since the inversion the reconciler makes NO base-row write at all, so only the `statusField` entry
+     *  is consumed — any other key is intentionally IGNORED (an app-owned column is the app worker's job,
+     *  not the reconciler's; ADR 0065). */
     readonly set: { readonly [k: string]: string | number | boolean | null };
+  };
+  /**
+   * Optional overrides for the DERIVED read-model VIEW the runtime provisions per binding (ADR 0065,
+   * the writer→source inversion). The reconciler feeds engine truth into the canonical projections
+   * (`urban_instance_state`, `urban_open_user_tasks`) and the runtime provisions a managed SQLite VIEW
+   * over the binding's base table that re-exports `base.*` plus a derived status column — the terminal
+   * (`onTerminated`) and wait-on-human (`onWaitingHuman`) edges computed by `defineReadModel` over the
+   * projections, precedence-correct (terminated wins). The operator page reads this derived column; the
+   * base `statusField` column now holds only the worker-owned / business-outcome status. Both fields
+   * default sensibly (`view` → `<table>__tracking`, `statusColumn` → `derived_status`); override them to
+   * avoid a collision (e.g. more than one binding on one base table, or a base column already named
+   * `derived_status`). A binding with no `statusField` provisions no VIEW (nothing to derive), but the
+   * reconciler still feeds the projections.
+   *
+   * The VIEW is a first-class readable pages surface, not a separate wiring step: `SqliteGateway.schema()`
+   * introspects views (`type IN ('table','view')`) and `/app/data/<source>/<view>` serves `SELECT *`
+   * verbatim, so an operator page reads the derived status simply by pointing its page `data.table` at
+   * this managed VIEW (which re-exports `base.*`, so it is a drop-in for the base table) and its column at
+   * `statusColumn`. This is opt-in by design: the base table stays readable carrying the worker-owned
+   * status; the runtime does NOT silently rebind every page off the base table.
+   */
+  readonly readModel?: {
+    /** Managed VIEW name (must be a SQL identifier and differ from the base table). */
+    readonly view?: string;
+    /** Derived effective-status column name in that VIEW (must be a SQL identifier). */
+    readonly statusColumn?: string;
   };
 };
 

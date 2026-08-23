@@ -154,3 +154,14 @@ test("syncInstance is atomic — it composes inside an existing transaction and 
 test("the DSL projection name is stable and unprefixed (usable in `exists(...)`)", () => {
   assert.equal(OPEN_USER_TASKS_PROJECTION, "urban_open_user_tasks");
 });
+
+test("instanceKeys returns each distinct instance with ≥1 open task (and drops one when cleared)", async () => {
+  await withStore((store) => {
+    assert.deepEqual(store.instanceKeys(), []); // empty projection
+    store.syncInstance("pi-1", [task("ut-1"), task("ut-2")]); // two tasks, one instance
+    store.syncInstance("pi-2", [task("ut-3")]);
+    assert.deepEqual(store.instanceKeys().sort(), ["pi-1", "pi-2"]); // distinct, not per-task
+    store.clearInstance("pi-1"); // answered/terminated
+    assert.deepEqual(store.instanceKeys(), ["pi-2"]); // retired key no longer listed
+  });
+});

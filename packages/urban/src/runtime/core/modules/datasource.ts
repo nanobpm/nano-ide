@@ -14,6 +14,7 @@ import {
 } from "./gateway.ts";
 import { currentJobContext } from "../execContext.ts";
 import { isAbsolutePath } from "../../../toolkit/artifact.ts";
+import { SQL_IDENT, isReservedObjectName } from "../read-model.ts";
 
 export function sqlitePathFromUrl(url: string): string {
   // Accept "file:./x.db", "file:x.db", "sqlite:./x.db" or a bare path.
@@ -95,7 +96,7 @@ export function makeProvenanceRecorder(
   source: string,
 ): InsertObserver {
   return (table, pk) => {
-    if (table.startsWith("_urban_") || table.startsWith("_nano_") || table.startsWith("sqlite_")) {
+    if (isReservedObjectName(table)) {
       return;
     }
     const ctx = currentJobContext();
@@ -153,9 +154,11 @@ export async function openSqliteSource(
   return db;
 }
 
-/** A safe unquoted SQL identifier. Table/column names are interpolated directly into SQL,
- * so reject anything that isn't a plain identifier to prevent invalid SQL / injection. */
-const SQL_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** A safe unquoted SQL identifier check. Table/column names are interpolated directly into SQL, so
+ * reject anything that isn't a plain identifier to prevent invalid SQL / injection. The regex itself
+ * is the runtime-wide single source of truth in `read-model.ts` (No Drift Surfaces — a divergent copy
+ * could let table validation and read-model/manifest validation disagree); we reuse it here rather than
+ * re-declaring it, keeping this module's own error message. */
 function assertSqlIdent(kind: string, name: string): string {
   if (!SQL_IDENT.test(name)) {
     throw new Error(`invalid ${kind} "${name}": must match ${SQL_IDENT.source}`);

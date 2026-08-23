@@ -870,6 +870,64 @@ test("detects a non-view shadow case-insensitively (SQLite folds object names)",
   await h.close();
 });
 
+test("mounts a binding with custom readModel.view + statusColumn and serves the override target", async () => {
+  // The public page path: a binding with BOTH overrides must provision the CUSTOM view/column (not the
+  // default `plans__tracking`/`derived_status`) and derive the effective status into that column.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ readModel: { view: "plans_board", statusColumn: "eff_status" } })], sched);
+  await sched.advance(1000);
+  // The custom view exists and its custom column carries the derived status…
+  const rows = h.db.all<{ eff_status: string }>("SELECT eff_status FROM plans_board WHERE process_key = ?", ["pi1"]);
+  assert.equal(rows[0]?.eff_status, "abandoned");
+  // …and the DEFAULT view name was NOT provisioned (the override target is honored, not both).
+  const dflt = h.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='view' AND name='plans__tracking'");
+  assert.equal(dflt[0]?.n, 0);
+  await handle.stop();
+  await h.close();
+});
+
+test("resolves the onTerminated patch key case-insensitively against statusField", async () => {
+  // SQL column identifiers fold case, but `set[statusField]` is a case-sensitive JS lookup. A binding
+  // with `statusField: "Status"` and `onTerminated.set: { status: "abandoned" }` must still emit the
+  // terminal edge (fold the key) — otherwise the derivation silently falls through to the base column.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ statusField: "Status", onTerminated: { set: { status: "abandoned" } } })], sched);
+  await sched.advance(1000);
+  assert.equal(derivedOne(h, "pi1"), "abandoned"); // terminal WHEN emitted despite the case mismatch
+  await handle.stop();
+  await h.close();
+});
+
+test("does not retire a default view claimed by another status-bearing binding on the same table", async () => {
+  // A status-bearing binding and a STATUS-LESS binding on the same table share the default
+  // `plans__tracking` name. The status-less binding's retire path must NOT drop the view the owner
+  // provisions (iteration-order dependent). Status-bearing first is the order that exposes the bug.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(
+    h,
+    [planBinding(), planBinding({ statusField: undefined, activeStatuses: undefined })],
+    sched,
+  );
+  await sched.advance(1000);
+  const view = h.db.all<{ n: number }>("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='view' AND name='plans__tracking'");
+  assert.equal(view[0]?.n, 1); // survived — not retired by the status-less sibling
+  assert.equal(derivedOne(h, "pi1"), "abandoned");
+  await handle.stop();
+  await h.close();
+});
+
 function mount(h: Harness, bindings: InstanceTracking[], sched: SchedulerDeps) {
   h.api.manifest.instanceTracking = bindings;
   return mountInstanceTracking(

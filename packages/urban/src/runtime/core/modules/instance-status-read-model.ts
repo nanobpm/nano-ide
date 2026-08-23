@@ -92,18 +92,35 @@ export function deriveInstanceStatusExpr(binding: InstanceTracking, statusField:
   const terminated = terminatedEdgeExpr(binding.keyField);
   const whens: WhenClause[] = [];
 
-  const terminalStatus = binding.onTerminated?.set?.[statusField];
+  const terminalStatus = patchValueForColumn(binding.onTerminated?.set, statusField);
   if (terminalStatus !== undefined) {
     whens.push(when(terminated, lit(terminalStatus)));
   }
 
-  const waitingStatus = binding.onWaitingHuman?.set?.[statusField];
+  const waitingStatus = patchValueForColumn(binding.onWaitingHuman?.set, statusField);
   if (waitingStatus !== undefined) {
     whens.push(when(and(waitingHumanEdgeExpr(binding.keyField), not(terminated)), lit(waitingStatus)));
   }
 
   // No edge touches the status column ⇒ the derived status is exactly the stored transient (no CASE).
   return whens.length > 0 ? caseWhen(whens, col(statusField)) : col(statusField);
+}
+
+/** Read the patch value a `*.set` map assigns to the status COLUMN, matching the key case-insensitively.
+ *  SQL column identifiers fold case (SQLite), but a JS `set[statusField]` lookup is case-sensitive, so a
+ *  binding with `statusField: "Status"` and `onTerminated.set: { status: "abandoned" }` would emit no
+ *  terminal `WHEN` and silently fall through to the base column. Fold the comparison so the derivation
+ *  matches the column the equivalent SQL UPDATE would have addressed. */
+function patchValueForColumn(set: unknown, statusField: string): string | number | boolean | null | undefined {
+  if (set === null || typeof set !== "object") return undefined;
+  const folded = statusField.toLowerCase();
+  for (const [k, v] of Object.entries(set)) {
+    if (k.toLowerCase() !== folded) continue;
+    if (v === undefined) return undefined;
+    if (v === null || typeof v === "string" || typeof v === "number" || typeof v === "boolean") return v;
+    return undefined;
+  }
+  return undefined;
 }
 
 /** The managed-VIEW name + derived-status column a binding's read model uses (config overrides applied). */

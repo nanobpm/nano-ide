@@ -194,9 +194,34 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
       const b = isRecord(t) ? t : undefined;
       if (typeof b?.table !== "string" || b.table.length === 0) {
         issues.push({ path: `instanceTracking[${i}].table`, message: "missing table" });
+      } else if (!SQL_IDENT.test(b.table)) {
+        // The base `table` is compiled directly into the derived VIEW's DDL (`defineReadModel` asserts
+        // `baseTable` matches SQL_IDENT). Manifest validation historically only checked non-empty, so a
+        // name like `external-orders` validated and was polled while the VIEW was silently skipped at
+        // mount (read-model construction throws). Enforce the identifier rule at author time so validation
+        // and provisioning agree (No Drift — a name accepted here is accepted at VIEW build).
+        issues.push({
+          path: `instanceTracking[${i}].table`,
+          message: `table must be a SQL identifier (${SQL_IDENT.source})`,
+        });
       }
       if (typeof b?.keyField !== "string" || b.keyField.length === 0) {
         issues.push({ path: `instanceTracking[${i}].keyField`, message: "missing keyField" });
+      } else if (!SQL_IDENT.test(b.keyField)) {
+        // `keyField` is interpolated into the derived VIEW's edge predicates (`terminatedEdgeExpr`), so it
+        // must be a bare identifier for the same reason `table` must.
+        issues.push({
+          path: `instanceTracking[${i}].keyField`,
+          message: `keyField must be a SQL identifier (${SQL_IDENT.source})`,
+        });
+      }
+      // `statusField`, when present, becomes a VIEW output column (`col(statusField)`), so it must also be
+      // a bare identifier — a non-identifier would fail opaquely at VIEW construction.
+      if (typeof b?.statusField === "string" && b.statusField.length > 0 && !SQL_IDENT.test(b.statusField)) {
+        issues.push({
+          path: `instanceTracking[${i}].statusField`,
+          message: `statusField must be a SQL identifier (${SQL_IDENT.source})`,
+        });
       }
       const onTerminated = isRecord(b?.onTerminated) ? b.onTerminated : undefined;
       const set = isRecord(onTerminated?.set) ? onTerminated.set : undefined;
@@ -284,6 +309,17 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
             message: "readModel must be an object with optional `view` / `statusColumn`",
           });
         } else {
+          // Mirror the schema's `additionalProperties: false` intent (as the `network` block does): reject
+          // unknown keys so a typo like `statusColum` fails loudly instead of silently falling back to the
+          // default derived column while the page reads the wrong field.
+          for (const k of Object.keys(rm)) {
+            if (k !== "view" && k !== "statusColumn") {
+              issues.push({
+                path: `instanceTracking[${i}].readModel.${k}`,
+                message: "unknown key (readModel additionalProperties: false)",
+              });
+            }
+          }
           for (const field of ["view", "statusColumn"] as const) {
             const v = rm[field];
             if (v !== undefined && (typeof v !== "string" || !SQL_IDENT.test(v))) {

@@ -510,6 +510,44 @@ test("a reserved-prefix default VIEW (from a reserved base table) is flagged on 
   assert.ok(issues.some((i) => i.path === "instanceTracking[0].table"));
 });
 
+test("non-identifier table / keyField / statusField are flagged (they compile into VIEW SQL)", () => {
+  // `table`/`keyField`/`statusField` are interpolated into the derived VIEW's DDL and predicates, so a
+  // non-identifier (e.g. `external-orders`) that historically only passed the non-empty check would
+  // validate yet throw at VIEW construction. Enforce the identifier rule at author time (No Drift).
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "external-orders",
+        keyField: "process key",
+        statusField: "the.status",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].table"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].keyField"));
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].statusField"));
+});
+
+test("an unknown key inside readModel is flagged (additionalProperties: false)", () => {
+  // A typo like `statusColum` would silently fall back to the default derived column while the page reads
+  // the wrong field. Mirror the `network` block's unknown-key rejection.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "plans",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "plans_board", statusColum: "eff_status" },
+      },
+    ],
+  });
+  assert.ok(issues.some((i) => i.path === "instanceTracking[0].readModel.statusColum"));
+});
+
 test("readModel.statusColumn colliding with statusField is flagged case-insensitively", () => {
   const issues = collectManifestIssues({
     ...valid,

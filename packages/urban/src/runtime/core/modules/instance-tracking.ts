@@ -360,6 +360,16 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
     });
     return;
   }
+  // View names claimed by a CURRENT status-bearing binding (folded — SQLite folds identifiers). A
+  // status-less binding shares its base table's default `<table>__tracking` name with a status-bearing
+  // binding on the same table, and its retire path (below) would otherwise DROP the view that binding
+  // just created (iteration-order dependent). Validation guarantees no two status-bearing bindings share
+  // a view name, so this set is unambiguous. Retirement consults it so it only drops UNCLAIMED names.
+  const claimedByStatusful = new Set<string>();
+  for (const b of bindings) {
+    if (typeof b.statusField !== "string" || b.statusField.length === 0) continue;
+    claimedByStatusful.add(instanceTrackingReadModelTarget(b).view.toLowerCase());
+  }
   for (const binding of bindings) {
     // Resolve the managed VIEW name (config override or `<table>__tracking`) up front — we need it even
     // on the skip paths below to RETIRE a previously-managed VIEW, so a manifest change (statusField
@@ -388,9 +398,14 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
     }
     if (!model) {
       // No statusField ⇒ nothing derivable to project. Retire any VIEW an earlier boot managed under
-      // this name: without this, dropping `statusField` from a binding would leave the old derived
-      // surface discoverable/readable while the runtime believes it provisioned nothing.
-      retireManagedTrackingView(api, db, viewName, binding.table);
+      // this name — UNLESS a current status-bearing binding claims the same name (a status-bearing +
+      // status-less binding on one table share the default view name; retiring here would drop the view
+      // the owner provisions). Without the retire, dropping `statusField` from a binding would otherwise
+      // leave the old derived surface discoverable/readable while the runtime believes it provisioned
+      // nothing.
+      if (!claimedByStatusful.has(viewName.toLowerCase())) {
+        retireManagedTrackingView(api, db, viewName, binding.table);
+      }
       continue;
     }
     // Base-column collision guard (ADR 0065): the VIEW selects `base.*` and appends the derived status as
@@ -473,11 +488,15 @@ export function mountInstanceTracking(
   const armed: string[] = [];
   let stopped = false;
 
-  // Provision the derived status VIEWs and construct the projection stores ONCE for the whole mount.
-  // Both are absent-safe: with no default data source the VIEWs are skipped and `projections` is
-  // undefined, so each poll degrades to a pure engine query that feeds nothing (never throwing).
-  provisionInstanceTrackingViews(api, bindings);
+  // Ensure the canonical projection tables (`_urban_*`) exist BEFORE creating the derived VIEWs that
+  // SELECT over them: a VIEW built on missing sidecar tables is created fine (SQLite does not validate a
+  // view body) but then reads `no such table`, so the mount would look successful while the page fails.
+  // Both are absent-safe: with no default data source `projections` is undefined and no VIEW is
+  // provisioned, so each poll degrades to a pure engine query that feeds nothing (never throwing). When
+  // projection setup fails (undefined) there is nothing coherent to derive over, so VIEW provisioning is
+  // skipped as well.
   const projections = tryInstanceProjections(api);
+  if (projections) provisionInstanceTrackingViews(api, bindings);
 
   for (const binding of bindings) {
     // `pollMs` feeds a self-rescheduling timer, so a non-number/NaN/zero/negative value would

@@ -33,6 +33,7 @@ import { cancelInstanceReconciling, type CancelInstanceResult } from "./cancel.t
 import { apiDocsPath } from "./api.ts";
 import { quoteIdent } from "./gateway.ts";
 import { RENDERER_JS } from "./runtime.gen.ts";
+import { isSqlIdentifier } from "../read-model.ts";
 
 /** The subset of the datasource gateway the page runtime needs. */
 export interface PagesDataSource {
@@ -181,10 +182,10 @@ async function serveAsset(
   }
 }
 
-/** A SQL identifier guard — a table name must be a bare identifier *and* a known table
- * (checked against `schema()`), so `/app/data/:table` can never inject SQL. */
-const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
-
+/** A table name must be a bare SQL identifier ({@link isSqlIdentifier}, the runtime-wide single source
+ * of truth) *and* a known table (checked against `schema()`), so `/app/data/:table` can never inject
+ * SQL. Reusing the shared guard (rather than a private regex) keeps this surface from drifting from
+ * manifest / read-model / data-source identifier validation. */
 // A query flag (e.g. ?count=1) is "on" when present and not one of the falsy
 // spellings. A bare `?count` (empty string) still counts as on, so a caller can
 // opt in without inventing a value.
@@ -367,7 +368,7 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
       // v1 exposes only the injected default datasource; a request naming any other
       // source is rejected rather than silently served off the default.
       if (source !== sourceName) return json({ error: `unknown datasource "${source}"` }, 404);
-      if (!IDENT.test(table)) return json({ error: "invalid table name" }, 400);
+      if (!isSqlIdentifier(table)) return json({ error: "invalid table name" }, 400);
       let tables: Set<string>;
       try {
         tables = await knownTables();

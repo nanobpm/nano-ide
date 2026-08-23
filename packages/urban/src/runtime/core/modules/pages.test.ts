@@ -1950,3 +1950,102 @@ test("the nested serve declines (does not shadow) a same-path trigger route regi
   assert.equal(hook.status, 202);
   assert.deepEqual(JSON.parse(hook.body ?? "{}"), { queued: true });
 });
+
+// ── engine-declared forms in a dataGrid detail (ADR 0026 / #457) ────────────
+// The pages surface exposes the SAME two seams the taskInbox surface uses:
+//   GET  /app/actions/form?formKey=…   → resolve a deployed .form's form-js schema
+//   POST /app/actions/complete         → complete the row's user task
+// so one grid can render the several different typed forms a heterogeneous task
+// inbox carries, instead of duplicating each into a page-local `detail.form`.
+
+/** A recording engine for the form-resolution + completion seams. `resolveForm`
+ * supplies the getForm result while the wrapper still records every call, so a test
+ * can assert BOTH the resolved schema and the exact `{formKey, formId}` the shared
+ * presence gate passed through. */
+function formEngine(
+  resolveForm: (input: { formKey?: string; formId?: string }) => Awaited<ReturnType<EngineClient["getForm"]>> = () => null,
+): {
+  engine: EngineClient;
+  formCalls: { formKey?: string; formId?: string }[];
+  completeCalls: { userTaskKey: string; variables?: Record<string, unknown> }[];
+} {
+  const formCalls: { formKey?: string; formId?: string }[] = [];
+  const completeCalls: { userTaskKey: string; variables?: Record<string, unknown> }[] = [];
+  const { engine } = fakeEngine();
+  const withSeams: EngineClient = {
+    ...engine,
+    async getForm(input: { formKey?: string; formId?: string }) {
+      formCalls.push(input);
+      return resolveForm(input);
+    },
+    async completeUserTask(userTaskKey: string, variables?: Record<string, unknown>) {
+      completeCalls.push({ userTaskKey, variables });
+    },
+  };
+  return { engine: withSeams, formCalls, completeCalls };
+}
+
+function formRouter(engine: EngineClient) {
+  const routes = createPagesRoutes({ pagesDir: "pages", homePage: "home", sourceName: "app" }, {
+    db: fakeDb(),
+    engine,
+    readPage: async () => JSON.stringify({ title: "Home", nodes: [] }),
+    listPages: async () => ["home"],
+  });
+  return makeRouter(routes);
+}
+
+test("GET /app/actions/form resolves a row's engine formKey to its form-js schema", async () => {
+  const schema = { type: "default", components: [{ type: "textfield", key: "note" }] };
+  const { engine, formCalls } = formEngine((input) => ({ formKey: input.formKey, schema }));
+  const res = await formRouter(engine)(req("GET", "/app/actions/form", { query: "formKey=form-123" }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(res.body ?? "{}").schema, schema);
+  assert.deepEqual(formCalls, [{ formKey: "form-123", formId: undefined }]);
+});
+
+test("GET /app/actions/form 400s when neither formKey nor formId is present (shared presence gate)", async () => {
+  const { engine } = formEngine();
+  const res = await formRouter(engine)(req("GET", "/app/actions/form"));
+  assert.equal(res.status, 400);
+  const blank = await formRouter(engine)(req("GET", "/app/actions/form", { query: "formKey=%20%20" }));
+  assert.equal(blank.status, 400, "a whitespace-only formKey is absent per the host.ts presence rule");
+});
+
+test("GET /app/actions/form 204s when the form can't be resolved (client falls back to bare completion)", async () => {
+  // getForm returns null (default) → 204, matching the taskInbox no-form fallback.
+  const { engine } = formEngine();
+  const res = await formRouter(engine)(req("GET", "/app/actions/form", { query: "formKey=missing" }));
+  assert.equal(res.status, 204);
+  assert.equal(res.body ?? "", "");
+});
+
+test("POST /app/actions/complete completes the row's user task with the submitted variables", async () => {
+  const { engine, completeCalls } = formEngine();
+  const res = await formRouter(engine)(
+    req("POST", "/app/actions/complete", { body: { userTaskKey: "ut-9", variables: { note: "ok" } } }),
+  );
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(res.body ?? "{}"), { ok: true });
+  assert.deepEqual(completeCalls, [{ userTaskKey: "ut-9", variables: { note: "ok" } }]);
+});
+
+test("POST /app/actions/complete supports the no-form bare completion (empty variables)", async () => {
+  const { engine, completeCalls } = formEngine();
+  const res = await formRouter(engine)(req("POST", "/app/actions/complete", { body: { userTaskKey: "ut-1" } }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(completeCalls, [{ userTaskKey: "ut-1", variables: undefined }]);
+});
+
+test("POST /app/actions/complete 400s without a userTaskKey", async () => {
+  const { engine, completeCalls } = formEngine();
+  const res = await formRouter(engine)(req("POST", "/app/actions/complete", { body: { variables: {} } }));
+  assert.equal(res.status, 400);
+  assert.equal(completeCalls.length, 0, "no completion is attempted for a keyless body");
+});
+
+test("the pages shell embeds the shared form-js renderer (NanoFormJs) for engine forms", async () => {
+  const res = await dispatch("GET", "/");
+  assert.match(res.body ?? "", /NanoFormJs/, "the shell exposes the shared renderer as a global");
+  assert.match(res.body ?? "", /function renderForm/, "the shared renderer is embedded, not forked");
+});

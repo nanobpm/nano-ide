@@ -1859,6 +1859,101 @@ function buildDetailForm(f, row, onSuccess) {
   return box;
 }
 
+// Build a dataGrid detail's ENGINE-declared form (ADR 0026, #457). Where
+// buildDetailForm renders a page-authored `detail.form` (fields duplicated from a
+// deployed `.form`), this resolves the row's engine `formKey` and renders the
+// AUTHORITATIVE deployed form-js schema — so one grid can render the several
+// different typed forms carried by a heterogeneous task inbox, and no page-local
+// copy can drift from the deployed form. It reuses the ONE shared form-js renderer
+// (globalThis.NanoFormJs, embedded by the shell) and the shared `/app/actions/form`
+// resolution gate + `/app/actions/complete` completion — the same seams the
+// taskInbox surface uses, no fork.
+//
+// `cfg.formKeyField` (default "form_key") names the row column carrying the engine
+// formKey; `cfg.userTaskKeyField` (default "user_task_key") names the column
+// carrying the user-task key to complete. A row with no formKey degrades to a bare
+// "Complete" button (empty variables), matching taskInbox's no-form fallback.
+/** @param {any} cfg
+ *  @param {Record<string, any>} row
+ *  @param {() => void | Promise<void>} onSuccess
+ *  @returns {HTMLElement|null}
+ */
+function buildEngineForm(cfg, row, onSuccess) {
+  if (!cfg) return null;
+  const userTaskKey = row[cfg.userTaskKeyField || "user_task_key"];
+  // Without a user-task key there is nothing to complete — render nothing rather
+  // than a dead button.
+  if (userTaskKey == null || userTaskKey === "") return null;
+  const formKey = row[cfg.formKeyField || "form_key"];
+  const box = el("div", { class: "pc-subform" });
+  const msg = el("p", { class: "njf-msg", role: "status", "aria-live": "polite" });
+  /** @param {Record<string, any>} variables */
+  const complete = (variables) =>
+    getJSON("/app/actions/complete", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ userTaskKey, variables }),
+    }).then(() => onSuccess());
+  // No renderable form → the bare completion path (parity with taskInbox).
+  const renderBare = () => {
+    const bar = el("div", { class: "njf-actions" });
+    const b = el("button", { class: "pc-btn pc-btn-sm", type: "button" }, "Complete");
+    b.addEventListener("click", async () => {
+      b.disabled = true;
+      msg.className = "njf-msg";
+      msg.textContent = "Sending\u2026";
+      try {
+        await complete(Object.create(null));
+      } catch (e) {
+        b.disabled = false;
+        msg.className = "njf-msg err";
+        msg.textContent = String(e.message || e);
+      }
+    });
+    bar.append(b);
+    box.append(bar, msg);
+  };
+  if (formKey == null || formKey === "") {
+    renderBare();
+    return box;
+  }
+  box.append(el("p", { class: "njf-text" }, "loading form\u2026"));
+  getJSON("/app/actions/form?formKey=" + encodeURIComponent(String(formKey)))
+    .then((f) => {
+      box.replaceChildren();
+      const renderer = /** @type {any} */ (globalThis).NanoFormJs;
+      if (!f || !f.schema || !renderer) {
+        renderBare();
+        return;
+      }
+      box.append(
+        renderer.renderForm(f.schema, {
+          submitLabel: "Complete",
+          /** @param {Record<string, any>} variables */
+          onSubmit: (variables) => {
+            msg.className = "njf-msg";
+            msg.textContent = "Sending\u2026";
+            // Surface completion failures to the operator (parity with the bare-completion
+            // path). Rethrow so renderForm's catch still re-enables the submit button.
+            return complete(variables).catch((e) => {
+              msg.className = "njf-msg err";
+              msg.textContent = String(e.message || e);
+              throw e;
+            });
+          },
+        }),
+        msg,
+      );
+    })
+    .catch((e) => {
+      box.replaceChildren();
+      msg.className = "njf-msg err";
+      msg.textContent = "Failed to load form: " + String(e.message || e);
+      box.append(msg);
+    });
+  return box;
+}
+
 /** @param {any} node */
 function renderDataGrid(node) {
   const p = node.props;
@@ -2162,6 +2257,11 @@ function renderDataGrid(node) {
     }
     const form = buildDetailForm(d.form, row, onSuccess || (() => { document.dispatchEvent(new CustomEvent("pc:refresh")); }));
     if (form) box.append(form);
+    // An engine-declared form (ADR 0026/#457) sits ALONGSIDE the page-authored
+    // `detail.form`, not replacing it: a grid may render the deployed form-js schema
+    // for the row's user task instead of (or in addition to) a hand-authored copy.
+    const engineForm = buildEngineForm(d.engineForm, row, onSuccess || (() => { document.dispatchEvent(new CustomEvent("pc:refresh")); }));
+    if (engineForm) box.append(engineForm);
     return box;
   }
 
@@ -2849,4 +2949,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, renderAppView, navLink, sameOriginPath, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, renderAppView, navLink, sameOriginPath, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, buildEngineForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };

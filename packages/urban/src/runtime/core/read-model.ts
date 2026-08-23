@@ -979,7 +979,11 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
     // `{}` inherits from `Object.prototype` (same treatment as `evaluate()`'s derived-output map below).
     const resolved: LookupRows = Object.create(null);
     for (const lk of lookups) {
-      const candidates = lookupRows[lk.as] ?? [];
+      // Read candidates via an OWN-property check: `lookupRows` is a caller-supplied object (often a
+      // plain `{}` — e.g. `evaluate`'s `lookupRows ?? {}`), so an identifier-legal alias like `__proto__`
+      // would resolve `lookupRows["__proto__"]` to `Object.prototype` (inherited, truthy, non-array) and
+      // the `.filter(...)` below would throw. `Object.hasOwn` treats a missing alias as absent instead.
+      const candidates = Object.hasOwn(lookupRows, lk.as) ? lookupRows[lk.as] : [];
       const matches = candidates.filter((r) =>
         lk.on.every((p) => compareValues("eq", lookupColumn(baseRow, p.base), lookupColumn(r, p.rollup))),
       );
@@ -1653,8 +1657,25 @@ function compileRollupSourceSql(
       const from =
         `${quoteIdent(leftRel)} ${quoteIdent(leftAlias)} ${joinKw} ` +
         `${quoteIdent(rightRel)} ${quoteIdent(rightAlias)} ON ${on}`;
+      // Index the join-mapped output columns by their FOLDED (case-insensitive) name: SQLite folds
+      // identifiers case-insensitively and the TS twin (`materializeRollupSource`) resolves these columns
+      // via the case-insensitive `lookupColumn`, so a rollup predicate/groupBy that references a
+      // join-mapped column with different casing must resolve here too — a case-sensitive `source.columns[name]`
+      // would succeed in TS but throw in SQL. Fail fast on a case-only collision (two output columns SQLite
+      // cannot tell apart), and use a `Map` so a `__proto__`-named column can't resolve off the prototype chain.
+      const foldedColumns = new Map<string, readonly [side: "left" | "right", column: string]>();
+      for (const [outName, mapped] of Object.entries(source.columns)) {
+        const key = foldSqlIdentifier(outName);
+        if (foldedColumns.has(key)) {
+          throw new Error(
+            `rollup join source declares output columns differing only in case ("${outName}"); ` +
+              `SQLite folds identifiers case-insensitively so they would be ambiguous`,
+          );
+        }
+        foldedColumns.set(key, mapped);
+      }
       const resolveColumn = (name: string): string => {
-        const mapped = source.columns[name];
+        const mapped = foldedColumns.get(foldSqlIdentifier(name));
         if (!mapped) throw new Error(`rollup join source has no mapped column "${name}"`);
         const [side, physical] = mapped;
         const alias = side === "left" ? leftAlias : rightAlias;

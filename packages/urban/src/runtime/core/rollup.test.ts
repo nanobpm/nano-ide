@@ -162,6 +162,48 @@ test("defineRollup (join source, D2 count/countWhere) parity-matches its VIEW �
   });
 });
 
+test("defineRollup join source resolves group/predicate columns case-insensitively (SQLite folding) — parity-matches", async () => {
+  // SQLite folds identifiers case-insensitively and the TS twin resolves join-mapped columns via the
+  // case-insensitive `lookupColumn`, so a rollup referencing a join-mapped output column with DIFFERENT
+  // casing than declared must resolve in SQL too. Before the fix `source.columns["PLAN_KEY"]` was a
+  // case-sensitive miss: the SQL compilation threw `no mapped column` while the TS reduce resolved fine.
+  const casedRollup = defineRollup({
+    name: "plan_delivery_counts_cased",
+    source: joinSource({
+      left: { relation: "plan_tasks", alias: "t" },
+      right: { relation: "pull_requests", alias: "p" },
+      on: [{ left: "pr_key", right: "pr_key" }],
+      columns: {
+        plan_key: ["left", "plan_key"],
+        pr_key: ["left", "pr_key"],
+        pr_status: ["right", "status"],
+      },
+    }),
+    groupBy: ["PLAN_KEY"],
+    aggregates: {
+      prs_opened: count("PR_KEY"),
+      prs_merged: countWhere(and(isNotNull(col("Pr_Key")), eq(col("PR_STATUS"), lit("merged")))),
+    },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertRollupParity(casedRollup, db, [
+        {
+          plan_tasks: [
+            { plan_key: "p1", pr_key: "pr1" },
+            { plan_key: "p1", pr_key: "pr2" },
+            { plan_key: "p2", pr_key: "pr3" },
+          ],
+          pull_requests: [
+            { pr_key: "pr1", status: "merged" },
+            { pr_key: "pr3", status: "merged" },
+          ],
+        },
+      ]),
+    );
+  });
+});
+
 test("defineRollup (two-level group key + WHERE) parity-matches — plan_wave_counts", async () => {
   await withDb((db) => {
     assert.doesNotThrow(() =>
@@ -380,6 +422,27 @@ test("resolveLookups uses a null-prototype map — a `__proto__` alias sets an o
   assert.equal(Object.getPrototypeOf({}), Object.prototype);
   const evaluated = evilModel.evaluate({ plan_key: "p1" }, {}, candidates);
   assert.equal(evaluated.opened, 5);
+});
+
+test("resolveLookups reads candidates by OWN property — a `__proto__` alias over a plain `{}` yields no match, not a throw", () => {
+  // The candidate input is a caller-supplied object; a normal `{}` inherits `Object.prototype`, so a
+  // `__proto__` alias would resolve `lookupRows["__proto__"]` to `Object.prototype` (truthy, non-array)
+  // and the internal `.filter(...)` would throw. Reading via `Object.hasOwn` treats it as absent instead.
+  const evilModel = defineReadModel({
+    name: "plan_delivery_proto_input",
+    baseTable: "plans",
+    lookups: [
+      { as: "__proto__", rollup: planDeliveryCounts, on: [{ base: "plan_key", rollup: "plan_key" }] },
+    ],
+    derive: { opened: rcol("__proto__", "prs_opened") },
+  });
+  // A plain object literal with no own `__proto__` property: the lookup must fall back to "no candidates".
+  const plainInput: Record<string, ReadonlyArray<Record<string, unknown>>> = {};
+  assert.doesNotThrow(() => evilModel.resolveLookups({ plan_key: "p1" }, plainInput));
+  const resolved = evilModel.resolveLookups({ plan_key: "p1" }, plainInput);
+  assert.equal(resolved.__proto__.prs_opened, null);
+  const evaluated = evilModel.evaluate({ plan_key: "p1" }, {}, plainInput);
+  assert.equal(evaluated.opened, null);
 });
 
 test("a read model can carry TWO distinct rollup lookups (plan_read_model shape)", async () => {

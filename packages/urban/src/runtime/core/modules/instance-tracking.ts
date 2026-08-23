@@ -36,7 +36,7 @@
 import type { AppApi, Mounted, RuntimeContext } from "../context.ts";
 import type { UserTaskSummary } from "../host.ts";
 import { type InstanceTracking, isConfiguredStatusSelector } from "../manifest.ts";
-import { assertSqlIdentifier } from "../read-model.ts";
+import { assertSqlIdentifier, lookupColumn, readModelRegistry } from "../read-model.ts";
 import { registerCanonicalProjections } from "./canonical-projections.ts";
 import { defineInstanceTrackingReadModel, instanceTrackingReadModelTarget, TERMINATED_STATE } from "./instance-status-read-model.ts";
 import { INSTANCE_STATE_PROJECTION, InstanceStateStore } from "./instance-state-store.ts";
@@ -191,6 +191,12 @@ async function reconcileOnce(
   binding: InstanceTracking,
   projections: InstanceProjections | undefined,
 ): Promise<{ scanned: number; reconciled: number }> {
+  // A binding mounted without a default data source (e.g. `mount.data: false`) has no table to poll and
+  // no VIEW to derive: `provisionInstanceTrackingViews`/`tryInstanceProjections` already degraded to
+  // no-ops at mount. Return the honest zero-count no-op here rather than falling through to
+  // `api.data.table(...)`, which THROWS with no default source and would log `reconcile failed` on every
+  // interval (the timer is still armed) — noise masquerading as a real failure.
+  if (!api.data.hasDefaultSource()) return { scanned: 0, reconciled: 0 };
   const table = api.data.table<Row>(binding.table, binding.keyField);
 
   // Select the rows worth polling. Three modes, in precedence order:
@@ -211,7 +217,7 @@ async function reconcileOnce(
   if (statusField && isConfiguredStatusSelector(binding.terminalStatuses)) {
     const terminal = new Set(binding.terminalStatuses);
     const all = await table.all();
-    candidates = all.filter((row) => !terminal.has(String(row[statusField])));
+    candidates = all.filter((row) => !terminal.has(String(lookupColumn(row, statusField))));
   } else if (statusField && isConfiguredStatusSelector(binding.activeStatuses)) {
     const perStatus = await Promise.all(
       binding.activeStatuses.map((s): Promise<Row[]> => table.find({ [statusField]: s })),
@@ -222,10 +228,14 @@ async function reconcileOnce(
   }
 
   // Map each active row to its tracked instance key. A row with no/empty key can't be
-  // reconciled (it never started an instance, or the column is unset) — skip it.
+  // reconciled (it never started an instance, or the column is unset) — skip it. Resolve `keyField`
+  // with the SAME case-insensitive column lookup the read-model VIEW compiler uses (SQLite folds
+  // identifier case, so a binding `keyField: "Process_Key"` over a `process_key` column correlates in
+  // the derived VIEW): a plain case-sensitive `row[binding.keyField]` would read `undefined` here and
+  // feed NO keys into either projection, so neither terminal nor waiting-human status could derive.
   const keyToRows = new Map<string, Row[]>();
   for (const row of candidates) {
-    const raw = row[binding.keyField];
+    const raw = lookupColumn(row, binding.keyField);
     if (raw == null || raw === "") continue;
     const key = String(raw);
     const list = keyToRows.get(key);
@@ -517,6 +527,19 @@ function provisionInstanceTrackingViews(api: AppApi, bindings: readonly Instance
         table: binding.table,
         error: String(err),
       });
+      continue;
+    }
+    // A registered read model (seam (a): `readModelRegistry`) already OWNS a VIEW of this name —
+    // `mountWorkers` provisioned it before this mount. Our unconditional `DROP VIEW … ; CREATE VIEW …`
+    // below would silently clobber that registered derivation (and a later worker mount could clobber
+    // ours back), with neither side detecting the conflict the registry itself rejects for two registered
+    // models. Refuse rather than fight over the name, mirroring the `nonViewObjectExists` guard above.
+    if (readModelRegistry.get(viewName)) {
+      api.log(
+        "warn",
+        `instanceTracking: managed VIEW name "${viewName}" collides with a registered read model; derived VIEW skipped (choose a distinct readModel.view)`,
+        { table: binding.table, view: viewName },
+      );
       continue;
     }
     try {

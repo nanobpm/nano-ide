@@ -510,6 +510,29 @@ test("a reserved-prefix default VIEW (from a reserved base table) is flagged on 
   assert.ok(issues.some((i) => i.path === "instanceTracking[0].table"));
 });
 
+test("a reserved base table with a NON-reserved explicit view is flagged on `table` (issue #452 review)", () => {
+  // The reserved-VIEW guard only inspects the effective VIEW NAME. A binding
+  // `table: "_urban_instance_state", readModel: { view: "tracking" }` slips past it: the published
+  // `tracking` VIEW is non-reserved (so gateway.schema() exposes it) yet SELECTs the runtime's hidden
+  // sidecar rows. Tracking a reserved runtime table is never legitimate — reject it on `table`.
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "_urban_instance_state",
+        keyField: "process_key",
+        statusField: "status",
+        onTerminated: { set: { status: "abandoned" } },
+        readModel: { view: "tracking" },
+      },
+    ],
+  });
+  assert.ok(
+    issues.some((i) => i.path === "instanceTracking[0].table" && i.message.includes("reserved prefix")),
+    "expected a reserved base-table issue on `table`",
+  );
+});
+
 test("non-identifier table / keyField / statusField are flagged (they compile into VIEW SQL)", () => {
   // `table`/`keyField`/`statusField` are interpolated into the derived VIEW's DDL and predicates, so a
   // non-identifier (e.g. `external-orders`) that historically only passed the non-empty check would

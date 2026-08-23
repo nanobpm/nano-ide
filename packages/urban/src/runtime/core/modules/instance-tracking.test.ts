@@ -22,7 +22,7 @@ import {
 import { defineInstanceTrackingReadModel } from "./instance-status-read-model.ts";
 import { INSTANCE_STATE_TABLE } from "./instance-state-store.ts";
 import { OPEN_USER_TASKS_TABLE } from "./open-user-tasks-store.ts";
-import { assertReadModelParity } from "../read-model.ts";
+import { assertReadModelParity, defineReadModel, lit, readModelRegistry } from "../read-model.ts";
 import { MAX_TIMER_DELAY_MS, type SchedulerDeps } from "./scheduler.ts";
 import { fakeScheduler } from "./scheduler.test-utils.ts";
 
@@ -1032,6 +1032,76 @@ test("retires a prior boot's managed VIEW when the projection feed becomes unava
   const second = mount(h, [planBinding()], sched2);
   assert.equal(viewExists(), 0); // retired — no longer serving a value over an unavailable projection
   await second.stop();
+  await h.close();
+});
+
+test("extracts candidate keys with case-insensitive keyField resolution (issue #452 review)", async () => {
+  // SQLite folds identifier case, so a binding `keyField: "Process_Key"` over a `process_key` column
+  // correlates in the derived VIEW. Candidate extraction must fold the SAME way (via the shared
+  // `lookupColumn`): a case-sensitive `row["Process_Key"]` would read undefined and feed NO keys, so
+  // neither terminal nor waiting-human status could derive despite a valid, provisioned VIEW.
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ keyField: "Process_Key" })], sched);
+  await sched.advance(1000);
+  assert.equal(projectedState(h, "pi1"), "TERMINATED"); // the key was extracted and fed to the projection
+  assert.equal(derivedOne(h, "pi1"), "abandoned"); // …so the derived status flipped
+  await handle.stop();
+  await h.close();
+});
+
+test("skips provisioning a managed VIEW whose name collides with a registered read model (issue #452 review)", async () => {
+  // Tracking VIEWs are provisioned OUTSIDE the `readModelRegistry`. If an app registers a model whose
+  // name equals a configured `readModel.view`, an unconditional DROP+CREATE here would silently clobber
+  // that registered derivation (the registry's own conflict detection never sees it). Refuse instead.
+  const prior = readModelRegistry.all();
+  const { engine } = fakeEngine({ pi1: "TERMINATED" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  try {
+    readModelRegistry.register(
+      defineReadModel({ name: "plans__tracking", baseTable: "plans", derive: { marker: lit("registered") } }),
+    );
+    const sched = fakeScheduler();
+    const handle = mount(h, [planBinding()], sched);
+    // The tracking mount must NOT have created its VIEW over the registered name…
+    const trackingView = h.db.all<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='view' AND name='plans__tracking'",
+    )[0]?.n ?? 0;
+    assert.equal(trackingView, 0);
+    // …and it must have said why.
+    const warned = h.logs.some(
+      (l) => l.level === "warn" && l.msg.includes("collides with a registered read model"),
+    );
+    assert.ok(warned, "expected a registry-collision warning");
+    await handle.stop();
+  } finally {
+    readModelRegistry.clear();
+    for (const m of prior) readModelRegistry.register(m);
+    await h.close();
+  }
+});
+
+test("reconcile is a silent no-op (no error log) when no default data source is configured (issue #452 review)", async () => {
+  // A binding mounted with `mount.data: false` has no default source: provisioning already no-ops. The
+  // timer still arms, so `reconcileOnce` must early-return instead of falling through to
+  // `api.data.table(...)` (which THROWS with no default) and logging `reconcile failed` every interval.
+  const { engine } = fakeEngine({});
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  h.api.data = new DataLayer(new Map(), undefined, {}); // no default source configured
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding()], sched);
+  await sched.advance(1000);
+  await sched.advance(1000); // a per-interval throw would have logged on each tick
+  const fails = h.logs.filter((l) => l.level === "error" && l.msg.includes("reconcile failed"));
+  assert.equal(fails.length, 0);
+  await handle.stop();
   await h.close();
 });
 

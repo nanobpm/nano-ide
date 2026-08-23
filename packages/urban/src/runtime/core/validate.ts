@@ -376,6 +376,19 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           message: `statusField "${statusFieldName}" collides with the default derived status column "${DEFAULT_DERIVED_STATUS_COLUMN}" (set readModel.statusColumn to a distinct name, or rename statusField)`,
         });
       }
+      // Reserved-base-table guard (ADR 0065): the base `table` must not itself be a reserved runtime
+      // object (`_urban_` / `_nano_` / `sqlite_`). The reserved-VIEW guard below only rejects a reserved
+      // *effective view name*, so a binding like `table: "_urban_instance_state", readModel: { view:
+      // "tracking" }` slips through — it would publish a NON-reserved `tracking` VIEW that SELECTs the
+      // runtime's hidden instance-state sidecar, and `gateway.schema()` filters only the object NAME, so
+      // `/app/data/.../tracking` would expose those internal rows. A tracking binding over a reserved
+      // runtime table is never legitimate; reject it at author time regardless of statusField.
+      if (typeof b?.table === "string" && b.table.length > 0 && isReservedObjectName(b.table)) {
+        issues.push({
+          path: `instanceTracking[${i}].table`,
+          message: `base table "${b.table}" uses a reserved prefix (_urban_ / _nano_ / sqlite_); tracking a reserved runtime table would publish a derived VIEW over hidden runtime state (choose an application base table)`,
+        });
+      }
       // Reserved-prefix guard (ADR 0065): the effective managed VIEW name (`readModel.view` or the
       // default `<table>__tracking`) must not begin with a reserved object prefix (`_urban_` / `_nano_`
       // / `sqlite_`). Such a VIEW provisions fine but is filtered out of the datasource `schema()`

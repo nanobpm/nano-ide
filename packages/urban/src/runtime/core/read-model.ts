@@ -554,7 +554,7 @@ export function compileToFn(expr: Expr): DerivationFn {
  *  `keyField` correlation. Fold here so both backends read the same column. (A table cannot declare two
  *  columns differing only in case, so the fallback is unambiguous.) Returns `null` for a missing column,
  *  preserving the previous `?? null` contract. */
-function lookupColumn(row: Record<string, unknown>, name: string): unknown {
+export function lookupColumn(row: Record<string, unknown>, name: string): unknown {
   if (Object.hasOwn(row, name)) return row[name] ?? null;
   const folded = name.toLowerCase();
   for (const key of Object.keys(row)) {

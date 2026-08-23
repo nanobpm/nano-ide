@@ -321,6 +321,67 @@ test("a rollup lookup with MORE than one candidate match throws (single-valued, 
   );
 });
 
+// ─── Regression guards: case-insensitive rcol alias resolution + null-prototype lookup map (#469 review).
+
+test("rcol resolves case-insensitively (SQLite folding) — a differently-cased alias parity-matches", async () => {
+  // Lookup aliases are validated/deduped case-insensitively and the SQL `resolveRollupColumn` folds the
+  // alias, so `rcol("C", …)` against a lookup declared `as: "c"` compiles/validates fine. Before the fix
+  // the TS backend read `lookups["C"]` verbatim → undefined → threw "without a resolved lookup row",
+  // drifting from the working SQL LEFT JOIN. It must now resolve the same row on both backends.
+  const foldedModel = defineReadModel({
+    name: "plan_delivery_folded",
+    baseTable: "plans",
+    lookups: [
+      {
+        as: "c",
+        rollup: planDeliveryCounts,
+        on: [{ base: "plan_key", rollup: "plan_key" }],
+        defaults: { prs_opened: 0 },
+      },
+    ],
+    derive: { opened: rcol("C", "prs_opened") },
+  });
+  const evaluated = foldedModel.evaluate(
+    { plan_key: "p1" },
+    {},
+    { c: [{ plan_key: "p1", prs_opened: 7 }] },
+  );
+  assert.equal(evaluated.opened, 7);
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(foldedModel, db, [
+        { baseRow: { plan_key: "p1" }, lookups: { c: [{ plan_key: "p1", prs_opened: 7 }] } },
+        { baseRow: { plan_key: "p2" }, lookups: { c: [] } },
+      ]),
+    );
+  });
+});
+
+test("resolveLookups uses a null-prototype map — a `__proto__` alias sets an own property, not the prototype", () => {
+  // Lookup aliases are only identifier-validated, so `__proto__` is a legal alias. Building `resolved`
+  // as a plain `{}` would route `resolved["__proto__"] = row` through the magic prototype setter,
+  // corrupting the object's prototype chain instead of storing the row. A null-prototype dict avoids it.
+  const evilModel = defineReadModel({
+    name: "plan_delivery_proto",
+    baseTable: "plans",
+    lookups: [
+      { as: "__proto__", rollup: planDeliveryCounts, on: [{ base: "plan_key", rollup: "plan_key" }] },
+    ],
+    derive: { opened: rcol("__proto__", "prs_opened") },
+  });
+  // Build the candidate input as a null-prototype dict: a plain `{ __proto__: [...] }` literal (or a
+  // bracket assignment on a normal object) would trip the inherited `__proto__` setter instead of
+  // storing an own "__proto__" property, so the row would never reach the resolver.
+  const candidates: Record<string, ReadonlyArray<Record<string, unknown>>> = Object.create(null);
+  candidates.__proto__ = [{ plan_key: "p1", prs_opened: 5 }];
+  const resolved = evilModel.resolveLookups({ plan_key: "p1" }, candidates);
+  assert.equal(Object.getPrototypeOf(resolved), null);
+  assert.ok(Object.hasOwn(resolved, "__proto__"));
+  assert.equal(Object.getPrototypeOf({}), Object.prototype);
+  const evaluated = evilModel.evaluate({ plan_key: "p1" }, {}, candidates);
+  assert.equal(evaluated.opened, 5);
+});
+
 test("a read model can carry TWO distinct rollup lookups (plan_read_model shape)", async () => {
   const planSummary = defineReadModel({
     name: "plan_summary_rm",

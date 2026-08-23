@@ -441,7 +441,8 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
 
 // ─────────────────────────────────────────── TS backend ──────────────────────────────────────────
 
-/** The resolved single rollup-lookup rows for one evaluation, keyed by lookup alias (see {@link rcol}).
+/** The resolved single rollup-lookup rows for one evaluation, keyed by the FOLDED (case-insensitive,
+ *  SQLite-folded) lookup alias — see {@link rcol}, whose `node.lookup` is folded the same way on read.
  *  Every declared lookup alias maps to exactly one resolved row: the matched rollup group with its
  *  missing/NULL columns already filled from the lookup's declared defaults (the TS twin of the VIEW's
  *  `COALESCE(alias.col, default)`). A LEFT-JOIN miss is therefore represented as a defaults/NULL-filled
@@ -579,7 +580,11 @@ export function compileToFn(expr: Expr): DerivationFn {
         if (!projRow) throw new Error(`pcol("${node.name}") evaluated outside an EXISTS projection context`);
         return lookupColumn(projRow, node.name);
       case "rcol": {
-        const row = lookups[node.lookup];
+        // Read the resolved row by the FOLDED alias: lookup aliases are identifier-validated and deduped
+        // case-insensitively (SQLite folding), and the SQL `resolveRollupColumn` resolves `node.lookup`
+        // through `foldSqlIdentifier` too, so a raw case-sensitive `lookups[node.lookup]` would let
+        // `rcol("C", …)` pass validation against a lookup declared `as: "c"` yet fail here at runtime.
+        const row = lookups[foldSqlIdentifier(node.lookup)];
         // Every declared lookup alias is resolved to a full row up front (a LEFT-JOIN miss becomes a
         // defaults/NULL-filled row, never an absent alias — see LookupRows). A missing alias here means a
         // raw `fnFor` caller skipped lookup resolution; fail loudly rather than silently reading NULL.
@@ -969,7 +974,10 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
     baseRow: BaseRow,
     lookupRows: Record<string, ReadonlyArray<Record<string, unknown>>>,
   ): LookupRows => {
-    const resolved: LookupRows = {};
+    // Null-prototype dictionary: lookup aliases are only identifier-validated, so an alias like
+    // `__proto__` must set a plain own property rather than trip the magic prototype setter a normal
+    // `{}` inherits from `Object.prototype` (same treatment as `evaluate()`'s derived-output map below).
+    const resolved: LookupRows = Object.create(null);
     for (const lk of lookups) {
       const candidates = lookupRows[lk.as] ?? [];
       const matches = candidates.filter((r) =>
@@ -994,7 +1002,7 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
         const dflt = lk.defaults?.[name];
         row[name] = raw === null || raw === undefined ? (dflt === undefined ? null : dflt) : raw;
       }
-      resolved[lk.as] = row;
+      resolved[foldSqlIdentifier(lk.as)] = row;
     }
     return resolved;
   };

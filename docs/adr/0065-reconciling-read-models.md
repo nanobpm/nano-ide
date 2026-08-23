@@ -167,3 +167,14 @@ retires drift surface #1 at its source.
    models at it (removes drift surface #1's *source* for the attention/wait edges).
 4. Invert `instanceTracking` from writer → source; retire the derivable `status` writes
    (closes drift surface #1 and delivers nanobpm/nano-workforce#439-L1 / nanobpm/nano-workforce#318).
+5. **GROUP-BY sibling (nanobpm/nano-ide#468):** `defineRollup` extends the same declare-once →
+   compile-to-both discipline to aggregates — one declaration lowers to BOTH a managed `*_counts`
+   VIEW and a TS group-reduce over a closed, flat aggregate op set (`count`/`countWhere`/`max`/
+   `minWhere`/`coalesce`/integer `add`), registered as a canonical projection (`rollupRegistry`) and
+   parity-guarded (`assertRollupParity`). Its source composes over a table, a projection, a declared
+   key-join of two relations (the two-hop case), or another rollup. `defineReadModel` gains ONE
+   correlated addition — a key-correlated rollup lookup (`LEFT JOIN <rollup> ON <full group key>`,
+   read via `rcol`) — so a per-row read model can fold a rollup's counts into a derived column without
+   a second hand-written VIEW/TS mirror. Display-string formatting stays OUT of the AST: rollups and
+   read models derive structured columns only; any label VIEW is a thin, explicitly-scoped consumer.
+   First consumer: nwf's plan-family count VIEWs (migrations 059/060/061).

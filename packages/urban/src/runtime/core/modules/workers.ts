@@ -11,7 +11,7 @@ import { runInJobContext } from "../execContext.ts";
 import type { JobExecContext } from "../execContext.ts";
 import { readLineage } from "../lineage.ts";
 import { LineageStore } from "./lineage-store.ts";
-import { readModelRegistry } from "../read-model.ts";
+import { readModelRegistry, rollupRegistry } from "../read-model.ts";
 import { registerCanonicalProjections } from "./canonical-projections.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
@@ -140,6 +140,25 @@ function tryLineageStore(app: AppApi, log: RuntimeContext["host"]["log"]): Linea
 }
 
 /**
+ * Apply every managed rollup VIEW registered in the process-wide `rollupRegistry` (ADR 0065, #468) to
+ * the app's DEFAULT data source, in dependency order (a composed rollup after the rollup it reads).
+ * Mirrors {@link tryProvisionReadModelViews}: empty until a sibling task registers a rollup, and
+ * absent-/error-safe so a missing datasource or a VIEW-provisioning failure never breaks a worker mount.
+ */
+function tryProvisionRollupViews(app: AppApi, log: RuntimeContext["host"]["log"]): void {
+  if (rollupRegistry.all().length === 0) return;
+  if (!app.data.hasDefaultSource()) {
+    log("debug", "rollups: no default data source; managed VIEW provisioning skipped");
+    return;
+  }
+  try {
+    rollupRegistry.ensureViews(app.data.source().db);
+  } catch (err) {
+    log("warn", "rollups: failed to provision managed VIEWs", { error: String(err) });
+  }
+}
+
+/**
  * Apply every managed read-model VIEW registered in the process-wide `readModelRegistry` to the app's
  * DEFAULT data source (ADR 0065, surface #3). A `defineReadModel(...)` declaration compiles to a
  * managed SQLite VIEW; provisioning it here — the same per-source boot path `tryLineageStore` uses —
@@ -251,6 +270,10 @@ export async function mountWorkers(
   // provision the projection tables per source (absent-safe), and finally the read-model VIEWs.
   registerCanonicalProjections();
   tryProvisionCanonicalProjections(app, ctx.host.log);
+  // Rollup VIEWs (ADR 0065, #468) BEFORE the read-model VIEWs: a read model's key-correlated rollup
+  // lookup `LEFT JOIN`s a rollup's `*_counts` VIEW, and a composed rollup reads another rollup's VIEW,
+  // so every rollup VIEW (in dependency order) must exist before any dependent VIEW compiles.
+  tryProvisionRollupViews(app, ctx.host.log);
   tryProvisionReadModelViews(app, ctx.host.log);
 
   // Cache module loads so a multi-type handler module is imported once.

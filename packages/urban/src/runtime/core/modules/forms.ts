@@ -12,6 +12,7 @@
 
 import type { EngineClient, HttpResponse } from "../host.ts";
 import { presentFormIdentifier } from "../host.ts";
+import { isRecord } from "../guards.ts";
 import { json, noContent } from "../router.ts";
 
 /**
@@ -38,9 +39,10 @@ export async function resolveFormResponse(
 /**
  * The shared user-task completion endpoint. Parses `{ userTaskKey, variables }`
  * from the request body and completes the task via `EngineClient.completeUserTask`.
- * A missing/blank `userTaskKey` 400s; a malformed body 400s; a present but
- * non-object `variables` (number, string, array, `null`) 400s so the completion
- * contract stays well-defined at this shared seam. Used by both the
+ * A body that isn't a JSON object (`null`, a scalar, an array) 400s instead of
+ * throwing a 500; a missing/blank `userTaskKey` 400s; a malformed body 400s; a
+ * present but non-object `variables` (number, string, array, `null`) 400s so the
+ * completion contract stays well-defined at this shared seam. Used by both the
  * taskInbox surface and the pages grid's engine-form detail so the completion
  * contract can't drift between them.
  */
@@ -48,19 +50,18 @@ export async function completeUserTaskResponse(
   engine: Pick<EngineClient, "completeUserTask">,
   bodyText: string,
 ): Promise<HttpResponse> {
-  let body: { userTaskKey?: string; variables?: Record<string, unknown> };
+  let parsed: unknown;
   try {
-    body = JSON.parse(bodyText || "{}");
+    parsed = JSON.parse(bodyText || "{}");
   } catch {
     return json({ error: "invalid JSON body" }, 400);
   }
-  if (!body.userTaskKey) return json({ error: "userTaskKey required" }, 400);
-  const { variables } = body;
-  if (
-    variables !== undefined &&
-    (typeof variables !== "object" || variables === null || Array.isArray(variables))
-  )
+  if (!isRecord(parsed)) return json({ error: "invalid JSON body" }, 400);
+  const { userTaskKey, variables } = parsed;
+  if (typeof userTaskKey !== "string" || !userTaskKey)
+    return json({ error: "userTaskKey required" }, 400);
+  if (variables !== undefined && !isRecord(variables))
     return json({ error: "variables must be a JSON object" }, 400);
-  await engine.completeUserTask(body.userTaskKey, variables);
+  await engine.completeUserTask(userTaskKey, variables);
   return json({ ok: true });
 }

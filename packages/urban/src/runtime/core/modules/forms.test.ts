@@ -79,6 +79,22 @@ test("completeUserTaskResponse 400s on a missing userTaskKey or malformed body �
   assert.equal(called, false);
 });
 
+test("completeUserTaskResponse 400s on a non-object JSON body — no crash, no completion attempted", async () => {
+  let called = false;
+  const engine: Pick<EngineClient, "completeUserTask"> = {
+    async completeUserTask() {
+      called = true;
+    },
+  };
+  // `JSON.parse("null")` returns `null`, and a bare scalar/array parses to a
+  // non-record — reading `.userTaskKey` off those must 400, never throw a 500.
+  for (const bodyText of ["null", "123", '"a string"', "true", "[]"]) {
+    const res = await completeUserTaskResponse(engine, bodyText);
+    assert.equal(res.status, 400, `body=${bodyText} should 400`);
+  }
+  assert.equal(called, false);
+});
+
 test("completeUserTaskResponse 400s on non-object variables — no completion attempted", async () => {
   let called = false;
   const engine: Pick<EngineClient, "completeUserTask"> = {

@@ -306,8 +306,22 @@ async function reconcileOnce(
       const batch = humanKeys.slice(i, i + WAITING_HUMAN_PROBE_CONCURRENCY);
       const perKey = await Promise.all(
         batch.map(async (key): Promise<number> => {
-          const openTasks = await api.engine.openUserTasks({ processInstanceKey: key });
-          return reconcileWaitingHumanKey(api, projections, key, openTasks);
+          // Isolate each key's probe: one engine `openUserTasks` rejection must NOT reject the whole
+          // `Promise.all` batch. Batches are awaited sequentially, so a single permanently-failing key in
+          // an early batch would otherwise starve every key in later batches on every tick, letting their
+          // stale open-task projections persist indefinitely. On a per-key failure, log and skip (count 0)
+          // — the projection is left as-is and re-probed next pass — so one bad engine response cannot
+          // stall the rest of the backlog.
+          try {
+            const openTasks = await api.engine.openUserTasks({ processInstanceKey: key });
+            return reconcileWaitingHumanKey(api, projections, key, openTasks);
+          } catch (err) {
+            api.log("warn", "instanceTracking: openUserTasks probe failed; key skipped this pass", {
+              key,
+              error: String(err),
+            });
+            return 0;
+          }
         }),
       );
       for (const n of perKey) reconciled += n;
@@ -342,6 +356,42 @@ function retireManagedTrackingView(api: Pick<AppApi, "log">, db: ProvisionDb, vi
       table,
       error: String(err),
     });
+  }
+}
+
+/** Retire (DROP) every managed tracking VIEW for these bindings, used when the projection feed is
+ *  unavailable (`tryInstanceProjections` returned undefined because projection-store provisioning
+ *  failed). Without this, a VIEW an earlier successful boot published is left readable and keeps
+ *  deriving a value over projection tables this mount has no coherent source for — a silent stale
+ *  surface. Retiring turns that into an honest "no such object" instead. Absent- and error-safe: with
+ *  no default data source there is no db and nothing managed to retire, and a retire failure never
+ *  breaks the mount. Deduplicates by folded VIEW name (a status-bearing + status-less binding on one
+ *  table share the default name) so we DROP each once. */
+function retireInstanceTrackingViews(api: AppApi, bindings: readonly InstanceTracking[]): void {
+  if (bindings.length === 0) return;
+  if (!api.data.hasDefaultSource()) return;
+  let db: ProvisionDb;
+  try {
+    db = api.data.source().db;
+  } catch (err) {
+    api.log("warn", "instanceTracking: failed to resolve default source; stale derived VIEWs not retired", {
+      error: String(err),
+    });
+    return;
+  }
+  const retired = new Set<string>();
+  for (const binding of bindings) {
+    let viewName: string;
+    try {
+      viewName = assertSqlIdentifier("instanceTracking.readModel.view", instanceTrackingReadModelTarget(binding).view);
+    } catch {
+      // A non-identifier view name was never provisionable, so there is nothing managed to retire.
+      continue;
+    }
+    const folded = viewName.toLowerCase();
+    if (retired.has(folded)) continue;
+    retired.add(folded);
+    retireManagedTrackingView(api, db, viewName, binding.table);
   }
 }
 
@@ -505,10 +555,13 @@ export function mountInstanceTracking(
   // view body) but then reads `no such table`, so the mount would look successful while the page fails.
   // Both are absent-safe: with no default data source `projections` is undefined and no VIEW is
   // provisioned, so each poll degrades to a pure engine query that feeds nothing (never throwing). When
-  // projection setup fails (undefined) there is nothing coherent to derive over, so VIEW provisioning is
-  // skipped as well.
+  // projection setup FAILS after an earlier boot succeeded (undefined despite a default source), there is
+  // nothing coherent to derive over, so instead of leaving a prior boot's VIEW readable over an
+  // unavailable/stale projection we RETIRE the managed VIEWs — an honest missing surface, not a silent
+  // stale one.
   const projections = tryInstanceProjections(api);
   if (projections) provisionInstanceTrackingViews(api, bindings);
+  else retireInstanceTrackingViews(api, bindings);
 
   for (const binding of bindings) {
     // `pollMs` feeds a self-rescheduling timer, so a non-number/NaN/zero/negative value would

@@ -41,6 +41,7 @@ import { fakeScheduler } from "./scheduler.test-utils.ts";
 function fakeEngine(
   states: Record<string, ProcessInstanceSnapshot["state"]>,
   openTasks: Record<string, number> = {},
+  failOpenTaskKeys: ReadonlySet<string> = new Set(),
 ): {
   engine: EngineClient;
   queries: string[][];
@@ -72,6 +73,11 @@ function fakeEngine(
     async openUserTasks(filter?: UserTaskFilter): Promise<UserTaskSummary[]> {
       const key = filter?.processInstanceKey;
       userTaskQueries.push(key);
+      // A key in `failOpenTaskKeys` models a permanently-failing engine probe (issue #452 review):
+      // one such key must not reject the whole `Promise.all` batch and starve the rest of the backlog.
+      if (key !== undefined && failOpenTaskKeys.has(key)) {
+        throw new Error(`openUserTasks probe permanently failing for ${key}`);
+      }
       const n = key ? (openTasks[key] ?? 0) : 0;
       return Array.from({ length: n }, (_unused, i): UserTaskSummary => ({
         userTaskKey: `${key}-t${i}`,
@@ -955,6 +961,77 @@ test("memoizes the settled-state projection lookup — one settled getState per 
   await sched.advance(1000);
   assert.equal(getStateQueries, 2); // 1 memoized `settled` + 1 terminal-recheck (un-memoized: 3)
   await handle.stop();
+  await h.close();
+});
+
+test("a failing openUserTasks probe does not starve other keys in later batches (issue #452 review)", async () => {
+  // `Promise.all` rejects the whole batch on one probe failure, and batches are awaited sequentially, so
+  // before the fix a permanently-failing key in the FIRST batch prevented every key in later batches from
+  // ever being probed/synced. With B+1 keys (B = probe concurrency) the failing key sits in batch 1 and
+  // one healthy key (`okLast`) sits in batch 2 — it must still get its open task synced, and the pass must
+  // NOT surface as a whole-pass "reconcile failed" error (only a per-key probe warn).
+  const C = WAITING_HUMAN_PROBE_CONCURRENCY;
+  const keys = ["fail", ...Array.from({ length: C }, (_u, i) => `ok${i}`)];
+  const okLast = `ok${C - 1}`; // the sole batch-2 key (keys = [fail, ok0..ok{C-1}] ⇒ batch2 = [ok{C-1}])
+  const states: Record<string, ProcessInstanceSnapshot["state"]> = {};
+  const openTasks: Record<string, number> = {};
+  for (const k of keys) {
+    states[k] = "ACTIVE"; // none terminal ⇒ all are probed for the wait-on-human edge
+    if (k !== "fail") openTasks[k] = 1; // every healthy key has one parked human task to sync
+  }
+  const { engine } = fakeEngine(states, openTasks, new Set(["fail"]));
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    // Seed "fail" first so it lands in batch 1 (humanKeySet preserves base-row/insertion order).
+    let idx = 0;
+    for (const k of keys) {
+      await t.insert({ plan_key: `p${idx++}`, process_key: k, status: "dispatched", note: null });
+    }
+  });
+  const sched = fakeScheduler();
+  const handle = mount(h, [planBinding({ onWaitingHuman: { set: { status: "awaiting_operator" } } })], sched);
+  await sched.advance(1000);
+  // The batch-2 healthy key was still probed and its projection synced despite the batch-1 failure.
+  assert.equal(projectedOpenTasks(h, okLast), 1);
+  // Isolation is per-key: a probe warn is logged, but the pass itself did not fail wholesale.
+  assert.ok(h.logs.some((l) => l.level === "warn" && /probe failed/.test(l.msg)));
+  assert.ok(!h.logs.some((l) => l.level === "error" && /reconcile failed/.test(l.msg)));
+  await handle.stop();
+  await h.close();
+});
+
+test("retires a prior boot's managed VIEW when the projection feed becomes unavailable (issue #452 review)", async () => {
+  // If projection-store provisioning fails on a later mount (after an earlier boot published the VIEW),
+  // the whole provisioning pass used to be skipped, leaving the derived VIEW readable over an
+  // unavailable/stale projection. It must instead be RETIRED — an honest missing surface, not a silent
+  // stale one.
+  const { engine } = fakeEngine({ pi1: "ACTIVE" });
+  const h = await withHarness(engine, PLANS_DDL, async (t) => {
+    await t.insert({ plan_key: "p1", process_key: "pi1", status: "dispatched", note: null });
+  });
+  const viewExists = (): number =>
+    h.db.all<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM sqlite_master WHERE type='view' AND name='plans__tracking'",
+    )[0]?.n ?? 0;
+  const sched1 = fakeScheduler();
+  const first = mount(h, [planBinding()], sched1);
+  assert.equal(viewExists(), 1); // earlier boot published the managed VIEW
+  await first.stop();
+
+  // Make the next mount's projection setup fail: throw only for the instance-state `ensureSchema` DDL so
+  // `tryInstanceProjections` returns undefined, while the retire path's `DROP VIEW` still executes.
+  h.db.exec = new Proxy(h.db.exec, {
+    apply(target, _thisArg, args) {
+      const sql = args[0];
+      if (typeof sql === "string" && sql.includes(INSTANCE_STATE_TABLE)) {
+        throw new Error("simulated projection schema provisioning failure");
+      }
+      return Reflect.apply(target, h.db, args);
+    },
+  });
+  const sched2 = fakeScheduler();
+  const second = mount(h, [planBinding()], sched2);
+  assert.equal(viewExists(), 0); // retired — no longer serving a value over an unavailable projection
+  await second.stop();
   await h.close();
 });
 

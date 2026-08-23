@@ -192,9 +192,17 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
   if (tracking) {
     tracking.forEach((t, i) => {
       const b = isRecord(t) ? t : undefined;
+      // Only a status-bearing binding builds a derived VIEW; a status-less binding just feeds projections
+      // and is polled through `api.data.table()`, whose `Table<T>` gateway safely `quoteIdent`s the base
+      // table and key column (so a name like `external-orders` works). The SQL_IDENT restriction below is
+      // therefore required ONLY when a VIEW is actually built (`table`/`keyField` are interpolated raw into
+      // its DDL/edge predicates then) — enforcing it on a status-less binding wrongly rejects a valid name
+      // that provisioning never touches. Gate on `buildsView` so validation and provisioning agree exactly
+      // (No Drift — a name is rejected here iff it would break at VIEW build).
+      const buildsView = typeof b?.statusField === "string" && b.statusField.length > 0;
       if (typeof b?.table !== "string" || b.table.length === 0) {
         issues.push({ path: `instanceTracking[${i}].table`, message: "missing table" });
-      } else if (!SQL_IDENT.test(b.table)) {
+      } else if (buildsView && !SQL_IDENT.test(b.table)) {
         // The base `table` is compiled directly into the derived VIEW's DDL (`defineReadModel` asserts
         // `baseTable` matches SQL_IDENT). Manifest validation historically only checked non-empty, so a
         // name like `external-orders` validated and was polled while the VIEW was silently skipped at
@@ -207,9 +215,9 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
       }
       if (typeof b?.keyField !== "string" || b.keyField.length === 0) {
         issues.push({ path: `instanceTracking[${i}].keyField`, message: "missing keyField" });
-      } else if (!SQL_IDENT.test(b.keyField)) {
+      } else if (buildsView && !SQL_IDENT.test(b.keyField)) {
         // `keyField` is interpolated into the derived VIEW's edge predicates (`terminatedEdgeExpr`), so it
-        // must be a bare identifier for the same reason `table` must.
+        // must be a bare identifier for the same reason `table` must — but only when a VIEW is built.
         issues.push({
           path: `instanceTracking[${i}].keyField`,
           message: `keyField must be a SQL identifier (${SQL_IDENT.source})`,

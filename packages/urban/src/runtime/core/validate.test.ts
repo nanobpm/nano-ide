@@ -530,6 +530,25 @@ test("non-identifier table / keyField / statusField are flagged (they compile in
   assert.ok(issues.some((i) => i.path === "instanceTracking[0].statusField"));
 });
 
+test("a STATUS-LESS instanceTracking binding accepts a non-identifier table/keyField (no VIEW is built)", () => {
+  // A binding with no `statusField` provisions no derived VIEW; it only feeds projections and is polled
+  // through `api.data.table()`, whose `Table<T>` gateway `quoteIdent`s the base table + key column. So a
+  // hyphenated/spaced name like `external-orders` / `process key` works and MUST NOT be rejected here —
+  // the SQL_IDENT rule applies only when a VIEW is actually built (No Drift with provisioning).
+  const issues = collectManifestIssues({
+    ...valid,
+    instanceTracking: [
+      {
+        table: "external-orders",
+        keyField: "process key",
+        onTerminated: { set: { status: "abandoned" } },
+      },
+    ],
+  });
+  assert.ok(!issues.some((i) => i.path === "instanceTracking[0].table"));
+  assert.ok(!issues.some((i) => i.path === "instanceTracking[0].keyField"));
+});
+
 test("an unknown key inside readModel is flagged (additionalProperties: false)", () => {
   // A typo like `statusColum` would silently fall back to the default derived column while the page reads
   // the wrong field. Mirror the `network` block's unknown-key rejection.

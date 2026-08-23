@@ -297,6 +297,15 @@ test("defineReadModel evaluate resolves the lookup + defaults the same way the V
   assert.equal(noPrs.delivery, null);
 });
 
+test("a bare fnFor call on an rcol column fails loudly (must resolve lookups via evaluate)", () => {
+  // rcol needs a resolved lookup row; a caller that skips resolution (bare fnFor, no lookups arg) must
+  // get a clear error rather than a silent NULL that would drift from the VIEW's LEFT JOIN.
+  assert.throws(
+    () => planDelivery.fnFor("delivery")({ plan_key: "p1", status: "done" }),
+    /without a resolved lookup row/,
+  );
+});
+
 test("a read model can carry TWO distinct rollup lookups (plan_read_model shape)", async () => {
   const planSummary = defineReadModel({
     name: "plan_summary_rm",

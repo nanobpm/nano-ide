@@ -442,9 +442,13 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
 // ─────────────────────────────────────────── TS backend ──────────────────────────────────────────
 
 /** The resolved single rollup-lookup rows for one evaluation, keyed by lookup alias (see {@link rcol}).
- *  Each value is the matched rollup group row (its NULL/missing columns already filled with the
- *  lookup's declared defaults) or `undefined` when the key found no group (a LEFT-JOIN miss). */
-export type LookupRows = Record<string, Record<string, unknown> | undefined>;
+ *  Every declared lookup alias maps to exactly one resolved row: the matched rollup group with its
+ *  missing/NULL columns already filled from the lookup's declared defaults (the TS twin of the VIEW's
+ *  `COALESCE(alias.col, default)`). A LEFT-JOIN miss is therefore represented as a defaults/NULL-filled
+ *  row — NOT an absent alias — so `rcol` always reads a stable object. Framework resolvers
+ *  ({@link ReadModel.evaluate}, the parity guard) populate this; a raw `fnFor` caller on a model with
+ *  lookups must pass the resolved map. */
+export type LookupRows = Record<string, Record<string, unknown>>;
 
 /** The compiled runtime derivation: same value as the SQL VIEW, computed in-process. */
 export type DerivationFn = (baseRow: BaseRow, projections?: ProjectionRows, lookups?: LookupRows) => unknown;
@@ -576,10 +580,16 @@ export function compileToFn(expr: Expr): DerivationFn {
         return lookupColumn(projRow, node.name);
       case "rcol": {
         const row = lookups[node.lookup];
-        // A LEFT-JOIN miss (no matching rollup group) yields NULL for every looked-up column, matching
-        // SQLite. The read model pre-fills the resolved row's declared defaults, so a present row already
-        // carries the COALESCE'd value; an absent row reads NULL here.
-        return row ? lookupColumn(row, node.name) : null;
+        // Every declared lookup alias is resolved to a full row up front (a LEFT-JOIN miss becomes a
+        // defaults/NULL-filled row, never an absent alias — see LookupRows). A missing alias here means a
+        // raw `fnFor` caller skipped lookup resolution; fail loudly rather than silently reading NULL.
+        if (!row) {
+          throw new Error(
+            `rcol("${node.lookup}", "${node.name}") evaluated without a resolved lookup row — ` +
+              `use ReadModel.evaluate() (or pass the model's resolved lookups) instead of a bare fnFor call`,
+          );
+        }
+        return lookupColumn(row, node.name);
       }
       case "compare":
         return compareValues(
@@ -1658,14 +1668,39 @@ function materializeRollupSource(source: RollupSource, inputs: RollupInputs): Re
         }
         return row;
       };
+      // Build the composite join key with the SAME storage-class-tagged encoding the GROUP BY reduce
+      // uses (groupKeyPart): integer number/bigint of equal value collide, numeric never equals text —
+      // matching `compareValues("eq", …)`. A nullish part yields `null` (no key), because SQLite's
+      // `ON l.k = r.k` never matches a NULL key, so those rows are excluded from the join entirely.
+      const keyOf = (row: Record<string, unknown>, cols: readonly string[]): string | null => {
+        const parts: string[] = [];
+        for (const c of cols) {
+          const v = lookupColumn(row, c);
+          if (v === null || v === undefined) return null;
+          parts.push(groupKeyPart(v));
+        }
+        return parts.join("\u0001");
+      };
+      // Index the right side once by its join key (O(|right|)) so each left row probes in O(1) rather
+      // than scanning every right row (was O(|left|·|right|)).
+      const rightCols = source.on.map((p) => p.right);
+      const leftCols = source.on.map((p) => p.left);
+      const rightByKey = new Map<string, Record<string, unknown>[]>();
+      for (const r of rightRows) {
+        const k = keyOf(r, rightCols);
+        if (k === null) continue;
+        let bucket = rightByKey.get(k);
+        if (!bucket) {
+          bucket = [];
+          rightByKey.set(k, bucket);
+        }
+        bucket.push(r);
+      }
       const out: Record<string, unknown>[] = [];
       for (const l of leftRows) {
-        // Join equality mirrors SQLite's `ON l.k = r.k`: a NULL key never matches (compareValues folds
-        // any nullish operand to false), so an unmatched LEFT row keeps NULL right columns.
-        const matches = rightRows.filter((r) =>
-          source.on.every((p) => compareValues("eq", lookupColumn(l, p.left), lookupColumn(r, p.right))),
-        );
-        if (matches.length === 0) {
+        const k = keyOf(l, leftCols);
+        const matches = k === null ? undefined : rightByKey.get(k);
+        if (!matches || matches.length === 0) {
           if (source.type !== "inner") out.push(map(l, undefined));
         } else {
           for (const r of matches) out.push(map(l, r));

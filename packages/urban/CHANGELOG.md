@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.81.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.80.0...@nanobpm/urban-0.81.0) (2026-08-23)
+
+
+### Features
+
+* **urban:** invert instanceTracking reconciler from writer to source (ADR 0065) ([#462](https://github.com/nanobpm/nano-ide/issues/462)) ([912c16a](https://github.com/nanobpm/nano-ide/commit/912c16a08314d5db43d414398196d0d00a972e56))
+
 ## [0.80.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.79.0...@nanobpm/urban-0.80.0) (2026-08-23)
 
 

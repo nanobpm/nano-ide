@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.13.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.12.16...@nanobpm/urban-testkit-0.13.0) (2026-08-23)
+
+
+### Features
+
+* **urban:** invert instanceTracking reconciler from writer to source (ADR 0065) ([#462](https://github.com/nanobpm/nano-ide/issues/462)) ([912c16a](https://github.com/nanobpm/nano-ide/commit/912c16a08314d5db43d414398196d0d00a972e56))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * devDependencies
+    * @nanobpm/urban bumped from >=0.80.0 to >=0.81.0
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.50.0 to >=0.81.0
+
 ## [0.12.16](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.12.15...@nanobpm/urban-testkit-0.12.16) (2026-08-23)
 
 

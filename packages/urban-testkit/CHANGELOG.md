@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.13.0...@nanobpm/urban-testkit-0.13.1) (2026-08-23)
+
+
+### Dependencies
+
+* **urban-testkit:** bump engine-wasm/engine-testkit/urban ranges and drop duplicate urban dep ([#466](https://github.com/nanobpm/nano-ide/issues/466)) ([bedca06](https://github.com/nanobpm/nano-ide/commit/bedca065c7be9d787480dcb7f8cca13f1cd4681a))
+
 ## [0.13.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.12.16...@nanobpm/urban-testkit-0.13.0) (2026-08-23)
 
 

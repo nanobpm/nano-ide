@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.80.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.79.0...@nanobpm/urban-0.80.0) (2026-08-23)
+
+
+### Features
+
+* **urban:** render engine-declared forms in a pages dataGrid detail ([#463](https://github.com/nanobpm/nano-ide/issues/463)) ([cdef0df](https://github.com/nanobpm/nano-ide/commit/cdef0df435209614a0980cba12e79cbdbb235c42))
+
 ## [0.79.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.78.0...@nanobpm/urban-0.79.0) (2026-08-22)
 
 

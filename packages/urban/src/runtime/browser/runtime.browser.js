@@ -2769,7 +2769,11 @@ function renderAppView(node) {
   });
 
   const section = el("section", { class: "pc-appview" + (fill ? " pc-appview-fill" : "") });
-  if (title) section.append(el("div", { class: "pc-appview-title" }, title));
+  // The title is an <h2> (the tag EVERY card renderer uses and makeCollapsible lifts into the
+  // collapse header), not a <div>: a collapsible appView's title must be lifted out of the body,
+  // otherwise it double-renders (header label + leftover in-body title). The .pc-appview-title CSS
+  // is class-based, so a non-collapsible appView renders identically.
+  if (title) section.append(el("h2", { class: "pc-appview-title" }, title));
   section.append(frame);
   return section;
 }

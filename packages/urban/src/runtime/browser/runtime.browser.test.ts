@@ -157,12 +157,27 @@ test("#416: renderAppView mounts a base-relative iframe honoring embed/title/fil
   assert.equal(frame.getAttribute("title"), "Agent networks");
   assert.equal(frame.className, "pc-appview-frame");
 
-  // The title also renders as a visible label above the frame.
+  // The title also renders as a visible label above the frame — as an <h2> (see below).
   const label = section.children.find(
     (c): c is FakeElement => c instanceof FakeElement && c.className === "pc-appview-title",
   );
   assert.ok(label, "the title renders as a label");
+  assert.equal(label.tagName, "H2", "the appView title must be an <h2> so makeCollapsible lifts it (no duplicate title when collapsible)");
   assert.equal(label.textContent, "Agent networks");
+});
+
+test("#471: the appView title is an <h2> so a collapsible appView doesn't double-render it", (t) => {
+  // makeCollapsible lifts a card's title out of the body into the collapse header by finding the
+  // renderer's <h2> (card.querySelector('h2')). Every card renderer emits an <h2>; renderAppView
+  // used to emit a <div class=pc-appview-title>, so the lift missed it and a collapsible appView
+  // showed its title twice (header label + leftover in-body div). Pin the tag so that can't regress.
+  t.after(installFakeDom());
+  const section = asFake(renderAppView({ type: "appView", props: { title: "Staged proposals", embed: "./e.html" } }));
+  const label = section.children.find(
+    (c): c is FakeElement => c instanceof FakeElement && c.className === "pc-appview-title",
+  );
+  assert.ok(label, "the appView renders a title label");
+  assert.equal(label.tagName, "H2", "renderAppView must emit its title as the <h2> makeCollapsible lifts");
 });
 
 test("#416: renderAppView rebases a root-absolute embed onto the mount root", (t) => {

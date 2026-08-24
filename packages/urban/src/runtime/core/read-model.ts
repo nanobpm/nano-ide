@@ -1921,6 +1921,37 @@ export function defineRollup(decl: RollupDecl): Rollup {
     forEachAggPredicate(agg, (pred) => assertRollupPredicate(`rollup "${decl.name}" aggregate "${a}"`, pred));
   }
 
+  // Fail-fast: when the source's output namespace is statically known — a key-`join` exposes its flat
+  // `columns` map, a composed `rollup` exposes its `outputColumns` — reject a rollup that references a
+  // `groupBy`/`col(...)` name absent from it. Otherwise the two backends drift silently: the SQL side
+  // throws (`no mapped column` for a join; `no such column` for a rollup source) at view compilation /
+  // query time, while the TS reduce reads NULL via `lookupColumn` and groups/counts against a phantom
+  // column. Fold names case-insensitively to mirror the resolvers (SQLite identifier folding +
+  // `lookupColumn`). A `table`/`projection` source has no statically-known namespace here, so it is
+  // left to the existing per-relation resolution.
+  const knownNamespaceCols =
+    decl.source.kind === "join"
+      ? Object.keys(decl.source.columns)
+      : decl.source.kind === "rollup"
+        ? decl.source.rollup.outputColumns
+        : undefined;
+  if (knownNamespaceCols) {
+    const knownFolded = new Set(knownNamespaceCols.map(foldSqlIdentifier));
+    const referencedCols = new Set<string>();
+    for (const g of decl.groupBy) referencedCols.add(g);
+    if (decl.where) collectColumns(decl.where, referencedCols, new Map(), new Map());
+    for (const a of aggNames) collectAggColumns(decl.aggregates[a], referencedCols);
+    for (const name of referencedCols) {
+      if (!knownFolded.has(foldSqlIdentifier(name))) {
+        const kind = decl.source.kind === "join" ? "join source" : "rollup source";
+        throw new Error(
+          `rollup "${decl.name}" references column "${name}" absent from its ${kind} output namespace ` +
+            `[${knownNamespaceCols.join(", ")}]`,
+        );
+      }
+    }
+  }
+
   const outputColumns = [...decl.groupBy, ...aggNames];
   const sourceRelations = [...new Set(rollupSourceRelations(decl.source))];
   const dependencies = decl.source.kind === "rollup" ? decl.source.rollup.viewChain : [];

@@ -205,6 +205,46 @@ test("defineRollup join source resolves group/predicate columns case-insensitive
   });
 });
 
+test("defineRollup rejects a groupBy/col reference absent from a known JOIN source namespace (fail-fast, no backend drift)", () => {
+  // The SQL side would throw `no mapped column` at view compilation while the TS reduce reads NULL via
+  // `lookupColumn` and groups/counts against a phantom column — a silent cross-backend drift. Reject it
+  // deterministically at declaration time instead.
+  assert.throws(
+    () =>
+      defineRollup({
+        name: "plan_delivery_counts_badcol",
+        source: joinSource({
+          left: { relation: "plan_tasks", alias: "t" },
+          right: { relation: "pull_requests", alias: "p" },
+          on: [{ left: "pr_key", right: "pr_key" }],
+          columns: {
+            plan_key: ["left", "plan_key"],
+            pr_key: ["left", "pr_key"],
+          },
+        }),
+        groupBy: ["plan_key"],
+        aggregates: { merged: countWhere(eq(col("pr_status"), lit("merged"))) },
+      }),
+    /references column "pr_status" absent from its join source output namespace/,
+  );
+});
+
+test("defineRollup rejects a groupBy/col reference absent from a known ROLLUP source namespace (fail-fast, no backend drift)", () => {
+  // A rollup-over-rollup that references a column the inner rollup does not output: the SQL side throws
+  // `no such column` at query time while the TS reduce reads NULL via `lookupColumn` — reject it
+  // deterministically at declaration time instead.
+  assert.throws(
+    () =>
+      defineRollup({
+        name: "plan_wave_progress_badcol",
+        source: fromRollup(planWaveCounts),
+        groupBy: ["plan_key"],
+        aggregates: { x: max("nonexistent") },
+      }),
+    /references column "nonexistent" absent from its rollup source output namespace/,
+  );
+});
+
 test("defineRollup (two-level group key + WHERE) parity-matches — plan_wave_counts", async () => {
   await withDb((db) => {
     assert.doesNotThrow(() =>

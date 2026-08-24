@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.82.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.82.0...@nanobpm/urban-0.82.1) (2026-08-24)
+
+
+### Bug Fixes
+
+* **urban:** emit appView title as an &lt;h2&gt; so collapsible panels don't double-render it ([#472](https://github.com/nanobpm/nano-ide/issues/472)) ([8354b8c](https://github.com/nanobpm/nano-ide/commit/8354b8c0de9b66f02e041db4f5b9877b8896b1e1))
+
 ## [0.82.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.81.0...@nanobpm/urban-0.82.0) (2026-08-24)
 
 

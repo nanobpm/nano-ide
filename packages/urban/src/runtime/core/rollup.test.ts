@@ -481,6 +481,37 @@ test("resolveLookups reads candidates case-insensitively — a differently-cased
   });
 });
 
+test("assertReadModelParity widens/inserts lookup fixtures case-insensitively — differently-cased sample key still parity-matches", async () => {
+  // The parity guard's fixture WIDENING and INSERTION must resolve each sample's lookup key the same way
+  // `resolveLookups` does: case-insensitively (SQLite identifier folding). A sample keyed `{ C: [...] }`
+  // for a lookup declared `as: "c"` must reach the SQL fixture — else the guard inserts NOTHING (VIEW
+  // LEFT JOIN NULL/default-fills to prs_opened=0) while the TS resolver folds and reads 7, producing a
+  // FALSE parity mismatch. This exercises the guard itself (round-3 only covered the TS resolver, and
+  // passed the parity sample under the matching lowercase key, so this surface stayed untested).
+  const model = defineReadModel({
+    name: "plan_delivery_cased_fixture",
+    baseTable: "plans",
+    lookups: [
+      {
+        as: "c",
+        rollup: planDeliveryCounts,
+        on: [{ base: "plan_key", rollup: "plan_key" }],
+        defaults: { prs_opened: 0 },
+      },
+    ],
+    derive: { opened: rcol("c", "prs_opened") },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      // Sample lookup keyed under the UPPER-CASE alias for a lookup declared `as: "c"`.
+      assertReadModelParity(model, db, [
+        { baseRow: { plan_key: "p1" }, lookups: { C: [{ plan_key: "p1", prs_opened: 7 }] } },
+        { baseRow: { plan_key: "p2" }, lookups: { C: [] } },
+      ]),
+    );
+  });
+});
+
 test("assertRollupParity builds TEMP fixtures under the PHYSICAL table a projection name maps to", async () => {
   // A `fromProjection` source names a LOGICAL projection; the compiled VIEW resolves it to a physical
   // relation via `resolveProjectionTable` (e.g. `urban_instance_state` → `_urban_instance_state`). The

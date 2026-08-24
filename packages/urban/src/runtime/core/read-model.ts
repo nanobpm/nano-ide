@@ -1249,10 +1249,16 @@ export function assertReadModelParity(
       if (!set) continue;
       for (const r of rows) for (const k of Object.keys(r)) set.add(k);
     }
-    for (const [alias, rows] of Object.entries(s.lookups ?? {})) {
-      const set = lookupColsByAlias.get(alias);
+    // Widen each DECLARED lookup's fixture from the sample's candidate rows read via
+    // {@link resolveCandidateRows} — the same case-insensitive OWN-key resolution `resolveLookups` uses
+    // (line ~1009) — so a sample supplying candidates under a different casing (e.g. `{ C: [...] }` for a
+    // lookup declared `as: "c"`) still widens the right fixture instead of being silently ignored (which
+    // would later insert nothing and fail parity for a non-parity reason). Keyed off `lookups`, not the
+    // sample's keys, so it mirrors the resolver exactly.
+    for (const lk of lookups) {
+      const set = lookupColsByAlias.get(lk.as);
       if (!set) continue;
-      for (const r of rows) for (const k of Object.keys(r)) set.add(k);
+      for (const r of resolveCandidateRows(s.lookups ?? {}, lk.as)) for (const k of Object.keys(r)) set.add(k);
     }
   }
 
@@ -1374,10 +1380,15 @@ export function assertReadModelParity(
         if (!table) continue;
         for (const r of rows) insertRow(table, r);
       }
-      for (const [alias, rows] of Object.entries(sample.lookups ?? {})) {
-        const table = lookupTables.get(alias);
+      // Insert each DECLARED lookup's candidate rows read via {@link resolveCandidateRows} — the same
+      // case-insensitive OWN-key resolution `resolveLookups` uses below — so candidates supplied under a
+      // different casing (e.g. `{ C: [...] }` for a lookup declared `as: "c"`) reach the SQL fixture the
+      // VIEW's LEFT JOIN reads, instead of being dropped by an exact-key `sample.lookups[alias]` lookup and
+      // failing parity for a non-parity reason. Keyed off `lookups`, mirroring the resolver.
+      for (const lk of lookups) {
+        const table = lookupTables.get(lk.as);
         if (!table) continue;
-        for (const r of rows) insertRow(table, r);
+        for (const r of resolveCandidateRows(sample.lookups ?? {}, lk.as)) insertRow(table, r);
       }
 
       // Read the SQL-derived values straight from the managed VIEW — the VIEW body already computes

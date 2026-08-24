@@ -619,6 +619,38 @@ test("assertRollupParity builds TEMP fixtures under the PHYSICAL table a project
   });
 });
 
+test("assertRollupParity — count(col) excludes undefined column values, matching SQL COUNT(col) (TS/SQL nullish parity)", async () => {
+  // Copilot advisory read-model.ts:1861 worried the TS `count(column)` case — which filters
+  // `lookupColumn(r, col) !== null` — would COUNT an in-memory `undefined` (common in JS fixtures) even
+  // though SQL has no `undefined` and `COUNT(col)` excludes NULL, drifting the two backends apart. It does
+  // not: `lookupColumn` is the single source of truth for column reads and already coalesces
+  // `undefined`/missing → null (read-model.ts:644/647), so the filter excludes them exactly as SQL does.
+  // This pins that contract via the parity harness: a row carrying `undefined` (or a missing key) must NOT
+  // be counted, and the TS reduce must agree with SQL `COUNT(val)`. It fails the moment a future change to
+  // `lookupColumn`/the count case lets `undefined` slip through and reintroduces the cross-backend drift.
+  const countColNullish = defineRollup({
+    name: "count_col_nullish",
+    source: fromProjection("count_col_src"),
+    groupBy: ["grp"],
+    aggregates: { n: count("val") },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertRollupParity(countColNullish, db, [
+        {
+          count_col_src: [
+            { grp: "g", val: 1 },
+            { grp: "g", val: undefined }, // JS-only: SQL stores NULL; TS must coalesce → excluded
+            { grp: "g", val: null }, // explicit NULL → excluded by both backends
+            { grp: "g" }, // missing key entirely → NULL/excluded
+            { grp: "g", val: 2 },
+          ],
+        },
+      ]),
+    );
+  });
+});
+
 test("a read model can carry TWO distinct rollup lookups (plan_read_model shape)", async () => {
   const planSummary = defineReadModel({
     name: "plan_summary_rm",

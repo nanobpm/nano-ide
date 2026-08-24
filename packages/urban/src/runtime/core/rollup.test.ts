@@ -552,6 +552,37 @@ test("assertReadModelParity widens/inserts lookup fixtures case-insensitively �
   });
 });
 
+test("viewDdl rejects a caller-supplied baseAlias that folds to a rollup lookup alias — collision would reuse one identifier for the base table and a joined rollup", () => {
+  // Lookup aliases are validated against the DEFAULT base alias at definition time, but `viewDdl` lets a
+  // caller override `baseAlias`. An override that folds (SQLite compares identifiers case-insensitively)
+  // to a lookup alias would emit `FROM plans "c" ... LEFT JOIN plan_delivery_counts "c" ON ...` — the same
+  // identifier bound to both relations, producing ambiguous/invalid SQL. The override must be rejected the
+  // same way a definition-time collision is, so the two backends can never diverge on it.
+  const model = defineReadModel({
+    name: "plan_delivery_basealias_guard",
+    baseTable: "plans",
+    lookups: [
+      {
+        as: "c",
+        rollup: planDeliveryCounts,
+        on: [{ base: "plan_key", rollup: "plan_key" }],
+        defaults: { prs_opened: 0 },
+      },
+    ],
+    derive: { opened: rcol("c", "prs_opened") },
+  });
+  // The default alias ("base") does not collide, so the managed DDL still renders.
+  assert.doesNotThrow(() => model.viewDdl());
+  // An exact-case override colliding with the lookup alias must throw.
+  assert.throws(() => model.viewDdl({ baseAlias: "c" }), /collides with the base alias/);
+  // A DIFFERENTLY-CASED override must also throw (SQLite folds identifiers) — never silently ambiguous SQL.
+  assert.throws(() => model.viewDdl({ baseAlias: "C" }), /collides with the base alias/);
+  // A non-colliding override renders fine and binds the base table to the requested alias.
+  const ddl = model.viewDdl({ baseAlias: "b" });
+  assert.match(ddl, /FROM "plans" "b"/);
+  assert.match(ddl, /LEFT JOIN "plan_delivery_counts" "c"/);
+});
+
 test("collectColumns buckets rcol columns case-insensitively — a differently-cased alias's non-default column reaches the SQL fixture", async () => {
   // The SQL TEMP fixture builder pre-seeds each lookup bucket under its DECLARED alias (`as`) — its join
   // keys + declared-default columns — and then `collectColumns` records the derivation's `rcol`

@@ -911,18 +911,27 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
   // ── Rollup lookups (#468): validate the LEFT-JOIN key-lookups and build the alias → metadata map the
   // SQL `rcol` resolver and the TS row resolver share, so both backends read the same rollup columns. ──
   const lookups = decl.lookups ?? [];
-  const baseAlias0 = DEFAULT_BASE_ALIAS;
+  // Single source of truth for the base-alias/lookup-alias collision guard. A `baseAlias` that folds
+  // (SQLite compares identifiers case-insensitively) to a rollup lookup alias would make the managed
+  // VIEW reuse one identifier for both the base table and a joined rollup — ambiguous/invalid SQL. This
+  // runs both at definition time against the DEFAULT base alias AND inside `viewDdl` against a
+  // caller-supplied `baseAlias` override, which the definition-time check can't see (#468).
+  const assertBaseAliasDistinctFromLookups = (baseAlias: string): void => {
+    const folded = foldSqlIdentifier(baseAlias);
+    for (const lk of lookups) {
+      if (foldSqlIdentifier(lk.as) === folded) {
+        throw new Error(
+          `read model "${decl.name}" rollup lookup alias "${lk.as}" collides with the base alias "${baseAlias}"; choose another`,
+        );
+      }
+    }
+  };
   const lookupByAlias = new Map<string, RollupLookupDecl>();
   for (const lk of lookups) {
     assertSqlIdentifier("rollup lookup alias", lk.as);
     const key = foldSqlIdentifier(lk.as);
     if (lookupByAlias.has(key)) {
       throw new Error(`read model "${decl.name}" declares two rollup lookups under alias "${lk.as}"`);
-    }
-    if (key === foldSqlIdentifier(baseAlias0)) {
-      throw new Error(
-        `read model "${decl.name}" rollup lookup alias "${lk.as}" collides with the base alias; choose another`,
-      );
     }
     if (lk.on.length === 0) throw new Error(`read model "${decl.name}" rollup lookup "${lk.as}" has an empty join key`);
     for (const pair of lk.on) {
@@ -949,6 +958,9 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
     }
     lookupByAlias.set(key, lk);
   }
+  // Definition-time guard: no lookup alias may collide with the DEFAULT base alias (a caller-supplied
+  // `baseAlias` override is guarded separately inside `viewDdl`, which is the only place it's known).
+  assertBaseAliasDistinctFromLookups(DEFAULT_BASE_ALIAS);
   // Validate every `rcol(alias, name)` reference resolves to a declared lookup and a real rollup column.
   {
     const baseColsSeen = new Set<string>();
@@ -1002,6 +1014,9 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
 
   const viewDdl = (options?: SqlCompileOptions, viewOptions?: ViewDdlOptions): string => {
     const baseAlias = resolveBaseAlias(options?.baseAlias);
+    // A caller-supplied `baseAlias` override is only known here — guard it against the lookup aliases so
+    // the LEFT JOINs below can't reuse the base table's identifier for a joined rollup (invalid SQL).
+    assertBaseAliasDistinctFromLookups(baseAlias);
     const selectBase = decl.selectBaseColumns !== false;
     const derived = columns.map((c) => `${sqlSelectFor(c, options)} AS ${quoteIdent(c)}`);
     const selectList = [...(selectBase ? [`${quoteIdent(baseAlias)}.*`] : []), ...derived].join(",\n  ");

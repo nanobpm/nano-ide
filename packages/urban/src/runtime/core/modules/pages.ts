@@ -905,6 +905,11 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
 .pc-appview-frame { display:block; width:100%; min-height:24rem; border:1px solid var(--nano-edge); border-radius:.6rem; background:var(--nano-inset); }
 .pc-appview-fill { display:flex; flex-direction:column; min-height:min(80vh,48rem); }
 .pc-appview-fill .pc-appview-frame { flex:1 1 auto; min-height:0; }
+/* When a fill appView is ALSO collapsible, makeCollapsible reparents the iframe into a
+   .pc-card-body, so the frame is no longer a direct flex child of .pc-appview-fill and its
+   flex:1 above stops taking effect (the panel loses its height). Make the collapse body a flex
+   item that grows AND a flex column, so fill propagates through it to the frame. */
+.pc-appview-fill .pc-card-body { flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
 /* A standalone button node + the modal it opens (e.g. a copy-pasteable prompt). */
 .pc-buttonrow { margin:1rem 0; }
 .pc-btn-ghost { background:transparent; color:var(--nano-text-muted); border:1px solid var(--nano-edge); }

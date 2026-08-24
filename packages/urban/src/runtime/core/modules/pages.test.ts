@@ -579,6 +579,16 @@ test("renderer supports an opt-in sticky nav bar", async () => {
   assert.match(css, /\.pc-bar\.pc-sticky \{[^}]*position:sticky[^}]*top:0/);
 });
 
+test("#471: a fill appView keeps its height when also collapsible (flex propagates through .pc-card-body)", async () => {
+  const css = (await dispatch("GET", "/")).body ?? "";
+  // makeCollapsible reparents a collapsible node's body (the iframe, for an appView) into a
+  // `.pc-card-body`, so a `fill` appView's frame is no longer a direct flex child of
+  // `.pc-appview-fill` and its `flex:1` stops applying. The shell CSS must make the collapse body a
+  // grow-able flex column so `fill` propagates through it to the frame.
+  assert.match(css, /\.pc-appview-fill \.pc-appview-frame \{[^}]*flex:1 1 auto/);
+  assert.match(css, /\.pc-appview-fill \.pc-card-body \{[^}]*flex:1 1 auto[^}]*display:flex[^}]*flex-direction:column/);
+});
+
 test("renderer exposes an embed-gated host-navigation bridge", async () => {
   const res = await dispatch("GET", "/app/runtime.js");
   const js = res.body ?? "";

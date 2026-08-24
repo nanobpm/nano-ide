@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.82.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.81.0...@nanobpm/urban-0.82.0) (2026-08-24)
+
+
+### Features
+
+* **urban:** add defineRollup GROUP-BY primitive + read-model rollup lookup ([#469](https://github.com/nanobpm/nano-ide/issues/469)) ([d6c6d91](https://github.com/nanobpm/nano-ide/commit/d6c6d91e497602b115017b6e1aaa881764d94cc0))
+
 ## [0.81.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.80.0...@nanobpm/urban-0.81.0) (2026-08-23)
 
 

@@ -552,8 +552,41 @@ test("assertReadModelParity widens/inserts lookup fixtures case-insensitively �
   });
 });
 
-test("assertRollupParity builds TEMP fixtures under the PHYSICAL table a projection name maps to", async () => {
-  // A `fromProjection` source names a LOGICAL projection; the compiled VIEW resolves it to a physical
+test("collectColumns buckets rcol columns case-insensitively — a differently-cased alias's non-default column reaches the SQL fixture", async () => {
+  // The SQL TEMP fixture builder pre-seeds each lookup bucket under its DECLARED alias (`as`) — its join
+  // keys + declared-default columns — and then `collectColumns` records the derivation's `rcol`
+  // references into that same map. If a derivation reads `rcol("C", "prs_in_flight")` against a lookup
+  // declared `as: "c"` — where `prs_in_flight` is NEITHER a join key NOR a declared default NOR present in
+  // the sample candidate rows — recording it under the verbatim key "C" (instead of folding to "c") lands
+  // it in a bucket the fixture builder never reads, so the column is dropped from the TEMP fixture table
+  // and the compiled VIEW's `c.prs_in_flight` read hits "no such column". Folding the bucket key puts it in
+  // the pre-seeded "c" bucket so the fixture carries the referenced column and both backends read NULL.
+  const model = defineReadModel({
+    name: "plan_delivery_folded_bucket",
+    baseTable: "plans",
+    lookups: [
+      {
+        as: "c",
+        rollup: planDeliveryCounts,
+        on: [{ base: "plan_key", rollup: "plan_key" }],
+        defaults: { prs_opened: 0 },
+      },
+    ],
+    derive: { flight: rcol("C", "prs_in_flight") },
+  });
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      // Candidate rows deliberately OMIT `prs_in_flight`, so only `collectColumns` can add it to the
+      // fixture — the sample-widening step cannot mask a divergent bucket key here.
+      assertReadModelParity(model, db, [
+        { baseRow: { plan_key: "p1" }, lookups: { c: [{ plan_key: "p1", prs_opened: 2 }] } },
+        { baseRow: { plan_key: "p2" }, lookups: { c: [] } },
+      ]),
+    );
+  });
+});
+
+test("assertRollupParity builds TEMP fixtures under the PHYSICAL table a projection name maps to", async () => {  // A `fromProjection` source names a LOGICAL projection; the compiled VIEW resolves it to a physical
   // relation via `resolveProjectionTable` (e.g. `urban_instance_state` → `_urban_instance_state`). The
   // parity guard must create/insert its TEMP fixtures under that PHYSICAL name — otherwise the VIEW's
   // FROM points at a table the (logical-named) fixture never created and SQLite throws "no such table".

@@ -584,7 +584,9 @@ export function compileToFn(expr: Expr): DerivationFn {
         // case-insensitively (SQLite folding), and the SQL `resolveRollupColumn` resolves `node.lookup`
         // through `foldSqlIdentifier` too, so a raw case-sensitive `lookups[node.lookup]` would let
         // `rcol("C", …)` pass validation against a lookup declared `as: "c"` yet fail here at runtime.
-        const row = lookups[foldSqlIdentifier(node.lookup)];
+        // Read by OWN property (via {@link readOwn}) so an identifier-legal `__proto__` alias over a bare
+        // `fnFor` caller's plain `{}` can't resolve `Object.prototype` (truthy) and bypass the guard below.
+        const row = readOwn(lookups, foldSqlIdentifier(node.lookup));
         // Every declared lookup alias is resolved to a full row up front (a LEFT-JOIN miss becomes a
         // defaults/NULL-filled row, never an absent alias — see LookupRows). A missing alias here means a
         // raw `fnFor` caller skipped lookup resolution; fail loudly rather than silently reading NULL.
@@ -621,7 +623,9 @@ export function compileToFn(expr: Expr): DerivationFn {
         return evalNode(node.else, baseRow, projections, lookups, projRow);
       }
       case "exists": {
-        const rows = projections[node.projection] ?? [];
+        // Read by OWN property so a projection literally named `__proto__` over a bare `fnFor` caller's
+        // plain `{}` resolves to no rows (empty EXISTS) instead of the inherited `Object.prototype`.
+        const rows = readOwn(projections, node.projection) ?? [];
         return rows.some((r) => truthy(evalNode(node.where, baseRow, projections, lookups, r)));
       }
     }
@@ -643,6 +647,16 @@ export function lookupColumn(row: Record<string, unknown>, name: string): unknow
     if (key.toLowerCase() === folded) return row[key] ?? null;
   }
   return null;
+}
+
+/** Read a dictionary entry by OWN property only. A model-controlled identifier (a lookup alias or
+ *  projection name) reaching a bare `fnFor` caller's plain-`{}` dictionary must not resolve an inherited
+ *  prototype member: `dict["__proto__"]` / `dict["toString"]` on a `{}` return truthy `Object.prototype` /
+ *  function values, which would slip past a `?? default` / missing-key guard and read from the prototype
+ *  chain. The canonical resolved dictionaries are `Object.create(null)`, but this keeps the bare-caller
+ *  path safe too (the sibling of the OWN-key checks in {@link lookupColumn}/{@link resolveCandidateRows}). */
+function readOwn<T>(dict: Record<string, T>, key: string): T | undefined {
+  return Object.hasOwn(dict, key) ? dict[key] : undefined;
 }
 
 /** Read a rollup lookup's candidate rows from the caller-supplied `lookupRows` dictionary by its alias,
@@ -810,9 +824,22 @@ function collectColumns(
       }
       return;
     case "rcol": {
-      const set = lookupCols.get(expr.lookup) ?? new Set<string>();
+      // Canonicalize the bucket key case-insensitively (SQLite folds lookup aliases): a derivation using
+      // rcol("C", …) must land in the SAME bucket as a lookup declared/seeded `as: "c"`, else the referenced
+      // column is recorded under a divergent key and both consumers (the parity guard and the SQL TEMP
+      // fixture builder, which fold on read) drop it — producing missing fixture columns / false parity
+      // failures. Reuse an existing key whose folded form matches (e.g. the pre-seeded declared alias).
+      const folded = foldSqlIdentifier(expr.lookup);
+      let key = expr.lookup;
+      for (const k of lookupCols.keys()) {
+        if (foldSqlIdentifier(k) === folded) {
+          key = k;
+          break;
+        }
+      }
+      const set = lookupCols.get(key) ?? new Set<string>();
       set.add(expr.name);
-      lookupCols.set(expr.lookup, set);
+      lookupCols.set(key, set);
       return;
     }
     case "compare":

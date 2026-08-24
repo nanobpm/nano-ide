@@ -24,6 +24,7 @@ import {
   pcol,
   ProjectionRegistry,
   projectionRegistry,
+  rcol,
   ReadModelRegistry,
   isReservedObjectName,
   RESERVED_OBJECT_PREFIXES,
@@ -247,8 +248,32 @@ test("compileToFn resolves col/pcol identifiers case-insensitively (SQLite ident
   assert.equal(corr({ key: "pi-1" }, { p: [{ process_instance_key: "pi-2" }] }), false);
 });
 
-test("mixed-case col/pcol identifiers: the VIEW and TS backends agree (VIEW/TS parity on the no-edge fallback)", async () => {
-  // End-to-end guard for the case-fold fix: author a model with mixed-case identifiers over lowercase
+test("compileToFn / rcol reads the resolved lookup row by OWN property (a `__proto__` alias can't resolve Object.prototype)", () => {
+  // Lookup aliases are only identifier-validated, so `__proto__` is a legal alias. A bare `fnFor` caller
+  // supplies a plain `{}` for `lookups`; a raw `lookups["__proto__"]` resolves the inherited
+  // `Object.prototype` (truthy), bypassing the "missing lookup row → throw" guard and reading NULLs off the
+  // prototype chain. Reading by OWN property keeps the guard fail-loud on the bare-caller path.
+  const fn = compileToFn(rcol("__proto__", "amount"));
+  assert.throws(() => fn({}), /without a resolved lookup row/);
+  // A genuinely-supplied own `__proto__` row still resolves (null-prototype dict, an own property).
+  const lookups: Record<string, Record<string, unknown>> = Object.create(null);
+  lookups.__proto__ = { amount: 7 };
+  assert.equal(fn({}, {}, lookups), 7);
+});
+
+test("compileToFn / exists reads projections by OWN property (a `__proto__` projection can't resolve Object.prototype)", () => {
+  // Projection names are user-controlled, so `__proto__` is legal. A bare `fnFor` caller passes a plain
+  // `{}` for projections; a raw `projections["__proto__"]` resolves the inherited `Object.prototype`
+  // (truthy, non-array), so `.some(...)` throws a TypeError. Reading by OWN property yields an empty EXISTS.
+  const fn = compileToFn(exists("__proto__", eq(col("k"), lit(1))));
+  assert.equal(fn({ k: 1 }), false); // no such projection → empty EXISTS, not a prototype read
+  // A genuinely-supplied own `__proto__` projection still matches.
+  const projections: Record<string, ReadonlyArray<Record<string, unknown>>> = Object.create(null);
+  projections.__proto__ = [{ k: 1 }];
+  assert.equal(fn({ k: 1 }, projections), true);
+});
+
+test("mixed-case col/pcol identifiers: the VIEW and TS backends agree (VIEW/TS parity on the no-edge fallback)", async () => {  // End-to-end guard for the case-fold fix: author a model with mixed-case identifiers over lowercase
   // columns and confirm the SQLite VIEW and the TS backend derive the SAME value — including the
   // parity-critical no-edge fallback that passes the stored status through.
   const mixed: ReadModel = defineReadModel({

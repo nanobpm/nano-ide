@@ -645,6 +645,27 @@ export function lookupColumn(row: Record<string, unknown>, name: string): unknow
   return null;
 }
 
+/** Read a rollup lookup's candidate rows from the caller-supplied `lookupRows` dictionary by its alias,
+ *  resolved the way SQLite folds identifiers: an exact OWN-key match first, then a case-insensitive
+ *  OWN-key fallback (the sibling of {@link lookupColumn}). Lookup aliases are case-insensitive SQL
+ *  identifiers — declared/deduped via `foldSqlIdentifier`, and `rcol` reads them folded — so candidates
+ *  supplied under a different casing (e.g. `{ C: [...] }` for an alias declared `c`) must still be found;
+ *  a raw case-sensitive `lookupRows[alias]` would silently treat them as "no candidates" and NULL/default-
+ *  fill, drifting from the folded treatment everywhere else. OWN-key checks (not the prototype-walking
+ *  `in`) also keep an identifier-legal `__proto__` alias from resolving to `Object.prototype` (inherited,
+ *  non-array) and throwing in the caller's `.filter(...)`. */
+function resolveCandidateRows(
+  lookupRows: Record<string, ReadonlyArray<Record<string, unknown>>>,
+  alias: string,
+): ReadonlyArray<Record<string, unknown>> {
+  if (Object.hasOwn(lookupRows, alias)) return lookupRows[alias];
+  const folded = foldSqlIdentifier(alias);
+  for (const key of Object.keys(lookupRows)) {
+    if (foldSqlIdentifier(key) === folded) return lookupRows[key];
+  }
+  return [];
+}
+
 // ───────────────────────────────────────── defineReadModel ───────────────────────────────────────
 
 /** The declarative read-model input passed to {@link defineReadModel}. */
@@ -979,11 +1000,13 @@ export function defineReadModel(decl: ReadModelDecl): ReadModel {
     // `{}` inherits from `Object.prototype` (same treatment as `evaluate()`'s derived-output map below).
     const resolved: LookupRows = Object.create(null);
     for (const lk of lookups) {
-      // Read candidates via an OWN-property check: `lookupRows` is a caller-supplied object (often a
-      // plain `{}` — e.g. `evaluate`'s `lookupRows ?? {}`), so an identifier-legal alias like `__proto__`
-      // would resolve `lookupRows["__proto__"]` to `Object.prototype` (inherited, truthy, non-array) and
-      // the `.filter(...)` below would throw. `Object.hasOwn` treats a missing alias as absent instead.
-      const candidates = Object.hasOwn(lookupRows, lk.as) ? lookupRows[lk.as] : [];
+      // Read candidates by the lookup's alias via {@link resolveCandidateRows}: an OWN-property check
+      // (so an identifier-legal `__proto__` alias over a plain `{}` can't resolve `lookupRows["__proto__"]`
+      // to `Object.prototype` — inherited, truthy, non-array — and throw in the `.filter(...)` below), plus
+      // a case-insensitive fallback so a caller supplying candidates under a different casing (e.g.
+      // `{ C: [...] }` for an alias declared `c`) is still matched, mirroring the folded alias treatment
+      // used by `rcol`, the resolved-row keying below, and the SQL LEFT JOIN.
+      const candidates = resolveCandidateRows(lookupRows, lk.as);
       const matches = candidates.filter((r) =>
         lk.on.every((p) => compareValues("eq", lookupColumn(baseRow, p.base), lookupColumn(r, p.rollup))),
       );
@@ -1763,6 +1786,32 @@ function rollupSourceRelations(source: RollupSource): string[] {
   }
 }
 
+/** The physical twin of {@link rollupSourceRelations}: each leaf relation name mapped to the physical
+ *  SQL table the compiled VIEW reads, applying the SAME projection→table resolution
+ *  {@link compileRollupSourceSql} uses — identity for a raw `table` source, `resolveProjectionTable` for
+ *  `projection`/`join` relations, recursing for a composed `rollup`. The parity guard builds its TEMP
+ *  fixtures under these names so they match the VIEW's `FROM`; otherwise a projection whose name maps to a
+ *  different physical relation (e.g. `urban_instance_state` → `_urban_instance_state`) would leave the
+ *  VIEW pointing at a table the logical-named fixture never created. */
+function rollupSourcePhysicalTables(
+  source: RollupSource,
+  resolveProjectionTable: (name: string) => string,
+): Map<string, string> {
+  switch (source.kind) {
+    case "table":
+      return new Map([[source.table, source.table]]);
+    case "projection":
+      return new Map([[source.projection, resolveProjectionTable(source.projection)]]);
+    case "join":
+      return new Map([
+        [source.left.relation, resolveProjectionTable(source.left.relation)],
+        [source.right.relation, resolveProjectionTable(source.right.relation)],
+      ]);
+    case "rollup":
+      return rollupSourcePhysicalTables(source.rollup.decl.source, resolveProjectionTable);
+  }
+}
+
 /** Evaluate one aggregate over a group's source rows (the TS backend). */
 function evalAgg(agg: AggExpr, rows: Record<string, unknown>[]): unknown {
   switch (agg.kind) {
@@ -2101,6 +2150,13 @@ export function assertRollupParity(
   const onMismatch = options.onMismatch ?? defaultOnMismatch;
   const fixtureCols = rollup.fixtureColumns();
   const relations = [...fixtureCols.keys()];
+  // Fixtures are keyed by LOGICAL relation name (what `RollupInputs`/`reduce` read), but the managed VIEW
+  // reads the PHYSICAL table `compileRollupSourceSql` resolves each projection/join relation to. Build the
+  // TEMP tables under those physical names (via the same resolver the VIEW is compiled with, line below)
+  // so the VIEW's `FROM` finds them; the column/row maps stay logical-keyed.
+  const resolveTable = options.sql?.resolveProjectionTable ?? ((n: string) => projectionRegistry.sqlTableFor(n));
+  const physicalTables = rollupSourcePhysicalTables(rollup.decl.source, resolveTable);
+  const physical = (rel: string): string => physicalTables.get(rel) ?? rel;
 
   const createFixture = (table: string, cols: Set<string>): void => {
     const colList = [...cols];
@@ -2126,7 +2182,7 @@ export function assertRollupParity(
     for (let i = rollup.viewChain.length - 1; i >= 0; i--) {
       db.exec(`DROP VIEW IF EXISTS temp.${quoteIdent(rollup.viewChain[i].projectionName)};`);
     }
-    for (const rel of relations) db.exec(`DROP TABLE IF EXISTS temp.${quoteIdent(rel)};`);
+    for (const rel of relations) db.exec(`DROP TABLE IF EXISTS temp.${quoteIdent(physical(rel))};`);
   };
 
   // Widen each leaf fixture with any extra column keys present in the sample rows.
@@ -2142,16 +2198,16 @@ export function assertRollupParity(
 
   dropFixtures();
   try {
-    for (const rel of relations) createFixture(rel, cols.get(rel) ?? new Set());
+    for (const rel of relations) createFixture(physical(rel), cols.get(rel) ?? new Set());
     // Materialise the VIEW chain (dependencies first) as TEMP views over the leaf fixtures.
     for (const r of rollup.viewChain) db.exec(r.viewDdl(options.sql, { temp: true }));
 
     const outputList = rollup.outputColumns.map((c) => quoteIdent(c)).join(", ");
     sampleSets.forEach((inputs, idx) => {
-      for (const rel of relations) db.run(`DELETE FROM ${quoteIdent(rel)};`);
+      for (const rel of relations) db.run(`DELETE FROM ${quoteIdent(physical(rel))};`);
       for (const [rel, rows] of Object.entries(inputs)) {
         if (!cols.has(rel)) continue;
-        for (const r of rows) insertRow(rel, r);
+        for (const r of rows) insertRow(physical(rel), r);
       }
 
       const sqlRows = db.all<Record<string, unknown>>(

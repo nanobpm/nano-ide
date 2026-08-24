@@ -18,6 +18,7 @@ import {
   defineReadModel,
   defineRollup,
   eq,
+  fromProjection,
   fromRollup,
   gt,
   isNotNull,
@@ -443,6 +444,75 @@ test("resolveLookups reads candidates by OWN property — a `__proto__` alias ov
   assert.equal(resolved.__proto__.prs_opened, null);
   const evaluated = evilModel.evaluate({ plan_key: "p1" }, {}, plainInput);
   assert.equal(evaluated.opened, null);
+});
+
+test("resolveLookups reads candidates case-insensitively — a differently-cased alias key still matches", async () => {
+  // Lookup aliases are case-insensitive SQL identifiers: `resolveLookups` stores its resolved row under
+  // `foldSqlIdentifier(alias)` and `rcol` reads it folded. A caller that supplies candidates under a
+  // different casing (e.g. `{ C: [...] }` for an alias declared `c`) must therefore still be matched —
+  // a raw case-sensitive `lookupRows["c"]` would treat them as "no candidates" and NULL/default-fill,
+  // drifting from the folded treatment (and from the SQL LEFT JOIN, which never sees this dictionary).
+  const model = defineReadModel({
+    name: "plan_delivery_cased_input",
+    baseTable: "plans",
+    lookups: [
+      {
+        as: "c",
+        rollup: planDeliveryCounts,
+        on: [{ base: "plan_key", rollup: "plan_key" }],
+        defaults: { prs_opened: 0 },
+      },
+    ],
+    derive: { opened: rcol("c", "prs_opened") },
+  });
+  // Candidate keyed under the UPPER-CASE alias for a lookup declared `as: "c"`.
+  const resolved = model.resolveLookups({ plan_key: "p1" }, { C: [{ plan_key: "p1", prs_opened: 9 }] });
+  assert.equal(resolved.c.prs_opened, 9);
+  const evaluated = model.evaluate({ plan_key: "p1" }, {}, { C: [{ plan_key: "p1", prs_opened: 9 }] });
+  assert.equal(evaluated.opened, 9);
+  // Parity: the SQL VIEW reads the real rollup relation, so both backends must land the same value.
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(model, db, [
+        { baseRow: { plan_key: "p1" }, lookups: { c: [{ plan_key: "p1", prs_opened: 9 }] } },
+        { baseRow: { plan_key: "p2" }, lookups: { c: [] } },
+      ]),
+    );
+  });
+});
+
+test("assertRollupParity builds TEMP fixtures under the PHYSICAL table a projection name maps to", async () => {
+  // A `fromProjection` source names a LOGICAL projection; the compiled VIEW resolves it to a physical
+  // relation via `resolveProjectionTable` (e.g. `urban_instance_state` → `_urban_instance_state`). The
+  // parity guard must create/insert its TEMP fixtures under that PHYSICAL name — otherwise the VIEW's
+  // FROM points at a table the (logical-named) fixture never created and SQLite throws "no such table".
+  // Sample rows stay keyed by the logical projection name (what `RollupInputs`/`reduce` read).
+  const instanceRollup = defineRollup({
+    name: "instance_state_counts",
+    source: fromProjection("urban_instance_state"),
+    groupBy: ["status"],
+    aggregates: { total: count() },
+  });
+  const remap = (n: string): string => (n === "urban_instance_state" ? "_urban_instance_state" : n);
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertRollupParity(
+        instanceRollup,
+        db,
+        [
+          {
+            urban_instance_state: [
+              { status: "active", instance_key: "i1" },
+              { status: "active", instance_key: "i2" },
+              { status: "done", instance_key: "i3" },
+            ],
+          },
+          { urban_instance_state: [] },
+        ],
+        { sql: { resolveProjectionTable: remap } },
+      ),
+    );
+  });
 });
 
 test("a read model can carry TWO distinct rollup lookups (plan_read_model shape)", async () => {

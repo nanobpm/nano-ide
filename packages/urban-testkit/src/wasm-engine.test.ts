@@ -1530,3 +1530,33 @@ test("deriveWaitStates: joins each park to its active element instance key and d
   assert.deepEqual(deriveWaitStates(snapshot, { waitStateType: "JOB" }).map((w) => w.elementId), ["svc"]);
   assert.deepEqual(deriveWaitStates(snapshot, { elementId: "catch" }).map((w) => w.waitStateType), ["MESSAGE"]);
 });
+
+test("deriveWaitStates: a multi-instance elementId is an ambiguous park join and is dropped, not mis-keyed", () => {
+  const snapshot = JSON.parse(JSON.stringify({
+    instances: [{
+      key: "3",
+      activeElements: [
+        { elementId: "mi", key: "10" }, // two active tokens of the SAME element (multi-instance)
+        { elementId: "mi", key: "11" },
+        { elementId: "solo", key: "12" },
+      ],
+    }],
+    // One job row for the ambiguous element and one for the unambiguous element.
+    jobs: [
+      { elementId: "mi", instanceKey: "3", jobType: "work", key: "50" },
+      { elementId: "solo", instanceKey: "3", jobType: "work", key: "51" },
+    ],
+  }));
+
+  // Both element instances still surface (deriveElementInstances emits each active token)...
+  assert.deepEqual(
+    deriveElementInstances(snapshot).map((e) => e.elementInstanceKey).sort(),
+    ["10", "11", "12"],
+  );
+  // ...but the JOB park on the ambiguous `mi` element can't be paired to a single token from
+  // the snapshot, so it is dropped rather than joined to an arbitrary (wrong) key. Only the
+  // unambiguous `solo` park survives.
+  assert.deepEqual(deriveWaitStates(snapshot), [
+    { elementInstanceKey: "12", processInstanceKey: "3", elementId: "solo", waitStateType: "JOB", jobType: "work", jobKey: "51" },
+  ]);
+});

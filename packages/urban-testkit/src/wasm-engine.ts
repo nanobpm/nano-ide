@@ -1265,18 +1265,30 @@ function records(v: unknown): Record<string, unknown>[] {
 /** Build a `(processInstanceKey, elementId) → elementInstanceKey` index from each instance's
  *  active elements. A snapshot park row (job/message/timer/signal) carries its `elementId` +
  *  owning process instance but not the element-instance key, so it resolves the key through
- *  this index — the same key {@link deriveElementInstances} reports, so the two cannot drift. */
+ *  this index — the same key {@link deriveElementInstances} reports, so the two cannot drift.
+ *
+ *  When a single `(processInstanceKey, elementId)` maps to *more than one* active element
+ *  instance (a multi-instance activity's parallel tokens), the join is ambiguous — a park row
+ *  carries only `elementId` + process instance, not the element-instance key, so it can't be
+ *  paired to the right token. Such a key is marked ambiguous and left *absent* from the index,
+ *  so {@link waitStateIdentity} drops the park rather than attaching an arbitrary (wrong) key. */
 function activeElementKeyIndex(snapshot: Record<string, unknown>): Map<string, string> {
   const index = new Map<string, string>();
+  const ambiguous = new Set<string>();
   for (const inst of records(snapshot.instances)) {
     const processInstanceKey = presentKey(inst.key);
     if (processInstanceKey === undefined) continue;
     for (const el of records(inst.activeElements)) {
       const elementInstanceKey = presentKey(el.key);
       const elementId = presentString(el.elementId);
-      if (elementInstanceKey !== undefined && elementId !== undefined) {
-        index.set(`${processInstanceKey}\u0000${elementId}`, elementInstanceKey);
+      if (elementInstanceKey === undefined || elementId === undefined) continue;
+      const mapKey = `${processInstanceKey}\u0000${elementId}`;
+      if (index.has(mapKey) || ambiguous.has(mapKey)) {
+        index.delete(mapKey);
+        ambiguous.add(mapKey);
+        continue;
       }
+      index.set(mapKey, elementInstanceKey);
     }
   }
   return index;

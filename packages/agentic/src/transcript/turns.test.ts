@@ -243,3 +243,42 @@ test("readTurns fails fast on a corrupt content-block payload", () => {
   });
   assert.throws(() => store.readTurns("job:corrupt"), TranscriptCorruptionError);
 });
+
+test("readTurns fails fast on a negative / fractional metric (not just non-numeric)", () => {
+  const store = new TranscriptStore(db);
+  const metrics = {
+    inputTokens: -1,
+    outputTokens: 0,
+    reasoningTokenCount: 0,
+    cacheCreationTokenCount: 0,
+    cacheReadTokenCount: 0,
+    durationMs: 0,
+  };
+  insertRawTurn(store, db, { ...rawTurn, metrics: JSON.stringify(metrics) });
+  assert.throws(() => store.readTurns("job:corrupt"), TranscriptCorruptionError);
+});
+
+test("readTurns re-raises malformed JSON as a corruption error, not a SyntaxError", () => {
+  const store = new TranscriptStore(db);
+  insertRawTurn(store, db, { ...rawTurn, content: "{not json" });
+  assert.throws(() => store.readTurns("job:corrupt"), TranscriptCorruptionError);
+});
+
+test("recordTurns rejects a non-array content / toolCalls at the untyped boundary", () => {
+  const store = newStore();
+  // A caller passing runtime-invalid data through an untyped boundary: content is not an
+  // array. Build the fixture via JSON.parse (not a type assertion) and expect a clear
+  // corruption error, never a raw TypeError from `.map`.
+  const badContent: TranscriptTurn = JSON.parse(
+    '{"sequence":0,"loopIteration":0,"role":"USER","content":{},"toolCalls":[]}',
+  );
+  assert.throws(() => store.recordTurns("job:bad3", [badContent], "ephemeral"), TranscriptCorruptionError);
+
+  const badToolCalls: TranscriptTurn = JSON.parse(
+    '{"sequence":0,"loopIteration":0,"role":"USER","content":[],"toolCalls":"nope"}',
+  );
+  assert.throws(() => store.recordTurns("job:bad4", [badToolCalls], "ephemeral"), TranscriptCorruptionError);
+
+  assert.equal(store.readTurns("job:bad3").length, 0);
+  assert.equal(store.readTurns("job:bad4").length, 0);
+});

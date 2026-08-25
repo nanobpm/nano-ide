@@ -285,10 +285,6 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
 function toTurnRole(value: unknown): TranscriptTurnRole {
   const match = TURN_ROLES.find((role) => role === value);
   if (match !== undefined) return match;
@@ -397,16 +393,19 @@ function toToolCall(value: unknown): TranscriptToolCall {
 
 function readMetric(source: Record<string, unknown>, key: keyof TranscriptTurnMetrics): number {
   const value = source[key];
-  if (!isFiniteNumber(value)) {
-    throw new TranscriptCorruptionError(`transcript metric "${key}" must be a finite number, got ${JSON.stringify(value)}`);
+  if (!isNonNegInt(value)) {
+    throw new TranscriptCorruptionError(
+      `transcript metric "${key}" must be a non-negative safe integer, got ${JSON.stringify(value)}`,
+    );
   }
   return value;
 }
 
 /**
  * Validate a value into canonical per-turn metrics — the single validator both the write
- * and read paths run through. Every field must be a finite number (parity with Camunda's
- * `AgentHistoryMetricsValue`).
+ * and read paths run through. Every field must be a non-negative safe integer: Camunda's
+ * `AgentHistoryMetricsValue` token counts and `durationMs` are integer-valued and cannot be
+ * negative, so an out-of-domain value is treated as corruption rather than round-tripped.
  */
 function toMetrics(value: unknown): TranscriptTurnMetrics {
   if (!isPlainObject(value)) {
@@ -422,9 +421,24 @@ function toMetrics(value: unknown): TranscriptTurnMetrics {
   };
 }
 
-/** Parse a JSON array column, failing with a corruption error on non-arrays. */
+/**
+ * Parse a JSON column, re-raising a malformed-JSON `SyntaxError` as a
+ * {@link TranscriptCorruptionError} so every read-back failure surfaces through the store's
+ * single corruption signal rather than a raw parse error.
+ */
+function parseJsonColumn(json: string, label: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch (err) {
+    throw new TranscriptCorruptionError(
+      `transcript turn ${label} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** Parse a JSON array column, failing with a corruption error on invalid JSON or non-arrays. */
 function parseJsonArray(json: string, label: string): unknown[] {
-  const parsed: unknown = JSON.parse(json);
+  const parsed = parseJsonColumn(json, label);
   if (!Array.isArray(parsed)) {
     throw new TranscriptCorruptionError(`transcript turn ${label} must be a JSON array, got ${JSON.stringify(parsed)}`);
   }
@@ -465,8 +479,7 @@ function toTurn(row: DbTurnRow): TranscriptTurn {
     toolCalls: parseJsonArray(row.tool_calls, "toolCalls").map(toToolCall),
   };
   if (row.metrics !== null) {
-    const parsed: unknown = JSON.parse(row.metrics);
-    out.metrics = toMetrics(parsed);
+    out.metrics = toMetrics(parseJsonColumn(row.metrics, "metrics"));
   }
   if (row.produced_at !== null) {
     if (!isNonNegInt(row.produced_at)) {
@@ -723,6 +736,16 @@ export class TranscriptStore {
           );
         }
         const role = toTurnRole(turn.role);
+        if (!Array.isArray(turn.content)) {
+          throw new TranscriptCorruptionError(
+            `transcript turn content must be an array, got ${JSON.stringify(turn.content)}`,
+          );
+        }
+        if (!Array.isArray(turn.toolCalls)) {
+          throw new TranscriptCorruptionError(
+            `transcript turn toolCalls must be an array, got ${JSON.stringify(turn.toolCalls)}`,
+          );
+        }
         const content = JSON.stringify(turn.content.map(toContentBlock));
         const toolCalls = JSON.stringify(turn.toolCalls.map(toToolCall));
         const metrics = turn.metrics === undefined ? null : JSON.stringify(toMetrics(turn.metrics));

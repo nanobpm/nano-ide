@@ -85,6 +85,9 @@ function cancelEngine(opts: {
     openUserTasks: notUsed("openUserTasks"),
     getForm: notUsed("getForm"),
     completeUserTask: notUsed("completeUserTask"),
+    searchElementInstances: notUsed("searchElementInstances"),
+    searchElementInstanceWaitStates: notUsed("searchElementInstanceWaitStates"),
+    getElementInstance: notUsed("getElementInstance"),
     registerWorker: notUsed("registerWorker"),
     close: notUsed("close"),
   };

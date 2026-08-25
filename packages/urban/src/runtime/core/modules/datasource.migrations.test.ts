@@ -20,6 +20,9 @@ const noEngine: EngineClient = {
   getForm: async () => null,
   completeUserTask: async () => {},
   searchProcessInstances: async () => [],
+  searchElementInstances: async () => [],
+  searchElementInstanceWaitStates: async () => [],
+  getElementInstance: async () => null,
   registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
   close: async () => {},
 };

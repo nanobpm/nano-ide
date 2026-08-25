@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import {
   createNanoSdkEngineClient,
   normalizeProcessInstanceState,
+  normalizeElementInstanceState,
+  normalizeWaitStateType,
   requireProcessInstanceKey,
   SdkEngineClient,
   type NanoSdkActivatedJob,
@@ -73,6 +75,18 @@ function fakeSdkClient(overrides: Partial<NanoSdkClient> = {}): NanoSdkClient & 
     async searchProcessInstances() {
       calls.push("searchProcessInstances");
       return { items: [] };
+    },
+    async searchElementInstances() {
+      calls.push("searchElementInstances");
+      return { items: [] };
+    },
+    async searchElementInstanceWaitStates() {
+      calls.push("searchElementInstanceWaitStates");
+      return { items: [] };
+    },
+    async getElementInstance() {
+      calls.push("getElementInstance");
+      return {};
     },
     async completeUserTask() {
       calls.push("completeUserTask");
@@ -446,6 +460,227 @@ test("normalizeProcessInstanceState maps the terminal set and rejects others", (
   assert.equal(normalizeProcessInstanceState("SUSPENDED"), undefined);
   assert.equal(normalizeProcessInstanceState(42), undefined);
   assert.equal(normalizeProcessInstanceState(undefined), undefined);
+});
+
+test("normalizeElementInstanceState maps the terminal set (case-insensitive) and rejects others", () => {
+  assert.equal(normalizeElementInstanceState("ACTIVE"), "ACTIVE");
+  assert.equal(normalizeElementInstanceState("completed"), "COMPLETED");
+  assert.equal(normalizeElementInstanceState("Terminated"), "TERMINATED");
+  assert.equal(normalizeElementInstanceState("SKIPPED"), undefined);
+  assert.equal(normalizeElementInstanceState(7), undefined);
+  assert.equal(normalizeElementInstanceState(undefined), undefined);
+});
+
+test("normalizeWaitStateType maps the wait-state kinds (case-insensitive) and rejects others", () => {
+  assert.equal(normalizeWaitStateType("JOB"), "JOB");
+  assert.equal(normalizeWaitStateType("message"), "MESSAGE");
+  assert.equal(normalizeWaitStateType("User_Task"), "USER_TASK");
+  assert.equal(normalizeWaitStateType("TIMER"), "TIMER");
+  assert.equal(normalizeWaitStateType("signal"), "SIGNAL");
+  assert.equal(normalizeWaitStateType("CONDITION"), "CONDITION");
+  assert.equal(normalizeWaitStateType("ESCALATION"), undefined);
+  assert.equal(normalizeWaitStateType(3), undefined);
+});
+
+test("searchElementInstances passes zero-wait consistency, maps rows, and forwards selectors", async () => {
+  let seenInput: unknown;
+  let seenConsistency: unknown;
+  const client = fakeSdkClient({
+    searchElementInstances: async (input, c) => {
+      seenInput = input;
+      seenConsistency = c;
+      return {
+        items: [
+          {
+            elementInstanceKey: 5,
+            processInstanceKey: 3,
+            elementId: "task",
+            type: "SERVICE_TASK",
+            state: "active",
+          },
+          // elementType may arrive as `elementType` on a plain REST body.
+          {
+            elementInstanceKey: "6",
+            processInstanceKey: "3",
+            elementId: "gw",
+            elementType: "PARALLEL_GATEWAY",
+            state: "COMPLETED",
+          },
+        ],
+      };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchElementInstances({
+    processInstanceKey: "3",
+    elementId: "task",
+    state: "ACTIVE",
+  });
+  assert.deepEqual(seenInput, {
+    filter: { processInstanceKey: "3", elementId: "task", state: "ACTIVE" },
+  });
+  assert.deepEqual(seenConsistency, { consistency: { waitUpToMs: 0 } });
+  assert.deepEqual(out, [
+    {
+      elementInstanceKey: "5",
+      processInstanceKey: "3",
+      elementId: "task",
+      elementType: "SERVICE_TASK",
+      state: "ACTIVE",
+    },
+    {
+      elementInstanceKey: "6",
+      processInstanceKey: "3",
+      elementId: "gw",
+      elementType: "PARALLEL_GATEWAY",
+      state: "COMPLETED",
+    },
+  ]);
+});
+
+test("searchElementInstances with no filter sends an empty filter", async () => {
+  let seenInput: unknown;
+  const client = fakeSdkClient({
+    searchElementInstances: async (input) => {
+      seenInput = input;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  await engine.searchElementInstances();
+  assert.deepEqual(seenInput, { filter: {} });
+});
+
+test("searchElementInstances skips malformed rows (missing key/elementId/state)", async () => {
+  const client = fakeSdkClient({
+    searchElementInstances: async () => ({
+      items: [
+        { elementInstanceKey: "", processInstanceKey: "3", elementId: "a", state: "ACTIVE" }, // keyless
+        { elementInstanceKey: "5", processInstanceKey: "", elementId: "a", state: "ACTIVE" }, // no PI key
+        { elementInstanceKey: "6", processInstanceKey: "3", elementId: "", state: "ACTIVE" }, // no elementId
+        { elementInstanceKey: "7", processInstanceKey: "3", elementId: "a", state: "SKIPPED" }, // bad state
+        { elementInstanceKey: "8", processInstanceKey: "3", elementId: "ok", state: "ACTIVE" }, // kept
+      ],
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchElementInstances();
+  assert.deepEqual(out, [
+    { elementInstanceKey: "8", processInstanceKey: "3", elementId: "ok", state: "ACTIVE" },
+  ]);
+});
+
+test("searchElementInstanceWaitStates maps JOB/MESSAGE parks and unwraps SDK `details`", async () => {
+  let seenInput: unknown;
+  let seenConsistency: unknown;
+  const client = fakeSdkClient({
+    searchElementInstanceWaitStates: async (input, c) => {
+      seenInput = input;
+      seenConsistency = c;
+      return {
+        items: [
+          {
+            elementInstanceKey: 5,
+            processInstanceKey: 3,
+            elementId: "svc",
+            type: "SERVICE_TASK",
+            details: { waitStateType: "JOB", jobType: "work", jobKey: 6 },
+          },
+          {
+            elementInstanceKey: 8,
+            processInstanceKey: 3,
+            elementId: "catch",
+            details: { waitStateType: "MESSAGE", messageName: "Go", correlationKey: "K1" },
+          },
+        ],
+      };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchElementInstanceWaitStates({ processInstanceKey: "3" });
+  assert.deepEqual(seenInput, { filter: { processInstanceKey: "3" } });
+  assert.deepEqual(seenConsistency, { consistency: { waitUpToMs: 0 } });
+  assert.deepEqual(out, [
+    {
+      elementInstanceKey: "5",
+      processInstanceKey: "3",
+      elementId: "svc",
+      elementType: "SERVICE_TASK",
+      waitStateType: "JOB",
+      jobType: "work",
+      jobKey: "6",
+    },
+    {
+      elementInstanceKey: "8",
+      processInstanceKey: "3",
+      elementId: "catch",
+      waitStateType: "MESSAGE",
+      messageName: "Go",
+      correlationKey: "K1",
+    },
+  ]);
+});
+
+test("searchElementInstanceWaitStates forwards a waitStateType selector and reads inlined details", async () => {
+  let seenInput: unknown;
+  const client = fakeSdkClient({
+    searchElementInstanceWaitStates: async (input) => {
+      seenInput = input;
+      // A plain REST body may inline the park fields rather than nesting them under `details`.
+      return {
+        items: [
+          {
+            elementInstanceKey: "9",
+            processInstanceKey: "3",
+            elementId: "ut",
+            waitStateType: "USER_TASK",
+            taskKey: "42",
+          },
+          { elementInstanceKey: "10", processInstanceKey: "3", elementId: "?" }, // no waitStateType → dropped
+        ],
+      };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchElementInstanceWaitStates({ waitStateType: "USER_TASK" });
+  assert.deepEqual(seenInput, { filter: { waitStateType: "USER_TASK" } });
+  assert.deepEqual(out, [
+    {
+      elementInstanceKey: "9",
+      processInstanceKey: "3",
+      elementId: "ut",
+      waitStateType: "USER_TASK",
+      userTaskKey: "42",
+    },
+  ]);
+});
+
+test("getElementInstance returns a mapped summary, and null for a blank key or a 404", async () => {
+  const client = fakeSdkClient({
+    getElementInstance: async (input) => {
+      if (input.elementInstanceKey === "5") {
+        return {
+          elementInstanceKey: 5,
+          processInstanceKey: 3,
+          elementId: "task",
+          type: "SERVICE_TASK",
+          state: "ACTIVE",
+        };
+      }
+      throw new Error("404 not found");
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  assert.deepEqual(await engine.getElementInstance("5"), {
+    elementInstanceKey: "5",
+    processInstanceKey: "3",
+    elementId: "task",
+    elementType: "SERVICE_TASK",
+    state: "ACTIVE",
+  });
+  // A blank key short-circuits without hitting the engine; a 404 is treated as absence.
+  assert.equal(await engine.getElementInstance("   "), null);
+  assert.equal(await engine.getElementInstance("missing"), null);
 });
 
 test("registerWorker creates a worker the SDK auto-starts, and dispatches + completes", async () => {

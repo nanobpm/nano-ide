@@ -262,6 +262,103 @@ export interface UserTaskFilter {
 }
 
 /**
+ * An element instance's lifecycle state, as the engine reports it on a
+ * `/v2/element-instances/search` result. Mirrors the engine's `ElementInstanceStateEnum`:
+ * `ACTIVE` (a token is currently *at* this element), `COMPLETED` (the token has left it), or
+ * `TERMINATED` (the element was interrupted). Structurally the same terminal set as
+ * {@link ProcessInstanceState}, but a distinct concept — element instances are the tokens
+ * *within* a process instance — so it is kept as its own type rather than aliased.
+ */
+export type ElementInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED";
+
+/**
+ * A single element instance ("token") as {@link EngineClient.searchElementInstances} and
+ * {@link EngineClient.getElementInstance} report it — the finest-grained "how far has this
+ * process instance progressed" signal, below the process-instance lifecycle
+ * ({@link ProcessInstanceSnapshot}) and independent of whether the element is a user task
+ * ({@link UserTaskSummary}). It surfaces active *non-user-task* elements (a service task, a
+ * gateway, a catch event) a user-task search cannot see — "the furthest element reached".
+ * Carries the element instance's own key, its identity (`elementId`, its BPMN `elementType`
+ * when the engine reports it), the owning process instance, and its lifecycle `state`.
+ */
+export interface ElementInstanceSummary {
+  readonly elementInstanceKey: string;
+  readonly processInstanceKey: string;
+  readonly elementId: string;
+  /** The BPMN element type (e.g. `"SERVICE_TASK"`, `"USER_TASK"`,
+   *  `"INTERMEDIATE_CATCH_EVENT"`), when the engine reports it. Kept transport-agnostic (a
+   *  bare string) so a new BPMN element type on the engine flows through without having to be
+   *  enumerated here. Absent when the adapter's read model does not carry it. */
+  readonly elementType?: string;
+  readonly state: ElementInstanceState;
+}
+
+/**
+ * The kind of wait an element instance is parked in, as a
+ * `/v2/element-instances/wait-states/search` result reports it. Unlike a user-task search,
+ * this surfaces *every* park — a `JOB` (a service task awaiting a worker), a `MESSAGE`
+ * (an event awaiting correlation), a `TIMER`, a `SIGNAL`, a `CONDITION`, as well as a
+ * `USER_TASK` — so a consumer can read "what is this instance blocked on" beyond user tasks.
+ */
+export type WaitStateType =
+  | "JOB"
+  | "MESSAGE"
+  | "USER_TASK"
+  | "TIMER"
+  | "SIGNAL"
+  | "CONDITION";
+
+/**
+ * A single parked (waiting) element instance as
+ * {@link EngineClient.searchElementInstanceWaitStates} reports it. Every variant carries the
+ * element instance's identity; the `waitStateType` discriminates the park-specific fields — a
+ * `JOB` carries the `jobType`/`jobKey` it is parked on, a `MESSAGE` the awaited
+ * `messageName`/`correlationKey`, a `USER_TASK` the `userTaskKey`, a `SIGNAL` the
+ * `signalName` — so a caller narrows on `waitStateType` to reach them type-safely rather than
+ * probing a flat optional-field bag.
+ */
+export type ElementInstanceWaitState =
+  & {
+    readonly elementInstanceKey: string;
+    readonly processInstanceKey: string;
+    readonly elementId: string;
+    readonly elementType?: string;
+  }
+  & (
+    | { readonly waitStateType: "JOB"; readonly jobType: string; readonly jobKey?: string }
+    | {
+      readonly waitStateType: "MESSAGE";
+      readonly messageName: string;
+      readonly correlationKey?: string;
+    }
+    | { readonly waitStateType: "USER_TASK"; readonly userTaskKey: string }
+    | { readonly waitStateType: "TIMER" }
+    | { readonly waitStateType: "SIGNAL"; readonly signalName: string }
+    | { readonly waitStateType: "CONDITION" }
+  );
+
+/**
+ * Selectors for an element-instance search: which process instance, element, and/or lifecycle
+ * state to match. Used by {@link EngineClient.searchElementInstances}.
+ */
+export interface ElementInstanceFilter {
+  processInstanceKey?: string;
+  elementId?: string;
+  state?: ElementInstanceState;
+}
+
+/**
+ * Selectors for an element-instance *wait-state* search: which process instance, element,
+ * and/or kind of wait to match. Used by {@link EngineClient.searchElementInstanceWaitStates}.
+ * There is deliberately no lifecycle-`state` selector — a wait state is always an active park.
+ */
+export interface ElementInstanceWaitStateFilter {
+  processInstanceKey?: string;
+  elementId?: string;
+  waitStateType?: WaitStateType;
+}
+
+/**
  * A deployed form's form-js schema plus its identifying metadata, as
  * {@link EngineClient.getForm} returns it. `schema` is the parsed form-js document
  * (`{ type: "default", schemaVersion, components: [...] }`) that the surface renders
@@ -350,6 +447,38 @@ export interface EngineClient {
     processInstanceKeys?: string[];
     state?: ProcessInstanceState;
   }): Promise<ProcessInstanceSnapshot[]>;
+  /**
+   * Search element instances ("tokens") by process instance, element, and/or lifecycle state
+   * (`POST /v2/element-instances/search`). Where {@link searchProcessInstances} answers "is
+   * this instance still running" and {@link searchUserTasks} answers "what user tasks are
+   * open", this answers "what element has a token reached" — including the active
+   * *non-user-task* elements (a service task, a gateway, a catch event) that a user-task
+   * search cannot see, i.e. "the furthest element reached". An eventually consistent
+   * (zero-wait) read; each {@link ElementInstanceSummary} carries the element instance's key,
+   * its `elementId`/`elementType`, the owning process instance, and its `state`.
+   */
+  searchElementInstances(
+    filter?: ElementInstanceFilter,
+  ): Promise<ElementInstanceSummary[]>;
+  /**
+   * Search the *wait states* of element instances
+   * (`POST /v2/element-instances/wait-states/search`) — every park, not only user tasks. A
+   * `JOB` park (a service task awaiting a worker), a `MESSAGE` park (an event awaiting
+   * correlation), a `TIMER`/`SIGNAL`/`CONDITION`, plus `USER_TASK`. A zero-wait read; each
+   * result is discriminated by `waitStateType` (see {@link ElementInstanceWaitState}), so a
+   * consumer can read the job/message parks a {@link searchUserTasks} cannot surface.
+   */
+  searchElementInstanceWaitStates(
+    filter?: ElementInstanceWaitStateFilter,
+  ): Promise<ElementInstanceWaitState[]>;
+  /**
+   * Fetch a single element instance by its key (`GET /v2/element-instances/{elementInstanceKey}`),
+   * or `null` when no such element instance exists (or the key is blank). A zero-wait read
+   * returning the same {@link ElementInstanceSummary} shape as {@link searchElementInstances}.
+   */
+  getElementInstance(
+    elementInstanceKey: string,
+  ): Promise<ElementInstanceSummary | null>;
   /** Register a push worker for a job type. Draining is handled by the adapter. */
   registerWorker(
     jobType: string,
@@ -384,6 +513,9 @@ export const ENGINE_CLIENT_METHODS = [
   "getForm",
   "completeUserTask",
   "searchProcessInstances",
+  "searchElementInstances",
+  "searchElementInstanceWaitStates",
+  "getElementInstance",
   "registerWorker",
   "close",
 ] as const satisfies readonly (keyof EngineClient)[];

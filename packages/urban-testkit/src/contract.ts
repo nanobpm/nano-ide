@@ -242,6 +242,87 @@ export function runEngineClientContract(
       assert.equal(inst?.state, "ACTIVE", "a failed job must not complete the instance");
     });
   });
+
+  test(`${label}: searchElementInstances surfaces the active element a parked instance reached`, async () => {
+    await withEngine(async (engine) => {
+      // No worker registered → the token parks *at* the `work` service task, so it is the
+      // furthest element reached — an active non-user-task element a user-task search can't see.
+      await engine.deployResources(res(SERVICE_BPMN));
+      const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "svc" });
+
+      const els = await waitForValue(async () => {
+        const found = await engine.searchElementInstances({ processInstanceKey });
+        return found.some((e) => e.elementId === "work") ? found : undefined;
+      });
+      const work = els.find((e) => e.elementId === "work");
+      assert.ok(work, "expected the parked service-task element instance");
+      assert.equal(work?.processInstanceKey, processInstanceKey);
+      assert.equal(work?.state, "ACTIVE");
+      assert.ok(work?.elementInstanceKey, "element instance carries its own key");
+
+      // getElementInstance round-trips that key; a blank/unknown key resolves to null (no throw).
+      const byKey = await engine.getElementInstance(work?.elementInstanceKey ?? "");
+      assert.equal(byKey?.elementInstanceKey, work?.elementInstanceKey);
+      assert.equal(byKey?.elementId, "work");
+      assert.equal(await engine.getElementInstance("   "), null);
+
+      // The elementId selector narrows the search.
+      const filtered = await engine.searchElementInstances({ processInstanceKey, elementId: "work" });
+      assert.deepEqual(filtered.map((e) => e.elementId), ["work"]);
+      // A lifecycle state the read model can't serve here yields nothing, never a wrong row.
+      const completed = await engine.searchElementInstances({ processInstanceKey, elementId: "work", state: "COMPLETED" });
+      assert.deepEqual(completed, []);
+    });
+  });
+
+  test(`${label}: searchElementInstanceWaitStates surfaces a JOB park (not only user tasks)`, async () => {
+    await withEngine(async (engine) => {
+      // No worker → the `work` service task parks as a JOB wait state — the job/message parks a
+      // user-task search cannot surface, which is the whole point of the wait-states query.
+      await engine.deployResources(res(SERVICE_BPMN));
+      const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "svc" });
+
+      const waits = await waitForValue(async () => {
+        const found = await engine.searchElementInstanceWaitStates({ processInstanceKey });
+        return found.length > 0 ? found : undefined;
+      });
+      const job = waits.find((w) => w.waitStateType === "JOB");
+      assert.ok(job, "expected a JOB wait state for the parked service task");
+      assert.equal(job?.elementId, "work");
+      assert.equal(job?.processInstanceKey, processInstanceKey);
+      // The element-instance key resolves to the same one searchElementInstances reports.
+      const [byElement] = await engine.searchElementInstances({ processInstanceKey, elementId: "work" });
+      assert.equal(job?.elementInstanceKey, byElement?.elementInstanceKey);
+      if (job?.waitStateType === "JOB") {
+        assert.equal(job.jobType, "work");
+      }
+      // The waitStateType selector narrows: this model has no MESSAGE park.
+      const messages = await engine.searchElementInstanceWaitStates({ processInstanceKey, waitStateType: "MESSAGE" });
+      assert.deepEqual(messages, []);
+    });
+  });
+
+  test(`${label}: a user task surfaces as a USER_TASK wait state`, async () => {
+    await withEngine(async (engine) => {
+      await engine.deployResources(res(USER_TASK_BPMN));
+      const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "human" });
+
+      const waits = await waitForValue(async () => {
+        const found = await engine.searchElementInstanceWaitStates({
+          processInstanceKey,
+          waitStateType: "USER_TASK",
+        });
+        return found.length > 0 ? found : undefined;
+      });
+      assert.equal(waits.length, 1);
+      const ut = waits[0];
+      assert.equal(ut.elementId, "review");
+      assert.equal(ut.processInstanceKey, processInstanceKey);
+      if (ut.waitStateType === "USER_TASK") {
+        assert.ok(ut.userTaskKey, "a USER_TASK wait state carries the user task key");
+      }
+    });
+  });
 }
 
 /** Wrap BPMN XML content one resource for `deployResources`. */

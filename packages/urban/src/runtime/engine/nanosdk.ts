@@ -114,15 +114,17 @@ export function normalizeWaitStateType(raw: unknown): WaitStateType | undefined 
   }
 }
 
-/** A non-empty string form of an engine key/id, or `undefined` when absent/blank. Coerces a
- *  numeric key to a string (the engine may serialize a key either way) but never
- *  `String(...)`-coerces an arbitrary object into a garbage `"[object Object]"` id. */
+/** A non-empty string form of an engine key/id, or `undefined` when absent/blank (including a
+ *  whitespace-only string). Coerces a numeric key to a string (the engine may serialize a key
+ *  either way) but never `String(...)`-coerces an arbitrary object into a garbage
+ *  `"[object Object]"` id. The blank check trims, matching `getElementInstance`'s blank-key
+ *  guard and the form-key presence helpers, so a `"   "` key can never leak into a result. */
 function presentEngineKey(value: unknown): string | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) ? String(value) : undefined;
   }
   if (typeof value !== "string") return undefined;
-  return value === "" ? undefined : value;
+  return value.trim() === "" ? undefined : value;
 }
 
 /** The element type carried on an element-instance/wait-state row. The Camunda SDK DTO calls
@@ -153,7 +155,7 @@ export function mapElementInstanceRow(
     });
     return undefined;
   }
-  const elementId = typeof row.elementId === "string" && row.elementId !== ""
+  const elementId = typeof row.elementId === "string" && row.elementId.trim() !== ""
     ? row.elementId
     : undefined;
   if (elementId === undefined) {
@@ -190,7 +192,7 @@ export function mapElementInstanceWaitStateRow(
 ): ElementInstanceWaitState | undefined {
   const elementInstanceKey = presentEngineKey(row.elementInstanceKey);
   const processInstanceKey = presentEngineKey(row.processInstanceKey);
-  const elementId = typeof row.elementId === "string" && row.elementId !== ""
+  const elementId = typeof row.elementId === "string" && row.elementId.trim() !== ""
     ? row.elementId
     : undefined;
   if (elementInstanceKey === undefined || processInstanceKey === undefined || elementId === undefined) {

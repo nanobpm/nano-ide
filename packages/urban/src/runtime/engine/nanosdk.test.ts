@@ -556,8 +556,10 @@ test("searchElementInstances skips malformed rows (missing key/elementId/state)"
     searchElementInstances: async () => ({
       items: [
         { elementInstanceKey: "", processInstanceKey: "3", elementId: "a", state: "ACTIVE" }, // keyless
+        { elementInstanceKey: "   ", processInstanceKey: "3", elementId: "a", state: "ACTIVE" }, // whitespace key
         { elementInstanceKey: "5", processInstanceKey: "", elementId: "a", state: "ACTIVE" }, // no PI key
         { elementInstanceKey: "6", processInstanceKey: "3", elementId: "", state: "ACTIVE" }, // no elementId
+        { elementInstanceKey: "9", processInstanceKey: "3", elementId: "  ", state: "ACTIVE" }, // whitespace elementId
         { elementInstanceKey: "7", processInstanceKey: "3", elementId: "a", state: "SKIPPED" }, // bad state
         { elementInstanceKey: "8", processInstanceKey: "3", elementId: "ok", state: "ACTIVE" }, // kept
       ],

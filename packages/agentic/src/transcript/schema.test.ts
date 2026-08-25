@@ -6,6 +6,8 @@ import {
   TRANSCRIPT_CHUNK_TABLE,
   TRANSCRIPT_SCHEMA_SQL,
   TRANSCRIPT_STREAM_TABLE,
+  TRANSCRIPT_TURN_SCHEMA_SQL,
+  TRANSCRIPT_TURN_TABLE,
 } from "./schema.ts";
 import { TranscriptStore } from "./store.ts";
 import { openTestDb } from "./test-db.ts";
@@ -27,6 +29,10 @@ function normaliseSql(sql: string): string {
 
 const migrationPath = fileURLToPath(
   new URL("../../../../db/migrations/002_agentic_transcript.sql", import.meta.url),
+);
+
+const turnMigrationPath = fileURLToPath(
+  new URL("../../../../db/migrations/008_agentic_transcript_turns.sql", import.meta.url),
 );
 
 test("the boot migration and TranscriptStore's DDL do not drift", () => {
@@ -53,17 +59,38 @@ test("the migration takes prefix 002, after S2's 001 and before S7", () => {
   assert.match(stream, /\/002_agentic_transcript\.sql$/);
 });
 
-test("ensureSchema creates both transcript tables idempotently", () => {
+test("the turn-view boot migration and TranscriptStore's turn DDL do not drift", () => {
+  const migrationSql = readFileSync(turnMigrationPath, "utf8");
+  assert.equal(
+    normaliseSql(migrationSql),
+    normaliseSql(TRANSCRIPT_TURN_SCHEMA_SQL),
+    "db/migrations/008_agentic_transcript_turns.sql must match TRANSCRIPT_TURN_SCHEMA_SQL — update both together",
+  );
+});
+
+test("the turn-view boot migration is forward-only and additive (IF NOT EXISTS, no drops/alters)", () => {
+  const migrationSql = readFileSync(turnMigrationPath, "utf8");
+  assert.match(migrationSql, /CREATE TABLE IF NOT EXISTS agentic_transcript_turn/);
+  assert.doesNotMatch(migrationSql, /\bDROP\b/i);
+  assert.doesNotMatch(migrationSql, /\bALTER\b/i);
+});
+
+test("the turn-view migration takes prefix 008 (next free after 007)", () => {
+  const stream = new URL("../../../../db/migrations/008_agentic_transcript_turns.sql", import.meta.url).pathname;
+  assert.match(stream, /\/008_agentic_transcript_turns\.sql$/);
+});
+
+test("ensureSchema creates all three transcript tables idempotently", () => {
   const db = openTestDb();
   const store = new TranscriptStore(db);
   store.ensureSchema();
   store.ensureSchema();
   const tables = db
     .all<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?) ORDER BY name",
-      [TRANSCRIPT_CHUNK_TABLE, TRANSCRIPT_STREAM_TABLE],
+      "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?, ?) ORDER BY name",
+      [TRANSCRIPT_CHUNK_TABLE, TRANSCRIPT_STREAM_TABLE, TRANSCRIPT_TURN_TABLE],
     )
     .map((r) => r.name);
-  assert.deepEqual(tables, [TRANSCRIPT_CHUNK_TABLE, TRANSCRIPT_STREAM_TABLE]);
+  assert.deepEqual(tables, [TRANSCRIPT_CHUNK_TABLE, TRANSCRIPT_STREAM_TABLE, TRANSCRIPT_TURN_TABLE]);
   db.close();
 });

@@ -22,7 +22,13 @@
  * ({@link SqliteDb}), so it works against any app DataLayer source without pulling
  * in the whole runtime.
  */
-import { TRANSCRIPT_CHUNK_TABLE, TRANSCRIPT_SCHEMA_SQL, TRANSCRIPT_STREAM_TABLE } from "./schema.ts";
+import {
+  TRANSCRIPT_CHUNK_TABLE,
+  TRANSCRIPT_SCHEMA_SQL,
+  TRANSCRIPT_STREAM_TABLE,
+  TRANSCRIPT_TURN_SCHEMA_SQL,
+  TRANSCRIPT_TURN_TABLE,
+} from "./schema.ts";
 
 /**
  * The minimal synchronous SQLite handle the store needs — structurally the same
@@ -61,6 +67,88 @@ export type TranscriptStatus = "open" | "completed";
 export interface TranscriptChunk {
   readonly offset: number;
   readonly chunk: string;
+}
+
+/**
+ * A structured turn's author role — the additive turn-structured view's parity
+ * with Camunda `AgentHistoryRole` (issue #475). One pass through the agent loop
+ * (model reasons → selects tools → evaluates results) is recorded as one or more
+ * role-tagged turns sharing a `loopIteration`.
+ */
+export type TranscriptTurnRole = "USER" | "ASSISTANT" | "TOOL_RESULT" | "CONFIGURATION" | "UNSPECIFIED";
+
+/** Parity with Camunda `AgentHistoryContentType`: the type of a content block. */
+export type TranscriptContentType = "TEXT" | "DOCUMENT" | "OBJECT" | "UNSPECIFIED";
+
+const TURN_ROLES: readonly TranscriptTurnRole[] = [
+  "USER",
+  "ASSISTANT",
+  "TOOL_RESULT",
+  "CONFIGURATION",
+  "UNSPECIFIED",
+];
+const CONTENT_TYPES: readonly TranscriptContentType[] = ["TEXT", "DOCUMENT", "OBJECT", "UNSPECIFIED"];
+
+/**
+ * A single typed content block in a turn's message, mirroring Camunda's
+ * `AgentHistoryMessageContentValue`. Exactly one payload is populated per the
+ * `contentType`: `text` for TEXT, `documentReference` for DOCUMENT, `object`
+ * (any JSON value) for OBJECT.
+ */
+export interface TranscriptContentBlock {
+  readonly contentType: TranscriptContentType;
+  /** Text payload; populated when `contentType` is TEXT. */
+  readonly text?: string;
+  /** Document reference; populated when `contentType` is DOCUMENT. */
+  readonly documentReference?: string;
+  /** JSON value payload; populated when `contentType` is OBJECT (any JSON type). */
+  readonly object?: unknown;
+}
+
+/**
+ * A tool call embedded in a turn, mirroring Camunda's
+ * `AgentHistoryEmbeddedToolCallValue`: `toolCallId`, `toolName`, the tool task's
+ * `elementId`, and the `arguments` passed to it.
+ */
+export interface TranscriptToolCall {
+  readonly toolCallId: string;
+  readonly toolName: string;
+  readonly elementId?: string;
+  readonly arguments: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * Per-turn metrics, mirroring Camunda's `AgentHistoryMetricsValue`: the token
+ * counts consumed/produced by the turn's LLM call and its wall-clock duration.
+ */
+export interface TranscriptTurnMetrics {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly reasoningTokenCount: number;
+  readonly cacheCreationTokenCount: number;
+  readonly cacheReadTokenCount: number;
+  readonly durationMs: number;
+}
+
+/**
+ * A structured transcript turn — the additive Camunda `AgentHistoryRecordValue`
+ * parity view (issue #475). `sequence` is the stream-local append order and the
+ * idempotency key (mirroring a chunk's `offset`); `loopIteration` is the
+ * agent-loop turn counter carried as data (several role-split turns can share one
+ * iteration). Recording turns never touches the raw chunk stream.
+ */
+export interface TranscriptTurn {
+  /** Stream-local append order + idempotency key (like a chunk's `offset`). */
+  readonly sequence: number;
+  /** The agent-loop turn counter (Camunda `loopIteration`). */
+  readonly loopIteration: number;
+  readonly role: TranscriptTurnRole;
+  readonly content: readonly TranscriptContentBlock[];
+  readonly toolCalls: readonly TranscriptToolCall[];
+  /** Per-turn metrics; undefined when the worker reported none for this turn. */
+  readonly metrics?: TranscriptTurnMetrics;
+  /** Epoch-millis timestamp the turn was produced; undefined when unreported. */
+  readonly producedAt?: number;
 }
 
 /** Per-stream transcript metadata. */
@@ -151,6 +239,17 @@ interface DbChunkRow {
   chunk: string;
 }
 
+/** The raw turn row shape (snake_case columns) as read from SQLite. */
+interface DbTurnRow {
+  turn_sequence: number;
+  loop_iteration: number;
+  role: string;
+  content: string;
+  tool_calls: string;
+  metrics: string | null;
+  produced_at: number | null;
+}
+
 function toLifecycle(value: string): TranscriptLifecycle {
   if (value === "ephemeral" || value === "long-lived") return value;
   throw new TranscriptCorruptionError(`invalid transcript lifecycle in DB: ${JSON.stringify(value)}`);
@@ -179,6 +278,241 @@ function toStream(row: DbStreamRow): TranscriptStream {
   };
   if (row.completed_at !== null) out.completedAt = row.completed_at;
   if (row.first_offset !== null) out.firstOffset = row.first_offset;
+  return out;
+}
+
+/**
+ * A plain JSON-shaped object: an ordinary or null-prototype object, never an array or a
+ * class instance (e.g. `Date`, `Map`). Rejecting exotic instances at the boundary stops a
+ * value that would serialise via `toJSON()` into a non-object (making the stored turn
+ * unreadable) from ever being persisted.
+ */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+function toTurnRole(value: unknown): TranscriptTurnRole {
+  const match = TURN_ROLES.find((role) => role === value);
+  if (match !== undefined) return match;
+  throw new TranscriptCorruptionError(`invalid transcript turn role: ${JSON.stringify(value)}`);
+}
+
+function toContentType(value: unknown): TranscriptContentType {
+  const match = CONTENT_TYPES.find((type) => type === value);
+  if (match !== undefined) return match;
+  throw new TranscriptCorruptionError(`invalid transcript content type: ${JSON.stringify(value)}`);
+}
+
+/**
+ * The payload key each content type carries: TEXT→`text`, DOCUMENT→`documentReference`,
+ * OBJECT→`object`; UNSPECIFIED carries none. Drives the per-`contentType` payload
+ * invariant enforced by {@link toContentBlock}.
+ */
+const CONTENT_PAYLOAD_KEYS = ["text", "documentReference", "object"] as const;
+const CONTENT_TYPE_PAYLOAD: Record<TranscriptContentType, (typeof CONTENT_PAYLOAD_KEYS)[number] | null> = {
+  TEXT: "text",
+  DOCUMENT: "documentReference",
+  OBJECT: "object",
+  UNSPECIFIED: null,
+};
+
+/**
+ * Validate a value into a canonical content block, enforcing the per-`contentType`
+ * payload invariant: a block carries exactly the one payload its type mandates
+ * (TEXT→text, DOCUMENT→documentReference, OBJECT→object) — never a missing, mismatched
+ * or multiple payload — and UNSPECIFIED carries none. This is the single validator both
+ * the write path (record) and the read path (deserialise) run through, so the two can
+ * never drift and a malformed block can neither persist nor round-trip. It emits only
+ * that one payload key, so serialise/deserialise round-trips exactly.
+ */
+function toContentBlock(value: unknown): TranscriptContentBlock {
+  if (!isPlainObject(value)) {
+    throw new TranscriptCorruptionError(`transcript content block must be an object, got ${JSON.stringify(value)}`);
+  }
+  const contentType = toContentType(value.contentType);
+  const present = CONTENT_PAYLOAD_KEYS.filter((key) => key in value && value[key] !== undefined);
+  const expected = CONTENT_TYPE_PAYLOAD[contentType];
+  if (expected === null) {
+    if (present.length > 0) {
+      throw new TranscriptCorruptionError(
+        `${contentType} content block must carry no payload, got ${JSON.stringify(present)}`,
+      );
+    }
+    return { contentType };
+  }
+  if (present.length !== 1 || present[0] !== expected) {
+    throw new TranscriptCorruptionError(
+      `${contentType} content block must carry exactly its ${expected} payload, got ${JSON.stringify(present)}`,
+    );
+  }
+  if (expected === "text") {
+    const text = value.text;
+    if (typeof text !== "string") {
+      throw new TranscriptCorruptionError(`content block text must be a string, got ${JSON.stringify(text)}`);
+    }
+    return { contentType, text };
+  }
+  if (expected === "documentReference") {
+    const documentReference = value.documentReference;
+    if (typeof documentReference !== "string") {
+      throw new TranscriptCorruptionError(
+        `content block documentReference must be a string, got ${JSON.stringify(documentReference)}`,
+      );
+    }
+    return { contentType, documentReference };
+  }
+  return { contentType, object: value.object };
+}
+
+/**
+ * Validate a value into a canonical tool call — the single validator both the write and
+ * read paths run through. Mirrors Camunda's `AgentHistoryEmbeddedToolCallValue`.
+ */
+function toToolCall(value: unknown): TranscriptToolCall {
+  if (!isPlainObject(value)) {
+    throw new TranscriptCorruptionError(`transcript tool call must be an object, got ${JSON.stringify(value)}`);
+  }
+  const { toolCallId, toolName, elementId } = value;
+  if (typeof toolCallId !== "string") {
+    throw new TranscriptCorruptionError(`tool call toolCallId must be a string, got ${JSON.stringify(toolCallId)}`);
+  }
+  if (typeof toolName !== "string") {
+    throw new TranscriptCorruptionError(`tool call toolName must be a string, got ${JSON.stringify(toolName)}`);
+  }
+  const args = value.arguments;
+  if (!isPlainObject(args)) {
+    throw new TranscriptCorruptionError(`tool call arguments must be an object, got ${JSON.stringify(args)}`);
+  }
+  const out: { toolCallId: string; toolName: string; elementId?: string; arguments: Record<string, unknown> } = {
+    toolCallId,
+    toolName,
+    arguments: args,
+  };
+  if (elementId !== undefined) {
+    if (typeof elementId !== "string") {
+      throw new TranscriptCorruptionError(`tool call elementId must be a string, got ${JSON.stringify(elementId)}`);
+    }
+    out.elementId = elementId;
+  }
+  return out;
+}
+
+function readMetric(source: Record<string, unknown>, key: keyof TranscriptTurnMetrics): number {
+  const value = source[key];
+  if (!isNonNegInt(value)) {
+    throw new TranscriptCorruptionError(
+      `transcript metric "${key}" must be a non-negative safe integer, got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+/**
+ * Validate a value into canonical per-turn metrics — the single validator both the write
+ * and read paths run through. Every field must be a non-negative safe integer: Camunda's
+ * `AgentHistoryMetricsValue` token counts and `durationMs` are integer-valued and cannot be
+ * negative, so an out-of-domain value is treated as corruption rather than round-tripped.
+ */
+function toMetrics(value: unknown): TranscriptTurnMetrics {
+  if (!isPlainObject(value)) {
+    throw new TranscriptCorruptionError(`transcript turn metrics must be an object, got ${JSON.stringify(value)}`);
+  }
+  return {
+    inputTokens: readMetric(value, "inputTokens"),
+    outputTokens: readMetric(value, "outputTokens"),
+    reasoningTokenCount: readMetric(value, "reasoningTokenCount"),
+    cacheCreationTokenCount: readMetric(value, "cacheCreationTokenCount"),
+    cacheReadTokenCount: readMetric(value, "cacheReadTokenCount"),
+    durationMs: readMetric(value, "durationMs"),
+  };
+}
+
+/**
+ * Parse a JSON column, re-raising a malformed-JSON `SyntaxError` as a
+ * {@link TranscriptCorruptionError} so every read-back failure surfaces through the store's
+ * single corruption signal rather than a raw parse error.
+ */
+function parseJsonColumn(json: string, label: string): unknown {
+  try {
+    return JSON.parse(json);
+  } catch (err) {
+    throw new TranscriptCorruptionError(
+      `transcript turn ${label} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/** Parse a JSON array column, failing with a corruption error on invalid JSON or non-arrays. */
+function parseJsonArray(json: string, label: string): unknown[] {
+  const parsed = parseJsonColumn(json, label);
+  if (!Array.isArray(parsed)) {
+    throw new TranscriptCorruptionError(`transcript turn ${label} must be a JSON array, got ${JSON.stringify(parsed)}`);
+  }
+  return parsed;
+}
+
+/**
+ * Serialise a validated turn payload for storage, re-raising a non-serialisable value
+ * (e.g. a `bigint`, which makes `JSON.stringify` throw a `TypeError`) as a
+ * {@link TranscriptCorruptionError} so the untyped write boundary only ever surfaces the
+ * store's own error taxonomy.
+ */
+function stringifyJson(value: unknown, label: string): string {
+  try {
+    return JSON.stringify(value);
+  } catch (err) {
+    throw new TranscriptCorruptionError(
+      `transcript turn ${label} is not JSON-serialisable: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Reconstruct a structured turn from its DB row, validating every field so a corrupted
+ * or hand-edited row fails fast with a {@link TranscriptCorruptionError} rather than
+ * silently propagating an out-of-domain value. `turn_sequence`, `loop_iteration` and
+ * `produced_at` are held to the same non-negative-safe-integer domain the write path
+ * enforces.
+ */
+function toTurn(row: DbTurnRow): TranscriptTurn {
+  if (!isRecordableOffset(row.turn_sequence)) {
+    throw new TranscriptCorruptionError(
+      `transcript turn sequence must be a non-negative safe integer, got ${JSON.stringify(row.turn_sequence)}`,
+    );
+  }
+  if (!isNonNegInt(row.loop_iteration)) {
+    throw new TranscriptCorruptionError(
+      `transcript turn loopIteration must be a non-negative safe integer, got ${JSON.stringify(row.loop_iteration)}`,
+    );
+  }
+  const out: {
+    sequence: number;
+    loopIteration: number;
+    role: TranscriptTurnRole;
+    content: TranscriptContentBlock[];
+    toolCalls: TranscriptToolCall[];
+    metrics?: TranscriptTurnMetrics;
+    producedAt?: number;
+  } = {
+    sequence: row.turn_sequence,
+    loopIteration: row.loop_iteration,
+    role: toTurnRole(row.role),
+    content: parseJsonArray(row.content, "content").map(toContentBlock),
+    toolCalls: parseJsonArray(row.tool_calls, "toolCalls").map(toToolCall),
+  };
+  if (row.metrics !== null) {
+    out.metrics = toMetrics(parseJsonColumn(row.metrics, "metrics"));
+  }
+  if (row.produced_at !== null) {
+    if (!isNonNegInt(row.produced_at)) {
+      throw new TranscriptCorruptionError(
+        `transcript turn producedAt must be a non-negative safe integer, got ${JSON.stringify(row.produced_at)}`,
+      );
+    }
+    out.producedAt = row.produced_at;
+  }
   return out;
 }
 
@@ -232,12 +566,15 @@ export class TranscriptStore {
 
   /**
    * Apply the canonical transcript DDL (idempotent). Callers that let the app
-   * DataLayer migration runner apply `db/migrations/002_agentic_transcript.sql`
-   * do not need this — but it is provided so the store is usable against a bare
-   * source too. The DDL is identical to the migration (drift-guarded).
+   * DataLayer migration runner apply the transcript migrations
+   * (`db/migrations/002_agentic_transcript.sql` for the chunk stream and
+   * `db/migrations/008_agentic_transcript_turns.sql` for the turn-structured
+   * view) do not need this — but it is provided so the store is usable against a
+   * bare source too. The DDL is identical to the migrations (drift-guarded).
    */
   ensureSchema(): void {
     this.#db.exec(TRANSCRIPT_SCHEMA_SQL);
+    this.#db.exec(TRANSCRIPT_TURN_SCHEMA_SQL);
   }
 
   /**
@@ -382,6 +719,99 @@ export class TranscriptStore {
   }
 
   /**
+   * Record structured turns into a stream's additive turn-structured view — the
+   * Camunda `AgentHistoryRecordValue` parity layer (issue #475). Each turn is
+   * keyed `(stream, sequence)` so re-recording an already-stored sequence (a
+   * retry, a re-emit, an overlapping reattach) is a no-op — never a duplicate,
+   * exactly the idempotency the chunk stream gets from `(stream, offset)`.
+   *
+   * This is purely additive: it never reads or writes the raw chunk stream or the
+   * stream's offset window, so it cannot regress any existing chunk reader. It
+   * auto-opens the stream (default `long-lived`) so the turns hang off a stream
+   * row; a lifecycle mismatch throws a {@link TranscriptLifecycleError} before
+   * writing anything (lifecycle is first-wins). The batch is atomic: an invalid
+   * turn (or any failed write) partway through rolls the whole call back — it
+   * records every turn or none. Returns the number of newly-persisted turns.
+   */
+  recordTurns(
+    stream: string,
+    turns: Iterable<TranscriptTurn>,
+    lifecycle: TranscriptLifecycle = "long-lived",
+  ): number {
+    const meta = this.open(stream, lifecycle);
+    if (meta.lifecycle !== lifecycle) {
+      throw new TranscriptLifecycleError(
+        stream,
+        `refusing to record turns into "${stream}" with lifecycle=${lifecycle}; the stream is ${meta.lifecycle} (lifecycle is first-wins)`,
+      );
+    }
+    const at = new Date(this.#clock.now()).toISOString();
+    return this.#atomic(() => {
+      let written = 0;
+      for (const turn of turns) {
+        if (!isPlainObject(turn)) {
+          throw new TranscriptCorruptionError(
+            `transcript turn must be an object, got ${JSON.stringify(turn)}`,
+          );
+        }
+        if (!isRecordableOffset(turn.sequence)) {
+          throw new RangeError(
+            `transcript turn sequence must be a non-negative safe integer below Number.MAX_SAFE_INTEGER, got ${turn.sequence}`,
+          );
+        }
+        if (!isNonNegInt(turn.loopIteration)) {
+          throw new RangeError(
+            `transcript turn loopIteration must be a non-negative safe integer, got ${turn.loopIteration}`,
+          );
+        }
+        const role = toTurnRole(turn.role);
+        if (!Array.isArray(turn.content)) {
+          throw new TranscriptCorruptionError(
+            `transcript turn content must be an array, got ${JSON.stringify(turn.content)}`,
+          );
+        }
+        if (!Array.isArray(turn.toolCalls)) {
+          throw new TranscriptCorruptionError(
+            `transcript turn toolCalls must be an array, got ${JSON.stringify(turn.toolCalls)}`,
+          );
+        }
+        const content = stringifyJson(turn.content.map(toContentBlock), "content");
+        const toolCalls = stringifyJson(turn.toolCalls.map(toToolCall), "toolCalls");
+        const metrics = turn.metrics === undefined ? null : stringifyJson(toMetrics(turn.metrics), "metrics");
+        let producedAt: number | null = null;
+        if (turn.producedAt !== undefined) {
+          if (!isNonNegInt(turn.producedAt)) {
+            throw new RangeError(
+              `transcript turn producedAt must be a non-negative safe integer (epoch millis), got ${turn.producedAt}`,
+            );
+          }
+          producedAt = turn.producedAt;
+        }
+        const { changes } = this.#db.run(
+          `INSERT INTO ${TRANSCRIPT_TURN_TABLE}
+             (stream, turn_sequence, loop_iteration, role, content, tool_calls, metrics, produced_at, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(stream, turn_sequence) DO NOTHING`,
+          [stream, turn.sequence, turn.loopIteration, role, content, toolCalls, metrics, producedAt, at],
+        );
+        written += changes;
+      }
+      return written;
+    });
+  }
+
+  /** Read a stream's whole turn-structured transcript in `sequence` order. */
+  readTurns(stream: string): TranscriptTurn[] {
+    return this.#db
+      .all<DbTurnRow>(
+        `SELECT turn_sequence, loop_iteration, role, content, tool_calls, metrics, produced_at
+         FROM ${TRANSCRIPT_TURN_TABLE} WHERE stream = ? ORDER BY turn_sequence`,
+        [stream],
+      )
+      .map(toTurn);
+  }
+
+  /**
    * Apply a rolling retention window to a long-lived stream: drop every chunk with
    * `offset < before`. A subsequent {@link since} from an offset older than
    * `before` reports a `gap`. Returns the number of chunks dropped. Refuses to
@@ -411,8 +841,9 @@ export class TranscriptStore {
   /**
    * Retention sweep for completed ephemeral transcripts: drop every stream whose
    * `status = 'completed'` and whose `completed_at` is older than the retention
-   * window, along with its chunks. Long-lived streams are never time-swept (they
-   * are bounded by {@link truncateBefore} instead). Returns the removed stream ids.
+   * window, along with its chunks and structured turns. Long-lived streams are
+   * never time-swept (they are bounded by {@link truncateBefore} instead). Returns
+   * the removed stream ids.
    *
    * The selection and all deletes run inside a single SAVEPOINT (#atomic) so the
    * sweep is all-or-nothing: if any delete throws mid-sweep the whole batch rolls
@@ -432,6 +863,7 @@ export class TranscriptStore {
         .map((r) => r.stream);
       for (const stream of removed) {
         this.#db.run(`DELETE FROM ${TRANSCRIPT_CHUNK_TABLE} WHERE stream = ?`, [stream]);
+        this.#db.run(`DELETE FROM ${TRANSCRIPT_TURN_TABLE} WHERE stream = ?`, [stream]);
         this.#db.run(`DELETE FROM ${TRANSCRIPT_STREAM_TABLE} WHERE stream = ?`, [stream]);
       }
       return removed;

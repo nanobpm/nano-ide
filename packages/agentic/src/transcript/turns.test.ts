@@ -318,3 +318,17 @@ test("recordTurns rejects a non-plain (class-instance-like) object at the untype
   assert.throws(() => store.recordTurns("job:nonplain", [turn], "ephemeral"), TranscriptCorruptionError);
   assert.equal(store.readTurns("job:nonplain").length, 0);
 });
+
+test("recordTurns rejects a null / non-object turn at the untyped boundary", () => {
+  const store = newStore();
+  // A caller passing `JSON.parse("null")` (or any non-object) through an untyped boundary
+  // must get a corruption error, never a raw "Cannot read properties of null" TypeError.
+  const nullTurn: TranscriptTurn = JSON.parse("null");
+  assert.throws(() => store.recordTurns("job:nullturn", [nullTurn], "ephemeral"), TranscriptCorruptionError);
+
+  const scalarTurn: TranscriptTurn = JSON.parse("42");
+  assert.throws(() => store.recordTurns("job:scalarturn", [scalarTurn], "ephemeral"), TranscriptCorruptionError);
+
+  assert.equal(store.readTurns("job:nullturn").length, 0);
+  assert.equal(store.readTurns("job:scalarturn").length, 0);
+});

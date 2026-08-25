@@ -749,6 +749,11 @@ export class TranscriptStore {
     return this.#atomic(() => {
       let written = 0;
       for (const turn of turns) {
+        if (!isPlainObject(turn)) {
+          throw new TranscriptCorruptionError(
+            `transcript turn must be an object, got ${JSON.stringify(turn)}`,
+          );
+        }
         if (!isRecordableOffset(turn.sequence)) {
           throw new RangeError(
             `transcript turn sequence must be a non-negative safe integer below Number.MAX_SAFE_INTEGER, got ${turn.sequence}`,

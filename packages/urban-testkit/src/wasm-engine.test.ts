@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { runEngineClientContract } from "./contract.ts";
 import {
   createWasmEngineClient,
+  deriveElementInstances,
+  deriveWaitStates,
   parseForm,
   presentKey,
   presentString,
@@ -1455,4 +1457,106 @@ test("wasm: a shutdownSignal abort listener that re-enters close() must not doub
     reentrant ?? Promise.reject(new Error("the abort listener never re-entered close()")),
     "the re-entrant close() must await the same memoized run, not start a second teardown that re-frees",
   );
+});
+
+// The snapshot-derivation helpers behind `searchElementInstances` /
+// `searchElementInstanceWaitStates` are pure functions over an untyped `JSON.parse`d snapshot,
+// so a malformed/changed snapshot (a non-array collection, `null`/non-object rows, a keyless
+// element, a park whose element is no longer active) must drop the bad row rather than throw or
+// leak a garbage key. Unit-tested directly with crafted snapshots; the shared contract covers the
+// live end-to-end path against a real engine.
+test("deriveElementInstances: maps active elements, applies selectors, drops malformed rows", () => {
+  const snapshot = JSON.parse(JSON.stringify({
+    instances: [
+      {
+        key: "3",
+        activeElements: [
+          { elementId: "work", key: "5" },
+          { elementId: "gw", key: "6" },
+          { elementId: "keyless" }, // no key → dropped
+          { key: "7" }, // no elementId → dropped
+          "not-an-object", // non-object row → dropped
+        ],
+      },
+      { key: "4", activeElements: [{ elementId: "other", key: "8" }] },
+      { activeElements: [{ elementId: "orphan", key: "9" }] }, // no instance key → dropped
+    ],
+  }));
+
+  assert.deepEqual(deriveElementInstances(snapshot), [
+    { elementInstanceKey: "5", processInstanceKey: "3", elementId: "work", state: "ACTIVE" },
+    { elementInstanceKey: "6", processInstanceKey: "3", elementId: "gw", state: "ACTIVE" },
+    { elementInstanceKey: "8", processInstanceKey: "4", elementId: "other", state: "ACTIVE" },
+  ]);
+  // Selectors narrow, and a non-ACTIVE state the snapshot can't serve yields nothing.
+  assert.deepEqual(
+    deriveElementInstances(snapshot, { processInstanceKey: "3", elementId: "work" }),
+    [{ elementInstanceKey: "5", processInstanceKey: "3", elementId: "work", state: "ACTIVE" }],
+  );
+  assert.deepEqual(deriveElementInstances(snapshot, { state: "COMPLETED" }), []);
+});
+
+test("deriveWaitStates: joins each park to its active element instance key and discriminates by type", () => {
+  const snapshot = JSON.parse(JSON.stringify({
+    instances: [{
+      key: "3",
+      activeElements: [
+        { elementId: "svc", key: "5" },
+        { elementId: "catch", key: "6" },
+        { elementId: "review", key: "7" },
+        { elementId: "tmr", key: "8" },
+        { elementId: "sig", key: "9" },
+      ],
+    }],
+    jobs: [
+      { elementId: "svc", instanceKey: "3", jobType: "work", key: "50" },
+      { elementId: "gone", instanceKey: "3", jobType: "x", key: "51" }, // element not active → dropped
+    ],
+    messageSubscriptions: [{ elementId: "catch", instanceKey: "3", messageName: "Go", correlationKey: "K1", key: "60" }],
+    timers: [{ elementId: "tmr", instanceKey: "3", key: "70" }],
+    signalSubscriptions: [{ elementId: "sig", instanceKey: "3", signalName: "Sig", key: "80" }],
+    userTasks: [{ elementId: "review", instanceKey: "3", elementInstanceKey: "7", key: "90" }],
+  }));
+
+  const all = deriveWaitStates(snapshot);
+  assert.deepEqual(all, [
+    { elementInstanceKey: "5", processInstanceKey: "3", elementId: "svc", waitStateType: "JOB", jobType: "work", jobKey: "50" },
+    { elementInstanceKey: "6", processInstanceKey: "3", elementId: "catch", waitStateType: "MESSAGE", messageName: "Go", correlationKey: "K1" },
+    { elementInstanceKey: "8", processInstanceKey: "3", elementId: "tmr", waitStateType: "TIMER" },
+    { elementInstanceKey: "9", processInstanceKey: "3", elementId: "sig", waitStateType: "SIGNAL", signalName: "Sig" },
+    { elementInstanceKey: "7", processInstanceKey: "3", elementId: "review", waitStateType: "USER_TASK", userTaskKey: "90" },
+  ]);
+  // Selectors narrow by kind and by element.
+  assert.deepEqual(deriveWaitStates(snapshot, { waitStateType: "JOB" }).map((w) => w.elementId), ["svc"]);
+  assert.deepEqual(deriveWaitStates(snapshot, { elementId: "catch" }).map((w) => w.waitStateType), ["MESSAGE"]);
+});
+
+test("deriveWaitStates: a multi-instance elementId is an ambiguous park join and is dropped, not mis-keyed", () => {
+  const snapshot = JSON.parse(JSON.stringify({
+    instances: [{
+      key: "3",
+      activeElements: [
+        { elementId: "mi", key: "10" }, // two active tokens of the SAME element (multi-instance)
+        { elementId: "mi", key: "11" },
+        { elementId: "solo", key: "12" },
+      ],
+    }],
+    // One job row for the ambiguous element and one for the unambiguous element.
+    jobs: [
+      { elementId: "mi", instanceKey: "3", jobType: "work", key: "50" },
+      { elementId: "solo", instanceKey: "3", jobType: "work", key: "51" },
+    ],
+  }));
+
+  // Both element instances still surface (deriveElementInstances emits each active token)...
+  assert.deepEqual(
+    deriveElementInstances(snapshot).map((e) => e.elementInstanceKey).sort(),
+    ["10", "11", "12"],
+  );
+  // ...but the JOB park on the ambiguous `mi` element can't be paired to a single token from
+  // the snapshot, so it is dropped rather than joined to an arbitrary (wrong) key. Only the
+  // unambiguous `solo` park survives.
+  assert.deepEqual(deriveWaitStates(snapshot), [
+    { elementInstanceKey: "12", processInstanceKey: "3", elementId: "solo", waitStateType: "JOB", jobType: "work", jobKey: "51" },
+  ]);
 });

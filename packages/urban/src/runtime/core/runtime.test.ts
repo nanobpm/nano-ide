@@ -53,6 +53,15 @@ class FakeEngine implements EngineClient {
   async searchProcessInstances() {
     return [];
   }
+  async searchElementInstances() {
+    return [];
+  }
+  async searchElementInstanceWaitStates() {
+    return [];
+  }
+  async getElementInstance() {
+    return null;
+  }
   async registerWorker(jobType: string, handler: JobHandler): Promise<WorkerSubscription> {
     this.workers.set(jobType, handler);
     return { jobType, unsubscribe: async () => void this.workers.delete(jobType) };

@@ -13,6 +13,12 @@
 
 import type {
   EngineClient,
+  ElementInstanceState,
+  ElementInstanceSummary,
+  ElementInstanceFilter,
+  ElementInstanceWaitState,
+  ElementInstanceWaitStateFilter,
+  WaitStateType,
   EngineJob,
   FormSchema,
   JobHandler,
@@ -60,6 +66,222 @@ export function normalizeProcessInstanceState(
       return "TERMINATED";
     default:
       return undefined;
+  }
+}
+
+/** Map the engine's element-instance `state` onto the transport-agnostic
+ *  {@link ElementInstanceState} union, or `undefined` for an unrecognized value (which the
+ *  caller skips rather than surfacing a malformed row). Case-insensitive so a future casing
+ *  tweak on the engine side doesn't silently drop element instances. Kept separate from
+ *  {@link normalizeProcessInstanceState} — the two model distinct engine enums that only
+ *  coincide today — so element and process state can diverge without a hidden coupling. */
+export function normalizeElementInstanceState(
+  raw: unknown,
+): ElementInstanceState | undefined {
+  if (typeof raw !== "string") return undefined;
+  switch (raw.toUpperCase()) {
+    case "ACTIVE":
+      return "ACTIVE";
+    case "COMPLETED":
+      return "COMPLETED";
+    case "TERMINATED":
+      return "TERMINATED";
+    default:
+      return undefined;
+  }
+}
+
+/** Map the engine's wait-state `waitStateType` onto the transport-agnostic
+ *  {@link WaitStateType} union, or `undefined` for an unrecognized value. Case-insensitive
+ *  so a casing tweak doesn't silently drop parks. */
+export function normalizeWaitStateType(raw: unknown): WaitStateType | undefined {
+  if (typeof raw !== "string") return undefined;
+  switch (raw.toUpperCase()) {
+    case "JOB":
+      return "JOB";
+    case "MESSAGE":
+      return "MESSAGE";
+    case "USER_TASK":
+      return "USER_TASK";
+    case "TIMER":
+      return "TIMER";
+    case "SIGNAL":
+      return "SIGNAL";
+    case "CONDITION":
+      return "CONDITION";
+    default:
+      return undefined;
+  }
+}
+
+/** A non-empty string form of an engine key/id, or `undefined` when absent/blank (including a
+ *  whitespace-only string). Coerces a numeric key to a string (the engine may serialize a key
+ *  either way) but never `String(...)`-coerces an arbitrary object into a garbage
+ *  `"[object Object]"` id. The blank check trims, matching `getElementInstance`'s blank-key
+ *  guard and the form-key presence helpers, so a `"   "` key can never leak into a result. */
+function presentEngineKey(value: unknown): string | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/** A required text field (a wait-state discriminator's `jobType`/`messageName`/`signalName`),
+ *  or `undefined` when absent or blank — the caller skips the row rather than emitting a typed
+ *  wait state carrying an empty required string. Returns the trimmed value, matching the
+ *  presence rule used for keys, so surrounding whitespace can never leak into a result. */
+function presentText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/** The element type carried on an element-instance/wait-state row. The Camunda SDK DTO calls
+ *  it `type`; a plain REST/Rust-engine body may call it `elementType`. Accept either. */
+function pickElementType(row: Record<string, unknown>): string | undefined {
+  return presentText(row.elementType) ?? presentText(row.type);
+}
+
+/** Map one engine element-instance row onto an {@link ElementInstanceSummary}, or `undefined`
+ *  when the row is malformed (missing key/elementId/process instance, or an unrecognized
+ *  state). The single source of truth both `searchElementInstances` and `getElementInstance`
+ *  extract through, so the two cannot drift. */
+export function mapElementInstanceRow(
+  row: Record<string, unknown>,
+  log: Log,
+): ElementInstanceSummary | undefined {
+  const elementInstanceKey = presentEngineKey(row.elementInstanceKey);
+  if (elementInstanceKey === undefined) {
+    log("warn", "skipping element instance with no key in engine response");
+    return undefined;
+  }
+  const processInstanceKey = presentEngineKey(row.processInstanceKey);
+  if (processInstanceKey === undefined) {
+    log("warn", "skipping element instance with no processInstanceKey in engine response", {
+      elementInstanceKey,
+    });
+    return undefined;
+  }
+  const elementId = typeof row.elementId === "string" && row.elementId.trim() !== ""
+    ? row.elementId.trim()
+    : undefined;
+  if (elementId === undefined) {
+    log("warn", "skipping element instance with no elementId in engine response", {
+      elementInstanceKey,
+    });
+    return undefined;
+  }
+  const state = normalizeElementInstanceState(row.state);
+  if (state === undefined) {
+    log("warn", "skipping element instance with unrecognized state", {
+      elementInstanceKey,
+      state: String(row.state),
+    });
+    return undefined;
+  }
+  const elementType = pickElementType(row);
+  return {
+    elementInstanceKey,
+    processInstanceKey,
+    elementId,
+    ...(elementType ? { elementType } : {}),
+    state,
+  };
+}
+
+/** Map one engine wait-state row onto an {@link ElementInstanceWaitState}, or `undefined`
+ *  when the row is malformed (missing identity, or an unrecognized `waitStateType`). The
+ *  Camunda SDK nests the park-specific fields under `details`; a plain REST body may inline
+ *  them — read `details` first, then fall back to the row itself, so both wire shapes map. */
+export function mapElementInstanceWaitStateRow(
+  row: Record<string, unknown>,
+  log: Log,
+): ElementInstanceWaitState | undefined {
+  const elementInstanceKey = presentEngineKey(row.elementInstanceKey);
+  const processInstanceKey = presentEngineKey(row.processInstanceKey);
+  const elementId = typeof row.elementId === "string" && row.elementId.trim() !== ""
+    ? row.elementId.trim()
+    : undefined;
+  if (elementInstanceKey === undefined || processInstanceKey === undefined || elementId === undefined) {
+    log("warn", "skipping element-instance wait state with incomplete identity in engine response");
+    return undefined;
+  }
+  const details = isRecord(row.details) ? row.details : row;
+  const waitStateType = normalizeWaitStateType(details.waitStateType ?? row.waitStateType);
+  if (waitStateType === undefined) {
+    log("warn", "skipping element-instance wait state with unrecognized waitStateType", {
+      elementInstanceKey,
+      waitStateType: String(details.waitStateType ?? row.waitStateType),
+    });
+    return undefined;
+  }
+  const elementType = pickElementType(row);
+  const base = {
+    elementInstanceKey,
+    processInstanceKey,
+    elementId,
+    ...(elementType ? { elementType } : {}),
+  };
+  switch (waitStateType) {
+    case "JOB": {
+      // `jobType` is the required discriminator of a JOB park; without it the row is malformed.
+      const jobType = presentText(details.jobType);
+      if (jobType === undefined) {
+        log("warn", "skipping JOB wait state with no jobType in engine response", {
+          elementInstanceKey,
+        });
+        return undefined;
+      }
+      const jobKey = presentEngineKey(details.jobKey);
+      return { ...base, waitStateType, jobType, ...(jobKey ? { jobKey } : {}) };
+    }
+    case "MESSAGE": {
+      // `messageName` is the required discriminator of a MESSAGE park.
+      const messageName = presentText(details.messageName);
+      if (messageName === undefined) {
+        log("warn", "skipping MESSAGE wait state with no messageName in engine response", {
+          elementInstanceKey,
+        });
+        return undefined;
+      }
+      const correlationKey = presentText(details.correlationKey);
+      return {
+        ...base,
+        waitStateType,
+        messageName,
+        ...(correlationKey ? { correlationKey } : {}),
+      };
+    }
+    case "USER_TASK": {
+      // `userTaskKey` is the required identity of a USER_TASK park; without it the row is
+      // malformed. Skip it (like the missing-identity guards above) rather than emit a typed
+      // wait state carrying an empty key that would break a downstream join.
+      const userTaskKey = presentEngineKey(details.taskKey ?? details.userTaskKey);
+      if (userTaskKey === undefined) {
+        log("warn", "skipping USER_TASK wait state with no userTaskKey in engine response", {
+          elementInstanceKey,
+        });
+        return undefined;
+      }
+      return { ...base, waitStateType, userTaskKey };
+    }
+    case "SIGNAL": {
+      // `signalName` is the required discriminator of a SIGNAL park.
+      const signalName = presentText(details.signalName);
+      if (signalName === undefined) {
+        log("warn", "skipping SIGNAL wait state with no signalName in engine response", {
+          elementInstanceKey,
+        });
+        return undefined;
+      }
+      return { ...base, waitStateType, signalName };
+    }
+    case "TIMER":
+      return { ...base, waitStateType };
+    case "CONDITION":
+      return { ...base, waitStateType };
   }
 }
 
@@ -143,6 +365,21 @@ export interface NanoSdkClient {
   ): Promise<Record<string, unknown>>;
   searchProcessInstances(
     input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
+  searchElementInstances(
+    input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
+  searchElementInstanceWaitStates(
+    input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
+  getElementInstance(
+    input: { elementInstanceKey: string },
     consistency?: unknown,
     options?: unknown,
   ): Promise<Record<string, unknown>>;
@@ -353,6 +590,80 @@ export class SdkEngineClient implements EngineClient {
       }
       return [{ processInstanceKey: String(key), state }];
     });
+  }
+
+  async searchElementInstances(
+    filter?: ElementInstanceFilter,
+  ): Promise<ElementInstanceSummary[]> {
+    // Mirror `searchProcessInstances`: build the engine filter from the transport-agnostic
+    // selectors, read at zero-wait consistency (an element-instance search is eventually
+    // consistent), and map each row through the single `mapElementInstanceRow` gate — which
+    // also `searchElementInstances`/`getElementInstance` share — dropping malformed rows.
+    const f: Record<string, unknown> = {};
+    if (filter?.processInstanceKey) f.processInstanceKey = filter.processInstanceKey;
+    if (filter?.elementId) f.elementId = filter.elementId;
+    if (filter?.state) f.state = filter.state;
+    const body = await this.client.searchElementInstances(
+      { filter: f },
+      { consistency: { waitUpToMs: 0 } },
+    );
+    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+    return items.flatMap((it) => {
+      const mapped = mapElementInstanceRow(it, this.log);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  async searchElementInstanceWaitStates(
+    filter?: ElementInstanceWaitStateFilter,
+  ): Promise<ElementInstanceWaitState[]> {
+    // The wait-states search surfaces *every* park (job/message/timer/signal/condition/user
+    // task), not just user tasks. Same zero-wait read + per-row mapping-gate shape as
+    // `searchElementInstances`; the SDK nests park-specific fields under `details`, which
+    // `mapElementInstanceWaitStateRow` unwraps.
+    const f: Record<string, unknown> = {};
+    if (filter?.processInstanceKey) f.processInstanceKey = filter.processInstanceKey;
+    if (filter?.elementId) f.elementId = filter.elementId;
+    if (filter?.waitStateType) f.waitStateType = filter.waitStateType;
+    const body = await this.client.searchElementInstanceWaitStates(
+      { filter: f },
+      { consistency: { waitUpToMs: 0 } },
+    );
+    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+    return items.flatMap((it) => {
+      const mapped = mapElementInstanceWaitStateRow(it, this.log);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  async getElementInstance(
+    elementInstanceKey: string,
+  ): Promise<ElementInstanceSummary | null> {
+    // A blank key can never address an element instance — short-circuit to null rather than
+    // issue a `GET /element-instances/` with an empty segment. Normalize the key up front (as
+    // `getForm` resolves a normalized identifier before fetching) so a padded-but-valid key
+    // like `" 5 "` addresses the same element instance rather than 404ing on the raw segment.
+    if (typeof elementInstanceKey !== "string" || elementInstanceKey.trim() === "") {
+      return null;
+    }
+    const key = elementInstanceKey.trim();
+    let body: Record<string, unknown>;
+    try {
+      body = await this.client.getElementInstance(
+        { elementInstanceKey: key },
+        { consistency: { waitUpToMs: 0 } },
+      );
+    } catch (err) {
+      // A 404 (no such element instance) is an expected "not found", not a fault — mirror
+      // `getForm`, which treats a failed fetch as absence (null) rather than propagating.
+      this.log("warn", "getElementInstance: engine fetch failed", {
+        elementInstanceKey: key,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    if (!isRecord(body)) return null;
+    return mapElementInstanceRow(body, this.log) ?? null;
   }
 
   async registerWorker(

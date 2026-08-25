@@ -32,6 +32,9 @@ class MiniEngine implements EngineClient {
   async getForm(): Promise<null> { return null; }
   async completeUserTask(): Promise<void> {}
   async searchProcessInstances(): Promise<[]> { return []; }
+  async searchElementInstances(): Promise<[]> { return []; }
+  async searchElementInstanceWaitStates(): Promise<[]> { return []; }
+  async getElementInstance(): Promise<null> { return null; }
   async close(): Promise<void> {}
   async registerWorker(jobType: string, handler: JobHandler): Promise<WorkerSubscription> {
     this.workers.set(jobType, handler);

@@ -83,6 +83,12 @@ export type { ValidationIssue } from "./core/validate.ts";
 // Host + engine contracts (for custom hosts / tests)
 export type {
   EngineClient,
+  ElementInstanceState,
+  ElementInstanceSummary,
+  ElementInstanceFilter,
+  ElementInstanceWaitState,
+  ElementInstanceWaitStateFilter,
+  WaitStateType,
   EngineJob,
   FormSchema,
   HostContext,

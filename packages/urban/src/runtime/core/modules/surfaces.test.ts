@@ -34,6 +34,9 @@ function ctxWith(surfaces: Record<string, unknown>): Parameters<typeof mountSurf
     getForm: async () => null,
     completeUserTask: async () => {},
     searchProcessInstances: async () => [],
+    searchElementInstances: async () => [],
+    searchElementInstanceWaitStates: async () => [],
+    getElementInstance: async () => null,
     registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
     close: async () => {},
   };
@@ -50,6 +53,9 @@ const fakeEngine: EngineClient = {
   getForm: async () => null,
   completeUserTask: async () => {},
   searchProcessInstances: async () => [],
+  searchElementInstances: async () => [],
+  searchElementInstanceWaitStates: async () => [],
+  getElementInstance: async () => null,
   registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
   close: async () => {},
 };

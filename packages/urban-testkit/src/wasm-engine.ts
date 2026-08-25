@@ -26,6 +26,10 @@ import type {
 import {
   applyAmbientLineage,
   type EngineClient,
+  type ElementInstanceSummary,
+  type ElementInstanceFilter,
+  type ElementInstanceWaitState,
+  type ElementInstanceWaitStateFilter,
   type EngineJob,
   isBpmnError,
   type JobHandler,
@@ -564,6 +568,55 @@ export class WasmEngineClient implements EngineClient {
       out.push({ processInstanceKey: key, state });
     }
     return out;
+  }
+
+  /**
+   * Search element instances ("tokens") — derived from the primary-state snapshot, which the
+   * WASM engine keeps in lieu of a `/v2/element-instances/search` read channel. Each running
+   * instance records its *active* element instances (`instances[].activeElements[]`), so this
+   * surfaces the ACTIVE set — "the furthest element reached", including active non-user-task
+   * elements a user-task search cannot see. A completed/terminated element instance is not
+   * retained with a key in the snapshot, so a caller filtering `state: "COMPLETED"` /
+   * `"TERMINATED"` gets an empty result here (unlike the gateway-backed `SdkEngineClient`,
+   * which the engine serves those from server-side). `elementType` is likewise absent — the
+   * snapshot does not carry the BPMN type — matching `ElementInstanceSummary`'s optional field.
+   */
+  async searchElementInstances(
+    filter?: ElementInstanceFilter,
+  ): Promise<ElementInstanceSummary[]> {
+    return deriveElementInstances(this.#snapshot(), filter);
+  }
+
+  /**
+   * Search element-instance *wait states* — every park, not only user tasks — derived from the
+   * snapshot's `jobs` (JOB), `messageSubscriptions` (MESSAGE), `timers` (TIMER),
+   * `signalSubscriptions` (SIGNAL) and `userTasks` (USER_TASK). A park row carries its
+   * `elementId` + owning process instance but not the element-instance key, so it is joined to
+   * the same instance's `activeElements` to resolve the key `searchElementInstances` reports —
+   * the two stay consistent. `CONDITION` parks are not modelled by the WASM engine and so never
+   * appear. This mirrors the *effective* behaviour of the gateway-backed `SdkEngineClient`,
+   * which the engine serves server-side; only the derivation site differs.
+   */
+  async searchElementInstanceWaitStates(
+    filter?: ElementInstanceWaitStateFilter,
+  ): Promise<ElementInstanceWaitState[]> {
+    return deriveWaitStates(this.#snapshot(), filter);
+  }
+
+  /** Fetch a single element instance by key — the snapshot-derived active set (see
+   *  {@link searchElementInstances}) narrowed to the one whose key matches, or `null` when no
+   *  such active element instance exists (mirrors `SdkEngineClient.getElementInstance`, which
+   *  returns `null` on a 404). A blank key can address nothing → `null`. */
+  async getElementInstance(
+    elementInstanceKey: string,
+  ): Promise<ElementInstanceSummary | null> {
+    if (typeof elementInstanceKey !== "string" || elementInstanceKey.trim() === "") {
+      return null;
+    }
+    const key = elementInstanceKey.trim();
+    const match = deriveElementInstances(this.#snapshot(), undefined)
+      .find((e) => e.elementInstanceKey === key);
+    return match ?? null;
   }
 
   async registerWorker(
@@ -1207,6 +1260,162 @@ function requireCreated(created: unknown): string {
 /** The `Record<string, unknown>` elements of an unknown value (non-records dropped). */
 function records(v: unknown): Record<string, unknown>[] {
   return Array.isArray(v) ? v.filter(isRecord) : [];
+}
+
+/** Build a `(processInstanceKey, elementId) → elementInstanceKey` index from each instance's
+ *  active elements. A snapshot park row (job/message/timer/signal) carries its `elementId` +
+ *  owning process instance but not the element-instance key, so it resolves the key through
+ *  this index — the same key {@link deriveElementInstances} reports, so the two cannot drift.
+ *
+ *  When a single `(processInstanceKey, elementId)` maps to *more than one* active element
+ *  instance (a multi-instance activity's parallel tokens), the join is ambiguous — a park row
+ *  carries only `elementId` + process instance, not the element-instance key, so it can't be
+ *  paired to the right token. Such a key is marked ambiguous and left *absent* from the index,
+ *  so {@link waitStateIdentity} drops the park rather than attaching an arbitrary (wrong) key. */
+function activeElementKeyIndex(snapshot: Record<string, unknown>): Map<string, string> {
+  const index = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const inst of records(snapshot.instances)) {
+    const processInstanceKey = presentKey(inst.key);
+    if (processInstanceKey === undefined) continue;
+    for (const el of records(inst.activeElements)) {
+      const elementInstanceKey = presentKey(el.key);
+      const elementId = presentString(el.elementId);
+      if (elementInstanceKey === undefined || elementId === undefined) continue;
+      const mapKey = `${processInstanceKey}\u0000${elementId}`;
+      if (index.has(mapKey) || ambiguous.has(mapKey)) {
+        index.delete(mapKey);
+        ambiguous.add(mapKey);
+        continue;
+      }
+      index.set(mapKey, elementInstanceKey);
+    }
+  }
+  return index;
+}
+
+/** Derive the ACTIVE element instances the WASM snapshot records (see
+ *  {@link WasmEngineClient.searchElementInstances}). Applies the `processInstanceKey`/
+ *  `elementId`/`state` selectors client-side, matching the effective behaviour of the
+ *  gateway-backed `SdkEngineClient`. */
+export function deriveElementInstances(
+  snapshot: Record<string, unknown>,
+  filter?: ElementInstanceFilter,
+): ElementInstanceSummary[] {
+  const out: ElementInstanceSummary[] = [];
+  // Only ACTIVE element instances are retained (with keys) in the snapshot; a request for any
+  // other lifecycle state cannot be satisfied here, so it yields nothing rather than a wrong row.
+  if (filter?.state !== undefined && filter.state !== "ACTIVE") return out;
+  for (const inst of records(snapshot.instances)) {
+    const processInstanceKey = presentKey(inst.key);
+    if (processInstanceKey === undefined) continue;
+    if (filter?.processInstanceKey !== undefined && processInstanceKey !== filter.processInstanceKey) {
+      continue;
+    }
+    for (const el of records(inst.activeElements)) {
+      const elementInstanceKey = presentKey(el.key);
+      const elementId = presentString(el.elementId);
+      if (elementInstanceKey === undefined || elementId === undefined) continue;
+      if (filter?.elementId !== undefined && elementId !== filter.elementId) continue;
+      out.push({ elementInstanceKey, processInstanceKey, elementId, state: "ACTIVE" });
+    }
+  }
+  return out;
+}
+
+/** Derive element-instance wait states from the snapshot's park collections (see
+ *  {@link WasmEngineClient.searchElementInstanceWaitStates}). Each park's element-instance key
+ *  is resolved through {@link activeElementKeyIndex}; the `processInstanceKey`/`elementId`/
+ *  `waitStateType` selectors are applied client-side. */
+export function deriveWaitStates(
+  snapshot: Record<string, unknown>,
+  filter?: ElementInstanceWaitStateFilter,
+): ElementInstanceWaitState[] {
+  const keyIndex = activeElementKeyIndex(snapshot);
+  const out: ElementInstanceWaitState[] = [];
+  const accept = (w: ElementInstanceWaitState): void => {
+    if (filter?.processInstanceKey !== undefined && w.processInstanceKey !== filter.processInstanceKey) {
+      return;
+    }
+    if (filter?.elementId !== undefined && w.elementId !== filter.elementId) return;
+    if (filter?.waitStateType !== undefined && w.waitStateType !== filter.waitStateType) return;
+    out.push(w);
+  };
+
+  // JOB parks — a service task awaiting a worker. A JOB without a jobType is malformed; skip it.
+  for (const job of records(snapshot.jobs)) {
+    const identity = waitStateIdentity(job, keyIndex);
+    if (identity === undefined) continue;
+    const jobType = presentString(job.jobType);
+    if (jobType === undefined) continue;
+    const jobKey = presentKey(job.key);
+    accept({ ...identity, waitStateType: "JOB", jobType, ...(jobKey ? { jobKey } : {}) });
+  }
+  // MESSAGE parks — an event awaiting message correlation. A MESSAGE without a messageName is
+  // malformed; skip it.
+  for (const sub of records(snapshot.messageSubscriptions)) {
+    const identity = waitStateIdentity(sub, keyIndex);
+    if (identity === undefined) continue;
+    const messageName = presentString(sub.messageName);
+    if (messageName === undefined) continue;
+    const correlationKey = presentString(sub.correlationKey);
+    accept({
+      ...identity,
+      waitStateType: "MESSAGE",
+      messageName,
+      ...(correlationKey ? { correlationKey } : {}),
+    });
+  }
+  // TIMER parks.
+  for (const timer of records(snapshot.timers)) {
+    const identity = waitStateIdentity(timer, keyIndex);
+    if (identity === undefined) continue;
+    accept({ ...identity, waitStateType: "TIMER" });
+  }
+  // SIGNAL parks — a SIGNAL without a signalName is malformed; skip it.
+  for (const sub of records(snapshot.signalSubscriptions)) {
+    const identity = waitStateIdentity(sub, keyIndex);
+    if (identity === undefined) continue;
+    const signalName = presentString(sub.signalName);
+    if (signalName === undefined) continue;
+    accept({ ...identity, waitStateType: "SIGNAL", signalName });
+  }
+  // USER_TASK parks — the snapshot carries the element-instance key directly on the task row.
+  for (const task of records(snapshot.userTasks)) {
+    const processInstanceKey = presentKey(task.instanceKey);
+    const elementId = presentString(task.elementId);
+    const elementInstanceKey = presentKey(task.elementInstanceKey);
+    const userTaskKey = presentKey(task.key);
+    if (
+      processInstanceKey === undefined || elementId === undefined ||
+      elementInstanceKey === undefined || userTaskKey === undefined
+    ) {
+      continue;
+    }
+    accept({
+      elementInstanceKey,
+      processInstanceKey,
+      elementId,
+      waitStateType: "USER_TASK",
+      userTaskKey,
+    });
+  }
+  return out;
+}
+
+/** Resolve the `{ elementInstanceKey, processInstanceKey, elementId }` identity of a park row
+ *  (job/message/timer/signal) whose `instanceKey`/`elementId` join to an active element, or
+ *  `undefined` when the row is incomplete or its element is no longer active. */
+function waitStateIdentity(
+  row: Record<string, unknown>,
+  keyIndex: Map<string, string>,
+): { elementInstanceKey: string; processInstanceKey: string; elementId: string } | undefined {
+  const processInstanceKey = presentKey(row.instanceKey);
+  const elementId = presentString(row.elementId);
+  if (processInstanceKey === undefined || elementId === undefined) return undefined;
+  const elementInstanceKey = keyIndex.get(`${processInstanceKey}\u0000${elementId}`);
+  if (elementInstanceKey === undefined) return undefined;
+  return { elementInstanceKey, processInstanceKey, elementId };
 }
 
 function str(v: unknown): string {

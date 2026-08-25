@@ -18,16 +18,24 @@ export type {
   Clock,
   SqliteDb,
   TranscriptChunk,
+  TranscriptContentBlock,
+  TranscriptContentType,
   TranscriptLifecycle,
   TranscriptRing,
   TranscriptSlice,
   TranscriptStatus,
   TranscriptStoreOptions,
   TranscriptStream,
+  TranscriptToolCall,
+  TranscriptTurn,
+  TranscriptTurnMetrics,
+  TranscriptTurnRole,
 } from "./store.ts";
 
 export {
   TRANSCRIPT_CHUNK_TABLE,
   TRANSCRIPT_SCHEMA_SQL,
   TRANSCRIPT_STREAM_TABLE,
+  TRANSCRIPT_TURN_SCHEMA_SQL,
+  TRANSCRIPT_TURN_TABLE,
 } from "./schema.ts";

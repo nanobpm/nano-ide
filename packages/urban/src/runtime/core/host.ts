@@ -265,9 +265,10 @@ export interface UserTaskFilter {
  * An element instance's lifecycle state, as the engine reports it on a
  * `/v2/element-instances/search` result. Mirrors the engine's `ElementInstanceStateEnum`:
  * `ACTIVE` (a token is currently *at* this element), `COMPLETED` (the token has left it), or
- * `TERMINATED` (the element was interrupted). Structurally the same terminal set as
- * {@link ProcessInstanceState}, but a distinct concept — element instances are the tokens
- * *within* a process instance — so it is kept as its own type rather than aliased.
+ * `TERMINATED` (the element was interrupted). Structurally the same state set as
+ * {@link ProcessInstanceState} (one active state plus the `COMPLETED`/`TERMINATED` terminals),
+ * but a distinct concept — element instances are the tokens *within* a process instance — so it
+ * is kept as its own type rather than aliased.
  */
 export type ElementInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED";
 

@@ -462,7 +462,7 @@ test("normalizeProcessInstanceState maps the terminal set and rejects others", (
   assert.equal(normalizeProcessInstanceState(undefined), undefined);
 });
 
-test("normalizeElementInstanceState maps the terminal set (case-insensitive) and rejects others", () => {
+test("normalizeElementInstanceState maps the recognized states (case-insensitive) and rejects others", () => {
   assert.equal(normalizeElementInstanceState("ACTIVE"), "ACTIVE");
   assert.equal(normalizeElementInstanceState("completed"), "COMPLETED");
   assert.equal(normalizeElementInstanceState("Terminated"), "TERMINATED");

@@ -716,6 +716,14 @@ test("getElementInstance returns a mapped summary, and null for a blank key or a
     elementType: "SERVICE_TASK",
     state: "ACTIVE",
   });
+  // A padded-but-valid key is normalized before the fetch, so it addresses the same instance.
+  assert.deepEqual(await engine.getElementInstance("  5  "), {
+    elementInstanceKey: "5",
+    processInstanceKey: "3",
+    elementId: "task",
+    elementType: "SERVICE_TASK",
+    state: "ACTIVE",
+  });
   // A blank key short-circuits without hitting the engine; a 404 is treated as absence.
   assert.equal(await engine.getElementInstance("   "), null);
   assert.equal(await engine.getElementInstance("missing"), null);

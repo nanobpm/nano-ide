@@ -640,21 +640,24 @@ export class SdkEngineClient implements EngineClient {
     elementInstanceKey: string,
   ): Promise<ElementInstanceSummary | null> {
     // A blank key can never address an element instance — short-circuit to null rather than
-    // issue a `GET /element-instances/` with an empty segment.
+    // issue a `GET /element-instances/` with an empty segment. Normalize the key up front (as
+    // `getForm` resolves a normalized identifier before fetching) so a padded-but-valid key
+    // like `" 5 "` addresses the same element instance rather than 404ing on the raw segment.
     if (typeof elementInstanceKey !== "string" || elementInstanceKey.trim() === "") {
       return null;
     }
+    const key = elementInstanceKey.trim();
     let body: Record<string, unknown>;
     try {
       body = await this.client.getElementInstance(
-        { elementInstanceKey },
+        { elementInstanceKey: key },
         { consistency: { waitUpToMs: 0 } },
       );
     } catch (err) {
       // A 404 (no such element instance) is an expected "not found", not a fault — mirror
       // `getForm`, which treats a failed fetch as absence (null) rather than propagating.
       this.log("warn", "getElementInstance: engine fetch failed", {
-        elementInstanceKey,
+        elementInstanceKey: key,
         err: err instanceof Error ? err.message : String(err),
       });
       return null;

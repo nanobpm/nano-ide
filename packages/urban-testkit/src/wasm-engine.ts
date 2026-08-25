@@ -613,8 +613,9 @@ export class WasmEngineClient implements EngineClient {
     if (typeof elementInstanceKey !== "string" || elementInstanceKey.trim() === "") {
       return null;
     }
+    const key = elementInstanceKey.trim();
     const match = deriveElementInstances(this.#snapshot(), undefined)
-      .find((e) => e.elementInstanceKey === elementInstanceKey);
+      .find((e) => e.elementInstanceKey === key);
     return match ?? null;
   }
 

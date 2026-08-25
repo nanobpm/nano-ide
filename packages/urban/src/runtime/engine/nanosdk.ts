@@ -124,7 +124,18 @@ function presentEngineKey(value: unknown): string | undefined {
     return Number.isFinite(value) ? String(value) : undefined;
   }
   if (typeof value !== "string") return undefined;
-  return value.trim() === "" ? undefined : value;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
+}
+
+/** A required text field (a wait-state discriminator's `jobType`/`messageName`/`signalName`),
+ *  or `undefined` when absent or blank — the caller skips the row rather than emitting a typed
+ *  wait state carrying an empty required string. Returns the trimmed value, matching the
+ *  presence rule used for keys, so surrounding whitespace can never leak into a result. */
+function presentText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed === "" ? undefined : trimmed;
 }
 
 /** The element type carried on an element-instance/wait-state row. The Camunda SDK DTO calls
@@ -156,7 +167,7 @@ export function mapElementInstanceRow(
     return undefined;
   }
   const elementId = typeof row.elementId === "string" && row.elementId.trim() !== ""
-    ? row.elementId
+    ? row.elementId.trim()
     : undefined;
   if (elementId === undefined) {
     log("warn", "skipping element instance with no elementId in engine response", {
@@ -193,7 +204,7 @@ export function mapElementInstanceWaitStateRow(
   const elementInstanceKey = presentEngineKey(row.elementInstanceKey);
   const processInstanceKey = presentEngineKey(row.processInstanceKey);
   const elementId = typeof row.elementId === "string" && row.elementId.trim() !== ""
-    ? row.elementId
+    ? row.elementId.trim()
     : undefined;
   if (elementInstanceKey === undefined || processInstanceKey === undefined || elementId === undefined) {
     log("warn", "skipping element-instance wait state with incomplete identity in engine response");
@@ -217,12 +228,26 @@ export function mapElementInstanceWaitStateRow(
   };
   switch (waitStateType) {
     case "JOB": {
-      const jobType = typeof details.jobType === "string" ? details.jobType : "";
+      // `jobType` is the required discriminator of a JOB park; without it the row is malformed.
+      const jobType = presentText(details.jobType);
+      if (jobType === undefined) {
+        log("warn", "skipping JOB wait state with no jobType in engine response", {
+          elementInstanceKey,
+        });
+        return undefined;
+      }
       const jobKey = presentEngineKey(details.jobKey);
       return { ...base, waitStateType, jobType, ...(jobKey ? { jobKey } : {}) };
     }
     case "MESSAGE": {
-      const messageName = typeof details.messageName === "string" ? details.messageName : "";
+      // `messageName` is the required discriminator of a MESSAGE park.
+      const messageName = presentText(details.messageName);
+      if (messageName === undefined) {
+        log("warn", "skipping MESSAGE wait state with no messageName in engine response", {
+          elementInstanceKey,
+        });
+        return undefined;
+      }
       const correlationKey = typeof details.correlationKey === "string"
         ? details.correlationKey
         : undefined;
@@ -247,7 +272,14 @@ export function mapElementInstanceWaitStateRow(
       return { ...base, waitStateType, userTaskKey };
     }
     case "SIGNAL": {
-      const signalName = typeof details.signalName === "string" ? details.signalName : "";
+      // `signalName` is the required discriminator of a SIGNAL park.
+      const signalName = presentText(details.signalName);
+      if (signalName === undefined) {
+        log("warn", "skipping SIGNAL wait state with no signalName in engine response", {
+          elementInstanceKey,
+        });
+        return undefined;
+      }
       return { ...base, waitStateType, signalName };
     }
     case "TIMER":

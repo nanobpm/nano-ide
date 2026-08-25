@@ -1329,19 +1329,22 @@ export function deriveWaitStates(
     out.push(w);
   };
 
-  // JOB parks — a service task awaiting a worker.
+  // JOB parks — a service task awaiting a worker. A JOB without a jobType is malformed; skip it.
   for (const job of records(snapshot.jobs)) {
     const identity = waitStateIdentity(job, keyIndex);
     if (identity === undefined) continue;
-    const jobType = presentString(job.jobType) ?? "";
+    const jobType = presentString(job.jobType);
+    if (jobType === undefined) continue;
     const jobKey = presentKey(job.key);
     accept({ ...identity, waitStateType: "JOB", jobType, ...(jobKey ? { jobKey } : {}) });
   }
-  // MESSAGE parks — an event awaiting message correlation.
+  // MESSAGE parks — an event awaiting message correlation. A MESSAGE without a messageName is
+  // malformed; skip it.
   for (const sub of records(snapshot.messageSubscriptions)) {
     const identity = waitStateIdentity(sub, keyIndex);
     if (identity === undefined) continue;
-    const messageName = presentString(sub.messageName) ?? "";
+    const messageName = presentString(sub.messageName);
+    if (messageName === undefined) continue;
     const correlationKey = presentString(sub.correlationKey);
     accept({
       ...identity,
@@ -1356,11 +1359,12 @@ export function deriveWaitStates(
     if (identity === undefined) continue;
     accept({ ...identity, waitStateType: "TIMER" });
   }
-  // SIGNAL parks.
+  // SIGNAL parks — a SIGNAL without a signalName is malformed; skip it.
   for (const sub of records(snapshot.signalSubscriptions)) {
     const identity = waitStateIdentity(sub, keyIndex);
     if (identity === undefined) continue;
-    const signalName = presentString(sub.signalName) ?? "";
+    const signalName = presentString(sub.signalName);
+    if (signalName === undefined) continue;
     accept({ ...identity, waitStateType: "SIGNAL", signalName });
   }
   // USER_TASK parks — the snapshot carries the element-instance key directly on the task row.

@@ -663,6 +663,36 @@ test("searchElementInstanceWaitStates forwards a waitStateType selector and read
   ]);
 });
 
+test("searchElementInstanceWaitStates drops parks missing their required discriminator field", async () => {
+  const client = fakeSdkClient({
+    searchElementInstanceWaitStates: async () => ({
+      items: [
+        { elementInstanceKey: "5", processInstanceKey: "3", elementId: "j", waitStateType: "JOB" }, // no jobType
+        { elementInstanceKey: "6", processInstanceKey: "3", elementId: "m", waitStateType: "MESSAGE" }, // no messageName
+        { elementInstanceKey: "7", processInstanceKey: "3", elementId: "s", waitStateType: "SIGNAL" }, // no signalName
+        {
+          elementInstanceKey: "8",
+          processInstanceKey: "3",
+          elementId: "j2",
+          waitStateType: "JOB",
+          jobType: "   ",
+        }, // blank jobType → dropped
+        {
+          elementInstanceKey: "9",
+          processInstanceKey: "3",
+          elementId: "t",
+          waitStateType: "TIMER",
+        }, // TIMER has no required field → kept
+      ],
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchElementInstanceWaitStates();
+  assert.deepEqual(out, [
+    { elementInstanceKey: "9", processInstanceKey: "3", elementId: "t", waitStateType: "TIMER" },
+  ]);
+});
+
 test("getElementInstance returns a mapped summary, and null for a blank key or a 404", async () => {
   const client = fakeSdkClient({
     getElementInstance: async (input) => {

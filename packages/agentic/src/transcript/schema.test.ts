@@ -94,18 +94,3 @@ test("ensureSchema creates all three transcript tables idempotently", () => {
   assert.deepEqual(tables, [TRANSCRIPT_CHUNK_TABLE, TRANSCRIPT_STREAM_TABLE, TRANSCRIPT_TURN_TABLE]);
   db.close();
 });
-
-test("ensureSchema creates both transcript tables idempotently", () => {
-  const db = openTestDb();
-  const store = new TranscriptStore(db);
-  store.ensureSchema();
-  store.ensureSchema();
-  const tables = db
-    .all<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?) ORDER BY name",
-      [TRANSCRIPT_CHUNK_TABLE, TRANSCRIPT_STREAM_TABLE],
-    )
-    .map((r) => r.name);
-  assert.deepEqual(tables, [TRANSCRIPT_CHUNK_TABLE, TRANSCRIPT_STREAM_TABLE]);
-  db.close();
-});

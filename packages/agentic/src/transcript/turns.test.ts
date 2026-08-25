@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
-import { TranscriptLifecycleError, TranscriptStore, type TranscriptTurn } from "./store.ts";
+import { TRANSCRIPT_TURN_TABLE } from "./schema.ts";
+import {
+  TranscriptCorruptionError,
+  TranscriptLifecycleError,
+  TranscriptStore,
+  type TranscriptTurn,
+} from "./store.ts";
 import { openTestDb, type TestDb } from "./test-db.ts";
 
 let db: TestDb;
@@ -137,4 +143,103 @@ test("sweep drops a completed ephemeral stream's turns along with its chunks", (
   assert.deepEqual(removed, ["job:475"]);
   assert.equal(store.readTurns("job:475").length, 0);
   assert.equal(store.read("job:475").length, 0);
+});
+
+test("recordTurns enforces the typed content-block payload invariant", () => {
+  const store = newStore();
+  // A TEXT block that also carries a documentReference payload — impossible per the
+  // typed-content contract. Build the runtime-invalid fixture via JSON.parse (not a
+  // type assertion) so a caller passing junk through an untyped boundary is exercised.
+  const twoPayloads: TranscriptTurn = JSON.parse(
+    '{"sequence":0,"loopIteration":0,"role":"USER","content":[{"contentType":"TEXT","text":"hi","documentReference":"d"}],"toolCalls":[]}',
+  );
+  assert.throws(() => store.recordTurns("job:bad", [twoPayloads], "ephemeral"), TranscriptCorruptionError);
+
+  // A DOCUMENT block missing its documentReference payload is equally invalid.
+  const missingPayload: TranscriptTurn = JSON.parse(
+    '{"sequence":0,"loopIteration":0,"role":"USER","content":[{"contentType":"DOCUMENT"}],"toolCalls":[]}',
+  );
+  assert.throws(() => store.recordTurns("job:bad2", [missingPayload], "ephemeral"), TranscriptCorruptionError);
+
+  // Nothing was persisted for either rejected batch.
+  assert.equal(store.readTurns("job:bad").length, 0);
+  assert.equal(store.readTurns("job:bad2").length, 0);
+});
+
+/** Insert a raw (possibly corrupt) turn row straight into the table, bypassing recordTurns. */
+function insertRawTurn(
+  store: TranscriptStore,
+  db: TestDb,
+  row: {
+    stream: string;
+    turn_sequence: number;
+    loop_iteration: number;
+    role: string;
+    content: string;
+    tool_calls: string;
+    metrics: string | null;
+    produced_at: number | null;
+  },
+): void {
+  store.ensureSchema();
+  db.run(
+    `INSERT INTO ${TRANSCRIPT_TURN_TABLE}
+       (stream, turn_sequence, loop_iteration, role, content, tool_calls, metrics, produced_at, recorded_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      row.stream,
+      row.turn_sequence,
+      row.loop_iteration,
+      row.role,
+      row.content,
+      row.tool_calls,
+      row.metrics,
+      row.produced_at,
+      "2026-01-01T00:00:00.000Z",
+    ],
+  );
+}
+
+const rawTurn = {
+  stream: "job:corrupt",
+  turn_sequence: 0,
+  loop_iteration: 0,
+  role: "USER",
+  content: "[]",
+  tool_calls: "[]",
+  metrics: null,
+  produced_at: null,
+};
+
+test("readTurns fails fast on a corrupt role", () => {
+  const store = new TranscriptStore(db);
+  insertRawTurn(store, db, { ...rawTurn, role: "WIZARD" });
+  assert.throws(() => store.readTurns("job:corrupt"), TranscriptCorruptionError);
+});
+
+test("readTurns fails fast on a corrupt turn_sequence", () => {
+  const store = new TranscriptStore(db);
+  insertRawTurn(store, db, { ...rawTurn, turn_sequence: -1 });
+  assert.throws(() => store.readTurns("job:corrupt"), TranscriptCorruptionError);
+});
+
+test("readTurns fails fast on a corrupt produced_at", () => {
+  const store = new TranscriptStore(db);
+  insertRawTurn(store, db, { ...rawTurn, produced_at: -5 });
+  assert.throws(() => store.readTurns("job:corrupt"), TranscriptCorruptionError);
+});
+
+test("readTurns fails fast on corrupt (non-numeric) metrics", () => {
+  const store = new TranscriptStore(db);
+  insertRawTurn(store, db, { ...rawTurn, metrics: JSON.stringify({ inputTokens: "lots" }) });
+  assert.throws(() => store.readTurns("job:corrupt"), TranscriptCorruptionError);
+});
+
+test("readTurns fails fast on a corrupt content-block payload", () => {
+  const store = new TranscriptStore(db);
+  insertRawTurn(store, db, {
+    ...rawTurn,
+    content: JSON.stringify([{ contentType: "TEXT", documentReference: "d" }]),
+  });
+  assert.throws(() => store.readTurns("job:corrupt"), TranscriptCorruptionError);
 });

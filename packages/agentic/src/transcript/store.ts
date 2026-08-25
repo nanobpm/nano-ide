@@ -302,84 +302,70 @@ function toContentType(value: unknown): TranscriptContentType {
 }
 
 /**
- * Validate + normalise a content block into a JSON-safe object. Enforces the
- * per-`contentType` payload (TEXT→text, DOCUMENT→documentReference, OBJECT→object)
- * and drops absent optional keys so serialise/deserialise round-trips exactly.
+ * The payload key each content type carries: TEXT→`text`, DOCUMENT→`documentReference`,
+ * OBJECT→`object`; UNSPECIFIED carries none. Drives the per-`contentType` payload
+ * invariant enforced by {@link toContentBlock}.
  */
-function normaliseContentBlock(block: TranscriptContentBlock): Record<string, unknown> {
-  const out: Record<string, unknown> = { contentType: toContentType(block.contentType) };
-  if (block.text !== undefined) {
-    if (typeof block.text !== "string") {
-      throw new TranscriptCorruptionError(`content block text must be a string, got ${JSON.stringify(block.text)}`);
-    }
-    out.text = block.text;
-  }
-  if (block.documentReference !== undefined) {
-    if (typeof block.documentReference !== "string") {
-      throw new TranscriptCorruptionError(
-        `content block documentReference must be a string, got ${JSON.stringify(block.documentReference)}`,
-      );
-    }
-    out.documentReference = block.documentReference;
-  }
-  if ("object" in block && block.object !== undefined) out.object = block.object;
-  return out;
-}
+const CONTENT_PAYLOAD_KEYS = ["text", "documentReference", "object"] as const;
+const CONTENT_TYPE_PAYLOAD: Record<TranscriptContentType, (typeof CONTENT_PAYLOAD_KEYS)[number] | null> = {
+  TEXT: "text",
+  DOCUMENT: "documentReference",
+  OBJECT: "object",
+  UNSPECIFIED: null,
+};
 
-/** Reconstruct a content block from a parsed-JSON value, validating its shape. */
+/**
+ * Validate a value into a canonical content block, enforcing the per-`contentType`
+ * payload invariant: a block carries exactly the one payload its type mandates
+ * (TEXT→text, DOCUMENT→documentReference, OBJECT→object) — never a missing, mismatched
+ * or multiple payload — and UNSPECIFIED carries none. This is the single validator both
+ * the write path (record) and the read path (deserialise) run through, so the two can
+ * never drift and a malformed block can neither persist nor round-trip. It emits only
+ * that one payload key, so serialise/deserialise round-trips exactly.
+ */
 function toContentBlock(value: unknown): TranscriptContentBlock {
   if (!isPlainObject(value)) {
     throw new TranscriptCorruptionError(`transcript content block must be an object, got ${JSON.stringify(value)}`);
   }
-  const out: { contentType: TranscriptContentType; text?: string; documentReference?: string; object?: unknown } = {
-    contentType: toContentType(value.contentType),
-  };
-  if (value.text !== undefined) {
-    if (typeof value.text !== "string") {
-      throw new TranscriptCorruptionError(`content block text must be a string, got ${JSON.stringify(value.text)}`);
-    }
-    out.text = value.text;
-  }
-  if (value.documentReference !== undefined) {
-    if (typeof value.documentReference !== "string") {
+  const contentType = toContentType(value.contentType);
+  const present = CONTENT_PAYLOAD_KEYS.filter((key) => key in value && value[key] !== undefined);
+  const expected = CONTENT_TYPE_PAYLOAD[contentType];
+  if (expected === null) {
+    if (present.length > 0) {
       throw new TranscriptCorruptionError(
-        `content block documentReference must be a string, got ${JSON.stringify(value.documentReference)}`,
+        `${contentType} content block must carry no payload, got ${JSON.stringify(present)}`,
       );
     }
-    out.documentReference = value.documentReference;
+    return { contentType };
   }
-  if ("object" in value && value.object !== undefined) out.object = value.object;
-  return out;
-}
-
-/** Validate + normalise a tool call into a JSON-safe object. */
-function normaliseToolCall(call: TranscriptToolCall): Record<string, unknown> {
-  if (typeof call.toolCallId !== "string") {
-    throw new TranscriptCorruptionError(`tool call toolCallId must be a string, got ${JSON.stringify(call.toolCallId)}`);
-  }
-  if (typeof call.toolName !== "string") {
-    throw new TranscriptCorruptionError(`tool call toolName must be a string, got ${JSON.stringify(call.toolName)}`);
-  }
-  if (!isPlainObject(call.arguments)) {
+  if (present.length !== 1 || present[0] !== expected) {
     throw new TranscriptCorruptionError(
-      `tool call arguments must be an object, got ${JSON.stringify(call.arguments)}`,
+      `${contentType} content block must carry exactly its ${expected} payload, got ${JSON.stringify(present)}`,
     );
   }
-  const out: Record<string, unknown> = {
-    toolCallId: call.toolCallId,
-    toolName: call.toolName,
-    arguments: call.arguments,
-  };
-  if (call.elementId !== undefined) {
-    if (typeof call.elementId !== "string") {
-      throw new TranscriptCorruptionError(`tool call elementId must be a string, got ${JSON.stringify(call.elementId)}`);
+  if (expected === "text") {
+    const text = value.text;
+    if (typeof text !== "string") {
+      throw new TranscriptCorruptionError(`content block text must be a string, got ${JSON.stringify(text)}`);
     }
-    out.elementId = call.elementId;
+    return { contentType, text };
   }
-  return out;
+  if (expected === "documentReference") {
+    const documentReference = value.documentReference;
+    if (typeof documentReference !== "string") {
+      throw new TranscriptCorruptionError(
+        `content block documentReference must be a string, got ${JSON.stringify(documentReference)}`,
+      );
+    }
+    return { contentType, documentReference };
+  }
+  return { contentType, object: value.object };
 }
 
-/** Reconstruct a tool call from a parsed-JSON value, validating its shape. */
+/**
+ * Validate a value into a canonical tool call — the single validator both the write and
+ * read paths run through. Mirrors Camunda's `AgentHistoryEmbeddedToolCallValue`.
+ */
 function toToolCall(value: unknown): TranscriptToolCall {
   if (!isPlainObject(value)) {
     throw new TranscriptCorruptionError(`transcript tool call must be an object, got ${JSON.stringify(value)}`);
@@ -409,15 +395,6 @@ function toToolCall(value: unknown): TranscriptToolCall {
   return out;
 }
 
-const METRIC_KEYS: readonly (keyof TranscriptTurnMetrics)[] = [
-  "inputTokens",
-  "outputTokens",
-  "reasoningTokenCount",
-  "cacheCreationTokenCount",
-  "cacheReadTokenCount",
-  "durationMs",
-];
-
 function readMetric(source: Record<string, unknown>, key: keyof TranscriptTurnMetrics): number {
   const value = source[key];
   if (!isFiniteNumber(value)) {
@@ -426,30 +403,23 @@ function readMetric(source: Record<string, unknown>, key: keyof TranscriptTurnMe
   return value;
 }
 
-function toMetrics(source: Record<string, unknown>): TranscriptTurnMetrics {
-  return {
-    inputTokens: readMetric(source, "inputTokens"),
-    outputTokens: readMetric(source, "outputTokens"),
-    reasoningTokenCount: readMetric(source, "reasoningTokenCount"),
-    cacheCreationTokenCount: readMetric(source, "cacheCreationTokenCount"),
-    cacheReadTokenCount: readMetric(source, "cacheReadTokenCount"),
-    durationMs: readMetric(source, "durationMs"),
-  };
-}
-
-/** Validate + normalise per-turn metrics into a JSON-safe object. */
-function normaliseMetrics(metrics: TranscriptTurnMetrics): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const key of METRIC_KEYS) {
-    const value = metrics[key];
-    if (!isFiniteNumber(value)) {
-      throw new TranscriptCorruptionError(
-        `transcript metric "${key}" must be a finite number, got ${JSON.stringify(value)}`,
-      );
-    }
-    out[key] = value;
+/**
+ * Validate a value into canonical per-turn metrics — the single validator both the write
+ * and read paths run through. Every field must be a finite number (parity with Camunda's
+ * `AgentHistoryMetricsValue`).
+ */
+function toMetrics(value: unknown): TranscriptTurnMetrics {
+  if (!isPlainObject(value)) {
+    throw new TranscriptCorruptionError(`transcript turn metrics must be an object, got ${JSON.stringify(value)}`);
   }
-  return out;
+  return {
+    inputTokens: readMetric(value, "inputTokens"),
+    outputTokens: readMetric(value, "outputTokens"),
+    reasoningTokenCount: readMetric(value, "reasoningTokenCount"),
+    cacheCreationTokenCount: readMetric(value, "cacheCreationTokenCount"),
+    cacheReadTokenCount: readMetric(value, "cacheReadTokenCount"),
+    durationMs: readMetric(value, "durationMs"),
+  };
 }
 
 /** Parse a JSON array column, failing with a corruption error on non-arrays. */
@@ -461,8 +431,24 @@ function parseJsonArray(json: string, label: string): unknown[] {
   return parsed;
 }
 
-/** Reconstruct a structured turn from its DB row, validating every field. */
+/**
+ * Reconstruct a structured turn from its DB row, validating every field so a corrupted
+ * or hand-edited row fails fast with a {@link TranscriptCorruptionError} rather than
+ * silently propagating an out-of-domain value. `turn_sequence`, `loop_iteration` and
+ * `produced_at` are held to the same non-negative-safe-integer domain the write path
+ * enforces.
+ */
 function toTurn(row: DbTurnRow): TranscriptTurn {
+  if (!isRecordableOffset(row.turn_sequence)) {
+    throw new TranscriptCorruptionError(
+      `transcript turn sequence must be a non-negative safe integer, got ${JSON.stringify(row.turn_sequence)}`,
+    );
+  }
+  if (!isNonNegInt(row.loop_iteration)) {
+    throw new TranscriptCorruptionError(
+      `transcript turn loopIteration must be a non-negative safe integer, got ${JSON.stringify(row.loop_iteration)}`,
+    );
+  }
   const out: {
     sequence: number;
     loopIteration: number;
@@ -480,12 +466,16 @@ function toTurn(row: DbTurnRow): TranscriptTurn {
   };
   if (row.metrics !== null) {
     const parsed: unknown = JSON.parse(row.metrics);
-    if (!isPlainObject(parsed)) {
-      throw new TranscriptCorruptionError(`transcript turn metrics must be an object, got ${JSON.stringify(parsed)}`);
-    }
     out.metrics = toMetrics(parsed);
   }
-  if (row.produced_at !== null) out.producedAt = row.produced_at;
+  if (row.produced_at !== null) {
+    if (!isNonNegInt(row.produced_at)) {
+      throw new TranscriptCorruptionError(
+        `transcript turn producedAt must be a non-negative safe integer, got ${JSON.stringify(row.produced_at)}`,
+      );
+    }
+    out.producedAt = row.produced_at;
+  }
   return out;
 }
 
@@ -733,9 +723,9 @@ export class TranscriptStore {
           );
         }
         const role = toTurnRole(turn.role);
-        const content = JSON.stringify(turn.content.map(normaliseContentBlock));
-        const toolCalls = JSON.stringify(turn.toolCalls.map(normaliseToolCall));
-        const metrics = turn.metrics === undefined ? null : JSON.stringify(normaliseMetrics(turn.metrics));
+        const content = JSON.stringify(turn.content.map(toContentBlock));
+        const toolCalls = JSON.stringify(turn.toolCalls.map(toToolCall));
+        const metrics = turn.metrics === undefined ? null : JSON.stringify(toMetrics(turn.metrics));
         let producedAt: number | null = null;
         if (turn.producedAt !== undefined) {
           if (!isNonNegInt(turn.producedAt)) {

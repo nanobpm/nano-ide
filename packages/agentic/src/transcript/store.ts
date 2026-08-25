@@ -281,8 +281,16 @@ function toStream(row: DbStreamRow): TranscriptStream {
   return out;
 }
 
+/**
+ * A plain JSON-shaped object: an ordinary or null-prototype object, never an array or a
+ * class instance (e.g. `Date`, `Map`). Rejecting exotic instances at the boundary stops a
+ * value that would serialise via `toJSON()` into a non-object (making the stored turn
+ * unreadable) from ever being persisted.
+ */
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
 }
 
 function toTurnRole(value: unknown): TranscriptTurnRole {
@@ -443,6 +451,22 @@ function parseJsonArray(json: string, label: string): unknown[] {
     throw new TranscriptCorruptionError(`transcript turn ${label} must be a JSON array, got ${JSON.stringify(parsed)}`);
   }
   return parsed;
+}
+
+/**
+ * Serialise a validated turn payload for storage, re-raising a non-serialisable value
+ * (e.g. a `bigint`, which makes `JSON.stringify` throw a `TypeError`) as a
+ * {@link TranscriptCorruptionError} so the untyped write boundary only ever surfaces the
+ * store's own error taxonomy.
+ */
+function stringifyJson(value: unknown, label: string): string {
+  try {
+    return JSON.stringify(value);
+  } catch (err) {
+    throw new TranscriptCorruptionError(
+      `transcript turn ${label} is not JSON-serialisable: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**
@@ -746,9 +770,9 @@ export class TranscriptStore {
             `transcript turn toolCalls must be an array, got ${JSON.stringify(turn.toolCalls)}`,
           );
         }
-        const content = JSON.stringify(turn.content.map(toContentBlock));
-        const toolCalls = JSON.stringify(turn.toolCalls.map(toToolCall));
-        const metrics = turn.metrics === undefined ? null : JSON.stringify(toMetrics(turn.metrics));
+        const content = stringifyJson(turn.content.map(toContentBlock), "content");
+        const toolCalls = stringifyJson(turn.toolCalls.map(toToolCall), "toolCalls");
+        const metrics = turn.metrics === undefined ? null : stringifyJson(toMetrics(turn.metrics), "metrics");
         let producedAt: number | null = null;
         if (turn.producedAt !== undefined) {
           if (!isNonNegInt(turn.producedAt)) {

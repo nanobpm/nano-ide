@@ -282,3 +282,39 @@ test("recordTurns rejects a non-array content / toolCalls at the untyped boundar
   assert.equal(store.readTurns("job:bad3").length, 0);
   assert.equal(store.readTurns("job:bad4").length, 0);
 });
+
+test("recordTurns re-raises a non-JSON-serialisable payload (bigint) as a corruption error", () => {
+  const store = newStore();
+  // `bigint` is assignable to an OBJECT block's `unknown` payload but makes JSON.stringify
+  // throw a raw TypeError. The store must re-raise it inside its own error taxonomy and
+  // leave nothing persisted.
+  const turn: TranscriptTurn = {
+    sequence: 0,
+    loopIteration: 0,
+    role: "ASSISTANT",
+    content: [{ contentType: "OBJECT", object: 10n }],
+    toolCalls: [],
+  };
+  assert.throws(() => store.recordTurns("job:bigint", [turn], "ephemeral"), TranscriptCorruptionError);
+  assert.equal(store.readTurns("job:bigint").length, 0);
+});
+
+test("recordTurns rejects a non-plain (class-instance-like) object at the untyped boundary", () => {
+  const store = newStore();
+  // A value that is an object but not a plain/null-prototype one (here, one whose prototype
+  // is another object — the same shape a `Date`/`Map` instance presents). Left unchecked it
+  // would serialise into a non-object and make the stored turn unreadable, so recordTurns
+  // must reject it up front. `Object.create` returns `any`, so no type assertion is needed.
+  const inheritedProto: Record<string, unknown> = { inherited: true };
+  const nonPlainArgs: Record<string, unknown> = Object.create(inheritedProto);
+  nonPlainArgs.path = "report.pdf";
+  const turn: TranscriptTurn = {
+    sequence: 0,
+    loopIteration: 0,
+    role: "ASSISTANT",
+    content: [],
+    toolCalls: [{ toolCallId: "call-1", toolName: "read", arguments: nonPlainArgs }],
+  };
+  assert.throws(() => store.recordTurns("job:nonplain", [turn], "ephemeral"), TranscriptCorruptionError);
+  assert.equal(store.readTurns("job:nonplain").length, 0);
+});

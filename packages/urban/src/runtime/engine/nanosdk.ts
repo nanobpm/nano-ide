@@ -234,7 +234,16 @@ export function mapElementInstanceWaitStateRow(
       };
     }
     case "USER_TASK": {
-      const userTaskKey = presentEngineKey(details.taskKey ?? details.userTaskKey) ?? "";
+      // `userTaskKey` is the required identity of a USER_TASK park; without it the row is
+      // malformed. Skip it (like the missing-identity guards above) rather than emit a typed
+      // wait state carrying an empty key that would break a downstream join.
+      const userTaskKey = presentEngineKey(details.taskKey ?? details.userTaskKey);
+      if (userTaskKey === undefined) {
+        log("warn", "skipping USER_TASK wait state with no userTaskKey in engine response", {
+          elementInstanceKey,
+        });
+        return undefined;
+      }
       return { ...base, waitStateType, userTaskKey };
     }
     case "SIGNAL": {

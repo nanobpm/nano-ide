@@ -638,6 +638,12 @@ test("searchElementInstanceWaitStates forwards a waitStateType selector and read
             waitStateType: "USER_TASK",
             taskKey: "42",
           },
+          {
+            elementInstanceKey: "11",
+            processInstanceKey: "3",
+            elementId: "ut2",
+            waitStateType: "USER_TASK",
+          }, // USER_TASK with no taskKey/userTaskKey → dropped (invalid identity)
           { elementInstanceKey: "10", processInstanceKey: "3", elementId: "?" }, // no waitStateType → dropped
         ],
       };

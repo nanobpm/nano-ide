@@ -473,8 +473,11 @@ export interface EngineClient {
   ): Promise<ElementInstanceWaitState[]>;
   /**
    * Fetch a single element instance by its key (`GET /v2/element-instances/{elementInstanceKey}`),
-   * or `null` when no such element instance exists (or the key is blank). A zero-wait read
-   * returning the same {@link ElementInstanceSummary} shape as {@link searchElementInstances}.
+   * or `null` when it cannot be resolved — the key is blank, no such element instance exists
+   * (a 404), or the fetch otherwise fails. A read is treated as absence rather than propagating
+   * (mirroring {@link getForm}), so a caller distinguishes "have it" from "don't" without a
+   * try/catch. A zero-wait read returning the same {@link ElementInstanceSummary} shape as
+   * {@link searchElementInstances}.
    */
   getElementInstance(
     elementInstanceKey: string,

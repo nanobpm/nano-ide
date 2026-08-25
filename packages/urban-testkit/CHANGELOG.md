@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.13.1...@nanobpm/urban-testkit-0.14.0) (2026-08-25)
+
+
+### Features
+
+* **urban:** surface element-instance queries on EngineClient ([#477](https://github.com/nanobpm/nano-ide/issues/477)) ([d80eddb](https://github.com/nanobpm/nano-ide/commit/d80eddb6501fd19724a9a9099eea39558fe91ba4))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.81.0 to >=0.83.0
+
 ## [0.13.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.13.0...@nanobpm/urban-testkit-0.13.1) (2026-08-23)
 
 

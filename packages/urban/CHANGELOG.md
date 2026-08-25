@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.83.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.82.1...@nanobpm/urban-0.83.0) (2026-08-25)
+
+
+### Features
+
+* **urban:** surface element-instance queries on EngineClient ([#477](https://github.com/nanobpm/nano-ide/issues/477)) ([d80eddb](https://github.com/nanobpm/nano-ide/commit/d80eddb6501fd19724a9a9099eea39558fe91ba4))
+
 ## [0.82.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.82.0...@nanobpm/urban-0.82.1) (2026-08-24)
 
 

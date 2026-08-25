@@ -141,9 +141,7 @@ function presentText(value: unknown): string | undefined {
 /** The element type carried on an element-instance/wait-state row. The Camunda SDK DTO calls
  *  it `type`; a plain REST/Rust-engine body may call it `elementType`. Accept either. */
 function pickElementType(row: Record<string, unknown>): string | undefined {
-  if (typeof row.elementType === "string" && row.elementType !== "") return row.elementType;
-  if (typeof row.type === "string" && row.type !== "") return row.type;
-  return undefined;
+  return presentText(row.elementType) ?? presentText(row.type);
 }
 
 /** Map one engine element-instance row onto an {@link ElementInstanceSummary}, or `undefined`
@@ -248,9 +246,7 @@ export function mapElementInstanceWaitStateRow(
         });
         return undefined;
       }
-      const correlationKey = typeof details.correlationKey === "string"
-        ? details.correlationKey
-        : undefined;
+      const correlationKey = presentText(details.correlationKey);
       return {
         ...base,
         waitStateType,

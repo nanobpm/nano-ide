@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.4.0...@nanobpm/agentic-0.5.0) (2026-08-25)
+
+
+### Features
+
+* **agentic:** turn-structured transcript view (Camunda AgentHistory parity) ([#476](https://github.com/nanobpm/nano-ide/issues/476)) ([73bf2a8](https://github.com/nanobpm/nano-ide/commit/73bf2a8e035d2f67056b0cb9c71a1957d13b9f7a))
+
 ## [0.4.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.3.0...@nanobpm/agentic-0.4.0) (2026-08-19)
 
 

@@ -47,10 +47,10 @@ export interface CockpitEnv {
   readonly createTerminal: CreateTerminal;
   /**
    * Mounts the structured (ACP) view widget and returns its event sink. Optional:
-   * when omitted the drill-in has no structured surface, so every chunk — even a
-   * marker-tagged one — falls through to the byte {@link createTerminal} sink
-   * (legacy raw-only behaviour). Default: the built-in {@link createStructuredSink}
-   * DOM renderer over {@link doc}.
+   * when omitted the drill-in uses the built-in {@link createStructuredSink} DOM
+   * renderer over {@link doc}, so marker-tagged chunks are decoded and routed to
+   * that structured surface while raw bytes still flow to the {@link createTerminal}
+   * sink. Provide your own to override the built-in renderer.
    */
   readonly createStructured?: CreateStructured;
   /** Reconnect scheduler for the relay client. Default `setTimeout(run, 0)`. */

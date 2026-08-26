@@ -19,15 +19,45 @@
  *  - inbound  `{ op: "subscribed", stream, gap, nextOffset }` — the resume ack
  *             (`gap: boolean` — the S5 wire flags whether chunks aged out),
  *  - inbound  {@link RelayPayload} `{ stream, offset, chunk }` — a data chunk.
+ *
+ * ## Structured (ACP) vs. raw streams
+ *
+ * A relay stream is either a **raw** byte stream (PTY output — arbitrary bytes) or
+ * a **structured** ACP stream whose chunks are {@link TRANSCRIPT_EVENT_MARKER}-tagged
+ * JSON envelopes (the transcript-event vocabulary) riding the *same*
+ * `{ stream, offset, chunk }` frames. The session classifies **each chunk** through
+ * the one canonical {@link parseTranscriptEvent} — detection is on the marker tag,
+ * never a guess — and routes a decoded structured event to the {@link StructuredSink}
+ * (the derived structured renderer) while writing a raw chunk verbatim to the byte
+ * {@link TerminalSink}. A mixed stream that starts raw and only later carries tagged
+ * chunks is handled per-chunk, so each chunk lands on the right surface. Routing does
+ * not touch the resume machinery: `nextOffset` advances identically whichever surface
+ * a chunk is applied to, so resume-from-offset neither loses nor double-applies
+ * structured events across a reconnect exactly as for raw output.
  */
 import type { RelayPayload } from "../protocol/index.ts";
 import { addSafeInt, isNonNegInt, isPosInt } from "../relay/index.ts";
+import { type TranscriptEvent, parseTranscriptEvent } from "../transcript/index.ts";
 
 /** The terminal sink the session writes decoded output to (xterm.js satisfies this). */
 export interface TerminalSink {
   /** Append a chunk of terminal output. */
   write(chunk: string): void;
   /** Tear down the underlying terminal widget and its listeners, if any. */
+  dispose?(): void;
+}
+
+/**
+ * The structured sink a session routes decoded transcript events to when the stream
+ * is a structured ACP stream (marker-tagged chunks). It receives the offset-keyed,
+ * immutable {@link TranscriptEvent} the one canonical {@link parseTranscriptEvent}
+ * derived from the chunk — never raw JSON — so the derived structured renderer folds
+ * over typed events rather than pretty-printing bytes.
+ */
+export interface StructuredSink {
+  /** Apply one decoded structured transcript event (in offset order). */
+  event(event: TranscriptEvent): void;
+  /** Tear down the underlying structured widget and its listeners, if any. */
   dispose?(): void;
 }
 
@@ -47,8 +77,15 @@ export type RelaySend = (message: RelayOutbound) => void;
 export interface TerminalSessionOptions {
   /** The relay stream id (one worker's terminal). */
   readonly stream: string;
-  /** Where decoded output is written. */
+  /** Where decoded raw output is written. */
   readonly sink: TerminalSink;
+  /**
+   * Where decoded structured transcript events are routed when the stream is a
+   * structured ACP stream (marker-tagged chunks). Omit for a pure byte-terminal:
+   * without it every chunk — even a marker-tagged one — is written verbatim to
+   * {@link sink}, preserving the legacy raw-only behaviour.
+   */
+  readonly structured?: StructuredSink;
   /** Emits outbound relay messages. */
   readonly send: RelaySend;
   /** Bulk credit requested on each (re)subscribe. Default 1024. */
@@ -73,6 +110,7 @@ function isRelayData(message: RelayInbound): message is RelayPayload {
 export class TerminalSession {
   readonly #stream: string;
   readonly #sink: TerminalSink;
+  readonly #structured: StructuredSink | undefined;
   readonly #send: RelaySend;
   readonly #credit: number;
   readonly #onGap: TerminalSessionOptions["onGap"];
@@ -84,6 +122,7 @@ export class TerminalSession {
   constructor(options: TerminalSessionOptions) {
     this.#stream = options.stream;
     this.#sink = options.sink;
+    this.#structured = options.structured;
     this.#send = options.send;
     this.#credit = options.credit ?? DEFAULT_CREDIT;
     if (!isPosInt(this.#credit)) {
@@ -152,17 +191,39 @@ export class TerminalSession {
     // Idempotent apply: a reconnect resubscribes from nextOffset, so the hub may
     // re-deliver the boundary chunk; anything we have already applied is dropped.
     if (data.offset < this.#nextOffset) return;
-    // Compute the next resume point BEFORE writing so the apply is atomic: a
+    // Compute the next resume point BEFORE applying so the apply is atomic: a
     // chunk at Number.MAX_SAFE_INTEGER makes addSafeInt throw, and it must throw
-    // before we touch the sink — otherwise the chunk is written but #nextOffset
+    // before we touch either sink — otherwise the chunk is applied but #nextOffset
     // is not advanced, leaving a partially-applied state that re-delivers (and
     // so duplicates) the chunk on reconnect. Advancing via addSafeInt also fails
     // fast rather than overflowing into an unsafe nextOffset — that value would
     // later be echoed in subscribe.from and lose precision on any JSON
     // round-trip, silently corrupting resume semantics.
     const nextOffset = addSafeInt(data.offset, 1, "nextOffset");
-    this.#sink.write(data.chunk);
+    this.#apply(data);
     this.#nextOffset = nextOffset;
+  }
+
+  /**
+   * Route one already-de-duplicated data chunk to the right surface. Classify it
+   * through the ONE canonical {@link parseTranscriptEvent}: a marker-tagged, known
+   * envelope decodes to a typed event and (when a {@link StructuredSink} is wired)
+   * is routed there — the derived structured renderer — instead of dumping raw JSON
+   * into the byte-terminal; anything else (raw bytes, non-JSON, an untagged or
+   * malformed envelope) falls back to `stream-chunk` and is written verbatim to the
+   * byte {@link TerminalSink}, so a legacy/raw or mixed stream renders exactly as
+   * before. With no structured sink the parse is skipped entirely, keeping the
+   * raw-only path byte-identical to a pure byte-terminal.
+   */
+  #apply(data: RelayPayload): void {
+    if (this.#structured !== undefined) {
+      const event = parseTranscriptEvent({ offset: data.offset, chunk: data.chunk });
+      if (event.kind !== "stream-chunk") {
+        this.#structured.event(event);
+        return;
+      }
+    }
+    this.#sink.write(data.chunk);
   }
 
   #onSubscribed(gap: boolean, nextOffset: number): void {

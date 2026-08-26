@@ -21,11 +21,15 @@ import type { DemandSupplyReport } from "../demand/index.ts";
 import { isPosInt } from "../relay/index.ts";
 import { RelayChannelClient, type Scheduler, type SocketFactory } from "./relay-client.ts";
 import { type DocumentLike, type ElementLike, renderCockpit } from "./render.ts";
-import { TerminalSession, type TerminalSink } from "./terminal-session.ts";
+import { createStructuredSink } from "./structured-view.ts";
+import { type StructuredSink, TerminalSession, type TerminalSink } from "./terminal-session.ts";
 import { cockpitView } from "./view.ts";
 
 /** Mounts a terminal into `host` and returns the sink relay output is written to. */
 export type CreateTerminal = (host: ElementLike) => TerminalSink;
+
+/** Mounts a structured (ACP) view into `host` and returns the sink decoded transcript events are routed to. */
+export type CreateStructured = (host: ElementLike) => StructuredSink;
 
 /** An opaque poll-timer handle (a Node `Timeout` or a browser timer id). */
 export type TimerHandle = unknown;
@@ -41,6 +45,14 @@ export interface CockpitEnv {
   readonly connectRelay: SocketFactory;
   /** Mounts the terminal widget (xterm.js in the browser) and returns its write sink. */
   readonly createTerminal: CreateTerminal;
+  /**
+   * Mounts the structured (ACP) view widget and returns its event sink. Optional:
+   * when omitted the drill-in has no structured surface, so every chunk — even a
+   * marker-tagged one — falls through to the byte {@link createTerminal} sink
+   * (legacy raw-only behaviour). Default: the built-in {@link createStructuredSink}
+   * DOM renderer over {@link doc}.
+   */
+  readonly createStructured?: CreateStructured;
   /** Reconnect scheduler for the relay client. Default `setTimeout(run, 0)`. */
   readonly schedule?: Scheduler;
   /** Poll scheduler. Default `setTimeout`. Injected so tests drive it by hand. Must be paired with {@link clearTimer}. */
@@ -82,6 +94,8 @@ class Cockpit implements CockpitHandle {
   readonly #env: CockpitEnv;
   readonly #matrixRegion: ElementLike;
   readonly #terminalHost: ElementLike;
+  readonly #structuredHost: ElementLike;
+  readonly #createStructured: CreateStructured;
   readonly #refreshMs: number;
   readonly #setTimer: (run: () => void, ms: number) => TimerHandle;
   readonly #clearTimer: (handle: TimerHandle) => void;
@@ -94,6 +108,9 @@ class Cockpit implements CockpitHandle {
   // The currently mounted terminal, tracked so switching streams (and dispose)
   // tears down the prior xterm instance instead of leaking it + its listeners.
   #terminal: TerminalSink | undefined;
+  // The currently mounted structured view, torn down alongside #terminal so a
+  // stream switch / dispose never leaks the prior worker's structured widget.
+  #structured: StructuredSink | undefined;
   // Bumped by every start()/stop() so an in-flight #tick() from a previous
   // start cycle can't reschedule after a stop→start race and leave two
   // overlapping poll chains running against the same cockpit.
@@ -142,6 +159,11 @@ class Cockpit implements CockpitHandle {
         }
       });
 
+    // The structured (ACP) view mounter defaults to the built-in DOM renderer over
+    // the injected document, so a structured stream derives + renders without any
+    // extra wiring; a browser caller may override it (e.g. a richer widget).
+    this.#createStructured = env.createStructured ?? ((host) => createStructuredSink(host, env.doc));
+
     // Build the stable skeleton once: a volatile matrix region the poll
     // re-renders, and a PERSISTENT terminal region a refresh never touches.
     env.host.replaceChildren();
@@ -159,6 +181,13 @@ class Cockpit implements CockpitHandle {
     this.#terminalHost.className = "cockpit-terminal-host";
     this.#terminalHost.setAttribute("data-terminal", "host");
     terminalPanel.appendChild(this.#terminalHost);
+    // A sibling PERSISTENT region for the derived structured (ACP) view. A raw
+    // stream leaves it empty; a structured stream renders here instead of dumping
+    // JSON into the byte-terminal; a mixed stream feeds both.
+    this.#structuredHost = env.doc.createElement("div");
+    this.#structuredHost.className = "cockpit-structured-host";
+    this.#structuredHost.setAttribute("data-structured", "host");
+    terminalPanel.appendChild(this.#structuredHost);
     shell.appendChild(this.#matrixRegion);
     shell.appendChild(terminalPanel);
     env.host.appendChild(shell);
@@ -233,12 +262,18 @@ class Cockpit implements CockpitHandle {
     // still cleans it up on the next drill or on dispose().
     this.#terminal?.dispose?.();
     this.#terminal = undefined;
+    // The structured view is torn down in lockstep with the terminal.
+    this.#structured?.dispose?.();
+    this.#structured = undefined;
 
     try {
-      // Fresh terminal for the newly selected worker.
+      // Fresh terminal + structured view for the newly selected worker.
       this.#terminalHost.replaceChildren();
       const sink = this.#env.createTerminal(this.#terminalHost);
       this.#terminal = sink;
+      this.#structuredHost.replaceChildren();
+      const structured = this.#createStructured(this.#structuredHost);
+      this.#structured = structured;
 
       let session: TerminalSession | undefined;
       const client = new RelayChannelClient({
@@ -253,6 +288,7 @@ class Cockpit implements CockpitHandle {
       session = new TerminalSession({
         stream,
         sink,
+        structured,
         send: (message) => client.sendRelay(message),
         credit: this.#env.credit,
       });
@@ -271,6 +307,8 @@ class Cockpit implements CockpitHandle {
     this.#drill = undefined;
     this.#terminal?.dispose?.();
     this.#terminal = undefined;
+    this.#structured?.dispose?.();
+    this.#structured = undefined;
   }
 }
 

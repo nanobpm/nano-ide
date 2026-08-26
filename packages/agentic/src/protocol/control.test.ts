@@ -95,6 +95,27 @@ test("a tagged-but-malformed envelope is an error, never a silent prompt", () =>
   }
 });
 
+test("a control envelope with leading whitespace still decodes structured (fast-path scans past whitespace)", () => {
+  const envelope = encodeInboundControlFrame({ kind: "cancel", reason: "stop" });
+  for (const prefix of [" ", "\t", "\n", "\r\n", "  \t\n "]) {
+    const result = parseInboundRelayChunk(prefix + envelope);
+    assert.ok(result.ok, prefix);
+    assert.equal(result.structured, true, prefix);
+    assert.deepEqual(result.frame, { kind: "cancel", reason: "stop" }, prefix);
+  }
+});
+
+test("chunks whose first non-whitespace char is not { stay legacy prompts verbatim", () => {
+  // Includes valid non-object JSON (number/array/string) that must NOT be
+  // mistaken for a control envelope by the JSON.parse fast-path gate.
+  for (const raw of ["  ls\n", "\t\ty", "42", "  3.14", "[1,2,3]", '"quoted"', "", "   "]) {
+    const result = parseInboundRelayChunk(raw);
+    assert.ok(result.ok, raw);
+    assert.equal(result.structured, false, raw);
+    assert.deepEqual(result.frame, { kind: "prompt", text: raw }, raw);
+  }
+});
+
 test("every frame kind round-trips through encode/parse", () => {
   const frames: InboundControlFrame[] = [
     { kind: "prompt", text: "多 bytes ✓" },

@@ -181,6 +181,24 @@ function validateEnvelope(env: Record<string, unknown>): InboundControlDecodeRes
 }
 
 /**
+ * Whether `chunk` begins with a JSON object — i.e. its first character that is
+ * not JSON-insignificant whitespace (space, tab, LF, CR) is `{`. Used as a
+ * cheap, allocation-free gate before attempting a full `JSON.parse`: only a
+ * chunk that starts a JSON object can possibly be a tagged control envelope.
+ */
+function startsWithJsonObject(chunk: string): boolean {
+  for (let i = 0; i < chunk.length; i++) {
+    const code = chunk.charCodeAt(i);
+    // JSON insignificant whitespace: space (0x20), tab (0x09), LF (0x0a), CR (0x0d).
+    if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+      continue;
+    }
+    return code === 0x7b; // '{'
+  }
+  return false;
+}
+
+/**
  * Decode a raw inbound steer chunk into a typed {@link InboundControlFrame}.
  *
  * A chunk tagged as a control envelope is validated and returned as its typed
@@ -191,11 +209,18 @@ function validateEnvelope(env: Record<string, unknown>): InboundControlDecodeRes
  * (`structured: false`). See the module header for the full decode order.
  */
 export function parseInboundRelayChunk(chunk: string): InboundControlDecodeResult {
+  // Fast path for the common per-keystroke steer: a control envelope is always a
+  // JSON *object*, so it must begin with `{` after any insignificant leading
+  // whitespace. Any chunk that does not is (and always was) a legacy bare-string
+  // prompt carrying the chunk verbatim, so skip the JSON.parse attempt entirely.
+  if (!startsWithJsonObject(chunk)) {
+    return { ok: true, structured: false, frame: { kind: "prompt", text: chunk } };
+  }
   let parsed: unknown;
   try {
     parsed = JSON.parse(chunk);
   } catch {
-    // Not JSON at all — a raw keystroke/line. Legacy bare-string prompt.
+    // Started with `{` but is not valid JSON. Legacy bare-string prompt.
     return { ok: true, structured: false, frame: { kind: "prompt", text: chunk } };
   }
   if (!isInboundControlEnvelope(parsed)) {

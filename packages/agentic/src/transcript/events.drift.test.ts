@@ -28,6 +28,7 @@ function sourceFiles(dir: string): string[] {
 }
 
 const PARSER_MODULE = join(TRANSCRIPT_DIR, "events.ts");
+const STORE_MODULE = join(TRANSCRIPT_DIR, "store.ts");
 
 test("the transcript-event marker literal is DEFINED in exactly one module (no second parser)", () => {
   // Consumers reference the marker via the imported `TRANSCRIPT_EVENT_MARKER` identifier; only the ONE
@@ -50,11 +51,12 @@ test("the transcript-event marker literal is DEFINED in exactly one module (no s
 });
 
 test("no transcript consumer re-parses raw chunks — JSON.parse of the log lives only in the parser", () => {
-  // Every projection must fold through the single parser, never JSON.parse a chunk itself. Scan the
-  // transcript-plane modules other than the store (the store's JSON handling is DB rows, not the log)
-  // and assert none of the event/derive-facing consumers contains a raw JSON.parse.
+  // Every projection must fold through the single parser, never JSON.parse a chunk itself. Scan every
+  // non-test transcript module EXCEPT the parser (which owns the one JSON.parse) and the store (whose
+  // JSON handling is DB rows, not the log), and assert none of them contains a raw JSON.parse. Scanning
+  // the whole plane (not a name pattern) means a future consumer module is guarded the moment it is added.
   const consumers = sourceFiles(TRANSCRIPT_DIR).filter(
-    (path) => path !== PARSER_MODULE && /(render|view|derive|read|fork)\.ts$/.test(path),
+    (path) => path !== PARSER_MODULE && path !== STORE_MODULE,
   );
   for (const path of consumers) {
     const src = readFileSync(path, "utf8");

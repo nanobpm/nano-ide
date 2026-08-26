@@ -326,7 +326,7 @@ export interface DerivedTurn {
 
 /** The single derived view every higher-level consumer reads instead of re-parsing raw bytes. */
 export interface DerivedView {
-  /** The per-turn structure (a turn is opened implicitly before the first turn event, if any content precedes it). */
+  /** The per-turn structure (a turn is opened implicitly before the first turn event when typed content — a message, tool-call or step — precedes it; raw `stream-chunk`s alone open no turn). */
   readonly turns: readonly DerivedTurn[];
   /** Every message across all turns, in offset order (the flat derived history). */
   readonly messages: readonly DerivedMessage[];
@@ -357,8 +357,10 @@ interface MutableTurn {
  * message history, tool cards (each call paired to its result by `callId`, else the most recent open
  * call), raw-byte accounting for replay fidelity, and the session lifecycle. It is a pure reduction of
  * one log: the cockpit, search, token accounting and export all read THIS, so there is never a second
- * parser of the same bytes. Content that precedes the first explicit `turn` event opens an implicit
- * turn 0, so a producer that never emits turn boundaries still derives a coherent single-turn view.
+ * parser of the same bytes. Typed content — a message, tool-call or step — that precedes the first
+ * explicit `turn` event opens an implicit turn 0, so a producer that never emits turn boundaries still
+ * derives a coherent single-turn view. Raw `stream-chunk` events alone open no turn (they only feed the
+ * byte-replay accounting), so a log of only chunks derives zero turns.
  */
 export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
   const turns: MutableTurn[] = [];

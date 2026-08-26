@@ -118,11 +118,12 @@ function validateEnvelope(env: Record<string, unknown>): InboundControlDecodeRes
   const kind = env.kind;
   switch (kind) {
     case "prompt": {
-      if (typeof env.text !== "string") {
+      const text = env.text;
+      if (typeof text !== "string") {
         errors.push({ code: "bad-prompt-text", message: "control.prompt.text must be a string" });
+        return { ok: false, errors };
       }
-      if (errors.length > 0) return { ok: false, errors };
-      return { ok: true, structured: true, frame: { kind: "prompt", text: env.text as string } };
+      return { ok: true, structured: true, frame: { kind: "prompt", text } };
     }
     case "cancel": {
       if ("reason" in env && typeof env.reason !== "string") {
@@ -134,26 +135,33 @@ function validateEnvelope(env: Record<string, unknown>): InboundControlDecodeRes
       return { ok: true, structured: true, frame };
     }
     case "permission": {
-      if (typeof env.requestId !== "string" || env.requestId.length === 0) {
+      const requestId = env.requestId;
+      const outcome = env.outcome;
+      const validRequestId = typeof requestId === "string" && requestId.length > 0 ? requestId : undefined;
+      if (validRequestId === undefined) {
         errors.push({
           code: "bad-permission-request-id",
           message: "control.permission.requestId must be a non-empty string",
         });
       }
-      if (env.outcome !== "granted" && env.outcome !== "denied") {
+      const validOutcome: PermissionOutcome | undefined =
+        outcome === "granted" || outcome === "denied" ? outcome : undefined;
+      if (validOutcome === undefined) {
         errors.push({
           code: "bad-permission-outcome",
           message: "control.permission.outcome must be 'granted' or 'denied'",
         });
       }
-      if (errors.length > 0) return { ok: false, errors };
+      if (errors.length > 0 || validRequestId === undefined || validOutcome === undefined) {
+        return { ok: false, errors };
+      }
       return {
         ok: true,
         structured: true,
         frame: {
           kind: "permission",
-          requestId: env.requestId as string,
-          outcome: env.outcome as PermissionOutcome,
+          requestId: validRequestId,
+          outcome: validOutcome,
         },
       };
     }

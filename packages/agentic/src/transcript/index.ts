@@ -39,3 +39,41 @@ export {
   TRANSCRIPT_TURN_SCHEMA_SQL,
   TRANSCRIPT_TURN_TABLE,
 } from "./schema.ts";
+
+/**
+ * The transcript EVENT vocabulary + the single derive() fold (ADR 0056, #251) — the canonical,
+ * merge-extensible typed event grammar every Urban app consumes and extends (rather than forking).
+ * The marker + version constants and {@link parseTranscriptEvent} are the single source of truth the
+ * whole package family (e.g. the cockpit's structured-stream detection) imports from here.
+ */
+export {
+  CORE_TRANSCRIPT_EVENT_KINDS,
+  CORE_TRANSCRIPT_VOCAB,
+  TRANSCRIPT_EVENT_MARKER,
+  TRANSCRIPT_EVENT_VERSION,
+  deriveView,
+  deriveViewFromChunks,
+  encodeTranscriptEvent,
+  mergeTranscriptVocab,
+  parseTranscriptEvent,
+  utf8ByteLength,
+} from "./events.ts";
+export type {
+  DerivedMessage,
+  DerivedTool,
+  DerivedTurn,
+  DerivedView,
+  LifecycleEvent,
+  MessageEvent,
+  StepEvent,
+  StoredChunk,
+  StreamChunkEvent,
+  ToolCallEvent,
+  ToolResultEvent,
+  TranscriptEvent,
+  TranscriptEventDecoder,
+  TranscriptEventKind,
+  TranscriptRole,
+  TranscriptVocab,
+  TurnEvent,
+} from "./events.ts";

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.7.0...@nanobpm/agentic-0.8.0) (2026-08-26)
+
+
+### Features
+
+* **agentic:** structured-stream drill-in in the cockpit terminal ([#486](https://github.com/nanobpm/nano-ide/issues/486)) ([7198b29](https://github.com/nanobpm/nano-ide/commit/7198b294d21281569540a1bcd807a14f143f3e20))
+
 ## [0.7.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.6.0...@nanobpm/agentic-0.7.0) (2026-08-26)
 
 

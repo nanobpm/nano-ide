@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.5.0...@nanobpm/agentic-0.6.0) (2026-08-26)
+
+
+### Features
+
+* **protocol:** typed inbound control vocabulary for relay steer-in (prompt/cancel/permission) ([#481](https://github.com/nanobpm/nano-ide/issues/481)) ([b513923](https://github.com/nanobpm/nano-ide/commit/b5139231a65607da767a72e59fa7af41118fd09c))
+
 ## [0.5.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.4.0...@nanobpm/agentic-0.5.0) (2026-08-25)
 
 

@@ -129,6 +129,26 @@ test("mergeTranscriptVocab: adds a new kind without forking the parser, and can 
   assert.equal(parseTranscriptEvent({ offset: 7, chunk: env("reasoning", { text: "thinking" }) }).kind, "stream-chunk");
 });
 
+test("vocab maps are null-prototype so inherited keys never leak into `in` / Object.keys", () => {
+  // A prototype-bearing vocab (`Object.assign({}, …)`) makes `"toString" in vocab` true and surfaces
+  // inherited Object.prototype keys to any consumer doing `kind in vocab` / `Object.keys(vocab)`,
+  // classifying a hostile `kind` off the prototype chain. Both the core vocab AND every merge result
+  // must be null-prototype so only OWN kinds exist — this guards the whole class, not one bad key.
+  const merged = mergeTranscriptVocab(CORE_TRANSCRIPT_VOCAB, {
+    custom: (_body, offset) => ({ kind: "step", offset }),
+  });
+  const vocabs: readonly (readonly [string, TranscriptVocab])[] = [
+    ["core", CORE_TRANSCRIPT_VOCAB],
+    ["merged", merged],
+  ];
+  for (const [name, vocab] of vocabs) {
+    assert.equal(Object.getPrototypeOf(vocab), null, `${name} vocab must have a null prototype`);
+    for (const inherited of ["toString", "constructor", "hasOwnProperty", "valueOf", "__proto__"]) {
+      assert.equal(inherited in vocab, false, `${name} vocab must not expose inherited key ${inherited}`);
+    }
+  }
+});
+
 test("EXTENSION POINT: a downstream app registers its own `permission` kind via mergeTranscriptVocab", () => {
   // Mirrors nano-workforce#559: an app adds a `permission` kind + parse handler WITHOUT editing this
   // package. The synthetic extra kind is decoded (here into a message the core fold understands) and

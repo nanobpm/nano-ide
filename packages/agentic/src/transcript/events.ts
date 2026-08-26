@@ -57,7 +57,9 @@ export const TRANSCRIPT_EVENT_MARKER = "nwfTranscriptEvent" as const;
 /** The current transcript-event envelope schema version (the value {@link TRANSCRIPT_EVENT_MARKER} carries). */
 export const TRANSCRIPT_EVENT_VERSION = 1 as const;
 
-/** The core, merge-extensible transcript-event kinds (authors add more via {@link mergeTranscriptVocab}). */
+/** The core, closed set of typed transcript-event kinds. Downstream apps register extra *envelope*
+ * kinds via {@link mergeTranscriptVocab}, but those decoders must still return one of these core
+ * variants — this union itself does not grow for TypeScript consumers. */
 export type TranscriptEventKind =
   | "stream-chunk"
   | "message"
@@ -125,7 +127,8 @@ export interface LifecycleEvent extends TranscriptEventBase {
   readonly phase: "open" | "completed" | "exited";
 }
 
-/** The core typed transcript-event union (merge-extensible: authors add kinds via the vocab). */
+/** The core, closed typed transcript-event union. Merging vocab lets an app decode custom *envelope*
+ * kinds, but each decoder returns one of these variants — the union itself does not grow for consumers. */
 export type TranscriptEvent =
   | StreamChunkEvent
   | MessageEvent
@@ -179,7 +182,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * parser. (`stream-chunk` is not decoded here — it is the fallback the parser applies to any chunk
  * that is not a well-formed typed envelope, so raw fidelity needs no decoder.)
  */
-export const CORE_TRANSCRIPT_VOCAB: TranscriptVocab = Object.freeze({
+export const CORE_TRANSCRIPT_VOCAB: TranscriptVocab = Object.freeze(Object.assign(Object.create(null), {
   message: (body, offset) => {
     const text = str(body, "text");
     if (text === undefined) return undefined;
@@ -221,7 +224,7 @@ export const CORE_TRANSCRIPT_VOCAB: TranscriptVocab = Object.freeze({
     if (phase !== "open" && phase !== "completed" && phase !== "exited") return undefined;
     return { kind: "lifecycle", offset, phase };
   },
-});
+} satisfies TranscriptVocab));
 
 /** The core event kinds the parser decodes from an envelope (every kind except the raw `stream-chunk`
  * fallback). Kept as a runtime list so the drift-guard can assert the single fold handles them all. */
@@ -236,13 +239,14 @@ export const CORE_TRANSCRIPT_EVENT_KINDS: readonly Exclude<TranscriptEventKind, 
 
 /**
  * Extend a vocabulary additively: later entries win on a key clash, so an author can either register a
- * brand-new kind or deliberately override a core decoder. Returns a NEW frozen vocab — neither input is
- * mutated — so the core stays canonical. This is the EXTENSION POINT a downstream app uses to add its
- * own kind (e.g. nano-workforce#559's `permission`) without editing this package: one schema, extended
- * by merge, never a second parser.
+ * brand-new kind or deliberately override a core decoder. Returns a NEW frozen, NULL-PROTOTYPE vocab —
+ * neither input is mutated — so the core stays canonical AND `kind in vocab` / `Object.keys(vocab)`
+ * only ever see own decoders (an inherited "toString"/"constructor" key can never masquerade as one).
+ * This is the EXTENSION POINT a downstream app uses to add its own kind (e.g. nano-workforce#559's
+ * `permission`) without editing this package: one schema, extended by merge, never a second parser.
  */
 export function mergeTranscriptVocab(base: TranscriptVocab, ...extensions: TranscriptVocab[]): TranscriptVocab {
-  return Object.freeze(Object.assign({}, base, ...extensions));
+  return Object.freeze(Object.assign(Object.create(null), base, ...extensions));
 }
 
 /**

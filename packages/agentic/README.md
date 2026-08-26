@@ -61,7 +61,7 @@ const appVocab = mergeTranscriptVocab(CORE_TRANSCRIPT_VOCAB, {
       ? { kind: "message", offset, role: "system", text: `permission(${body.requestId})` }
       : undefined, // reject malformed → raw fallback
 });
-parseTranscriptEvent(chunk, appVocab); // the one parser, now aware of `permission`
+parseTranscriptEvent({ offset, chunk }, appVocab); // the one parser, now aware of `permission`
 ```
 
 ### Migration for nano-workforce

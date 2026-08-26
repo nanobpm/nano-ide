@@ -338,7 +338,7 @@ export interface DerivedView {
   readonly rawChunkCount: number;
   /** The session lifecycle as the last lifecycle event reports it (defaults to `open`). */
   readonly lifecycle: "open" | "completed" | "exited";
-  /** Number of typed events folded. */
+  /** Number of events folded — every event in the log, including raw `stream-chunk`s. */
   readonly eventCount: number;
 }
 

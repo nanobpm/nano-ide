@@ -182,8 +182,9 @@ class Cockpit implements CockpitHandle {
     this.#terminalHost.setAttribute("data-terminal", "host");
     terminalPanel.appendChild(this.#terminalHost);
     // A sibling PERSISTENT region for the derived structured (ACP) view. A raw
-    // stream leaves it empty; a structured stream renders here instead of dumping
-    // JSON into the byte-terminal; a mixed stream feeds both.
+    // stream keeps it in its initial/empty structured state; a structured stream
+    // renders here instead of dumping JSON into the byte-terminal; a mixed stream
+    // feeds both.
     this.#structuredHost = env.doc.createElement("div");
     this.#structuredHost.className = "cockpit-structured-host";
     this.#structuredHost.setAttribute("data-structured", "host");

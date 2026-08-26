@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { RelayPayload } from "../protocol/index.ts";
-import { type TranscriptEvent, encodeTranscriptEvent } from "../transcript/index.ts";
+import { TRANSCRIPT_EVENT_MARKER, type TranscriptEvent, encodeTranscriptEvent } from "../transcript/index.ts";
 
 import { type RelayOutbound, type StructuredSink, TerminalSession } from "./terminal-session.ts";
 
@@ -312,7 +312,7 @@ test("a marker-tagged but malformed envelope falls back to raw bytes (byte-termi
   // retained verbatim for byte-replay fidelity, not routed as a structured event.
   const h = harness({ structured: true });
   h.session.attach();
-  const malformed = JSON.stringify({ nwfTranscriptEvent: 1, kind: "message" }); // no text → decoder rejects
+  const malformed = JSON.stringify({ [TRANSCRIPT_EVENT_MARKER]: 1, kind: "message" }); // no text → decoder rejects
   h.session.handle(h.data(0, malformed));
   assert.deepEqual(h.writes, [malformed]);
   assert.deepEqual(h.events, []);

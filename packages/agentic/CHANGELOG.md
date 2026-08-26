@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.6.0...@nanobpm/agentic-0.7.0) (2026-08-26)
+
+
+### Features
+
+* **agentic:** lift transcript event vocabulary into @nanobpm/agentic/transcript ([#482](https://github.com/nanobpm/nano-ide/issues/482)) ([c0c616d](https://github.com/nanobpm/nano-ide/commit/c0c616df99acf05e81797a65722614bbca437799))
+
 ## [0.6.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.5.0...@nanobpm/agentic-0.6.0) (2026-08-26)
 
 

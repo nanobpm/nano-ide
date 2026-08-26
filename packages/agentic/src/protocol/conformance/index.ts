@@ -27,3 +27,9 @@ export {
   type ValidToken,
   type InvalidToken,
 } from "./tokens.ts";
+export {
+  VALID_CONTROL_FRAMES,
+  MALFORMED_CONTROL_FRAMES,
+  type ValidControlFrame,
+  type MalformedControlFrame,
+} from "./control.ts";

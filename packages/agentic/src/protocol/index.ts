@@ -85,4 +85,21 @@ export {
   type PayloadValidationResult,
 } from "./payloads.ts";
 
+export {
+  CONTROL_FRAME_MARKER,
+  CONTROL_FRAME_VERSION,
+  isInboundControlEnvelope,
+  parseInboundRelayChunk,
+  encodeInboundControlFrame,
+  type InboundControlKind,
+  type PermissionOutcome,
+  type PromptControlFrame,
+  type CancelControlFrame,
+  type PermissionControlFrame,
+  type InboundControlFrame,
+  type InboundControlError,
+  type InboundControlErrorCode,
+  type InboundControlDecodeResult,
+} from "./control.ts";
+
 export { bytesToHex, hexToBytes } from "./hex.ts";

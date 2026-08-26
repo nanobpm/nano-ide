@@ -64,6 +64,17 @@ test("parseTranscriptEvent: a marker at the wrong version falls back to raw", ()
   assert.equal(parseTranscriptEvent({ offset: 0, chunk }).kind, "stream-chunk");
 });
 
+test("parseTranscriptEvent: an inherited-property kind never resolves a prototype decoder", () => {
+  // A hostile chunk whose `kind` names an Object.prototype member ("constructor", "toString",
+  // "__proto__", …) must NOT resolve `vocab[kind]` up the prototype chain to a non-decoder
+  // function and call it — that either throws (DoS) or returns a non-TranscriptEvent value. The
+  // vocab is a plain map, so only OWN kinds decode; every prototype key falls back to raw.
+  for (const kind of ["constructor", "toString", "hasOwnProperty", "valueOf", "__proto__"]) {
+    const event = parseTranscriptEvent({ offset: 0, chunk: env(kind, { foo: 1 }) });
+    assert.equal(event.kind, "stream-chunk", `kind=${kind} must fall back to a raw stream-chunk`);
+  }
+});
+
 test("core vocab decodes message with role (default assistant)", () => {
   assert.deepEqual(parseTranscriptEvent({ offset: 1, chunk: env("message", { text: "hello" }) }), {
     kind: "message",

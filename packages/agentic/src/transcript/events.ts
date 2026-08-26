@@ -264,8 +264,12 @@ export function parseTranscriptEvent(
   if (body === undefined) return raw;
   const kind = typeof body.kind === "string" ? body.kind : undefined;
   if (kind === undefined) return raw;
-  const decoder = vocab[kind];
-  if (decoder === undefined) return raw;
+  // Own-property + typeof-function guard: `kind` is untrusted, so a bare `vocab[kind]` would resolve
+  // inherited members like "constructor"/"toString"/"__proto__" up the prototype chain to a
+  // non-decoder function and call it — a crashable (DoS) / invariant-breaking path. Only an OWN
+  // decoder function is ever invoked; everything else falls back to the raw stream-chunk.
+  const decoder = Object.prototype.hasOwnProperty.call(vocab, kind) ? vocab[kind] : undefined;
+  if (typeof decoder !== "function") return raw;
   return decoder(body, entry.offset) ?? raw;
 }
 

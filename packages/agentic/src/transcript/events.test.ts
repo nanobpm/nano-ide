@@ -242,6 +242,38 @@ test("deriveView: an anonymous tool-result pairs with the most recent open anony
   assert.deepEqual(view.tools[0]?.result, { ok: false, offset: 1, content: "nope" });
 });
 
+test("deriveView: results pair into the correct turn's tool with interleaved, out-of-order calls across turns", () => {
+  // Two turns, each with two tools; results arrive interleaved and out of call order. Each result must
+  // land on its own call's card in BOTH the flat list and the owning turn — guarding the O(1) position
+  // tracking against pairing into the wrong turn/index.
+  const view = deriveView([
+    { kind: "turn", offset: 0, index: 0 },
+    { kind: "tool-call", offset: 1, name: "t0a", callId: "a" },
+    { kind: "tool-call", offset: 2, name: "t0b", callId: "b" },
+    { kind: "turn", offset: 3, index: 1 },
+    { kind: "tool-call", offset: 4, name: "t1c", callId: "c" },
+    { kind: "tool-call", offset: 5, name: "t1d", callId: "d" },
+    { kind: "tool-result", offset: 6, ok: true, callId: "c", content: "C" },
+    { kind: "tool-result", offset: 7, ok: false, callId: "a", content: "A" },
+    { kind: "tool-result", offset: 8, ok: true, callId: "d", content: "D" },
+    { kind: "tool-result", offset: 9, ok: false, callId: "b", content: "B" },
+  ]);
+  // Flat list keeps call order, each with its own result.
+  assert.deepEqual(
+    view.tools.map((t) => [t.name, t.result?.content]),
+    [["t0a", "A"], ["t0b", "B"], ["t1c", "C"], ["t1d", "D"]],
+  );
+  // Each result also lands on the matching card inside its OWN turn (not another turn's).
+  assert.deepEqual(
+    view.turns[0]?.tools.map((t) => [t.name, t.result?.ok]),
+    [["t0a", false], ["t0b", false]],
+  );
+  assert.deepEqual(
+    view.turns[1]?.tools.map((t) => [t.name, t.result?.ok]),
+    [["t1c", true], ["t1d", true]],
+  );
+});
+
 test("deriveViewFromChunks: an all-raw log derives no structure but full raw fidelity accounting", () => {
   const view = deriveViewFromChunks([
     { offset: 0, chunk: "line-1\n" },

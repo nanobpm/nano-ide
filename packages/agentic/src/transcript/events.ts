@@ -358,6 +358,18 @@ interface MutableTurn {
   steps: number;
 }
 
+/** A pending (result-less) tool call, remembered by where it lives in both the flat `tools` list and its
+ * owning turn's `tools` list. Recording those positions at call time lets a later `tool-result` replace the
+ * pending card in both lists in O(1), instead of re-scanning every turn/tool per result (which made result
+ * pairing O(n²) on long transcripts). Array positions are stable because both lists only ever grow by push
+ * and are updated by in-place index assignment — never spliced. */
+interface PendingTool {
+  tool: DerivedTool;
+  toolsIndex: number;
+  turn: MutableTurn;
+  turnToolIndex: number;
+}
+
 /**
  * THE SINGLE FOLD. Derive every higher-level view from the typed event log — "the log IS the state".
  *
@@ -374,8 +386,8 @@ export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
   const turns: MutableTurn[] = [];
   const messages: DerivedMessage[] = [];
   const tools: DerivedTool[] = [];
-  const openTools = new Map<string, DerivedTool>();
-  let anonymousTool: DerivedTool | undefined;
+  const openTools = new Map<string, PendingTool>();
+  let anonymousTool: PendingTool | undefined;
   let rawByteLength = 0;
   let rawChunkCount = 0;
   let lifecycle: "open" | "completed" | "exited" = "open";
@@ -415,17 +427,20 @@ export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
           ...(event.callId !== undefined ? { callId: event.callId } : {}),
           ...(event.args !== undefined ? { args: event.args } : {}),
         };
-        tools.push(tool);
-        ensureTurn(event.offset).tools.push(tool);
-        if (event.callId !== undefined) openTools.set(event.callId, tool);
-        else anonymousTool = tool;
+        const toolsIndex = tools.push(tool) - 1;
+        const turn = ensureTurn(event.offset);
+        const turnToolIndex = turn.tools.push(tool) - 1;
+        const pending: PendingTool = { tool, toolsIndex, turn, turnToolIndex };
+        if (event.callId !== undefined) openTools.set(event.callId, pending);
+        else anonymousTool = pending;
         break;
       }
       case "tool-result": {
-        const target = event.callId !== undefined ? openTools.get(event.callId) : anonymousTool;
-        if (target !== undefined) {
-          pairResult(tools, target, event);
-          pairResultInTurns(turns, target, event);
+        const pending = event.callId !== undefined ? openTools.get(event.callId) : anonymousTool;
+        if (pending !== undefined) {
+          const resolved = withResult(pending.tool, event);
+          tools[pending.toolsIndex] = resolved;
+          pending.turn.tools[pending.turnToolIndex] = resolved;
           if (event.callId !== undefined) openTools.delete(event.callId);
           else anonymousTool = undefined;
         }
@@ -454,25 +469,7 @@ export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
   };
 }
 
-/** Replace a pending tool with its result in the flat list. A pending tool starts as the same object in
- * both the flat list and its turn (pushed by reference), so {@link pairResultInTurns} locates it there by
- * identity; each list is then replaced independently with its own resolved copy via {@link withResult}. */
-function pairResult(list: DerivedTool[], target: DerivedTool, result: ToolResultEvent): void {
-  const idx = list.indexOf(target);
-  if (idx >= 0) list[idx] = withResult(target, result);
-}
-
-/** Replace a pending tool with its result inside whichever turn holds it. */
-function pairResultInTurns(turns: MutableTurn[], target: DerivedTool, result: ToolResultEvent): void {
-  for (const turn of turns) {
-    const idx = turn.tools.indexOf(target);
-    if (idx >= 0) {
-      turn.tools[idx] = withResult(target, result);
-      return;
-    }
-  }
-}
-
+/** Replace a pending tool with its result: a new resolved card that carries the result payload. */
 function withResult(tool: DerivedTool, result: ToolResultEvent): DerivedTool {
   return {
     ...tool,

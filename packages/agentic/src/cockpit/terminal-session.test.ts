@@ -2,23 +2,30 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { RelayPayload } from "../protocol/index.ts";
+import { TRANSCRIPT_EVENT_MARKER, type TranscriptEvent, encodeTranscriptEvent } from "../transcript/index.ts";
 
-import { type RelayOutbound, TerminalSession } from "./terminal-session.ts";
+import { type RelayOutbound, type StructuredSink, TerminalSession } from "./terminal-session.ts";
 
 interface Harness {
   readonly session: TerminalSession;
   readonly sent: RelayOutbound[];
   readonly writes: string[];
+  readonly events: TranscriptEvent[];
   data(offset: number, chunk: string, stream?: string): RelayPayload;
 }
 
-function harness(options: { from?: number; credit?: number; stream?: string } = {}): Harness {
+function harness(options: { from?: number; credit?: number; stream?: string; structured?: boolean } = {}): Harness {
   const stream = options.stream ?? "worker-1";
   const sent: RelayOutbound[] = [];
   const writes: string[] = [];
+  const events: TranscriptEvent[] = [];
+  const structured: StructuredSink | undefined = options.structured
+    ? { event: (event) => events.push(event) }
+    : undefined;
   const session = new TerminalSession({
     stream,
     sink: { write: (chunk) => writes.push(chunk) },
+    structured,
     send: (message) => sent.push(message),
     from: options.from,
     credit: options.credit,
@@ -27,6 +34,7 @@ function harness(options: { from?: number; credit?: number; stream?: string } = 
     session,
     sent,
     writes,
+    events,
     data: (offset, chunk, s = stream) => ({ stream: s, offset, chunk }),
   };
 }
@@ -248,5 +256,90 @@ test("grant rejects a non-positive or unsafe credit", () => {
   for (const credit of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN]) {
     assert.throws(() => h.session.grant(credit), RangeError, `grant(${credit}) should be rejected`);
   }
+});
+
+// A marker-tagged chunk (encoded via the ONE canonical grammar, never a hand-rolled marker literal).
+function structuredChunk(event: TranscriptEvent): string {
+  return encodeTranscriptEvent(event);
+}
+
+test("a structured (marker-tagged) chunk routes to the structured sink, NOT the byte-terminal", () => {
+  const h = harness({ structured: true });
+  h.session.attach();
+  h.session.handle(h.data(0, structuredChunk({ kind: "message", offset: 0, role: "assistant", text: "hi" })));
+  assert.deepEqual(h.writes, [], "a structured chunk must not be dumped into the byte-terminal");
+  assert.equal(h.events.length, 1);
+  assert.deepEqual(h.events[0], { kind: "message", offset: 0, role: "assistant", text: "hi" });
+  assert.equal(h.session.nextOffset, 1, "the resume offset advances for a structured chunk too");
+});
+
+test("a raw (untagged) chunk still renders on the byte-terminal even when a structured sink is wired", () => {
+  const h = harness({ structured: true });
+  h.session.attach();
+  h.session.handle(h.data(0, "plain bytes\n"));
+  assert.deepEqual(h.writes, ["plain bytes\n"]);
+  assert.deepEqual(h.events, [], "raw bytes never reach the structured sink");
+  assert.equal(h.session.nextOffset, 1);
+});
+
+test("with no structured sink a marker-tagged chunk is written verbatim (legacy raw-only behaviour)", () => {
+  const h = harness();
+  h.session.attach();
+  const chunk = structuredChunk({ kind: "message", offset: 0, role: "assistant", text: "hi" });
+  h.session.handle(h.data(0, chunk));
+  assert.deepEqual(h.writes, [chunk], "without a structured sink the envelope falls through to the byte-terminal");
+  assert.equal(h.session.nextOffset, 1);
+});
+
+test("a mixed stream that starts raw and only later carries tagged chunks routes each chunk correctly", () => {
+  const h = harness({ structured: true });
+  h.session.attach();
+  h.session.handle(h.data(0, "booting...\n"));
+  h.session.handle(h.data(1, structuredChunk({ kind: "turn", offset: 1, index: 0 })));
+  h.session.handle(h.data(2, structuredChunk({ kind: "message", offset: 2, role: "assistant", text: "done" })));
+  h.session.handle(h.data(3, "trailing raw\n"));
+  assert.deepEqual(h.writes, ["booting...\n", "trailing raw\n"], "raw chunks land on the terminal");
+  assert.deepEqual(
+    h.events.map((e) => e.kind),
+    ["turn", "message"],
+    "only the tagged chunks reach the structured sink",
+  );
+  assert.equal(h.session.nextOffset, 4);
+});
+
+test("a marker-tagged but malformed envelope falls back to raw bytes (byte-terminal), never the structured sink", () => {
+  // A chunk mentioning the marker but with an unknown/rejected body must be
+  // retained verbatim for byte-replay fidelity, not routed as a structured event.
+  const h = harness({ structured: true });
+  h.session.attach();
+  const malformed = JSON.stringify({ [TRANSCRIPT_EVENT_MARKER]: 1, kind: "message" }); // no text → decoder rejects
+  h.session.handle(h.data(0, malformed));
+  assert.deepEqual(h.writes, [malformed]);
+  assert.deepEqual(h.events, []);
+  assert.equal(h.session.nextOffset, 1);
+});
+
+test("a structured reconnect resumes from nextOffset — no dropped and no double-applied events", () => {
+  const h = harness({ structured: true });
+  h.session.attach();
+  h.session.handle(h.data(0, structuredChunk({ kind: "turn", offset: 0, index: 0 })));
+  h.session.handle(h.data(1, structuredChunk({ kind: "message", offset: 1, role: "assistant", text: "a" })));
+  assert.equal(h.session.nextOffset, 2);
+
+  // Socket drops; the client reconnects → re-attach resumes from offset 2.
+  h.session.attach();
+  assert.deepEqual(h.sent[1], { op: "subscribe", stream: "worker-1", from: 2, credit: 1024 });
+
+  // The hub replays the retained tail (re-sends offset 1) then continues. The
+  // replayed event is below nextOffset and must be dropped (no double-apply);
+  // the fresh event applies exactly once (no loss).
+  h.session.handle(h.data(1, structuredChunk({ kind: "message", offset: 1, role: "assistant", text: "a" })));
+  h.session.handle(h.data(2, structuredChunk({ kind: "message", offset: 2, role: "assistant", text: "b" })));
+  assert.deepEqual(
+    h.events.map((e) => (e.kind === "message" ? e.text : e.kind)),
+    ["turn", "a", "b"],
+    "no dropped and no duplicated structured events across the reconnect",
+  );
+  assert.equal(h.session.nextOffset, 3);
 });
 

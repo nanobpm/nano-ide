@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { decodeFrame, encodeFrame, type Frame } from "../protocol/index.ts";
 import type { DemandSupplyReport } from "../demand/index.ts";
+import { type TranscriptEvent, encodeTranscriptEvent } from "../transcript/index.ts";
 
 import { bootCockpit, type CockpitEnv } from "./boot.ts";
 import { FakeDocument, FakeElement } from "./fake-dom.ts";
@@ -64,8 +65,11 @@ interface Rig {
   readonly host: FakeElement;
   readonly sockets: FakeSocket[];
   readonly terminalWrites: string[];
+  readonly structuredEvents: TranscriptEvent[];
   terminalMounts: number;
   terminalDisposes: number;
+  structuredMounts: number;
+  structuredDisposes: number;
   readonly timers: Array<{ run: () => void; ms: number }>;
   reconnect: (() => void) | undefined;
   report: DemandSupplyReport;
@@ -76,13 +80,17 @@ function rig(): Rig {
   const host = new FakeElement("body");
   const sockets: FakeSocket[] = [];
   const terminalWrites: string[] = [];
+  const structuredEvents: TranscriptEvent[] = [];
   const timers: Array<{ run: () => void; ms: number }> = [];
   const state: Rig = {
     host,
     sockets,
     terminalWrites,
+    structuredEvents,
     terminalMounts: 0,
     terminalDisposes: 0,
+    structuredMounts: 0,
+    structuredDisposes: 0,
     timers,
     reconnect: undefined,
     report: served,
@@ -103,6 +111,16 @@ function rig(): Rig {
           write: (chunk) => terminalWrites.push(chunk),
           dispose: () => {
             state.terminalDisposes += 1;
+          },
+        };
+      },
+      createStructured: (structuredHost) => {
+        state.structuredMounts += 1;
+        structuredHost.appendChild(new FakeElement("div"));
+        return {
+          event: (event) => structuredEvents.push(event),
+          dispose: () => {
+            state.structuredDisposes += 1;
           },
         };
       },
@@ -172,6 +190,102 @@ test("relay output is written to the drilled worker's terminal", async () => {
   r.sockets[0]?.fireOpen();
   r.sockets[0]?.deliver({ lane: "bulk", family: "relay", seq: 0, payload: { stream: "ci-a", offset: 0, chunk: "boot\n" } });
   assert.deepEqual(r.terminalWrites, ["boot\n"]);
+  assert.deepEqual(r.structuredEvents, [], "a raw stream routes nothing to the structured view");
+});
+
+function structuredFrame(seq: number, offset: number, event: TranscriptEvent): Frame {
+  return { lane: "bulk", family: "relay", seq, payload: { stream: "ci-a", offset, chunk: encodeTranscriptEvent(event) } };
+}
+
+test("a structured (marker-tagged) stream routes to the structured view, NOT the byte-terminal", async () => {
+  const r = rig();
+  const cockpit = bootCockpit(r.env);
+  await cockpit.refresh();
+  cockpit.drill("ci-a");
+  r.sockets[0]?.fireOpen();
+  r.sockets[0]?.deliver(structuredFrame(0, 0, { kind: "turn", offset: 0, index: 0 }));
+  r.sockets[0]?.deliver(structuredFrame(1, 1, { kind: "message", offset: 1, role: "assistant", text: "hi" }));
+  assert.deepEqual(r.terminalWrites, [], "structured chunks are not dumped into the byte-terminal");
+  assert.deepEqual(
+    r.structuredEvents.map((e) => e.kind),
+    ["turn", "message"],
+    "the decoded transcript events reach the structured view",
+  );
+});
+
+test("a mixed stream routes each chunk to the right surface (raw → terminal, tagged → structured)", async () => {
+  const r = rig();
+  const cockpit = bootCockpit(r.env);
+  await cockpit.refresh();
+  cockpit.drill("ci-a");
+  r.sockets[0]?.fireOpen();
+  r.sockets[0]?.deliver({ lane: "bulk", family: "relay", seq: 0, payload: { stream: "ci-a", offset: 0, chunk: "booting\n" } });
+  r.sockets[0]?.deliver(structuredFrame(1, 1, { kind: "message", offset: 1, role: "assistant", text: "ready" }));
+  r.sockets[0]?.deliver({ lane: "bulk", family: "relay", seq: 2, payload: { stream: "ci-a", offset: 2, chunk: "tail\n" } });
+  assert.deepEqual(r.terminalWrites, ["booting\n", "tail\n"]);
+  assert.deepEqual(
+    r.structuredEvents.map((e) => (e.kind === "message" ? e.text : e.kind)),
+    ["ready"],
+  );
+});
+
+test("the structured view survives a cockpit reconnect — resume-from-offset, no loss, no dup", async () => {
+  const r = rig();
+  const cockpit = bootCockpit(r.env);
+  await cockpit.refresh();
+  cockpit.drill("ci-a");
+
+  const s1 = r.sockets[0];
+  s1?.fireOpen();
+  s1?.deliver(structuredFrame(0, 0, { kind: "message", offset: 0, role: "assistant", text: "a" }));
+  s1?.deliver(structuredFrame(1, 1, { kind: "message", offset: 1, role: "assistant", text: "b" }));
+
+  // The cockpit's socket drops; the client reconnects.
+  s1?.fireClose();
+  assert.ok(r.reconnect !== undefined, "a reconnect was scheduled");
+  r.reconnect?.();
+  const s2 = r.sockets[1];
+  s2?.fireOpen(); // re-attach → resume from offset 2
+  const subs = s2?.subscribeFrames() ?? [];
+  assert.deepEqual(subs.at(-1)?.payload, { op: "subscribe", stream: "ci-a", from: 2, credit: 1024 });
+
+  // The hub replays the retained tail (re-sends offset 1) then continues.
+  s2?.deliver(structuredFrame(0, 1, { kind: "message", offset: 1, role: "assistant", text: "b" }));
+  s2?.deliver(structuredFrame(1, 2, { kind: "message", offset: 2, role: "assistant", text: "c" }));
+  assert.deepEqual(
+    r.structuredEvents.map((e) => (e.kind === "message" ? e.text : e.kind)),
+    ["a", "b", "c"],
+    "no dropped and no duplicated structured events across the reconnect",
+  );
+});
+
+test("the built-in structured renderer derives into the structured host when none is injected", async () => {
+  const r = rig();
+  // Drop the custom createStructured so the default DOM renderer is exercised end-to-end.
+  const { createStructured: _drop, ...envWithoutStructured } = r.env;
+  const cockpit = bootCockpit(envWithoutStructured);
+  await cockpit.refresh();
+  cockpit.drill("ci-a");
+  r.sockets[0]?.fireOpen();
+  r.sockets[0]?.deliver(structuredFrame(0, 0, { kind: "message", offset: 0, role: "assistant", text: "hello" }));
+  assert.deepEqual(r.terminalWrites, [], "structured chunk is not dumped as raw");
+  const rendered = r.host.byClass("cockpit-structured-message");
+  assert.equal(rendered.length, 1, "the built-in structured renderer rendered the derived message");
+  assert.match(rendered[0]?.text() ?? "", /hello/);
+});
+
+test("switching streams disposes the prior structured view", async () => {
+  const r = rig();
+  const cockpit = bootCockpit(r.env);
+  await cockpit.refresh();
+  cockpit.drill("ci-a");
+  assert.equal(r.structuredMounts, 1);
+  assert.equal(r.structuredDisposes, 0);
+  cockpit.drill("ci-b");
+  assert.equal(r.structuredMounts, 2);
+  assert.equal(r.structuredDisposes, 1, "prior structured view disposed on stream switch");
+  cockpit.dispose();
+  assert.equal(r.structuredDisposes, 2, "the live structured view is disposed on dispose()");
 });
 
 test("the terminal survives a matrix refresh — it is not re-mounted and keeps streaming", async () => {

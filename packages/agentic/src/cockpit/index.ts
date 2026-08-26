@@ -34,6 +34,7 @@ export {
   type RelayInbound,
   type RelayOutbound,
   type RelaySend,
+  type StructuredSink,
   type TerminalSessionOptions,
   type TerminalSink,
 } from "./terminal-session.ts";
@@ -55,9 +56,16 @@ export {
 } from "./render.ts";
 
 export {
+  createStructuredSink,
+  renderStructured,
+  type StructuredTerminal,
+} from "./structured-view.ts";
+
+export {
   bootCockpit,
   type CockpitEnv,
   type CockpitHandle,
+  type CreateStructured,
   type CreateTerminal,
   type TimerHandle,
 } from "./boot.ts";

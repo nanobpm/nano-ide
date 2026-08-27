@@ -430,6 +430,13 @@ export function sharedSecretSchemeNames(doc: OpenApiDoc): string[] {
   const schemes = doc.components?.securitySchemes ?? {};
   const names: string[] = [];
   for (const [name, scheme] of Object.entries(schemes)) {
+    // A malformed scheme value (e.g. `webhookKey:` with no body parses as `null` in YAML, or a
+    // primitive) is not a valid apiKey shared-secret candidate — skip it rather than dereference it
+    // and throw a bare TypeError. This mirrors `evaluateSecurity`, which never treats a non-object
+    // scheme as a valid credential (a referenced null/primitive scheme surfaces there as a 500), so
+    // there is no silent security hole: mutations fail closed and a genuine misconfig is caught at
+    // request time by the enforcement path.
+    if (!isRecord(scheme)) continue;
     // Structural presence check (`typeof … === "string"`), NOT truthiness: a declared-but-EMPTY
     // `x-nano-secret-env` is a misconfiguration, not "no scheme". Selecting it here lets
     // `evaluateSecurity` surface it as a 500 (missing env-var pointer) — the same way it treats an

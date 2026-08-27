@@ -177,11 +177,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Resolve the MCP access policy from the manifest (`mcp: { enabled?, allowRemote? }`, read
- * reflectively until the app schema folds the field in — mirroring how `readApiBinding` reads
- * `api`) and the environment (`URBAN_MCP_ENABLED`, `URBAN_MCP_ALLOW_REMOTE`). The env flags win so
- * an operator can force the surface off (or open it to a non-loopback bind) without editing the
- * manifest. Enabled defaults ON and access defaults to loopback-only ("defaults ON for loopback").
+ * Resolve the MCP access policy from the manifest
+ * (`mcp: { enabled?, allowRemote?, allowMutations? }`, read reflectively until the app schema folds
+ * the field in — mirroring how `readApiBinding` reads `api`) and the environment
+ * (`URBAN_MCP_ENABLED`, `URBAN_MCP_ALLOW_REMOTE`, `URBAN_MCP_ALLOW_MUTATIONS`). The env flags win so
+ * an operator can force the surface off (or open it to a non-loopback bind, or enable mutating
+ * tools) without editing the manifest. Enabled defaults ON and access defaults to loopback-only
+ * ("defaults ON for loopback"); `allowMutations` defaults OFF (mutating tools stay closed).
  */
 export function readMcpConfig(manifest: unknown, env: (name: string) => string | undefined): McpConfig {
   const raw = manifest && typeof manifest === "object" ? Reflect.get(manifest, "mcp") : undefined;

@@ -703,6 +703,27 @@ test("sharedSecretSchemeNames: a declared-but-EMPTY x-nano-secret-env is still a
   assert.equal(sharedSecretSchemeName(doc), "webhookKey");
 });
 
+test("sharedSecretSchemeNames: a malformed (null) scheme entry is skipped, not a bare TypeError", () => {
+  // A mistakenly empty scheme (`webhookKey:` with no body) parses as `null` in YAML. Dereferencing
+  // it (`scheme.type`) would throw a bare TypeError; a non-object scheme is not a valid apiKey
+  // shared-secret candidate, so it is skipped and the real candidate is still selected. Built via
+  // JSON.parse so the runtime-invalid `null` scheme reaches the function (types forbid it).
+  const doc: OpenApiDoc = parseSpec(
+    JSON.stringify({
+      openapi: "3.0.0",
+      components: {
+        securitySchemes: {
+          brokenEmpty: null,
+          webhookKey: { type: "apiKey", in: "header", name: "X-Key", "x-nano-secret-env": "KEY" },
+        },
+      },
+      paths: {},
+    }),
+  );
+  assert.deepEqual(sharedSecretSchemeNames(doc), ["webhookKey"]);
+  assert.equal(sharedSecretSchemeName(doc), "webhookKey");
+});
+
 
 test("responseSchemaForStatus: a documented-but-bodyless status suppresses the default fallback", () => {
   const ops = collectOperations({

@@ -31,7 +31,7 @@ import { makeGateway } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
-import { evictExcessSessions, isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readMcpConfig } from "./mcp.ts";
+import { evictExcessSessions, isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readHeader, readMcpConfig } from "./mcp.ts";
 import { collectMcpToolProjection, diffMcpToolProjection, parseSpec } from "../../../openapi/spec.ts";
 
 // ---- fixtures ---------------------------------------------------------------------------------
@@ -529,6 +529,25 @@ test("the projection debug tools read the ADR 0065 canonical stores", async () =
 });
 
 // ---- mutation guard (Slice 3) -----------------------------------------------------------------
+
+// A repeated credential header must read the SAME under the MCP guard as under OpenAPI route
+// enforcement. `mountApi`/`toHttpRequest` read it via `Headers.get()`, which comma-joins repeated
+// values; `readHeader` must match that (not pick the first) so the shared-secret guard cannot
+// diverge from route enforcement on a `string[]` header (as Node's raw adapter surfaces it).
+test("readHeader comma-joins a repeated header to match Headers.get() semantics", () => {
+  // Baseline: a single string value is returned verbatim; a missing header is undefined.
+  assert.equal(readHeader({ "x-nano-key": "abc" }, "X-Nano-Key"), "abc");
+  assert.equal(readHeader({}, "X-Nano-Key"), undefined);
+  // A repeated header (string[]) is joined with ", " — exactly what `Headers.get()` returns for the
+  // reconstructed request in `toHttpRequest`, so the guard reads the identical credential string.
+  const joined = readHeader({ "x-nano-key": ["a", "b"] }, "X-Nano-Key");
+  const viaHeaders = (() => {
+    const h = new Headers();
+    for (const v of ["a", "b"]) h.append("X-Nano-Key", v);
+    return h.get("X-Nano-Key") ?? undefined;
+  })();
+  assert.equal(joined, viaHeaders, "readHeader must match Headers.get() for a repeated header");
+});
 
 // A spec that declares the app's shared-secret scheme (an apiKey header pointing at an env var via
 // `x-nano-secret-env`) — the credential the framework MUTATING tools require. REUSING the app's

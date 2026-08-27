@@ -230,12 +230,15 @@ export function isLoopbackRequest(req: HttpRequest): boolean {
 }
 
 /** Read a header value from the SDK's per-request `requestInfo.headers` map (lower-cased keys,
- *  values `string | string[] | undefined`). Returns the first value for a repeated header, or
- *  `undefined` when absent. Used to read the shared-secret credential the client presents on the
- *  MCP connection for a mutating tool call. */
-function readHeader(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
+ *  values `string | string[] | undefined`). A repeated header (`string[]`, as Node's raw adapter
+ *  surfaces it) is comma-joined to MATCH `Headers.get()` semantics — the same read `mountApi` and
+ *  the reconstructed `toHttpRequest` use for OpenAPI route enforcement — so the shared-secret guard
+ *  cannot diverge from route enforcement on a repeated credential header. Returns `undefined` when
+ *  absent. Used to read the shared-secret credential the client presents on the MCP connection for a
+ *  mutating tool call. */
+export function readHeader(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
   const value = headers[name.toLowerCase()];
-  if (Array.isArray(value)) return value[0];
+  if (Array.isArray(value)) return value.join(", ");
   return value;
 }
 

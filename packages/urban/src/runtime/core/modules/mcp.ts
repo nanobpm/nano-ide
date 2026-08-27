@@ -220,18 +220,20 @@ function missingPathParams(op: OperationInfo, args: Record<string, unknown>): st
     .map((p) => p.name);
 }
 
-/** The `required` string keys a tool's `inputSchema` declares but the call omitted (absent, or not a
- *  non-empty-after-trim string). Derived from the schema's own `required` array — the single source
- *  of truth — so declaring a field required is enough to have missing (or whitespace-only) calls
- *  rejected rather than silently substituted with an empty string. */
-function missingRequiredArgs(inputSchema: Record<string, unknown>, args: Record<string, unknown>): string[] {
+/** The `required` keys a tool's `inputSchema` declares but the call omitted. Presence is decided
+ *  solely by {@link isBlankArg} — the single source of truth also used for path args — so a value is
+ *  "provided" unless it is absent (`undefined`/`null`) or a blank/whitespace-only string. A required
+ *  non-string input (e.g. a numeric/boolean/object arg) that is present is therefore accepted, not
+ *  wrongly reported missing. Derived from the schema's own `required` array so declaring a field
+ *  required is enough to have missing (or whitespace-only) calls rejected rather than silently
+ *  substituted with an empty string. */
+export function missingRequiredArgs(inputSchema: Record<string, unknown>, args: Record<string, unknown>): string[] {
   const required = inputSchema.required;
   if (!Array.isArray(required)) return [];
   const missing: string[] = [];
   for (const key of required) {
     if (typeof key !== "string") continue;
-    const value = args[key];
-    if (typeof value !== "string" || isBlankArg(value)) missing.push(key);
+    if (isBlankArg(args[key])) missing.push(key);
   }
   return missing;
 }

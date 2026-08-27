@@ -29,7 +29,7 @@ import { makeGateway } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
-import { isLoopbackRequest, mountMcp, readMcpConfig } from "./mcp.ts";
+import { isLoopbackRequest, missingRequiredArgs, mountMcp, readMcpConfig } from "./mcp.ts";
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
@@ -484,6 +484,29 @@ test("a debug tool call missing a required parameter is rejected before its hand
   assert.equal(blankCall.result?.isError, true, "a whitespace-only required arg must also be rejected");
   assert.match(toolContentText(blankCall.result), /missing required parameter/i);
   assert.equal(handlerRan, false, "the debug handler must not run for a whitespace-only required-arg call");
+});
+
+test("missingRequiredArgs treats a present non-string value as provided, not missing", () => {
+  // Presence is decided solely by isBlankArg, so a required numeric/boolean/object arg that is
+  // actually supplied must NOT be reported missing — the earlier `typeof value !== "string"` guard
+  // wrongly rejected every non-string required input.
+  const schema = { required: ["count", "enabled", "filter"] };
+  assert.deepEqual(
+    missingRequiredArgs(schema, { count: 0, enabled: false, filter: { state: "ACTIVE" } }),
+    [],
+    "present non-string required args (including falsy 0/false) must be accepted",
+  );
+
+  // Absent (undefined/null) and blank/whitespace-only string values remain rejected.
+  assert.deepEqual(
+    missingRequiredArgs(schema, { count: undefined, enabled: null, filter: "   " }),
+    ["count", "enabled", "filter"],
+    "undefined, null, and whitespace-only string required args must be reported missing",
+  );
+
+  // A required key entirely omitted from args is missing; a non-empty string is provided.
+  assert.deepEqual(missingRequiredArgs({ required: ["id"] }, {}), ["id"]);
+  assert.deepEqual(missingRequiredArgs({ required: ["id"] }, { id: "x" }), []);
 });
 
 test("the system brief is served as an MCP resource", async () => {

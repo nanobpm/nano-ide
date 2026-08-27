@@ -643,6 +643,44 @@ test("with no shared-secret scheme and no opt-in, a mutating tool fails closed",
   assert.equal(refused.result?.isError, true, "a mutation must fail closed when nothing can authorize it");
 });
 
+test("a mutating tool refused for a misconfigured shared secret logs a 500 and surfaces the status", async () => {
+  // The spec declares a shared-secret scheme, but its secret env var is unset — a server
+  // misconfiguration (500), not a bad credential (401). Like `mountApi`, the MCP guard must log it
+  // for operators and carry the 500 status in the error payload so a client can tell them apart.
+  const engine = fakeEngine({ cancelInstance: async () => assert.fail("must not run") });
+  const { router, logs } = buildHarness({ engine, spec: GUARDED_SPEC, env: () => undefined });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "a misconfigured shared secret must refuse the mutation");
+  const payload = JSON.parse(toolContentText(refused.result));
+  assert.equal(payload.status, 500, "a misconfig refusal must surface status 500, not 401");
+  assert.match(payload.error, /misconfigured/i);
+  const misconfigLogs = logs.filter((l) => l.level === "error" && l.msg.includes("misconfigured"));
+  assert.equal(misconfigLogs.length, 1, "a 500-class refusal must be logged for operators");
+  assert.equal(misconfigLogs[0].fields?.tool, "urban_debug_cancel_instance");
+});
+
+test("a mutating tool refused for a missing credential surfaces a 401 status without an error log", async () => {
+  const engine = fakeEngine({ cancelInstance: async () => assert.fail("must not run") });
+  const { router, logs } = buildHarness({ engine, spec: GUARDED_SPEC, env: guardEnv });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "a missing credential must refuse the mutation");
+  const payload = JSON.parse(toolContentText(refused.result));
+  assert.equal(payload.status, 401, "a missing/invalid credential must surface status 401");
+  assert.equal(
+    logs.filter((l) => l.level === "error" && l.msg.includes("misconfigured")).length,
+    0,
+    "a plain unauthorized (401) is not a misconfig and must not be logged as one",
+  );
+});
+
 test("an authorized mutating tool rejects a blank/non-string key or negative retries before touching the engine", async () => {
   const touched: string[] = [];
   const engine = fakeEngine({

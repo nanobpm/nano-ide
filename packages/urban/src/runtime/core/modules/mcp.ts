@@ -873,7 +873,21 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
       if (debug) {
         if (debug.mutating) {
           const authz = await authorizeMutation(headers);
-          if (!authz.ok) return textResult({ error: authz.error ?? "unauthorized" }, true);
+          if (!authz.ok) {
+            const status = authz.status ?? 401;
+            // Mirror `mountApi`'s security handling: a `500` refusal means the shared-secret scheme
+            // is misconfigured (unknown/unsupported scheme, or an unset secret env var) rather than a
+            // bad/absent credential. Log it — as `mountApi` does for its OpenAPI security — so an
+            // operator can diagnose the misconfiguration, and carry the status in the error payload
+            // so a client can distinguish a `500` misconfig from a `401` unauthorized.
+            if (status === 500) {
+              ctx.host.log("error", "mcp mutating tool security is misconfigured (ADR 0059)", {
+                tool: name,
+                reason: authz.error,
+              });
+            }
+            return textResult({ error: authz.error ?? "unauthorized", status }, true);
+          }
         }
         const missing = missingRequiredArgs(debug.inputSchema, args);
         if (missing.length > 0) {

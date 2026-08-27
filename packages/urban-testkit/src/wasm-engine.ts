@@ -32,6 +32,8 @@ import {
   type ElementInstanceWaitStateFilter,
   type EngineJob,
   isBpmnError,
+  type IncidentFilter,
+  type IncidentSummary,
   type JobHandler,
   type UserTaskState,
   type UserTaskFilter,
@@ -617,6 +619,99 @@ export class WasmEngineClient implements EngineClient {
     const match = deriveElementInstances(this.#snapshot(), undefined)
       .find((e) => e.elementInstanceKey === key);
     return match ?? null;
+  }
+
+  /** Incidents the WASM engine currently records. The engine retains an incident in its snapshot
+   *  only while it is *open* (a resolved incident drops out), so every reported incident is
+   *  `ACTIVE`; a request for any other lifecycle state therefore yields nothing. Each snapshot
+   *  incident carries `key`/`instanceKey`/`elementId`/`kind`/`reason` but no job key, so `jobKey`
+   *  is left absent (matching `IncidentSummary`'s optional field); the element-instance key is
+   *  resolved by joining `(instanceKey, elementId)` to the owning instance's `activeElements` —
+   *  the same index `searchElementInstanceWaitStates` uses, so the two cannot drift. The
+   *  `processInstanceKey`/`state` selectors are applied client-side, mirroring the effective
+   *  behaviour of the gateway-backed `SdkEngineClient`. */
+  async searchIncidents(filter?: IncidentFilter): Promise<IncidentSummary[]> {
+    // Only open (ACTIVE) incidents are retained in the snapshot; a request for any other
+    // lifecycle state cannot be satisfied here, so it yields nothing rather than a wrong row.
+    if (filter?.state !== undefined && filter.state !== "ACTIVE") return [];
+    const snapshot = this.#snapshot();
+    const keyIndex = activeElementKeyIndex(snapshot);
+    // Normalize the request selector the same way the response mapper normalizes keys: a
+    // whitespace-only/padded `processInstanceKey` must not silently filter out every row (a blank
+    // selector is treated as absent, matching the presence rule used elsewhere in this file and the
+    // `SdkEngineClient` adapter — No Drift Surfaces).
+    const wantInstanceKey = presentKey(filter?.processInstanceKey);
+    const out: IncidentSummary[] = [];
+    for (const inc of records(snapshot.incidents)) {
+      const incidentKey = presentKey(inc.key);
+      const processInstanceKey = presentKey(inc.instanceKey);
+      if (incidentKey === undefined || processInstanceKey === undefined) continue;
+      if (
+        wantInstanceKey !== undefined &&
+        processInstanceKey !== wantInstanceKey
+      ) {
+        continue;
+      }
+      const elementId = presentString(inc.elementId);
+      const elementInstanceKey = elementId !== undefined
+        ? keyIndex.get(`${processInstanceKey}\u0000${elementId}`)
+        : undefined;
+      const errorType = presentString(inc.kind);
+      const errorMessage = presentString(inc.reason);
+      out.push({
+        incidentKey,
+        processInstanceKey,
+        ...(elementId ? { elementId } : {}),
+        ...(elementInstanceKey ? { elementInstanceKey } : {}),
+        ...(errorType ? { errorType } : {}),
+        ...(errorMessage ? { errorMessage } : {}),
+        state: "ACTIVE",
+      });
+    }
+    return out;
+  }
+
+  /** Resolve an open incident by key, returning the parked token to progress (a job incident
+   *  returns its job to the activatable pool — which must have retries left, see
+   *  {@link updateJobRetries}). Drains afterward so a re-activated job is served, mirroring a live
+   *  push engine (parity with `SdkEngineClient`, whose engine serves it server-side). */
+  async resolveIncident(input: { incidentKey: string }): Promise<void> {
+    this.#liveEngine.resolveIncident(requireKey(input.incidentKey, "incidentKey"));
+    await this.drain();
+  }
+
+  /** Set a failed job's remaining retries — the "retry a failed job" operation. Bumping retries
+   *  back above zero makes the job activatable again so a paired {@link resolveIncident} can
+   *  return it to the pool. Drains afterward for the same push-parity reason as the other
+   *  mutating calls. */
+  async updateJobRetries(input: { jobKey: string; retries: number }): Promise<void> {
+    const jobKey = requireKey(input.jobKey, "jobKey");
+    // `retries` reaches the engine as the job's remaining retry count, and `number` admits `NaN`,
+    // fractional, and negative values — none of which is a valid retry count. Reject them up front
+    // so a tool-driven call fails with a clear message instead of an opaque engine error, matching
+    // `SdkEngineClient.updateJobRetries`.
+    if (!Number.isInteger(input.retries) || input.retries < 0) {
+      throw new Error("retries must be a non-negative integer");
+    }
+    this.#liveEngine.updateRetries(jobKey, input.retries);
+    await this.drain();
+  }
+
+  /** Set (merge) variables into a scope (`scopeKey` is a process-instance or element-instance
+   *  key). `local` merges strictly into that local scope; the default (`false`) propagates to the
+   *  outermost scope — the same semantics the live SDK adapter's `createElementInstanceVariables`
+   *  honours. Drains afterward so a variable that unblocks a waiting worker takes effect. */
+  async setVariables(input: {
+    scopeKey: string;
+    variables: Record<string, unknown>;
+    local?: boolean;
+  }): Promise<void> {
+    this.#liveEngine.setVariables(
+      requireKey(input.scopeKey, "scopeKey"),
+      JSON.stringify(input.variables),
+      input.local ?? false,
+    );
+    await this.drain();
   }
 
   async registerWorker(
@@ -1451,6 +1546,21 @@ export function presentKey(v: unknown): string | undefined {
  *  leak in as a garbage identifier. Exported for the coercion-defect-class guard in the tests. */
 export function presentString(v: unknown): string | undefined {
   return typeof v === "string" ? present(v) : undefined;
+}
+
+/** The non-empty, trimmed string form of a *required* engine key, or throws when the value is
+ *  absent/blank (including a whitespace-only or padded string). A mutating seam op addresses a
+ *  single entity by key, so a blank key is a caller bug that must fail fast with an actionable
+ *  message rather than reach the WASM engine as a garbage identifier and surface an opaque error —
+ *  matching `SdkEngineClient`'s `requireEngineKey` so the two adapters stay behaviour-identical (No
+ *  Drift Surfaces). Reuses {@link presentKey}'s trim-and-coerce rule so a padded key like `" 5 "`
+ *  is normalized identically to how read paths resolve it. Exported for the guard in the tests. */
+export function requireKey(value: unknown, name: string): string {
+  const key = presentKey(value);
+  if (key === undefined) {
+    throw new Error(`${name} must be a non-empty key`);
+  }
+  return key;
 }
 
 /** Parse a form-js schema from a read-model `FormResult.schema`: the engine serializes it as a

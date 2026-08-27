@@ -62,6 +62,12 @@ class FakeEngine implements EngineClient {
   async getElementInstance() {
     return null;
   }
+  async searchIncidents() {
+    return [];
+  }
+  async resolveIncident() {}
+  async updateJobRetries() {}
+  async setVariables() {}
   async registerWorker(jobType: string, handler: JobHandler): Promise<WorkerSubscription> {
     this.workers.set(jobType, handler);
     return { jobType, unsubscribe: async () => void this.workers.delete(jobType) };

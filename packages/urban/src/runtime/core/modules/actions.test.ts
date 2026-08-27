@@ -36,6 +36,10 @@ const engine: EngineClient = {
   searchElementInstances: async () => [],
   searchElementInstanceWaitStates: async () => [],
   getElementInstance: async () => null,
+  searchIncidents: async () => [],
+  resolveIncident: async () => {},
+  updateJobRetries: async () => {},
+  setVariables: async () => {},
   registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
   close: async () => {},
 };

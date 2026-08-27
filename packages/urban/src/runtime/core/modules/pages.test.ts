@@ -51,6 +51,10 @@ function fakeEngine(): { engine: EngineClient; calls: FakeEngineCalls } {
     async searchElementInstances() { return []; },
     async searchElementInstanceWaitStates() { return []; },
     async getElementInstance() { return null; },
+    async searchIncidents() { return []; },
+    async resolveIncident() {},
+    async updateJobRetries() {},
+    async setVariables() {},
     async registerWorker(jobType) { return { jobType, unsubscribe: async () => {} }; },
     async close() {},
   };

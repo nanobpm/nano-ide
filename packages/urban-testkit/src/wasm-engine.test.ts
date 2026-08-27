@@ -8,6 +8,7 @@ import {
   parseForm,
   presentKey,
   presentString,
+  requireKey,
   searchRows,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
@@ -107,6 +108,106 @@ test("wasm: presentString accepts only strings, never coercing other types", () 
   assert.equal(presentString(42), undefined, "a number is absent (string-only identifier)");
   assert.equal(presentString({}), undefined, "an object never coerces to \"[object Object]\"");
   assert.equal(presentString([1]), undefined);
+});
+
+// `requireKey` guards the mutating seam ops (resolveIncident/updateJobRetries/setVariables): a
+// required key must be present and is normalized under the shared trim rule, or it throws fast —
+// matching `SdkEngineClient`'s `requireEngineKey` so the two adapters can't drift.
+test("wasm: requireKey trims a present key and throws on a blank/absent one", () => {
+  assert.equal(requireKey("k1", "incidentKey"), "k1");
+  assert.equal(requireKey("  k2  ", "incidentKey"), "k2", "trims like the shared presence rule");
+  assert.equal(requireKey(2251799813685250, "jobKey"), "2251799813685250", "numeric key stringified");
+  assert.throws(() => requireKey("   ", "incidentKey"), /incidentKey must be a non-empty key/);
+  assert.throws(() => requireKey("", "scopeKey"), /scopeKey must be a non-empty key/);
+  assert.throws(() => requireKey(undefined, "jobKey"), /jobKey must be a non-empty key/);
+});
+
+// The mutating incident-repair seam ops must fail fast on a caller-side bug rather than forward a
+// garbage identifier / invalid retry count into the WASM engine and surface an opaque error —
+// parity with `SdkEngineClient` (No Drift Surfaces). These guards are input validation, so they
+// reject before touching the live engine (no deploy/instance needed).
+test("wasm: mutating seam ops reject blank keys and invalid retry counts before hitting the engine", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    await assert.rejects(
+      () => engine.resolveIncident({ incidentKey: "   " }),
+      /incidentKey must be a non-empty key/,
+    );
+    await assert.rejects(
+      () => engine.setVariables({ scopeKey: "", variables: { x: 1 } }),
+      /scopeKey must be a non-empty key/,
+    );
+    await assert.rejects(
+      () => engine.updateJobRetries({ jobKey: " ", retries: 3 }),
+      /jobKey must be a non-empty key/,
+    );
+    // A blank key is caught before the retry-count check, so exercise `retries` with a valid key.
+    for (const retries of [Number.NaN, 1.5, -1]) {
+      await assert.rejects(
+        () => engine.updateJobRetries({ jobKey: "1", retries }),
+        /retries must be a non-negative integer/,
+        `retries=${retries} must be rejected`,
+      );
+    }
+  } finally {
+    await engine.close();
+  }
+});
+
+// The `searchIncidents` `processInstanceKey` selector is normalized under the shared trim rule, so
+// a padded key (`" <key> "`) still matches the owning instance and a whitespace-only selector is
+// treated as absent (returns all) rather than silently filtering everything out — matching
+// `SdkEngineClient`'s request-selector normalization.
+test("wasm: searchIncidents normalizes the processInstanceKey selector (padded matches, blank is absent)", async () => {
+  const model = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+  id="defs_sel" targetNamespace="http://nanobpm.io/testkit">
+  <bpmn:process id="sel_incident" isExecutable="true">
+    <bpmn:startEvent id="start"><bpmn:outgoing>f1</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="work"/>
+    <bpmn:serviceTask id="work">
+      <bpmn:extensionElements><zeebe:taskDefinition type="work"/></bpmn:extensionElements>
+      <bpmn:incoming>f1</bpmn:incoming><bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="f2" sourceRef="work" targetRef="end"/>
+    <bpmn:endEvent id="end"><bpmn:incoming>f2</bpmn:incoming></bpmn:endEvent>
+  </bpmn:process>
+</bpmn:definitions>`;
+  const engine = await createWasmEngineClient();
+  try {
+    await engine.registerWorker("work", () => {
+      throw new Error("always fails → incident");
+    });
+    await engine.deployResources([
+      { name: "sel_incident.bpmn", content: model, contentType: "text/xml" },
+    ]);
+    const { processInstanceKey } = await engine.createInstance({
+      processDefinitionId: "sel_incident",
+    });
+    assert.equal((await engine.searchIncidents()).length, 1, "one incident raised");
+
+    // Exact key matches; a padded copy of that same key still matches (selector is trimmed).
+    assert.equal((await engine.searchIncidents({ processInstanceKey })).length, 1);
+    assert.equal(
+      (await engine.searchIncidents({ processInstanceKey: `  ${processInstanceKey}  ` })).length,
+      1,
+      "a padded selector is trimmed and still matches the owning instance",
+    );
+    // A whitespace-only selector is treated as absent (not an impossible filter) → returns all.
+    assert.equal(
+      (await engine.searchIncidents({ processInstanceKey: "   " })).length,
+      1,
+      "a blank selector is absent, not a filter that matches nothing",
+    );
+    // A genuinely different key still filters everything out.
+    assert.equal(
+      (await engine.searchIncidents({ processInstanceKey: "does-not-exist" })).length,
+      0,
+    );
+  } finally {
+    await engine.close();
+  }
 });
 
 test("wasm: a BpmnError from a worker is routed as a BPMN error, not a failure", async () => {

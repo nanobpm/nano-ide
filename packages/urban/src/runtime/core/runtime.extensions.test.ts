@@ -41,6 +41,12 @@ class NoopEngine implements EngineClient {
   async getElementInstance() {
     return null;
   }
+  async searchIncidents() {
+    return [];
+  }
+  async resolveIncident() {}
+  async updateJobRetries() {}
+  async setVariables() {}
   async registerWorker(jobType: string): Promise<WorkerSubscription> {
     return { jobType, unsubscribe: async () => {} };
   }

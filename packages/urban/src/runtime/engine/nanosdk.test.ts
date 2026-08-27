@@ -88,6 +88,22 @@ function fakeSdkClient(overrides: Partial<NanoSdkClient> = {}): NanoSdkClient & 
       calls.push("getElementInstance");
       return {};
     },
+    async searchIncidents() {
+      calls.push("searchIncidents");
+      return { items: [] };
+    },
+    async resolveIncident(input) {
+      calls.push("resolveIncident");
+      return { ...input };
+    },
+    async updateJob(input) {
+      calls.push("updateJob");
+      return { ...input };
+    },
+    async createElementInstanceVariables(input) {
+      calls.push("createElementInstanceVariables");
+      return { ...input };
+    },
     async completeUserTask() {
       calls.push("completeUserTask");
       return {};
@@ -727,6 +743,93 @@ test("getElementInstance returns a mapped summary, and null for a blank key or a
   // A blank key short-circuits without hitting the engine; a 404 is treated as absence.
   assert.equal(await engine.getElementInstance("   "), null);
   assert.equal(await engine.getElementInstance("missing"), null);
+});
+
+test("searchIncidents normalizes the processInstanceKey selector (trims, drops blank)", async () => {
+  let seenInput: { filter?: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    async searchIncidents(input) {
+      seenInput = input;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+
+  // A padded key is trimmed before it reaches the engine filter.
+  await engine.searchIncidents({ processInstanceKey: "  7  " });
+  assert.deepEqual(seenInput?.filter, { processInstanceKey: "7" });
+
+  // A whitespace-only key is treated as absent, not forwarded as a garbage filter segment.
+  await engine.searchIncidents({ processInstanceKey: "   " });
+  assert.deepEqual(seenInput?.filter, {});
+
+  // The state selector still passes through untouched.
+  await engine.searchIncidents({ state: "ACTIVE" });
+  assert.deepEqual(seenInput?.filter, { state: "ACTIVE" });
+});
+
+test("resolveIncident normalizes the incidentKey and rejects a blank one", async () => {
+  let seen: { incidentKey: string } | undefined;
+  const client = fakeSdkClient({
+    async resolveIncident(input) {
+      seen = input;
+      return { ...input };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+
+  await engine.resolveIncident({ incidentKey: "  inc-1  " });
+  assert.deepEqual(seen, { incidentKey: "inc-1" });
+
+  await assert.rejects(
+    engine.resolveIncident({ incidentKey: "   " }),
+    /incidentKey must be a non-empty key/,
+  );
+});
+
+test("setVariables normalizes the scopeKey and rejects a blank one", async () => {
+  let seen: Record<string, unknown> | undefined;
+  const client = fakeSdkClient({
+    async createElementInstanceVariables(input) {
+      seen = input;
+      return { ...input };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+
+  await engine.setVariables({ scopeKey: "  ei-9  ", variables: { fixed: true } });
+  assert.deepEqual(seen, { elementInstanceKey: "ei-9", variables: { fixed: true } });
+
+  await assert.rejects(
+    engine.setVariables({ scopeKey: "  ", variables: { fixed: true } }),
+    /scopeKey must be a non-empty key/,
+  );
+});
+
+test("updateJobRetries normalizes the jobKey and rejects a blank key or an invalid retry count", async () => {
+  let seen: { jobKey: string; changeset: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    async updateJob(input) {
+      seen = input;
+      return { ...input };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+
+  await engine.updateJobRetries({ jobKey: "  j-1  ", retries: 3 });
+  assert.deepEqual(seen, { jobKey: "j-1", changeset: { retries: 3 } });
+
+  await assert.rejects(
+    engine.updateJobRetries({ jobKey: "   ", retries: 3 }),
+    /jobKey must be a non-empty key/,
+  );
+  for (const retries of [-1, 1.5, Number.NaN]) {
+    await assert.rejects(
+      engine.updateJobRetries({ jobKey: "j-1", retries }),
+      /retries must be a non-negative integer/,
+      `retries=${retries} must be rejected`,
+    );
+  }
 });
 
 test("registerWorker creates a worker the SDK auto-starts, and dispatches + completes", async () => {

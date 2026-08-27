@@ -14,12 +14,14 @@
 // SAME `mountApi` router, so it flows through the identical delegate registry + validation the HTTP
 // route uses (a tool call is equivalent to the corresponding HTTP call).
 //
-// This module (ADR 0067) exposes app operations as MCP tools — READ operations unguarded on
-// loopback, and MUTATING operations (Slice 3) guarded by the app's shared secret (or an explicit
-// runtime opt-in). An operation opts out of projection with the `x-mcp` extension. It also exposes
-// framework-owned process-debugging tools over BOTH truth planes: engine truth via existing
-// `EngineClient` methods (reads, plus mutating unstick tools — cancel/resolve/retry/set-variables),
-// and the ADR 0065 canonical projection stores (`urban_instance_state` / `urban_open_user_tasks`).
+// This module (ADR 0067) exposes app operations as MCP tools — each authorized exactly as its own
+// HTTP route by the operation's OpenAPI `security` (a read or mutating op with no `security` is
+// open; there is NO extra MCP-level shared-secret guard on app operations). An operation opts out
+// of projection with the `x-mcp` extension. It also exposes framework-owned process-debugging tools
+// over BOTH truth planes: engine truth via existing `EngineClient` methods (reads, plus mutating
+// unstick tools — cancel/resolve/retry/set-variables, which ARE guarded by the app's shared secret
+// or the `mcp.allowMutations` opt-in), and the ADR 0065 canonical projection stores
+// (`urban_instance_state` / `urban_open_user_tasks`).
 // The app's system brief (`/app/agent.json`) is served as an MCP resource, plus one orientation
 // entry under MCP prompts.
 //
@@ -827,9 +829,9 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
       "This endpoint is the app's runtime-served MCP surface (ADR 0067).",
       "",
       `- Read the \`${SYSTEM_BRIEF_URI}\` resource first for the app's system model (processes, service-task call graph, decisions, ownership).`,
-      "- App tools mirror the app's HTTP operations one-to-one: a tool call is equivalent to the corresponding `/app/api` HTTP call, validated identically. An operation is exposed unless it opts out with the `x-mcp` extension (a security-relevant authoring switch).",
+      "- App tools mirror the app's HTTP operations one-to-one: a tool call is equivalent to the corresponding `/app/api` HTTP call, validated identically and authorized exactly as that HTTP route by the operation's own OpenAPI `security` (an operation with no `security` is open — there is no extra MCP-level guard). An operation is exposed unless it opts out with the `x-mcp` extension (a security-relevant authoring switch).",
       `- \`${DEBUG_PREFIX}*\` READ tools are framework-owned process-debugging tools: engine truth (process instances, wait states, element instances, user tasks, incidents) and the ADR 0065 projection stores (instance state, open user tasks). They are unauthenticated on loopback.`,
-      `- \`${DEBUG_PREFIX}*\` MUTATING tools (cancel_instance, resolve_incident, retry_job, set_variables) and any mutating app operation are GUARDED: present the app's shared secret as its apiKey header on the MCP connection, or the operator must set the mcp.allowMutations opt-in. A mutating call without the credential is refused.`,
+      `- \`${DEBUG_PREFIX}*\` MUTATING tools (cancel_instance, resolve_incident, retry_job, set_variables) are framework-GUARDED: present the app's shared secret as its apiKey header on the MCP connection, or the operator must set the mcp.allowMutations opt-in. A mutating call without the credential is refused. (App operation tools are NOT covered by this guard — they are authorized by their own OpenAPI \`security\`, above.)`,
     ].join("\n");
 
   /** Build a fresh low-level MCP `Server` with this app's tools/resources/prompts wired. One is

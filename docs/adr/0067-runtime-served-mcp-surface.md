@@ -76,7 +76,10 @@ so the exposed tools are **version-matched by construction** — the invariant t
 live-guide design protected by convention now holds structurally. Adds
 `@modelcontextprotocol/sdk` as a `packages/urban` dependency. Bind/guard posture
 follows the existing network story: loopback by default, LAN exposure via the
-app-manifest `network.bind` setting.
+app-manifest `network.bind` setting. The read-only tools are **unauthenticated**
+(see §4), so this loopback default is precisely what limits their exposure —
+setting `network.bind` to a LAN interface exposes those unauthenticated read tools
+to the LAN, and should only be done on a trusted network.
 
 ### 2. App-operation tools: projected, not declared
 
@@ -113,8 +116,10 @@ A fixed, app-agnostic tool family for process debugging, exposed for every app:
 ### 4. Read/mutate split, resources, prompts
 
 - **Read tools on by default; mutations guarded.** Diagnostic tools (search, wait
-  states, variables, incidents, projections, and read-only app operations) need no
-  credential beyond loopback. Mutating tools (cancel instance, resolve/retry
+  states, variables, incidents, projections, and read-only app operations) are
+  **unauthenticated** — they need no credential, so loopback binding (the default;
+  see §1) is what limits their exposure, and binding to a LAN interface exposes them
+  unauthenticated. Mutating tools (cancel instance, resolve/retry
   incident, set variables, side-effecting app operations) require the app's shared
   secret, reusing Urban's existing operation-guard convention: an OpenAPI `apiKey`
   security scheme whose expected value is an env pointer via `x-nano-secret-env`

@@ -17,7 +17,8 @@ Urban apps are increasingly **operated and debugged by AI coding agents**. The w
 example is nano-workforce: it serves a live, instance-keyed markdown operator guide
 over REST (`GET /app/api/agent` — nano-workforce's own OpenAPI operation under the
 framework `/app/api` base, distinct from the framework-mounted static `/app/agent`
-brief of ADR 0060) that a human copy-pastes into an agent — or that a
+brief served by the runtime's agent module,
+`packages/urban/src/runtime/core/modules/agent.ts`) that a human copy-pastes into an agent — or that a
 bootstrap skill (`skills/nano-workforce/SKILL.md`) fetches on demand — after which the
 agent drives the app's OpenAPI operations with **prose-described `curl`** recipes.
 
@@ -81,10 +82,16 @@ binding like `/app/api-docs`, which `modules/api.ts` gates on `docsEnabled`
 so the exposed tools are **version-matched by construction** — the invariant the
 live-guide design protected by convention now holds structurally. Adds
 `@modelcontextprotocol/sdk` as a `packages/urban` dependency. Bind/guard posture
-follows the existing network story: loopback by default, LAN exposure via the
-app-manifest `network.bind` setting. The read-only tools are **unauthenticated**
-(see §4), so this loopback default is precisely what limits their exposure —
-setting `network.bind` to a LAN interface exposes those unauthenticated read tools
+follows the existing network story: the runtime fails *closed* to loopback when
+`network.bind` is omitted, but LAN exposure is a one-line opt-in via the
+app-manifest `network.bind` setting — and `create-urban-app` scaffolds new apps
+with an explicit `network.bind: "all"` (0.0.0.0) so a worker fleet can reach them,
+so off-loopback binding is the *common* case in practice, not a rare one. The
+read-only tools are **unauthenticated**
+(see §4), so what limits their exposure is the *effective* bind mode: on a
+loopback bind they stay local, but under the scaffolded `bind: "all"` default they
+are reachable by anything that can route to the host. Setting (or leaving)
+`network.bind` on a LAN interface exposes those unauthenticated read tools
 to the LAN, and should only be done on a trusted network.
 
 ### 2. App-operation tools: projected, not declared

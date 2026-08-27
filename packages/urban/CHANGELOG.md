@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.85.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.84.0...@nanobpm/urban-0.85.0) (2026-08-27)
+
+
+### Features
+
+* **urban:** serve a read-only MCP surface at /app/mcp (ADR 0067) ([#491](https://github.com/nanobpm/nano-ide/issues/491)) ([904fb21](https://github.com/nanobpm/nano-ide/commit/904fb21363724c3921893754fed8c6fedaa8ea50))
+
 ## [0.84.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.83.0...@nanobpm/urban-0.84.0) (2026-08-27)
 
 

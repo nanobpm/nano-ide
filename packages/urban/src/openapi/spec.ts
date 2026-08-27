@@ -420,7 +420,8 @@ export function diffMcpToolProjection(
 /**
  * Every app shared-secret security scheme (ADR 0067/0059): the `apiKey` schemes in
  * `components.securitySchemes` presented in a request HEADER and pointing at an env var via
- * `x-nano-secret-env`, in document (authoring) order. Single source of truth for both the guard
+ * `x-nano-secret-env` (declared, even if empty — an empty pointer is a misconfiguration surfaced as
+ * 500 downstream, not "no scheme"), in document (authoring) order. Single source of truth for both the guard
  * selector (`sharedSecretSchemeName`) and its ambiguity check — a mutating MCP tool REUSES the
  * app's existing shared secret (the same one a `webhook` trigger or a guarded operation already
  * uses) instead of minting an MCP-specific synonym.
@@ -429,7 +430,15 @@ export function sharedSecretSchemeNames(doc: OpenApiDoc): string[] {
   const schemes = doc.components?.securitySchemes ?? {};
   const names: string[] = [];
   for (const [name, scheme] of Object.entries(schemes)) {
-    if (scheme.type === "apiKey" && (scheme.in ?? "header") === "header" && scheme["x-nano-secret-env"]) {
+    // Structural presence check (`typeof … === "string"`), NOT truthiness: a declared-but-EMPTY
+    // `x-nano-secret-env` is a misconfiguration, not "no scheme". Selecting it here lets
+    // `evaluateSecurity` surface it as a 500 (missing env-var pointer) — the same way it treats an
+    // empty pointer — instead of silently dropping the scheme so the guard reports a misleading 401.
+    if (
+      scheme.type === "apiKey" &&
+      (scheme.in ?? "header") === "header" &&
+      typeof scheme["x-nano-secret-env"] === "string"
+    ) {
       names.push(name);
     }
   }

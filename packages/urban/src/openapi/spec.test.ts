@@ -685,6 +685,24 @@ test("sharedSecretSchemeName: MULTIPLE candidate schemes are an explicit misconf
   );
 });
 
+test("sharedSecretSchemeNames: a declared-but-EMPTY x-nano-secret-env is still a candidate (→ 500 downstream, not a silent 401)", () => {
+  // An empty `x-nano-secret-env` is a misconfiguration, not "no scheme": a truthiness test would
+  // drop it so the guard reports a misleading "no shared-secret scheme" (401). A structural presence
+  // check keeps it selected so `evaluateSecurity` surfaces it as a 500, mirroring how it treats an
+  // empty env-var pointer.
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      securitySchemes: {
+        webhookKey: { type: "apiKey", in: "header", name: "X-Key", "x-nano-secret-env": "" },
+      },
+    },
+    paths: {},
+  };
+  assert.deepEqual(sharedSecretSchemeNames(doc), ["webhookKey"]);
+  assert.equal(sharedSecretSchemeName(doc), "webhookKey");
+});
+
 
 test("responseSchemaForStatus: a documented-but-bodyless status suppresses the default fallback", () => {
   const ops = collectOperations({

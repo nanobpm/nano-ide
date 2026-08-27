@@ -632,6 +632,60 @@ test("the explicit allowMutations opt-in authorizes a mutating tool without a cr
   assert.deepEqual(resolved, ["inc-9"]);
 });
 
+test("the allowMutations opt-in is loopback-only: with allowRemote on, mutations still require the shared secret", async () => {
+  // Regression guard for the failure class: a credential-free opt-in must NOT silently apply once
+  // the surface is opened to non-loopback callers, or mutating urban_debug_* tools would be exposed
+  // remotely with no guard at all. With allowMutations AND allowRemote both on, the bypass is
+  // ignored and the shared secret is still enforced (refused without it, allowed with it).
+  const cancelled: string[] = [];
+  const engine = fakeEngine({
+    cancelInstance: async ({ processInstanceKey }) => {
+      cancelled.push(processInstanceKey);
+    },
+  });
+  const remoteMutateEnv = (v: string) =>
+    v === "URBAN_MCP_ALLOW_MUTATIONS" || v === "URBAN_MCP_ALLOW_REMOTE"
+      ? "true"
+      : v === "NANO_WEBHOOK_KEY"
+        ? SECRET
+        : undefined;
+  const { router } = buildHarness({ engine, spec: GUARDED_SPEC, env: remoteMutateEnv });
+  const session = await connect(router);
+
+  // allowMutations is set, but because allowRemote is on it must NOT bypass the shared secret.
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "allowMutations must not bypass the guard when allowRemote is on");
+  assert.equal(JSON.parse(toolContentText(refused.result)).status, 401, "a remote-exposed mutation without the secret is 401");
+  assert.deepEqual(cancelled, [], "the engine mutation must not run for an unauthorized remote call");
+
+  // Presenting the app's shared secret still authorizes it (the shared-secret path is unchanged).
+  const authed = { ...session, headers: { ...session.headers, "X-Nano-Key": SECRET } };
+  const ok = await rpc(router, authed, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.notEqual(ok.result?.isError, true, "the shared secret must still authorize a mutation under allowRemote");
+  assert.deepEqual(cancelled, ["pi-1"]);
+});
+
+test("with allowMutations + allowRemote but no shared-secret scheme, mutations fail closed", async () => {
+  // The remote-exposed bypass being ignored must leave NO other credential-free path: with no
+  // shared-secret scheme configured either, the mutation is refused rather than silently allowed.
+  const engine = fakeEngine({ resolveIncident: async () => assert.fail("must not run") });
+  const remoteMutateEnv = (v: string) =>
+    v === "URBAN_MCP_ALLOW_MUTATIONS" || v === "URBAN_MCP_ALLOW_REMOTE" ? "true" : undefined;
+  const { router } = buildHarness({ engine, env: remoteMutateEnv });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_resolve_incident",
+    arguments: { incidentKey: "inc-9" },
+  });
+  assert.equal(refused.result?.isError, true, "a remote-exposed mutation with no scheme and no in-scope opt-in must fail closed");
+});
+
 test("with no shared-secret scheme and no opt-in, a mutating tool fails closed", async () => {
   const engine = fakeEngine({ setVariables: async () => assert.fail("must not run") });
   const { router } = buildHarness({ engine });

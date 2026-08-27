@@ -165,7 +165,10 @@ interface McpConfig {
   /** Explicit runtime opt-in that authorizes the framework MUTATING debug tools WITHOUT a
    *  shared-secret credential (ADR 0067 Slice 3). Defaults OFF: mutations then require the app's
    *  shared secret. An operator sets this to open mutations on a trusted, credential-less setup
-   *  (e.g. a purely local debugging box). */
+   *  (e.g. a purely local debugging box). It is honoured LOOPBACK-ONLY: when `allowRemote` is also
+   *  enabled the credential-free bypass is ignored and remote mutations still require the shared
+   *  secret, so opening the surface to non-loopback callers can never silently expose unguarded
+   *  mutating tools. */
   readonly allowMutations: boolean;
 }
 
@@ -770,15 +773,21 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
   });
 
   // Decide whether a mutating tool call is authorized. Either an explicit runtime opt-in
-  // (`mcp.allowMutations` / `URBAN_MCP_ALLOW_MUTATIONS`) opens mutations credential-free, OR the
-  // client presented the app's shared secret (the apiKey header scheme, via `x-nano-secret-env`).
-  // With no shared-secret scheme configured and no opt-in, mutations are refused (fail closed).
+  // (`mcp.allowMutations` / `URBAN_MCP_ALLOW_MUTATIONS`) opens mutations credential-free — but only
+  // LOOPBACK-ONLY (`!allowRemote`), so exposing the surface to non-loopback callers can never
+  // silently drop the guard — OR the client presented the app's shared secret (the apiKey header
+  // scheme, via `x-nano-secret-env`). With no shared-secret scheme configured and no (in-scope)
+  // opt-in, mutations are refused (fail closed).
   const NO_SHARED_SECRET_SCHEME_ERROR =
-    "mutating MCP tools require the app's shared secret (an apiKey header security scheme with x-nano-secret-env), or the explicit mcp.allowMutations opt-in";
+    "mutating MCP tools require the app's shared secret (an apiKey header security scheme with x-nano-secret-env), or the explicit mcp.allowMutations opt-in (honoured loopback-only, i.e. when mcp.allowRemote is off)";
   const authorizeMutation = async (
     headers: Record<string, string | string[] | undefined>,
   ): Promise<SecurityDecision> => {
-    if (config.allowMutations) return { ok: true };
+    // The credential-free opt-in is loopback-only: with `allowRemote` on, a non-loopback caller
+    // could otherwise reach mutating `urban_debug_*` tools with no shared-secret guard at all, which
+    // contradicts the "trusted, purely local box" intent. When remote exposure is enabled we ignore
+    // the bypass and fall through to require the shared secret.
+    if (config.allowMutations && !config.allowRemote) return { ok: true };
     const loaded = await loadSpecDoc();
     if (!loaded.doc && loaded.failed) {
       // A broken/unparseable spec is a server misconfiguration (500) — already logged by
@@ -844,7 +853,7 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
       `- Read the \`${SYSTEM_BRIEF_URI}\` resource first for the app's system model (processes, service-task call graph, decisions, ownership).`,
       "- App tools mirror the app's HTTP operations one-to-one: a tool call is equivalent to the corresponding `/app/api` HTTP call, validated identically and authorized exactly as that HTTP route by the operation's own OpenAPI `security` (an operation with no `security` is open — there is no extra MCP-level guard). An operation is exposed unless it opts out with the `x-mcp` extension (a security-relevant authoring switch).",
       `- \`${DEBUG_PREFIX}*\` READ tools are framework-owned process-debugging tools: engine truth (process instances, wait states, element instances, user tasks, incidents) and the ADR 0065 projection stores (instance state, open user tasks). They are unauthenticated on loopback.`,
-      `- \`${DEBUG_PREFIX}*\` MUTATING tools (cancel_instance, resolve_incident, retry_job, set_variables) are framework-GUARDED: present the app's shared secret as its apiKey header on the MCP connection, or the operator must set the mcp.allowMutations opt-in. A mutating call without the credential is refused. (App operation tools are NOT covered by this guard — they are authorized by their own OpenAPI \`security\`, above.)`,
+      `- \`${DEBUG_PREFIX}*\` MUTATING tools (cancel_instance, resolve_incident, retry_job, set_variables) are framework-GUARDED: present the app's shared secret as its apiKey header on the MCP connection, or the operator must set the mcp.allowMutations opt-in (honoured loopback-only — when mcp.allowRemote is enabled, mutations always require the shared secret). A mutating call without the credential is refused. (App operation tools are NOT covered by this guard — they are authorized by their own OpenAPI \`security\`, above.)`,
     ].join("\n");
 
   /** Build a fresh low-level MCP `Server` with this app's tools/resources/prompts wired. One is

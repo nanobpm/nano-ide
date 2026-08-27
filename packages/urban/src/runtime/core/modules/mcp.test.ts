@@ -1,10 +1,12 @@
-// Red/Green tests for the runtime-served MCP surface (ADR 0067, Slice 1). They drive real
-// JSON-RPC over the mounted `/app/mcp` route through the SDK transport — an initialize/tools-list/
-// tools-call handshake against a booted app — and assert: every non-excluded read-only app
-// operation projects to a tool whose input schema matches the spec; a mutating operation is
-// withheld; a tool call flows through the SAME `mountApi` delegate + validation as the HTTP call;
-// the framework debug tools return engine truth and ADR 0065 projection data; and the system-brief
-// resource + orientation prompt are served. Access gating (loopback-only, flag) is covered too.
+// Red/Green tests for the runtime-served MCP surface (ADR 0067). They drive real JSON-RPC over the
+// mounted `/app/mcp` route through the SDK transport — an initialize/tools-list/tools-call handshake
+// against a booted app — and assert: every non-excluded app operation projects to a tool whose
+// input schema matches the spec; an `x-mcp`-excluded operation is withheld; a tool call flows
+// through the SAME `mountApi` delegate + validation as the HTTP call; the framework debug tools
+// (read + mutating) return engine truth and ADR 0065 projection data; a MUTATING tool refuses
+// without the shared-secret guard credential and succeeds with it (while read tools stay open on
+// loopback); the spec↔tool parity guard fails on injected skew; and the system-brief resource +
+// orientation prompt are served. Access gating (loopback-only, flag) is covered too.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -30,6 +32,7 @@ import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
 import { evictExcessSessions, isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readMcpConfig } from "./mcp.ts";
+import { collectMcpToolProjection, diffMcpToolProjection, parseSpec } from "../../../openapi/spec.ts";
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
@@ -237,16 +240,59 @@ test("a POST without a session and without an initialize request is a 400", asyn
 
 // ---- tool projection --------------------------------------------------------------------------
 
-test("every read-only app operation projects to a tool; mutating operations are withheld", async () => {
+test("every app operation projects to a tool; read tools are annotated read-only, mutating ones destructive", async () => {
   const { router } = buildHarness();
   const session = await connect(router);
   const list = await rpc(router, session, "tools/list", {});
   const tools = list.result?.tools;
   assert.ok(Array.isArray(tools));
+  const byName = new Map(tools.map((t) => [Reflect.get(t, "name"), t]));
+  assert.ok(byName.has("getInvoice"), "read-only getInvoice must be a tool");
+  assert.ok(byName.has("listInvoices"), "read-only listInvoices must be a tool");
+  // Slice 3: mutating app operations ARE now projected (guarded by their OpenAPI security at
+  // dispatch, or open when the op declares none — matching the HTTP route), no longer withheld.
+  assert.ok(byName.has("createInvoice"), "mutating createInvoice must now be a tool (guarded, not withheld)");
+
+  const readAnn = Reflect.get(byName.get("getInvoice") ?? {}, "annotations");
+  assert.equal(Reflect.get(readAnn ?? {}, "readOnlyHint"), true, "a read op must be annotated read-only");
+  const mutAnn = Reflect.get(byName.get("createInvoice") ?? {}, "annotations");
+  assert.equal(Reflect.get(mutAnn ?? {}, "readOnlyHint"), false, "a mutating op must not be annotated read-only");
+  assert.equal(Reflect.get(mutAnn ?? {}, "destructiveHint"), true, "a mutating op must be annotated destructive");
+});
+
+test("an x-mcp-excluded operation is withheld from the tool surface while its siblings project", async () => {
+  const excludedSpec = JSON.stringify({
+    openapi: "3.1.0",
+    paths: {
+      "/things": {
+        get: { operationId: "listThings", summary: "read", responses: { "200": {} } },
+      },
+      "/things/reindex": {
+        post: {
+          operationId: "reindexThings",
+          summary: "operator-only, withheld",
+          "x-mcp": false,
+          responses: { "202": {} },
+        },
+      },
+    },
+  });
+  const { router } = buildHarness({ spec: excludedSpec });
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
   const names = tools.map((t) => Reflect.get(t, "name"));
-  assert.ok(names.includes("getInvoice"), "read-only getInvoice must be a tool");
-  assert.ok(names.includes("listInvoices"), "read-only listInvoices must be a tool");
-  assert.ok(!names.includes("createInvoice"), "mutating createInvoice must NOT be a tool in this slice");
+  assert.ok(names.includes("listThings"), "a non-excluded op must still project");
+  assert.ok(!names.includes("reindexThings"), "an x-mcp-excluded op must NOT appear as a tool");
+
+  // And it is unreachable by name too — CallTool resolves it to neither a debug nor an app tool.
+  const call = await router(
+    mcpPost({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "reindexThings", arguments: {} } }, session.headers),
+  );
+  const parsed = JSON.parse(call.body ?? "{}");
+  assert.ok(parsed.error, "an excluded op must not be callable");
+  assert.match(String(parsed.error.message), /no such tool/i);
 });
 
 test("a projected tool's input schema matches the spec's params", async () => {
@@ -445,6 +491,148 @@ test("the projection debug tools read the ADR 0065 canonical stores", async () =
     db.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// ---- mutation guard (Slice 3) -----------------------------------------------------------------
+
+// A spec that declares the app's shared-secret scheme (an apiKey header pointing at an env var via
+// `x-nano-secret-env`) — the credential the framework MUTATING tools require. REUSING the app's
+// existing shared secret, never an MCP-specific synonym (ADR 0067 §4).
+const GUARDED_SPEC = JSON.stringify({
+  openapi: "3.1.0",
+  components: {
+    securitySchemes: {
+      appSecret: { type: "apiKey", in: "header", name: "X-Nano-Key", "x-nano-secret-env": "NANO_WEBHOOK_KEY" },
+    },
+  },
+  paths: {
+    "/invoices": {
+      get: { operationId: "listInvoices", summary: "List invoices", responses: { "200": {} } },
+    },
+  },
+});
+
+const SECRET = "s3cr3t-value";
+const guardEnv = (v: string) => (v === "NANO_WEBHOOK_KEY" ? SECRET : undefined);
+
+test("a mutating framework tool refuses without the guard credential and succeeds with it", async () => {
+  const cancelled: string[] = [];
+  const engine = fakeEngine({
+    cancelInstance: async ({ processInstanceKey }) => {
+      cancelled.push(processInstanceKey);
+    },
+  });
+  const { router } = buildHarness({ engine, spec: GUARDED_SPEC, env: guardEnv });
+  const session = await connect(router);
+
+  // Without the credential the mutation is refused before the engine is touched.
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "a mutating tool must refuse without the guard credential");
+  assert.match(toolContentText(refused.result), /unauthorized/i);
+  assert.deepEqual(cancelled, [], "the engine mutation must not run for an unauthorized call");
+
+  // With the correct shared secret on the connection header the mutation runs.
+  const authedSession = { ...session, headers: { ...session.headers, "X-Nano-Key": SECRET } };
+  const ok = await rpc(router, authedSession, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.notEqual(ok.result?.isError, true, "a mutating tool must succeed with the guard credential");
+  assert.deepEqual(cancelled, ["pi-1"], "the engine mutation must run once authorized");
+
+  // A wrong credential is refused too (constant-time compare via evaluateSecurity).
+  const wrongSession = { ...session, headers: { ...session.headers, "X-Nano-Key": "nope" } };
+  const wrong = await rpc(router, wrongSession, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-2" },
+  });
+  assert.equal(wrong.result?.isError, true, "a wrong credential must be refused");
+  assert.deepEqual(cancelled, ["pi-1"], "a wrong-credential call must not run the mutation");
+});
+
+test("read tools work on loopback without any credential, even when a shared-secret scheme is declared", async () => {
+  const engine = fakeEngine({ searchIncidents: async () => [] });
+  const { router } = buildHarness({
+    engine,
+    spec: GUARDED_SPEC,
+    env: guardEnv,
+    modules: { "/app/operations/listInvoices": { default: () => ({ body: [{ id: "1" }] }) } },
+  });
+  const session = await connect(router);
+
+  // A read app operation dispatches with no credential (its GET route declares no security).
+  const appRead = await rpc(router, session, "tools/call", { name: "listInvoices", arguments: {} });
+  assert.notEqual(appRead.result?.isError, true, "a read app op must serve on loopback without a credential");
+  assert.deepEqual(JSON.parse(toolContentText(appRead.result)), [{ id: "1" }]);
+
+  // A read framework debug tool likewise needs no credential.
+  const dbgRead = await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_incidents",
+    arguments: { state: "ACTIVE" },
+  });
+  assert.notEqual(dbgRead.result?.isError, true, "a read debug tool must serve on loopback without a credential");
+});
+
+test("the explicit allowMutations opt-in authorizes a mutating tool without a credential", async () => {
+  const resolved: string[] = [];
+  const engine = fakeEngine({
+    resolveIncident: async ({ incidentKey }) => {
+      resolved.push(incidentKey);
+    },
+  });
+  // No shared-secret scheme in the spec; the runtime opt-in alone opens mutations.
+  const { router } = buildHarness({
+    engine,
+    env: (v) => (v === "URBAN_MCP_ALLOW_MUTATIONS" ? "true" : undefined),
+  });
+  const session = await connect(router);
+  const ok = await rpc(router, session, "tools/call", {
+    name: "urban_debug_resolve_incident",
+    arguments: { incidentKey: "inc-9" },
+  });
+  assert.notEqual(ok.result?.isError, true, "allowMutations must authorize a mutation with no credential");
+  assert.deepEqual(resolved, ["inc-9"]);
+});
+
+test("with no shared-secret scheme and no opt-in, a mutating tool fails closed", async () => {
+  const engine = fakeEngine({ setVariables: async () => assert.fail("must not run") });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_set_variables",
+    arguments: { scopeKey: "pi-1", variables: { x: 1 } },
+  });
+  assert.equal(refused.result?.isError, true, "a mutation must fail closed when nothing can authorize it");
+});
+
+// ---- spec ↔ tool parity guard (Slice 3) -------------------------------------------------------
+
+test("the spec↔tool parity guard reports drift on an injected skew and none in parity", () => {
+  const doc = parseSpec(
+    JSON.stringify({
+      openapi: "3.1.0",
+      paths: {
+        "/a": { get: { operationId: "readA", responses: { "200": {} } } },
+        "/b": { post: { operationId: "mutateB", responses: { "201": {} } } },
+        "/c": { post: { operationId: "hiddenC", "x-mcp": false, responses: { "202": {} } } },
+      },
+    }),
+  );
+  const projection = collectMcpToolProjection(doc);
+  // A snapshot identical to the current projection is in parity.
+  assert.deepEqual(diffMcpToolProjection(projection, projection), []);
+
+  // Inject skew: drop one op, flip another's mutating/excluded facts.
+  const skewed = projection
+    .filter((p) => p.operationId !== "readA")
+    .map((p) => (p.operationId === "hiddenC" ? { ...p, excluded: false } : p));
+  const drift = diffMcpToolProjection(skewed, projection);
+  assert.ok(drift.length >= 2, "both a missing op and a changed fact must be reported");
+  assert.ok(drift.some((l) => l.includes("readA")), "the dropped op must be reported");
+  assert.ok(drift.some((l) => l.includes("hiddenC")), "the flipped exclusion must be reported");
 });
 
 // ---- resource + prompt ------------------------------------------------------------------------

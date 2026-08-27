@@ -106,9 +106,18 @@ style of the repo's `check:*` drift gates such as `check:schema`) alarms if the
 projection ever diverges.
 
 The app declares only an **exclusion list** (convention: an `x-mcp` extension on the
-operation, defaulting to exposed). Operator-only doors stay operator-only — e.g.
-nano-workforce's `dispatchDeliveryGraph`, whose approval *is* a human clicking
-Dispatch in the cockpit (nwf ADR 0005), is never a tool.
+operation, defaulting to exposed). An operation opts out with either `x-mcp: false`
+or `x-mcp: { exclude: true }`; every other value (or its absence) leaves the
+operation exposed as a tool. **`x-mcp` is security-relevant and must be documented as
+such:** it is the one authoring switch that keeps an operator-only door out of the
+agent-facing tool surface, so it is parsed once in the same `collectOperations` walker
+the runtime and the parity guard both read (never a second source of truth to drift),
+and the spec↔tool parity guard (`check:mcp`, wired in CI beside `check:runtime`) fails
+the build on any skew between the spec's projected tool set and the committed snapshot —
+so silently exposing, hiding, or flipping the read/mutate class of an operation cannot
+land unreviewed. Operator-only doors stay operator-only — e.g. nano-workforce's
+`dispatchDeliveryGraph`, whose approval *is* a human clicking Dispatch in the cockpit
+(nwf ADR 0005), is never a tool.
 
 ### 3. Framework-owned debug tools over both planes
 
@@ -135,7 +144,10 @@ A fixed, app-agnostic tool family for process debugging, exposed for every app:
   credential, so loopback binding (the default; see §1) is what limits their
   exposure, and binding to a LAN interface exposes them unauthenticated. Its mutating
   tools (cancel instance, resolve/retry incident, set variables) require the app's
-  shared secret, or an explicit runtime opt-in.
+  shared secret (the `apiKey` header scheme below), or an explicit runtime opt-in
+  (`mcp.allowMutations` in the manifest / `URBAN_MCP_ALLOW_MUTATIONS=true`) that opens
+  them credential-free for a trusted, purely-local box. A mutating call without either
+  is refused; reads stay open on loopback regardless.
 - **App-operation tools inherit the OpenAPI `security` contract.** App operations are
   guarded exactly as the runtime already enforces them: `evaluateSecurity`
   (`modules/api.ts`) authorizes each call from the operation's declared `security`

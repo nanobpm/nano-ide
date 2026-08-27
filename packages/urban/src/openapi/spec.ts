@@ -187,6 +187,11 @@ export interface OperationInfo {
    *  else the document-level default, else `[]`). An empty list means the operation is open. */
   security: OpenApiSecurityRequirement[];
   eject: boolean;
+  /** Whether the operation opts OUT of MCP tool projection via the `x-mcp` extension (ADR 0067).
+   *  Defaults to `false` — an operation IS exposed as a tool unless it explicitly excludes itself.
+   *  Security-relevant: this is the single authoring switch that keeps an operator-only door (e.g.
+   *  a human-gated dispatch) out of the agent-facing tool surface. See {@link isMcpExcluded}. */
+  mcpExcluded: boolean;
   summary?: string;
 }
 
@@ -307,11 +312,125 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         responseSchemas: collectResponseSchemas(responses),
         security,
         eject: opRaw["x-urban-eject"] === true,
+        mcpExcluded: isMcpExcluded(opRaw["x-mcp"]),
         summary: typeof opRaw.summary === "string" ? opRaw.summary : undefined,
       });
     }
   }
   return out;
+}
+
+/**
+ * Read the `x-mcp` operation extension (ADR 0067 — MCP tool projection). An operation is EXPOSED as
+ * an MCP tool by default; it is excluded only when it says so explicitly, so a spec author opts a
+ * door OUT rather than every operation having to opt in. Recognised exclusion forms:
+ *   - `x-mcp: false`            — a terse boolean opt-out;
+ *   - `x-mcp: { exclude: true }` — the object form (room for future keys, e.g. per-tool metadata).
+ * Any other value (including `x-mcp: true` / `{ exclude: false }` / absent) leaves the operation
+ * exposed — fail-open to the documented default. This is a SECURITY-RELEVANT authoring rule: it is
+ * the one switch that keeps an operator-only operation out of the agent-facing tool surface, so it
+ * is enforced from the same single walker the runtime and the parity guard both read (no second
+ * source of truth to drift, ADR 0053).
+ */
+export function isMcpExcluded(ext: unknown): boolean {
+  if (ext === false) return true;
+  return isRecord(ext) && ext.exclude === true;
+}
+
+/** The HTTP methods MCP treats as read-only (safe, non-mutating). Every other method an operation
+ *  can declare is a mutation whose tool is guarded (ADR 0067 Slice 3). */
+const READ_ONLY_METHODS: readonly HttpMethodLower[] = ["get", "head"];
+
+/** Whether an operation's HTTP method mutates state — anything other than a safe read verb. Drives
+ *  the MCP read/mutate split: read tools are unguarded on loopback, mutating tools are gated. */
+export function isMutatingMethod(method: HttpMethodLower): boolean {
+  return !READ_ONLY_METHODS.includes(method);
+}
+
+/** One operation's MCP-tool projection facts: its id, HTTP method, whether it mutates, and whether
+ *  `x-mcp` excludes it from projection. This is the shared unit the runtime MCP surface AND the CI
+ *  spec↔tool parity guard both read — a single derivation of "which operations become tools", never
+ *  a second walker (ADR 0053). */
+export interface McpToolProjection {
+  operationId: string;
+  method: HttpMethodLower;
+  mutating: boolean;
+  excluded: boolean;
+}
+
+/**
+ * Project every operationId-bearing operation to its MCP-tool facts, in the stable
+ * `collectOperations` (path, method) order. Excluded operations are RETAINED here (flagged
+ * `excluded: true`) rather than dropped, so the parity guard can positively assert that an
+ * `x-mcp`-excluded door is present-but-withheld — the runtime drops them when it builds the live
+ * tool list. Derived entirely from {@link collectOperations}, so it can never diverge from what
+ * `mountApi` routes.
+ */
+export function collectMcpToolProjection(doc: OpenApiDoc): McpToolProjection[] {
+  return collectOperations(doc).map((op) => ({
+    operationId: op.operationId,
+    method: op.method,
+    mutating: isMutatingMethod(op.method),
+    excluded: op.mcpExcluded,
+  }));
+}
+
+/**
+ * Compare a previously-captured MCP-tool projection (the committed snapshot) against the projection
+ * freshly computed from the spec, returning a human-readable line for every skew — an operation the
+ * spec now projects that the snapshot lacks, one the snapshot still lists that the spec no longer
+ * projects, or one whose method / mutating / excluded facts changed. An empty array means the spec
+ * and the projected tool list are in parity. This is the pure core of the `check:mcp` CI drift gate
+ * (ADR 0067) — the same "generated derived artifact + fail-on-drift" pattern the repo already uses
+ * for `check:runtime` — and is unit-tested by feeding it an injected skew.
+ */
+export function diffMcpToolProjection(
+  snapshot: McpToolProjection[],
+  current: McpToolProjection[],
+): string[] {
+  const drift: string[] = [];
+  const byId = (list: McpToolProjection[]): Map<string, McpToolProjection> =>
+    new Map(list.map((p) => [p.operationId, p]));
+  const snapshotById = byId(snapshot);
+  const currentById = byId(current);
+  for (const [id, cur] of currentById) {
+    const snap = snapshotById.get(id);
+    if (!snap) {
+      drift.push(`+ ${id}: spec projects a tool the snapshot is missing (regenerate the snapshot)`);
+      continue;
+    }
+    if (snap.method !== cur.method || snap.mutating !== cur.mutating || snap.excluded !== cur.excluded) {
+      drift.push(
+        `~ ${id}: projection changed — snapshot {method:${snap.method}, mutating:${snap.mutating}, ` +
+          `excluded:${snap.excluded}} vs spec {method:${cur.method}, mutating:${cur.mutating}, ` +
+          `excluded:${cur.excluded}}`,
+      );
+    }
+  }
+  for (const id of snapshotById.keys()) {
+    if (!currentById.has(id)) {
+      drift.push(`- ${id}: snapshot lists a tool the spec no longer projects (regenerate the snapshot)`);
+    }
+  }
+  return drift;
+}
+
+/**
+ * The name of the app's shared-secret security scheme (ADR 0067/0059): the first `apiKey` scheme in
+ * `components.securitySchemes` presented in a request HEADER and pointing at an env var via
+ * `x-nano-secret-env`. This is the credential the framework MUTATING MCP tools require — REUSING the
+ * app's existing shared secret (the same one a `webhook` trigger or a guarded operation already
+ * uses) instead of minting an MCP-specific synonym. `undefined` when the app declares no such
+ * scheme, in which case the mutating tools stay closed unless an explicit runtime opt-in is set.
+ */
+export function sharedSecretSchemeName(doc: OpenApiDoc): string | undefined {
+  const schemes = doc.components?.securitySchemes ?? {};
+  for (const [name, scheme] of Object.entries(schemes)) {
+    if (scheme.type === "apiKey" && (scheme.in ?? "header") === "header" && scheme["x-nano-secret-env"]) {
+      return name;
+    }
+  }
+  return undefined;
 }
 
 /**

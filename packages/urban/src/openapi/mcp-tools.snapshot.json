@@ -1,0 +1,20 @@
+[
+  {
+    "operationId": "reindexWidgets",
+    "method": "post",
+    "mutating": true,
+    "excluded": true
+  },
+  {
+    "operationId": "listWidgets",
+    "method": "get",
+    "mutating": false,
+    "excluded": false
+  },
+  {
+    "operationId": "createWidget",
+    "method": "post",
+    "mutating": true,
+    "excluded": false
+  }
+]

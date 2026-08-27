@@ -1,0 +1,49 @@
+# Parity-guard fixture (ADR 0067 Slice 3) — NOT an app spec.
+#
+# This is the input to the spec↔tool parity guard (`scripts/gen-mcp-tools.ts`).
+# It exercises every branch of the MCP tool projection with a stable, minimal
+# document so `check:mcp` fails loudly the moment the walker's projection changes
+# without a matching, reviewed regeneration of `mcp-tools.snapshot.json`:
+#
+#   - a READ operation (GET)            → projected, non-mutating
+#   - a MUTATING operation (POST)       → projected, mutating (guarded at runtime)
+#   - an `x-mcp`-EXCLUDED operation      → present in the doc but withheld from the
+#                                          agent-facing tool surface (the security-
+#                                          relevant opt-out, `x-mcp: false`)
+#
+# Edit this fixture ONLY together with a reviewed `npm run gen:mcp-tools`.
+openapi: 3.1.0
+info:
+  title: mcp-parity-fixture
+  version: 0.0.0
+components:
+  securitySchemes:
+    appSecret:
+      type: apiKey
+      in: header
+      name: X-Nano-Key
+      x-nano-secret-env: NANO_WEBHOOK_KEY
+paths:
+  /widgets:
+    get:
+      operationId: listWidgets
+      summary: List widgets (read — projected, unguarded on loopback).
+      responses:
+        "200":
+          description: ok
+    post:
+      operationId: createWidget
+      summary: Create a widget (mutating — projected, guarded).
+      security:
+        - appSecret: []
+      responses:
+        "201":
+          description: created
+  /internal/reindex:
+    post:
+      operationId: reindexWidgets
+      summary: Operator-only reindex (withheld from the MCP tool surface).
+      x-mcp: false
+      responses:
+        "202":
+          description: accepted

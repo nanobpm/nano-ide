@@ -58,6 +58,16 @@ jobs:
           npm run gen:runtime -w packages/urban
           git diff --exit-code -- packages/urban/src/runtime/core/modules/runtime.gen.ts
 
+      # The MCP tool surface (ADR 0067) is PROJECTED from the OpenAPI spec by the
+      # single walker in packages/urban/src/openapi/spec.ts. A silent change to
+      # that projection — an operation starting/stopping being a tool, flipping
+      # read↔mutating, or gaining/losing its `x-mcp` exclusion — is a security-
+      # relevant surface change. The projection is captured as a committed
+      # snapshot (mcp-tools.snapshot.json) and this step fails on any spec↔tool
+      # skew. Regenerate + commit locally with `npm run gen:mcp-tools -w packages/urban`.
+      - name: MCP tool projection is in parity with the spec
+        run: npm run check:mcp -w packages/urban
+
   # db/migrations/*.sql are forward-only and applied in lexical filename order, so
   # the numeric prefix is load-bearing (see scripts/lib/migration-order.mjs). Two
   # branches that fork off the same state can each pick "the next free prefix N"

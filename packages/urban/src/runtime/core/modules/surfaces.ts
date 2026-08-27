@@ -216,7 +216,7 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
   // unconditionally (like `/app/agent`) so an MCP client always has a stable address. It projects
   // the app's read-only OpenAPI operations as tools from the SAME enumeration `mountApi` routes
   // from, plus framework-owned read-only process-debugging tools — zero app-side MCP code.
-  const mcp = mountMcp(ctx, app);
+  const mcp = mountMcp(ctx, app, api.routes);
   routes.push(...mcp.routes);
   enabled.push("mcp@/app/mcp");
 

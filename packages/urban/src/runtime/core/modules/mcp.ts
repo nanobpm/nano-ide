@@ -57,9 +57,10 @@ import type {
   UserTaskState,
   WaitStateType,
 } from "../host.ts";
+import { presentFormIdentifier } from "../host.ts";
 import { resolveBindMode } from "../manifest.ts";
 import { json, makeRouter, type Route } from "../router.ts";
-import { API_BASE, mountApi, readApiBinding } from "./api.ts";
+import { API_BASE, readApiBinding } from "./api.ts";
 import { resolveAppPath } from "./datasource.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
@@ -195,20 +196,33 @@ function toolQuery(op: OperationInfo, args: Record<string, unknown>): URLSearchP
   return query;
 }
 
+/** Whether an argument is absent for presence purposes: unset (`undefined`/`null`), or a string that
+ *  is empty or whitespace-only after trimming. This is the trimmed-presence rule
+ *  {@link presentFormIdentifier} enforces for form identifiers, reused here so MCP required/path args
+ *  and form resolution cannot drift on what "provided" means (a whitespace-only `"   "` is absent in
+ *  both). A non-string value (e.g. a numeric path id) is considered present. */
+function isBlankArg(value: unknown): boolean {
+  if (value === undefined || value === null) return true;
+  if (typeof value === "string") return presentFormIdentifier(value) === undefined;
+  return false;
+}
+
 /** The required path parameters an operation declares that the tool `args` did not supply. Unlike
  *  an HTTP request (whose path can't structurally omit a segment), a tool call can leave a
- *  `{param}` unset; `fillPath` would then substitute an empty string and silently mis-route (a 404
- *  route mismatch, or worse a different route shape), so a missing path arg is rejected up front. */
+ *  `{param}` unset or blank; `fillPath` would then substitute an empty string and silently mis-route
+ *  (a 404 route mismatch, or worse a different route shape), so a missing/blank path arg is rejected
+ *  up front. Blankness uses the shared trimmed-presence rule so a whitespace-only value is rejected
+ *  too. */
 function missingPathParams(op: OperationInfo, args: Record<string, unknown>): string[] {
   return op.parameters
-    .filter((p) => p.in === "path" && (args[p.name] === undefined || args[p.name] === null))
+    .filter((p) => p.in === "path" && isBlankArg(args[p.name]))
     .map((p) => p.name);
 }
 
 /** The `required` string keys a tool's `inputSchema` declares but the call omitted (absent, or not a
- *  non-empty string). Derived from the schema's own `required` array — the single source of truth —
- *  so declaring a field required is enough to have missing calls rejected rather than silently
- *  substituted with an empty string. */
+ *  non-empty-after-trim string). Derived from the schema's own `required` array — the single source
+ *  of truth — so declaring a field required is enough to have missing (or whitespace-only) calls
+ *  rejected rather than silently substituted with an empty string. */
 function missingRequiredArgs(inputSchema: Record<string, unknown>, args: Record<string, unknown>): string[] {
   const required = inputSchema.required;
   if (!Array.isArray(required)) return [];
@@ -216,7 +230,7 @@ function missingRequiredArgs(inputSchema: Record<string, unknown>, args: Record<
   for (const key of required) {
     if (typeof key !== "string") continue;
     const value = args[key];
-    if (typeof value !== "string" || value.length === 0) missing.push(key);
+    if (typeof value !== "string" || isBlankArg(value)) missing.push(key);
   }
   return missing;
 }
@@ -415,17 +429,18 @@ function buildDebugTools(app: AppApi): DebugTool[] {
  * `mcp-session-id`. The tool projection reuses the SAME OpenAPI enumeration and dispatch path as
  * `mountApi`, so a tool call is equivalent to the corresponding HTTP call.
  */
-export function mountMcp(ctx: RuntimeContext, app: AppApi): McpHandle {
+export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): McpHandle {
   const config = readMcpConfig(ctx.manifest, ctx.host.env);
   // The effective HTTP bind interface. When the app is bound to all interfaces, the
   // client-controlled `Host` header is not a trustworthy loopback signal (a remote caller can send
   // `Host: localhost`), so a loopback-only surface must refuse EVERY caller rather than trust it.
   const bindMode = resolveBindMode(ctx.manifest, ctx.host.env);
 
-  // Reuse the app's OpenAPI dispatch VERBATIM: `mountApi` owns the `/app/api` router (validation +
-  // delegate registry). A tool call is reconstructed into the operation's HTTP request and routed
-  // through it, so tool and HTTP call share one code path (no forked dispatcher).
-  const apiRouter = makeRouter(mountApi(ctx, app).routes);
+  // Reuse the app's OpenAPI dispatch VERBATIM: `mountSurfaces` already built the `/app/api` router
+  // (validation + delegate registry) via `mountApi` and hands us its routes here, so tool and HTTP
+  // calls share ONE dispatcher instance (no forked dispatcher, no second doc/delegate cache). A tool
+  // call is reconstructed into the operation's HTTP request and routed through this same router.
+  const apiRouter = makeRouter(apiRoutes);
 
   // The read-only operation table, projected lazily from the same spec `mountApi` reads and cached
   // (mirroring `mountApi`'s lazy `loadDoc`). A missing/broken spec degrades to "no app tools"

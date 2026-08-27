@@ -24,6 +24,7 @@ import type {
   SqliteDb,
 } from "../host.ts";
 import { makeRouter } from "../router.ts";
+import { mountApi } from "./api.ts";
 import { makeGateway } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
@@ -147,7 +148,7 @@ function buildHarness(opts: {
     log: createLogger(() => {}),
   };
   const ctx: RuntimeContext = { root: "/app", manifest, engine, host };
-  const handle = mountMcp(ctx, app);
+  const handle = mountMcp(ctx, app, mountApi(ctx, app).routes);
   const router = makeRouter(handle.routes);
   return { router: (r) => Promise.resolve(router(r)), imported };
 }
@@ -320,6 +321,13 @@ test("a tool call missing a required path parameter is rejected before dispatch"
   assert.match(text, /missing required path parameter/i);
   assert.match(text, /\bid\b/);
   assert.equal(delegateRan, false, "the delegate must not run for a missing-path-param tool call");
+
+  // A whitespace-only path arg is blank under the shared trimmed-presence rule: it would `fillPath`
+  // to a blank segment and mis-route, so it is rejected the same as an omitted param.
+  const blankCall = await rpc(router, session, "tools/call", { name: "getInvoice", arguments: { id: "  " } });
+  assert.equal(blankCall.result?.isError, true, "a whitespace-only path param must also be rejected");
+  assert.match(toolContentText(blankCall.result), /missing required path parameter/i);
+  assert.equal(delegateRan, false, "the delegate must not run for a blank-path-param tool call");
 });
 
 // ---- framework debug tools --------------------------------------------------------------------
@@ -425,6 +433,16 @@ test("a debug tool call missing a required parameter is rejected before its hand
   });
   assert.equal(emptyCall.result?.isError, true, "an empty required arg must also be rejected");
   assert.equal(handlerRan, false, "the debug handler must not run for an empty required-arg call");
+
+  // A whitespace-only value is absent under the same trimmed-presence rule `presentFormIdentifier`
+  // enforces — it would otherwise slip through and query the engine with a blank identifier.
+  const blankCall = await rpc(router, session, "tools/call", {
+    name: "urban_debug_get_element_instance",
+    arguments: { elementInstanceKey: "   " },
+  });
+  assert.equal(blankCall.result?.isError, true, "a whitespace-only required arg must also be rejected");
+  assert.match(toolContentText(blankCall.result), /missing required parameter/i);
+  assert.equal(handlerRan, false, "the debug handler must not run for a whitespace-only required-arg call");
 });
 
 test("the system brief is served as an MCP resource", async () => {

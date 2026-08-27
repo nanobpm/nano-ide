@@ -8,16 +8,20 @@
 //
 // Derive-don't-declare (ADR 0053): the app tool list is PROJECTED from the SAME OpenAPI
 // enumeration `mountApi` routes from — `parseSpec` + `collectOperations` (openapi/spec.ts), read
-// through `readApiBinding` — never a second spec walker. Each read-only operation becomes one tool
+// through `readApiBinding` — never a second spec walker. Each projected operation becomes one tool
 // whose `operationId` is the tool name and whose request-body/params schema is the tool input
 // schema; a tool call is reconstructed into the operation's HTTP request and dispatched through the
 // SAME `mountApi` router, so it flows through the identical delegate registry + validation the HTTP
 // route uses (a tool call is equivalent to the corresponding HTTP call).
 //
-// This slice (ADR 0067 Slice 1) exposes READ-ONLY app operations only (GET/HEAD) — mutating
-// operations and their guards are Slice 3. It also exposes framework-owned read-only
-// process-debugging tools over BOTH truth planes: engine truth via existing `EngineClient` methods,
-// and the ADR 0065 canonical projection stores (`urban_instance_state` / `urban_open_user_tasks`).
+// This module (ADR 0067) exposes app operations as MCP tools — each authorized exactly as its own
+// HTTP route by the operation's OpenAPI `security` (a read or mutating op with no `security` is
+// open; there is NO extra MCP-level shared-secret guard on app operations). An operation opts out
+// of projection with the `x-mcp` extension. It also exposes framework-owned process-debugging tools
+// over BOTH truth planes: engine truth via existing `EngineClient` methods (reads, plus mutating
+// unstick tools — cancel/resolve/retry/set-variables, which ARE guarded by the app's shared secret
+// or the `mcp.allowMutations` opt-in), and the ADR 0065 canonical projection stores
+// (`urban_instance_state` / `urban_open_user_tasks`).
 // The app's system brief (`/app/agent.json`) is served as an MCP resource, plus one orientation
 // entry under MCP prompts.
 //
@@ -44,15 +48,22 @@ import { GENERATED_DIR } from "../../../toolkit/artifact.ts";
 import { SYSTEM_BRIEF_JSON } from "../../../toolkit/derivers/system-brief.ts";
 import {
   collectOperations,
+  evaluateSecurity,
+  isMutatingMethod,
+  type OpenApiDoc,
   type OperationInfo,
   parseSpec,
+  type SecurityDecision,
+  sharedSecretSchemeName,
 } from "../../../openapi/spec.ts";
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage } from "../guards.ts";
 import type {
   ElementInstanceWaitStateFilter,
+  EngineIncidentState,
   HttpRequest,
   HttpResponse,
+  IncidentFilter,
   ProcessInstanceState,
   SqliteDb,
   UserTaskFilter,
@@ -151,6 +162,14 @@ interface McpConfig {
   readonly enabled: boolean;
   /** Whether non-loopback callers are allowed. Defaults OFF (loopback-only). */
   readonly allowRemote: boolean;
+  /** Explicit runtime opt-in that authorizes the framework MUTATING debug tools WITHOUT a
+   *  shared-secret credential (ADR 0067 Slice 3). Defaults OFF: mutations then require the app's
+   *  shared secret. An operator sets this to open mutations on a trusted, credential-less setup
+   *  (e.g. a purely local debugging box). It is honoured LOOPBACK-ONLY: when `allowRemote` is also
+   *  enabled the credential-free bypass is ignored and remote mutations still require the shared
+   *  secret, so opening the surface to non-loopback callers can never silently expose unguarded
+   *  mutating tools. */
+  readonly allowMutations: boolean;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -158,11 +177,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /**
- * Resolve the MCP access policy from the manifest (`mcp: { enabled?, allowRemote? }`, read
- * reflectively until the app schema folds the field in — mirroring how `readApiBinding` reads
- * `api`) and the environment (`URBAN_MCP_ENABLED`, `URBAN_MCP_ALLOW_REMOTE`). The env flags win so
- * an operator can force the surface off (or open it to a non-loopback bind) without editing the
- * manifest. Enabled defaults ON and access defaults to loopback-only ("defaults ON for loopback").
+ * Resolve the MCP access policy from the manifest
+ * (`mcp: { enabled?, allowRemote?, allowMutations? }`, read reflectively until the app schema folds
+ * the field in — mirroring how `readApiBinding` reads `api`) and the environment
+ * (`URBAN_MCP_ENABLED`, `URBAN_MCP_ALLOW_REMOTE`, `URBAN_MCP_ALLOW_MUTATIONS`). The env flags win so
+ * an operator can force the surface off (or open it to a non-loopback bind, or enable mutating
+ * tools) without editing the manifest. Enabled defaults ON and access defaults to loopback-only
+ * ("defaults ON for loopback"); `allowMutations` defaults OFF (mutating tools stay closed).
  */
 export function readMcpConfig(manifest: unknown, env: (name: string) => string | undefined): McpConfig {
   const raw = manifest && typeof manifest === "object" ? Reflect.get(manifest, "mcp") : undefined;
@@ -171,14 +192,19 @@ export function readMcpConfig(manifest: unknown, env: (name: string) => string |
   // surprisingly (e.g. the string `"false"` is not a boolean `false`).
   const rawEnabled = isRecord(raw) ? Reflect.get(raw, "enabled") : undefined;
   const rawAllowRemote = isRecord(raw) ? Reflect.get(raw, "allowRemote") : undefined;
+  const rawAllowMutations = isRecord(raw) ? Reflect.get(raw, "allowMutations") : undefined;
   const manifestEnabled = typeof rawEnabled === "boolean" ? rawEnabled : undefined;
   const manifestAllowRemote = typeof rawAllowRemote === "boolean" ? rawAllowRemote : undefined;
+  const manifestAllowMutations = typeof rawAllowMutations === "boolean" ? rawAllowMutations : undefined;
   const envEnabled = env("URBAN_MCP_ENABLED");
   const envAllowRemote = env("URBAN_MCP_ALLOW_REMOTE");
+  const envAllowMutations = env("URBAN_MCP_ALLOW_MUTATIONS");
   const enabled = envEnabled === "false" ? false : envEnabled === "true" ? true : manifestEnabled !== false;
   const allowRemote =
     envAllowRemote === "true" ? true : envAllowRemote === "false" ? false : manifestAllowRemote === true;
-  return { enabled, allowRemote };
+  const allowMutations =
+    envAllowMutations === "true" ? true : envAllowMutations === "false" ? false : manifestAllowMutations === true;
+  return { enabled, allowRemote, allowMutations };
 }
 
 /** The host portion of an HTTP `Host` header, lower-cased and stripped of any `:port` (and of the
@@ -203,10 +229,25 @@ export function isLoopbackRequest(req: HttpRequest): boolean {
   return name === undefined || name === "localhost" || name === "127.0.0.1" || name === "::1";
 }
 
-/** True for a read-only operation — the only operations this slice projects as tools. Mutating
- *  operations (POST/PUT/PATCH/DELETE) are withheld until Slice 3 adds them behind a guard. */
-function isReadOnlyOperation(op: OperationInfo): boolean {
-  return op.method === "get" || op.method === "head";
+/** Read a header value from the SDK's per-request `requestInfo.headers` map (lower-cased keys,
+ *  values `string | string[] | undefined`). A repeated header (`string[]`, as Node's raw adapter
+ *  surfaces it) is comma-joined to MATCH `Headers.get()` semantics — the same read `mountApi` and
+ *  the reconstructed `toHttpRequest` use for OpenAPI route enforcement — so the shared-secret guard
+ *  cannot diverge from route enforcement on a repeated credential header. Returns `undefined` when
+ *  absent. Used to read the shared-secret credential the client presents on the MCP connection for a
+ *  mutating tool call. */
+export function readHeader(headers: Record<string, string | string[] | undefined>, name: string): string | undefined {
+  const value = headers[name.toLowerCase()];
+  if (Array.isArray(value)) return value.join(", ");
+  return value;
+}
+
+/** A minimal read of the `x-mcp` extension for a projected operation is done at parse time
+ *  (`OperationInfo.mcpExcluded`); here we only need the mutation classification, shared with the CI
+ *  parity guard via {@link isMutatingMethod}. Kept as a named predicate for readability at the call
+ *  sites (tool annotations + guard). */
+function isMutatingOperation(op: OperationInfo): boolean {
+  return isMutatingMethod(op.method);
 }
 
 /** A JSON Schema (OpenAPI object subset) describing a tool's input, derived from an operation's
@@ -301,16 +342,29 @@ export function missingRequiredArgs(inputSchema: Record<string, unknown>, args: 
 
 /** Reconstruct the HTTP request an operation tool call is equivalent to, ready to hand to the
  *  reused `mountApi` router. The JSON body is the tool's `body` argument (when the op declares one).
- */
-function toHttpRequest(op: OperationInfo, args: Record<string, unknown>): HttpRequest {
+ *  The MCP connection's request headers are FORWARDED (with `content-type` pinned to JSON) so the
+ *  reused router's `evaluateSecurity` sees the client's credential: a mutating (or a secured
+ *  read-only) app operation is then guarded exactly as its HTTP route is — the app operation tools
+ *  inherit the OpenAPI `security` contract rather than a bespoke MCP gate (ADR 0067 §4). */
+function toHttpRequest(
+  op: OperationInfo,
+  args: Record<string, unknown>,
+  forwardHeaders: Record<string, string | string[] | undefined>,
+): HttpRequest {
   const bodyText = op.requestBodySchema !== undefined && args.body !== undefined
     ? JSON.stringify(args.body)
     : "";
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(forwardHeaders)) {
+    if (typeof value === "string") headers.set(key, value);
+    else if (Array.isArray(value)) for (const v of value) headers.append(key, v);
+  }
+  headers.set("content-type", "application/json");
   return {
     method: op.method.toUpperCase(),
     path: fillPath(op, args),
     query: toolQuery(op, args),
-    headers: new Headers({ "content-type": "application/json" }),
+    headers,
     text: () => Promise.resolve(bodyText),
   };
 }
@@ -328,6 +382,31 @@ function textResult(value: unknown, isError = false): {
 function readString(args: Record<string, unknown>, key: string): string | undefined {
   const v = args[key];
   return typeof v === "string" ? v : undefined;
+}
+
+/** Read an OPTIONAL string argument in its TRIMMED present form, or `undefined` when it is missing,
+ *  non-string, or blank/whitespace-only. The canonical read for identifying keys and filter values
+ *  (processInstanceKey/elementId/assignee/candidateGroup): it applies the SAME
+ *  {@link presentFormIdentifier} trimmed-presence rule that `missingRequiredArgs`/{@link isBlankArg}
+ *  use for presence, so a padded value like `"  pi-1  "` normalizes to `"pi-1"` instead of reaching
+ *  the engine untrimmed — where a filter would silently match nothing and a keyed lookup would target
+ *  a whitespace-padded entity that does not exist. The single source of truth {@link requireString}
+ *  also derives from, so required and optional reads cannot drift on how they normalize. */
+function readPresentString(args: Record<string, unknown>, key: string): string | undefined {
+  return presentFormIdentifier(readString(args, key));
+}
+
+/** Read a REQUIRED non-empty string argument, TRIMMED, or throw `InvalidParams`. The canonical guard
+ *  the mutating debug tools use for their identifying keys (processInstanceKey/incidentKey/jobKey/
+ *  scopeKey): a missing, non-string, or blank value fails fast before any engine state is touched,
+ *  rather than silently degrading to `""` and performing a broken/misleading mutation. Derived from
+ *  {@link readPresentString} — the same trimmed-presence rule {@link isBlankArg} (hence
+ *  `missingRequiredArgs`) uses — so a padded key like `"  pi-1  "` cannot pass the required-arg check
+ *  yet reach the engine untrimmed and mis-target the entity. */
+function requireString(args: Record<string, unknown>, key: string): string {
+  const present = readPresentString(args, key);
+  if (present === undefined) throw new McpError(ErrorCode.InvalidParams, `${key} must be a non-empty string`);
+  return present;
 }
 
 function readStringArray(args: Record<string, unknown>, key: string): string[] | undefined {
@@ -355,20 +434,45 @@ function readWaitStateType(args: Record<string, unknown>, key: string): WaitStat
     : undefined;
 }
 
-/** One framework-owned read-only debug tool: its MCP descriptor plus a handler that reads engine
- *  truth or a projection store and returns JSON. */
+/** Narrow an argument to a real engine incident state — the `"UNKNOWN"` client-side sentinel is
+ *  deliberately NOT a selector (see `IncidentState`/`IncidentFilter`), so it is rejected here. */
+function readIncidentState(args: Record<string, unknown>, key: string): EngineIncidentState | undefined {
+  const v = args[key];
+  return v === "ACTIVE" || v === "MIGRATED" || v === "PENDING" || v === "RESOLVED" ? v : undefined;
+}
+
+/** Read a plain JSON object argument (an MCP `object` input), else `undefined`. Used for the
+ *  `set_variables` payload — an arbitrary variable map handed to the engine verbatim. */
+function readObject(args: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  const v = args[key];
+  return isRecord(v) ? v : undefined;
+}
+
+/** Read a finite integer argument (for a job's retry count), else `undefined`. */
+function readInteger(args: Record<string, unknown>, key: string): number | undefined {
+  const v = args[key];
+  return typeof v === "number" && Number.isInteger(v) ? v : undefined;
+}
+
+/** One framework-owned debug tool: its MCP descriptor plus a handler that reads engine truth / a
+ *  projection store, or (for a `mutating` tool) performs an unstick operation. A `mutating` tool is
+ *  gated by the shared-secret guard before its handler runs (ADR 0067 §4); a read tool is not. */
 interface DebugTool {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
+  /** Whether the tool mutates engine state — gates it behind the shared-secret guard and flips the
+   *  `readOnlyHint` annotation off in `tools/list`. Read tools omit it (default read-only). */
+  readonly mutating?: boolean;
   run(args: Record<string, unknown>): Promise<unknown>;
 }
 
 const OPTIONAL_STRING = { type: "string" } as const;
 
 /** Build the framework debug tools, closing over the app's engine (truth plane) and default data
- *  source (the ADR 0065 projection stores). The engine tools consume only EXISTING `EngineClient`
- *  methods — no seam extension in this slice. */
+ *  source (the ADR 0065 projection stores). READ tools consume the engine's read accessors and the
+ *  projection stores; MUTATING tools (ADR 0067 Slice 3, gated by the shared-secret guard) drive the
+ *  Slice 2 seam extension — cancel an instance, resolve/retry an incident, set variables. */
 function buildDebugTools(app: AppApi): DebugTool[] {
   const projectionDb = (): SqliteDb | undefined =>
     app.data.hasDefaultSource() ? app.data.source().db : undefined;
@@ -409,9 +513,9 @@ function buildDebugTools(app: AppApi): DebugTool[] {
       },
       run: (args) => {
         const filter: ElementInstanceWaitStateFilter = {};
-        const pik = readString(args, "processInstanceKey");
+        const pik = readPresentString(args, "processInstanceKey");
         if (pik) filter.processInstanceKey = pik;
-        const elementId = readString(args, "elementId");
+        const elementId = readPresentString(args, "elementId");
         if (elementId) filter.elementId = elementId;
         const waitStateType = readWaitStateType(args, "waitStateType");
         if (waitStateType) filter.waitStateType = waitStateType;
@@ -426,7 +530,7 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         properties: { elementInstanceKey: OPTIONAL_STRING },
         required: ["elementInstanceKey"],
       },
-      run: (args) => app.engine.getElementInstance(readString(args, "elementInstanceKey") ?? ""),
+      run: (args) => app.engine.getElementInstance(requireString(args, "elementInstanceKey")),
     },
     {
       name: `${DEBUG_PREFIX}search_user_tasks`,
@@ -442,15 +546,112 @@ function buildDebugTools(app: AppApi): DebugTool[] {
       },
       run: (args) => {
         const filter: UserTaskFilter & { state?: UserTaskState } = {};
-        const pik = readString(args, "processInstanceKey");
+        const pik = readPresentString(args, "processInstanceKey");
         if (pik) filter.processInstanceKey = pik;
-        const assignee = readString(args, "assignee");
+        const assignee = readPresentString(args, "assignee");
         if (assignee) filter.assignee = assignee;
-        const candidateGroup = readString(args, "candidateGroup");
+        const candidateGroup = readPresentString(args, "candidateGroup");
         if (candidateGroup) filter.candidateGroup = candidateGroup;
         const state = readUserTaskState(args, "state");
         if (state) filter.state = state;
         return app.engine.searchUserTasks(filter);
+      },
+    },
+    {
+      name: `${DEBUG_PREFIX}search_incidents`,
+      description:
+        "Engine truth: search incidents (stuck tokens — a job out of retries, an unhandled error, a failed gateway) by process instance and/or state. Read-only; each result carries the incidentKey/jobKey the mutating unstick tools take.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          processInstanceKey: OPTIONAL_STRING,
+          state: { type: "string", enum: ["ACTIVE", "MIGRATED", "PENDING", "RESOLVED"] },
+        },
+      },
+      run: (args) => {
+        const filter: IncidentFilter = {};
+        const pik = readPresentString(args, "processInstanceKey");
+        if (pik) filter.processInstanceKey = pik;
+        const state = readIncidentState(args, "state");
+        if (state) filter.state = state;
+        return app.engine.searchIncidents(filter);
+      },
+    },
+    {
+      name: `${DEBUG_PREFIX}cancel_instance`,
+      description: "MUTATING: cancel a running process instance. Requires the shared-secret guard.",
+      mutating: true,
+      inputSchema: {
+        type: "object",
+        properties: { processInstanceKey: OPTIONAL_STRING },
+        required: ["processInstanceKey"],
+      },
+      run: async (args) => {
+        const processInstanceKey = requireString(args, "processInstanceKey");
+        await app.engine.cancelInstance({ processInstanceKey });
+        return { cancelled: processInstanceKey };
+      },
+    },
+    {
+      name: `${DEBUG_PREFIX}resolve_incident`,
+      description:
+        "MUTATING: resolve an open incident by key, unblocking the parked token (bump the job's retries first for a jobNoRetries incident — see retry_job). Requires the shared-secret guard.",
+      mutating: true,
+      inputSchema: {
+        type: "object",
+        properties: { incidentKey: OPTIONAL_STRING },
+        required: ["incidentKey"],
+      },
+      run: async (args) => {
+        const incidentKey = requireString(args, "incidentKey");
+        await app.engine.resolveIncident({ incidentKey });
+        return { resolved: incidentKey };
+      },
+    },
+    {
+      name: `${DEBUG_PREFIX}retry_job`,
+      description:
+        "MUTATING: set a failed job's remaining retries (making it activatable again — the 'retry' half of unsticking a jobNoRetries incident). Requires the shared-secret guard.",
+      mutating: true,
+      inputSchema: {
+        type: "object",
+        properties: { jobKey: OPTIONAL_STRING, retries: { type: "integer", minimum: 0 } },
+        required: ["jobKey", "retries"],
+      },
+      run: async (args) => {
+        const jobKey = requireString(args, "jobKey");
+        const retries = readInteger(args, "retries");
+        if (retries === undefined || retries < 0)
+          throw new McpError(ErrorCode.InvalidParams, "retries must be a non-negative integer");
+        await app.engine.updateJobRetries({ jobKey, retries });
+        return { jobKey, retries };
+      },
+    },
+    {
+      name: `${DEBUG_PREFIX}set_variables`,
+      description:
+        "MUTATING: merge variables into a scope (a process-instance or element-instance key); set `local` true to keep them in that local scope. Repairs state before resolving an incident. Requires the shared-secret guard.",
+      mutating: true,
+      inputSchema: {
+        type: "object",
+        properties: {
+          scopeKey: OPTIONAL_STRING,
+          variables: { type: "object" },
+          local: { type: "boolean" },
+        },
+        required: ["scopeKey", "variables"],
+      },
+      run: async (args) => {
+        const scopeKey = requireString(args, "scopeKey");
+        const variables = readObject(args, "variables");
+        if (variables === undefined) throw new McpError(ErrorCode.InvalidParams, "variables must be an object");
+        const input: { scopeKey: string; variables: Record<string, unknown>; local?: boolean } = {
+          scopeKey,
+          variables,
+        };
+        if (args.local === true) input.local = true;
+        await app.engine.setVariables(input);
+        return { scopeKey, set: Object.keys(variables) };
       },
     },
     {
@@ -462,9 +663,9 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         required: ["processInstanceKey"],
       },
       run: (args) => {
+        const key = requireString(args, "processInstanceKey");
         const db = projectionDb();
         if (!db) return Promise.resolve(null);
-        const key = readString(args, "processInstanceKey") ?? "";
         return Promise.resolve(new InstanceStateStore(db).getState(key) ?? null);
       },
     },
@@ -477,9 +678,9 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         required: ["processInstanceKey"],
       },
       run: (args) => {
+        const key = requireString(args, "processInstanceKey");
         const db = projectionDb();
         if (!db) return Promise.resolve([]);
-        const key = readString(args, "processInstanceKey") ?? "";
         return Promise.resolve(new OpenUserTasksStore(db).openTasks(key));
       },
     },
@@ -506,24 +707,54 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
   // call is reconstructed into the operation's HTTP request and routed through this same router.
   const apiRouter = makeRouter(apiRoutes);
 
-  // The read-only operation table, projected lazily from the same spec `mountApi` reads and cached
-  // (mirroring `mountApi`'s lazy `loadDoc`). A missing/broken spec degrades to "no app tools"
-  // rather than breaking the whole MCP endpoint (the debug tools + resource + prompt still serve).
-  let opsPromise: Promise<OperationInfo[]> | undefined;
-  const loadReadOnlyOps = (): Promise<OperationInfo[]> => {
-    if (!opsPromise) {
-      opsPromise = (async () => {
+  // The parsed OpenAPI document, loaded lazily from the same spec `mountApi` reads and cached
+  // (mirroring `mountApi`'s lazy `loadDoc`). Shared by the tool projection AND the mutation guard's
+  // shared-secret-scheme resolution, so both read one parse of one spec. The absent-`doc` outcome is
+  // discriminated: `failed: false` is a legitimately-absent binding (no app tools, no shared-secret
+  // scheme); `failed: true` is a broken/unparseable spec (a server misconfiguration, already logged)
+  // — the mutation guard needs the distinction to answer a `401` (nothing to authorize against) vs a
+  // `500` (spec broken, can't even tell) rather than conflating both as unauthorized. A failure is
+  // not cached, so a later request retries.
+  type SpecLoad = { doc: OpenApiDoc } | { doc: undefined; failed: boolean };
+  let docPromise: Promise<SpecLoad> | undefined;
+  const loadSpecDoc = (): Promise<SpecLoad> => {
+    if (!docPromise) {
+      docPromise = (async (): Promise<SpecLoad> => {
         const binding = readApiBinding(ctx.manifest);
-        if (!binding) return [];
+        if (!binding) return { doc: undefined, failed: false };
         const text = await ctx.host.readTextFile(resolveAppPath(ctx.root, binding.spec));
-        const readOnly = collectOperations(parseSpec(text)).filter(isReadOnlyOperation);
+        return { doc: parseSpec(text) };
+      })().catch((e) => {
+        docPromise = undefined; // don't cache the failure — let a later request retry
+        ctx.host.log("warn", "mcp: failed to load the app OpenAPI spec", { error: errorMessage(e) });
+        return { doc: undefined, failed: true };
+      });
+    }
+    return docPromise;
+  };
+
+  // The projected app operation table (read AND mutating), derived from the same enumeration
+  // `mountApi` routes. `x-mcp`-excluded operations are dropped (the security-relevant opt-out) as
+  // are reserved-namespace ids; the read/mutate split is applied at annotation + guard time via
+  // `isMutatingOperation`, never a forked walker. Memoized PER parsed spec document (keyed on the
+  // cached doc promise `loadSpecDoc` returns): `tools/list` and `tools/call` both hit this on every
+  // request, so recomputing `collectOperations` + the reserved-namespace filter (and re-emitting its
+  // warn) each time is avoidable overhead and log spam. When the spec fails to load `loadSpecDoc`
+  // resets its promise, so the key changes and the projection is recomputed on the retry.
+  let projectedOps: { docKey: Promise<SpecLoad>; ops: Promise<OperationInfo[]> } | undefined;
+  const loadProjectedOps = (): Promise<OperationInfo[]> => {
+    const docKey = loadSpecDoc();
+    if (projectedOps?.docKey !== docKey) {
+      const ops = docKey.then(({ doc }) => {
+        if (!doc) return [];
+        const projected = collectOperations(doc).filter((op) => !op.mcpExcluded);
         // The `urban_debug_` namespace is framework-reserved (see DEBUG_PREFIX). A `urban_debug_*`
         // operationId is a legal safe path segment, so an app could declare one — but `CallTool`
         // resolves `debugByName` before app ops, so such an op would be shadowed by the framework
         // tool AND surface a duplicate name in `tools/list`. Drop reserved-namespace app ops here
         // (the single projection source both `tools/list` and `CallTool` read), warning per drop,
         // so the collision is impossible by construction rather than order-dependent.
-        return readOnly.filter((op) => {
+        return projected.filter((op) => {
           if (op.operationId.startsWith(DEBUG_PREFIX)) {
             ctx.host.log("warn", "mcp: dropped app operation using reserved framework tool namespace", {
               operationId: op.operationId,
@@ -533,21 +764,85 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
           }
           return true;
         });
-      })().catch((e) => {
-        opsPromise = undefined; // don't cache the failure — let a later request retry
-        ctx.host.log("warn", "mcp: failed to project app operations as tools", { error: errorMessage(e) });
-        return [];
       });
+      projectedOps = { docKey, ops };
     }
-    return opsPromise;
+    return projectedOps.ops;
   };
 
   const debugTools = buildDebugTools(app);
   const debugByName = new Map(debugTools.map((t) => [t.name, t]));
 
+  // A minimal `OperationInfo` that requires ONLY the app's shared-secret scheme, so the framework
+  // mutating tools reuse `evaluateSecurity` VERBATIM (constant-time compare, misconfig→500, absent
+  // credential→401) rather than a bespoke comparison — the same enforcement path an app operation's
+  // own `security` takes. It is never routed; only its `security` field is read.
+  const sharedSecretOp = (schemeName: string): OperationInfo => ({
+    operationId: "__mcp_mutation_guard__",
+    method: "post",
+    path: "/__mcp_mutation_guard__",
+    parameters: [],
+    requestBodyRequired: false,
+    responseSchemas: [],
+    security: [{ [schemeName]: [] }],
+    eject: false,
+    mcpExcluded: false,
+  });
+
+  // Decide whether a mutating tool call is authorized. Either an explicit runtime opt-in
+  // (`mcp.allowMutations` / `URBAN_MCP_ALLOW_MUTATIONS`) opens mutations credential-free — but only
+  // LOOPBACK-ONLY (`!allowRemote`), so exposing the surface to non-loopback callers can never
+  // silently drop the guard — OR the client presented the app's shared secret (the apiKey header
+  // scheme, via `x-nano-secret-env`). With no shared-secret scheme configured and no (in-scope)
+  // opt-in, mutations are refused (fail closed).
+  const NO_SHARED_SECRET_SCHEME_ERROR =
+    "mutating MCP tools require the app's shared secret (an apiKey header security scheme with x-nano-secret-env), or the explicit mcp.allowMutations opt-in (honoured loopback-only, i.e. when mcp.allowRemote is off)";
+  const authorizeMutation = async (
+    headers: Record<string, string | string[] | undefined>,
+  ): Promise<SecurityDecision> => {
+    // The credential-free opt-in is loopback-only: with `allowRemote` on, a non-loopback caller
+    // could otherwise reach mutating `urban_debug_*` tools with no shared-secret guard at all, which
+    // contradicts the "trusted, purely local box" intent. When remote exposure is enabled we ignore
+    // the bypass and fall through to require the shared secret.
+    if (config.allowMutations && !config.allowRemote) return { ok: true };
+    const loaded = await loadSpecDoc();
+    if (!loaded.doc && loaded.failed) {
+      // A broken/unparseable spec is a server misconfiguration (500) — already logged by
+      // `loadSpecDoc` — not a missing credential (401): with no parsed spec we cannot even tell
+      // whether a shared-secret scheme exists to authorize against, so mirror `mountApi` and surface
+      // a 500 (the CallTool handler logs it) rather than a misleading 401.
+      return {
+        ok: false,
+        status: 500,
+        error:
+          "mutating MCP tools cannot be authorized: the app OpenAPI spec failed to load (server misconfiguration — see the logged 'mcp: failed to load the app OpenAPI spec' error)",
+      };
+    }
+    // A misconfigured spec — more than one candidate shared-secret scheme, so which one guards
+    // mutations would depend on authoring order — is a 500 (see `sharedSecretSchemeName`), not a
+    // missing/bad credential. Surface it like the other misconfiguration branches above.
+    let schemeName: string | undefined;
+    try {
+      schemeName = loaded.doc ? sharedSecretSchemeName(loaded.doc) : undefined;
+    } catch (e) {
+      return { ok: false, status: 500, error: errorMessage(e) };
+    }
+    if (!loaded.doc || !schemeName) {
+      return { ok: false, status: 401, error: NO_SHARED_SECRET_SCHEME_ERROR };
+    }
+    return evaluateSecurity(
+      loaded.doc,
+      sharedSecretOp(schemeName),
+      (name) => readHeader(headers, name),
+      () => undefined,
+      (envVar) => ctx.host.env(envVar),
+    );
+  };
+
   const dispatchOperationTool = async (
     op: OperationInfo,
     args: Record<string, unknown>,
+    headers: Record<string, string | string[] | undefined>,
   ): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> => {
     const missing = missingPathParams(op, args);
     if (missing.length > 0) {
@@ -558,7 +853,10 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
         true,
       );
     }
-    const res = await apiRouter(toHttpRequest(op, args));
+    // Forward the MCP connection's headers so the reused router enforces the operation's own
+    // OpenAPI `security` (a mutating — or secured read — app op is guarded exactly as its HTTP
+    // route). A `401`/`403`/`500` from that enforcement flows back as an error tool result.
+    const res = await apiRouter(toHttpRequest(op, args, headers));
     const status = res.status ?? 200;
     return textResult(res.body ?? "", status >= 400);
   };
@@ -578,9 +876,9 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
       "This endpoint is the app's runtime-served MCP surface (ADR 0067).",
       "",
       `- Read the \`${SYSTEM_BRIEF_URI}\` resource first for the app's system model (processes, service-task call graph, decisions, ownership).`,
-      "- App tools mirror the app's read-only HTTP operations one-to-one: a tool call is equivalent to the corresponding `/app/api` HTTP call, validated identically.",
-      `- \`${DEBUG_PREFIX}*\` tools are framework-owned read-only process-debugging tools: engine truth (process instances, wait states, element instances, user tasks) and the ADR 0065 projection stores (instance state, open user tasks).`,
-      "- This slice is read-only; mutating tools are added in a later slice behind an access guard.",
+      "- App tools mirror the app's HTTP operations one-to-one: a tool call is equivalent to the corresponding `/app/api` HTTP call, validated identically and authorized exactly as that HTTP route by the operation's own OpenAPI `security` (an operation with no `security` is open — there is no extra MCP-level guard). An operation is exposed unless it opts out with the `x-mcp` extension (a security-relevant authoring switch).",
+      `- \`${DEBUG_PREFIX}*\` READ tools are framework-owned process-debugging tools: engine truth (process instances, wait states, element instances, user tasks, incidents) and the ADR 0065 projection stores (instance state, open user tasks). They are unauthenticated on loopback.`,
+      `- \`${DEBUG_PREFIX}*\` MUTATING tools (cancel_instance, resolve_incident, retry_job, set_variables) are framework-GUARDED: present the app's shared secret as its apiKey header on the MCP connection, or the operator must set the mcp.allowMutations opt-in (honoured loopback-only — when mcp.allowRemote is enabled, mutations always require the shared secret). A mutating call without the credential is refused. (App operation tools are NOT covered by this guard — they are authorized by their own OpenAPI \`security\`, above.)`,
     ].join("\n");
 
   /** Build a fresh low-level MCP `Server` with this app's tools/resources/prompts wired. One is
@@ -592,27 +890,52 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
     );
 
     server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const ops = await loadReadOnlyOps();
-      const appTools = ops.map((op) => ({
-        name: op.operationId,
-        description: op.summary ?? `${op.method.toUpperCase()} ${op.path}`,
-        inputSchema: toolInputSchema(op),
-        annotations: { readOnlyHint: true },
-      }));
+      const ops = await loadProjectedOps();
+      const appTools = ops.map((op) => {
+        const mutating = isMutatingOperation(op);
+        return {
+          name: op.operationId,
+          description: op.summary ?? `${op.method.toUpperCase()} ${op.path}`,
+          inputSchema: toolInputSchema(op),
+          annotations: { readOnlyHint: !mutating, destructiveHint: mutating },
+        };
+      });
       const frameworkTools = debugTools.map((t) => ({
         name: t.name,
         description: t.description,
         inputSchema: t.inputSchema,
-        annotations: { readOnlyHint: true },
+        annotations: { readOnlyHint: !t.mutating, destructiveHint: t.mutating === true },
       }));
       return { tools: [...appTools, ...frameworkTools] };
     });
 
-    server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
       const { name } = request.params;
       const args = isRecord(request.params.arguments) ? request.params.arguments : {};
+      // The client presents its shared-secret credential as a header on the MCP connection; the SDK
+      // surfaces the request's headers here via `requestInfo`. Empty when a host cannot supply them
+      // (then a mutating call falls back to refuse unless the runtime opt-in is set).
+      const headers = extra.requestInfo?.headers ?? {};
       const debug = debugByName.get(name);
       if (debug) {
+        if (debug.mutating) {
+          const authz = await authorizeMutation(headers);
+          if (!authz.ok) {
+            const status = authz.status ?? 401;
+            // Mirror `mountApi`'s security handling: a `500` refusal means the shared-secret scheme
+            // is misconfigured (unknown/unsupported scheme, or an unset secret env var) rather than a
+            // bad/absent credential. Log it — as `mountApi` does for its OpenAPI security — so an
+            // operator can diagnose the misconfiguration, and carry the status in the error payload
+            // so a client can distinguish a `500` misconfig from a `401` unauthorized.
+            if (status === 500) {
+              ctx.host.log("error", "mcp mutating tool security is misconfigured (ADR 0059)", {
+                tool: name,
+                reason: authz.error,
+              });
+            }
+            return textResult({ error: authz.error ?? "unauthorized", status }, true);
+          }
+        }
         const missing = missingRequiredArgs(debug.inputSchema, args);
         if (missing.length > 0) {
           // Fail fast like an operation-tool validation error, instead of substituting an empty
@@ -628,12 +951,14 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
           return textResult({ error: errorMessage(e) }, true);
         }
       }
-      const ops = await loadReadOnlyOps();
+      const ops = await loadProjectedOps();
       const op = ops.find((o) => o.operationId === name);
       if (!op) {
         throw new McpError(ErrorCode.MethodNotFound, `no such tool: ${name}`);
       }
-      return dispatchOperationTool(op, args);
+      // App operation tools inherit their OpenAPI `security` — the forwarded headers let the reused
+      // router enforce it, so a mutating (or secured read) app op is guarded exactly as its HTTP route.
+      return dispatchOperationTool(op, args, headers);
     });
 
     server.setRequestHandler(ListResourcesRequestSchema, async () => ({
@@ -808,7 +1133,12 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
     routes,
     enabled: config.enabled,
     describe: () => ({
-      mcp: { path: MCP_PATH, enabled: config.enabled, loopbackOnly: !config.allowRemote },
+      mcp: {
+        path: MCP_PATH,
+        enabled: config.enabled,
+        loopbackOnly: !config.allowRemote,
+        allowMutations: config.allowMutations,
+      },
     }),
   };
 }

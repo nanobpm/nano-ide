@@ -1,10 +1,12 @@
-// Red/Green tests for the runtime-served MCP surface (ADR 0067, Slice 1). They drive real
-// JSON-RPC over the mounted `/app/mcp` route through the SDK transport — an initialize/tools-list/
-// tools-call handshake against a booted app — and assert: every non-excluded read-only app
-// operation projects to a tool whose input schema matches the spec; a mutating operation is
-// withheld; a tool call flows through the SAME `mountApi` delegate + validation as the HTTP call;
-// the framework debug tools return engine truth and ADR 0065 projection data; and the system-brief
-// resource + orientation prompt are served. Access gating (loopback-only, flag) is covered too.
+// Red/Green tests for the runtime-served MCP surface (ADR 0067). They drive real JSON-RPC over the
+// mounted `/app/mcp` route through the SDK transport — an initialize/tools-list/tools-call handshake
+// against a booted app — and assert: every non-excluded app operation projects to a tool whose
+// input schema matches the spec; an `x-mcp`-excluded operation is withheld; a tool call flows
+// through the SAME `mountApi` delegate + validation as the HTTP call; the framework debug tools
+// (read + mutating) return engine truth and ADR 0065 projection data; a MUTATING tool refuses
+// without the shared-secret guard credential and succeeds with it (while read tools stay open on
+// loopback); the spec↔tool parity guard fails on injected skew; and the system-brief resource +
+// orientation prompt are served. Access gating (loopback-only, flag) is covered too.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -29,7 +31,8 @@ import { makeGateway } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
-import { evictExcessSessions, isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readMcpConfig } from "./mcp.ts";
+import { evictExcessSessions, isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readHeader, readMcpConfig } from "./mcp.ts";
+import { collectMcpToolProjection, diffMcpToolProjection, parseSpec } from "../../../openapi/spec.ts";
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
@@ -98,9 +101,16 @@ function fakeEngine(overrides: Partial<EngineClient> = {}): EngineClient {
   };
 }
 
+interface LogEntry {
+  level: "debug" | "info" | "warn" | "error";
+  msg: string;
+  fields?: Record<string, unknown>;
+}
+
 interface Harness {
   router: (r: HttpRequest) => Promise<HttpResponse>;
   imported: string[];
+  logs: LogEntry[];
 }
 
 function buildHarness(opts: {
@@ -119,6 +129,7 @@ function buildHarness(opts: {
   const imported: string[] = [];
   const briefExists = opts.briefExists ?? true;
   const spec = opts.spec ?? SPEC;
+  const logs: LogEntry[] = [];
   const host: HostContext = {
     runtime: "node",
     env,
@@ -139,7 +150,9 @@ function buildHarness(opts: {
     },
     serveHttp: async () => ({ port: 0, stop: async () => {} }),
     now: () => 0,
-    log: () => {},
+    log: (level, msg, fields) => {
+      logs.push({ level, msg, fields });
+    },
   };
   const manifest: AppManifest = { schemaVersion: 1, id: "t", name: "T" };
   Reflect.set(manifest, "api", { spec: "openapi.json" });
@@ -156,7 +169,7 @@ function buildHarness(opts: {
   const ctx: RuntimeContext = { root: "/app", manifest, engine, host };
   const handle = mountMcp(ctx, app, mountApi(ctx, app).routes);
   const router = makeRouter(handle.routes);
-  return { router: (r) => Promise.resolve(router(r)), imported };
+  return { router: (r) => Promise.resolve(router(r)), imported, logs };
 }
 
 // ---- MCP JSON-RPC driver ----------------------------------------------------------------------
@@ -237,16 +250,59 @@ test("a POST without a session and without an initialize request is a 400", asyn
 
 // ---- tool projection --------------------------------------------------------------------------
 
-test("every read-only app operation projects to a tool; mutating operations are withheld", async () => {
+test("every app operation projects to a tool; read tools are annotated read-only, mutating ones destructive", async () => {
   const { router } = buildHarness();
   const session = await connect(router);
   const list = await rpc(router, session, "tools/list", {});
   const tools = list.result?.tools;
   assert.ok(Array.isArray(tools));
+  const byName = new Map(tools.map((t) => [Reflect.get(t, "name"), t]));
+  assert.ok(byName.has("getInvoice"), "read-only getInvoice must be a tool");
+  assert.ok(byName.has("listInvoices"), "read-only listInvoices must be a tool");
+  // Slice 3: mutating app operations ARE now projected (guarded by their OpenAPI security at
+  // dispatch, or open when the op declares none — matching the HTTP route), no longer withheld.
+  assert.ok(byName.has("createInvoice"), "mutating createInvoice must now be a tool (guarded, not withheld)");
+
+  const readAnn = Reflect.get(byName.get("getInvoice") ?? {}, "annotations");
+  assert.equal(Reflect.get(readAnn ?? {}, "readOnlyHint"), true, "a read op must be annotated read-only");
+  const mutAnn = Reflect.get(byName.get("createInvoice") ?? {}, "annotations");
+  assert.equal(Reflect.get(mutAnn ?? {}, "readOnlyHint"), false, "a mutating op must not be annotated read-only");
+  assert.equal(Reflect.get(mutAnn ?? {}, "destructiveHint"), true, "a mutating op must be annotated destructive");
+});
+
+test("an x-mcp-excluded operation is withheld from the tool surface while its siblings project", async () => {
+  const excludedSpec = JSON.stringify({
+    openapi: "3.1.0",
+    paths: {
+      "/things": {
+        get: { operationId: "listThings", summary: "read", responses: { "200": {} } },
+      },
+      "/things/reindex": {
+        post: {
+          operationId: "reindexThings",
+          summary: "operator-only, withheld",
+          "x-mcp": false,
+          responses: { "202": {} },
+        },
+      },
+    },
+  });
+  const { router } = buildHarness({ spec: excludedSpec });
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
   const names = tools.map((t) => Reflect.get(t, "name"));
-  assert.ok(names.includes("getInvoice"), "read-only getInvoice must be a tool");
-  assert.ok(names.includes("listInvoices"), "read-only listInvoices must be a tool");
-  assert.ok(!names.includes("createInvoice"), "mutating createInvoice must NOT be a tool in this slice");
+  assert.ok(names.includes("listThings"), "a non-excluded op must still project");
+  assert.ok(!names.includes("reindexThings"), "an x-mcp-excluded op must NOT appear as a tool");
+
+  // And it is unreachable by name too — CallTool resolves it to neither a debug nor an app tool.
+  const call = await router(
+    mcpPost({ jsonrpc: "2.0", id: 9, method: "tools/call", params: { name: "reindexThings", arguments: {} } }, session.headers),
+  );
+  const parsed = JSON.parse(call.body ?? "{}");
+  assert.ok(parsed.error, "an excluded op must not be callable");
+  assert.match(String(parsed.error.message), /no such tool/i);
 });
 
 test("a projected tool's input schema matches the spec's params", async () => {
@@ -404,6 +460,31 @@ test("an app operationId in the reserved urban_debug_ namespace can't shadow a f
   assert.deepEqual(JSON.parse(text), [snapshot]);
 });
 
+test("the reserved-namespace drop warns once, not on every tools/list and tools/call", async () => {
+  // The projected op table is memoized per parsed spec doc, so `collectOperations` + the reserved-
+  // namespace filter (which emits this warn) runs once — NOT on every request. Guards against the
+  // recompute/log-spam defect class: an app that accidentally declares a `urban_debug_*` op must not
+  // spam a warn on each of the many `tools/list`/`tools/call` requests a session makes.
+  const collidingSpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/shadow": {
+        get: { operationId: "urban_debug_search_process_instances", responses: { "200": {} } },
+      },
+    },
+  });
+  const engine = fakeEngine({ searchProcessInstances: async () => [] });
+  const { router, logs } = buildHarness({ engine, spec: collidingSpec });
+  const session = await connect(router);
+
+  await rpc(router, session, "tools/list", {});
+  await rpc(router, session, "tools/list", {});
+  await rpc(router, session, "tools/call", { name: "urban_debug_search_process_instances", arguments: { state: "ACTIVE" } });
+
+  const drops = logs.filter((l) => l.msg.includes("reserved framework tool namespace"));
+  assert.equal(drops.length, 1, "the reserved-namespace drop must warn exactly once across many requests");
+});
+
 test("the projection debug tools read the ADR 0065 canonical stores", async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-mcp-proj-"));
   const host = createNodeHost({ cwd: dir, log: () => {} });
@@ -445,6 +526,437 @@ test("the projection debug tools read the ADR 0065 canonical stores", async () =
     db.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+// ---- mutation guard (Slice 3) -----------------------------------------------------------------
+
+// A repeated credential header must read the SAME under the MCP guard as under OpenAPI route
+// enforcement. `mountApi`/`toHttpRequest` read it via `Headers.get()`, which comma-joins repeated
+// values; `readHeader` must match that (not pick the first) so the shared-secret guard cannot
+// diverge from route enforcement on a `string[]` header (as Node's raw adapter surfaces it).
+test("readHeader comma-joins a repeated header to match Headers.get() semantics", () => {
+  // Baseline: a single string value is returned verbatim; a missing header is undefined.
+  assert.equal(readHeader({ "x-nano-key": "abc" }, "X-Nano-Key"), "abc");
+  assert.equal(readHeader({}, "X-Nano-Key"), undefined);
+  // A repeated header (string[]) is joined with ", " — exactly what `Headers.get()` returns for the
+  // reconstructed request in `toHttpRequest`, so the guard reads the identical credential string.
+  const joined = readHeader({ "x-nano-key": ["a", "b"] }, "X-Nano-Key");
+  const viaHeaders = (() => {
+    const h = new Headers();
+    for (const v of ["a", "b"]) h.append("X-Nano-Key", v);
+    return h.get("X-Nano-Key") ?? undefined;
+  })();
+  assert.equal(joined, viaHeaders, "readHeader must match Headers.get() for a repeated header");
+});
+
+// A spec that declares the app's shared-secret scheme (an apiKey header pointing at an env var via
+// `x-nano-secret-env`) — the credential the framework MUTATING tools require. REUSING the app's
+// existing shared secret, never an MCP-specific synonym (ADR 0067 §4).
+const GUARDED_SPEC = JSON.stringify({
+  openapi: "3.1.0",
+  components: {
+    securitySchemes: {
+      appSecret: { type: "apiKey", in: "header", name: "X-Nano-Key", "x-nano-secret-env": "NANO_WEBHOOK_KEY" },
+    },
+  },
+  paths: {
+    "/invoices": {
+      get: { operationId: "listInvoices", summary: "List invoices", responses: { "200": {} } },
+    },
+  },
+});
+
+const SECRET = "s3cr3t-value";
+const guardEnv = (v: string) => (v === "NANO_WEBHOOK_KEY" ? SECRET : undefined);
+
+test("a mutating framework tool refuses without the guard credential and succeeds with it", async () => {
+  const cancelled: string[] = [];
+  const engine = fakeEngine({
+    cancelInstance: async ({ processInstanceKey }) => {
+      cancelled.push(processInstanceKey);
+    },
+  });
+  const { router } = buildHarness({ engine, spec: GUARDED_SPEC, env: guardEnv });
+  const session = await connect(router);
+
+  // Without the credential the mutation is refused before the engine is touched.
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "a mutating tool must refuse without the guard credential");
+  assert.match(toolContentText(refused.result), /unauthorized/i);
+  assert.deepEqual(cancelled, [], "the engine mutation must not run for an unauthorized call");
+
+  // With the correct shared secret on the connection header the mutation runs.
+  const authedSession = { ...session, headers: { ...session.headers, "X-Nano-Key": SECRET } };
+  const ok = await rpc(router, authedSession, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.notEqual(ok.result?.isError, true, "a mutating tool must succeed with the guard credential");
+  assert.deepEqual(cancelled, ["pi-1"], "the engine mutation must run once authorized");
+
+  // A wrong credential is refused too (constant-time compare via evaluateSecurity).
+  const wrongSession = { ...session, headers: { ...session.headers, "X-Nano-Key": "nope" } };
+  const wrong = await rpc(router, wrongSession, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-2" },
+  });
+  assert.equal(wrong.result?.isError, true, "a wrong credential must be refused");
+  assert.deepEqual(cancelled, ["pi-1"], "a wrong-credential call must not run the mutation");
+});
+
+test("read tools work on loopback without any credential, even when a shared-secret scheme is declared", async () => {
+  const engine = fakeEngine({ searchIncidents: async () => [] });
+  const { router } = buildHarness({
+    engine,
+    spec: GUARDED_SPEC,
+    env: guardEnv,
+    modules: { "/app/operations/listInvoices": { default: () => ({ body: [{ id: "1" }] }) } },
+  });
+  const session = await connect(router);
+
+  // A read app operation dispatches with no credential (its GET route declares no security).
+  const appRead = await rpc(router, session, "tools/call", { name: "listInvoices", arguments: {} });
+  assert.notEqual(appRead.result?.isError, true, "a read app op must serve on loopback without a credential");
+  assert.deepEqual(JSON.parse(toolContentText(appRead.result)), [{ id: "1" }]);
+
+  // A read framework debug tool likewise needs no credential.
+  const dbgRead = await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_incidents",
+    arguments: { state: "ACTIVE" },
+  });
+  assert.notEqual(dbgRead.result?.isError, true, "a read debug tool must serve on loopback without a credential");
+});
+
+test("the explicit allowMutations opt-in authorizes a mutating tool without a credential", async () => {
+  const resolved: string[] = [];
+  const engine = fakeEngine({
+    resolveIncident: async ({ incidentKey }) => {
+      resolved.push(incidentKey);
+    },
+  });
+  // No shared-secret scheme in the spec; the runtime opt-in alone opens mutations.
+  const { router } = buildHarness({
+    engine,
+    env: (v) => (v === "URBAN_MCP_ALLOW_MUTATIONS" ? "true" : undefined),
+  });
+  const session = await connect(router);
+  const ok = await rpc(router, session, "tools/call", {
+    name: "urban_debug_resolve_incident",
+    arguments: { incidentKey: "inc-9" },
+  });
+  assert.notEqual(ok.result?.isError, true, "allowMutations must authorize a mutation with no credential");
+  assert.deepEqual(resolved, ["inc-9"]);
+});
+
+test("the allowMutations opt-in is loopback-only: with allowRemote on, mutations still require the shared secret", async () => {
+  // Regression guard for the failure class: a credential-free opt-in must NOT silently apply once
+  // the surface is opened to non-loopback callers, or mutating urban_debug_* tools would be exposed
+  // remotely with no guard at all. With allowMutations AND allowRemote both on, the bypass is
+  // ignored and the shared secret is still enforced (refused without it, allowed with it).
+  const cancelled: string[] = [];
+  const engine = fakeEngine({
+    cancelInstance: async ({ processInstanceKey }) => {
+      cancelled.push(processInstanceKey);
+    },
+  });
+  const remoteMutateEnv = (v: string) =>
+    v === "URBAN_MCP_ALLOW_MUTATIONS" || v === "URBAN_MCP_ALLOW_REMOTE"
+      ? "true"
+      : v === "NANO_WEBHOOK_KEY"
+        ? SECRET
+        : undefined;
+  const { router } = buildHarness({ engine, spec: GUARDED_SPEC, env: remoteMutateEnv });
+  const session = await connect(router);
+
+  // allowMutations is set, but because allowRemote is on it must NOT bypass the shared secret.
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "allowMutations must not bypass the guard when allowRemote is on");
+  assert.equal(JSON.parse(toolContentText(refused.result)).status, 401, "a remote-exposed mutation without the secret is 401");
+  assert.deepEqual(cancelled, [], "the engine mutation must not run for an unauthorized remote call");
+
+  // Presenting the app's shared secret still authorizes it (the shared-secret path is unchanged).
+  const authed = { ...session, headers: { ...session.headers, "X-Nano-Key": SECRET } };
+  const ok = await rpc(router, authed, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.notEqual(ok.result?.isError, true, "the shared secret must still authorize a mutation under allowRemote");
+  assert.deepEqual(cancelled, ["pi-1"]);
+});
+
+test("with allowMutations + allowRemote but no shared-secret scheme, mutations fail closed", async () => {
+  // The remote-exposed bypass being ignored must leave NO other credential-free path: with no
+  // shared-secret scheme configured either, the mutation is refused rather than silently allowed.
+  const engine = fakeEngine({ resolveIncident: async () => assert.fail("must not run") });
+  const remoteMutateEnv = (v: string) =>
+    v === "URBAN_MCP_ALLOW_MUTATIONS" || v === "URBAN_MCP_ALLOW_REMOTE" ? "true" : undefined;
+  const { router } = buildHarness({ engine, env: remoteMutateEnv });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_resolve_incident",
+    arguments: { incidentKey: "inc-9" },
+  });
+  assert.equal(refused.result?.isError, true, "a remote-exposed mutation with no scheme and no in-scope opt-in must fail closed");
+});
+
+test("with no shared-secret scheme and no opt-in, a mutating tool fails closed", async () => {
+  const engine = fakeEngine({ setVariables: async () => assert.fail("must not run") });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_set_variables",
+    arguments: { scopeKey: "pi-1", variables: { x: 1 } },
+  });
+  assert.equal(refused.result?.isError, true, "a mutation must fail closed when nothing can authorize it");
+});
+
+test("a mutating tool refused for a misconfigured shared secret logs a 500 and surfaces the status", async () => {
+  // The spec declares a shared-secret scheme, but its secret env var is unset — a server
+  // misconfiguration (500), not a bad credential (401). Like `mountApi`, the MCP guard must log it
+  // for operators and carry the 500 status in the error payload so a client can tell them apart.
+  const engine = fakeEngine({ cancelInstance: async () => assert.fail("must not run") });
+  const { router, logs } = buildHarness({ engine, spec: GUARDED_SPEC, env: () => undefined });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "a misconfigured shared secret must refuse the mutation");
+  const payload = JSON.parse(toolContentText(refused.result));
+  assert.equal(payload.status, 500, "a misconfig refusal must surface status 500, not 401");
+  assert.match(payload.error, /misconfigured/i);
+  const misconfigLogs = logs.filter((l) => l.level === "error" && l.msg.includes("misconfigured"));
+  assert.equal(misconfigLogs.length, 1, "a 500-class refusal must be logged for operators");
+  assert.equal(misconfigLogs[0].fields?.tool, "urban_debug_cancel_instance");
+});
+
+test("a mutating tool refused for a missing credential surfaces a 401 status without an error log", async () => {
+  const engine = fakeEngine({ cancelInstance: async () => assert.fail("must not run") });
+  const { router, logs } = buildHarness({ engine, spec: GUARDED_SPEC, env: guardEnv });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "a missing credential must refuse the mutation");
+  const payload = JSON.parse(toolContentText(refused.result));
+  assert.equal(payload.status, 401, "a missing/invalid credential must surface status 401");
+  assert.equal(
+    logs.filter((l) => l.level === "error" && l.msg.includes("misconfigured")).length,
+    0,
+    "a plain unauthorized (401) is not a misconfig and must not be logged as one",
+  );
+});
+
+test("a mutating tool refused because the OpenAPI spec failed to load surfaces a 500, not a 401", async () => {
+  // A broken/unparseable spec is a server misconfiguration: the guard cannot tell whether a
+  // shared-secret scheme exists, so it must surface a 500 (logged for operators) rather than a
+  // misleading 401 that looks like a missing credential.
+  const engine = fakeEngine({ cancelInstance: async () => assert.fail("must not run") });
+  // Valid JSON but not an object at the root — `parseSpec` throws, so `loadSpecDoc` fails to load.
+  const { router, logs } = buildHarness({ engine, spec: "[1, 2, 3]", env: guardEnv });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "a broken spec must refuse the mutation");
+  const payload = JSON.parse(toolContentText(refused.result));
+  assert.equal(payload.status, 500, "a spec-load failure must surface status 500, not 401");
+  assert.match(payload.error, /failed to load/i);
+  const loadWarns = logs.filter((l) => l.level === "warn" && l.msg.includes("failed to load the app OpenAPI spec"));
+  assert.equal(loadWarns.length >= 1, true, "the spec-load failure must be logged");
+  const misconfigLogs = logs.filter((l) => l.level === "error" && l.msg.includes("misconfigured"));
+  assert.equal(misconfigLogs.length, 1, "a 500-class refusal must be logged for operators");
+  assert.equal(misconfigLogs[0].fields?.tool, "urban_debug_cancel_instance");
+});
+
+test("an authorized mutating tool rejects a blank/non-string key or negative retries before touching the engine", async () => {
+  const touched: string[] = [];
+  const engine = fakeEngine({
+    cancelInstance: async () => {
+      touched.push("cancelInstance");
+    },
+    resolveIncident: async () => {
+      touched.push("resolveIncident");
+    },
+    updateJobRetries: async () => {
+      touched.push("updateJobRetries");
+    },
+    setVariables: async () => {
+      touched.push("setVariables");
+    },
+  });
+  // Fully authorized via the opt-in — so a rejection can only come from argument validation.
+  const { router } = buildHarness({
+    engine,
+    env: (v) => (v === "URBAN_MCP_ALLOW_MUTATIONS" ? "true" : undefined),
+  });
+  const session = await connect(router);
+
+  const badCalls: { name: string; arguments: Record<string, unknown>; why: RegExp }[] = [
+    // Blank strings are rejected upstream as a missing required parameter; a non-string value slips
+    // past that check (it is "present") and must be rejected by the tool's own argument guard.
+    { name: "urban_debug_cancel_instance", arguments: { processInstanceKey: "" }, why: /missing required/i },
+    { name: "urban_debug_cancel_instance", arguments: { processInstanceKey: 123 }, why: /non-empty string/i },
+    { name: "urban_debug_resolve_incident", arguments: { incidentKey: 7 }, why: /non-empty string/i },
+    { name: "urban_debug_set_variables", arguments: { scopeKey: 1, variables: { x: 1 } }, why: /non-empty string/i },
+    { name: "urban_debug_retry_job", arguments: { jobKey: 42, retries: 0 }, why: /non-empty string/i },
+    { name: "urban_debug_retry_job", arguments: { jobKey: "j-1", retries: -1 }, why: /non-negative integer/i },
+  ];
+
+  for (const call of badCalls) {
+    const res = await rpc(router, session, "tools/call", { name: call.name, arguments: call.arguments });
+    assert.equal(res.result?.isError, true, `${call.name} must reject invalid args: ${JSON.stringify(call.arguments)}`);
+    assert.match(toolContentText(res.result), call.why);
+  }
+  assert.deepEqual(touched, [], "no invalid mutating call may reach the engine");
+});
+
+test("an authorized mutating tool trims a padded identifying key before mutating the engine", async () => {
+  // A padded key like "  pi-1  " is "present" (the required-arg check trims via presentFormIdentifier),
+  // so it slips past presence validation. The tool's own `requireString` guard must apply the SAME
+  // trimmed-presence rule and forward the TRIMMED value, or the engine mutation targets a whitespace-
+  // padded entity that does not exist. This guards the drift between the presence check and the guard.
+  const cancelled: string[] = [];
+  const engine = fakeEngine({
+    cancelInstance: async ({ processInstanceKey }) => {
+      cancelled.push(processInstanceKey);
+    },
+  });
+  const { router } = buildHarness({
+    engine,
+    env: (v) => (v === "URBAN_MCP_ALLOW_MUTATIONS" ? "true" : undefined),
+  });
+  const session = await connect(router);
+  const ok = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "  pi-1  " },
+  });
+  assert.notEqual(ok.result?.isError, true, "a padded but present key must be accepted");
+  assert.deepEqual(cancelled, ["pi-1"], "the engine must receive the trimmed key, not the padded one");
+});
+
+test("a read tool trims a padded filter value before querying the engine", async () => {
+  // The read path had the same drift the mutating guard closes: an optional filter value read raw
+  // reaches the engine untrimmed, so a padded key like "  pi-1  " becomes a filter that silently
+  // matches nothing. `readPresentString` — the single source of truth `requireString` derives from —
+  // applies the same trimmed-presence rule to optional reads, so search filters cannot mis-target.
+  const seen: (string | undefined)[] = [];
+  const engine = fakeEngine({
+    searchIncidents: async (filter) => {
+      seen.push(filter?.processInstanceKey);
+      return [];
+    },
+  });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+  const ok = await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_incidents",
+    arguments: { processInstanceKey: "  pi-1  " },
+  });
+  assert.notEqual(ok.result?.isError, true, "a padded filter value must be accepted");
+  assert.deepEqual(seen, ["pi-1"], "the engine must receive the trimmed filter value, not the padded one");
+});
+
+test("every debug tool with a required string key rejects a non-string value before querying/mutating", async () => {
+  // Defect-class guard (not a single-line squash): `missingRequiredArgs` treats a present non-string
+  // (number/object) as provided, so any tool that declares a key `required` but reads it with a
+  // degrade-to-empty pattern (`readPresentString(...) ?? ""`) would let that value slip past the
+  // presence check and query/mutate with an empty key — a confusing empty result, not a fast failure.
+  // The canonical fix is that EVERY required string key is read via `requireString`, which fails fast
+  // with InvalidParams. This test enumerates the live tool list and asserts that invariant holds for
+  // ALL current and future debug tools, so a new tool cannot silently reintroduce the drift.
+  const { router } = buildHarness({
+    // Fully authorized so a rejection can only come from argument validation, not the mutation gate.
+    env: (v) => (v === "URBAN_MCP_ALLOW_MUTATIONS" ? "true" : undefined),
+  });
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+
+  // A valid dummy for a required key of a given JSON-schema type, used to satisfy the OTHER required
+  // keys so the rejection is attributable solely to the one non-string key we poke.
+  const dummyForType = (type: unknown): unknown => {
+    if (type === "string") return "dummy";
+    if (type === "integer" || type === "number") return 0;
+    if (type === "boolean") return false;
+    if (type === "object") return {};
+    if (type === "array") return [];
+    return "dummy";
+  };
+
+  let requiredStringKeysChecked = 0;
+  for (const tool of tools) {
+    const name = Reflect.get(tool, "name");
+    if (typeof name !== "string" || !name.startsWith("urban_debug_")) continue;
+    const schema = Reflect.get(tool, "inputSchema");
+    if (schema === null || typeof schema !== "object") continue;
+    const required = Reflect.get(schema, "required");
+    const properties = Reflect.get(schema, "properties");
+    if (!Array.isArray(required) || properties === null || typeof properties !== "object") continue;
+
+    const requiredStringKeys = required.filter((k) => {
+      if (typeof k !== "string") return false;
+      const prop = Reflect.get(properties, k);
+      return prop !== null && typeof prop === "object" && Reflect.get(prop, "type") === "string";
+    });
+
+    for (const key of requiredStringKeys) {
+      const args: Record<string, unknown> = {};
+      for (const other of required) {
+        if (typeof other !== "string") continue;
+        const prop = Reflect.get(properties, other);
+        args[other] = dummyForType(prop !== null && typeof prop === "object" ? Reflect.get(prop, "type") : undefined);
+      }
+      // Poke exactly one required string key with a present-but-non-string value.
+      args[key] = 123;
+      const res = await rpc(router, session, "tools/call", { name, arguments: args });
+      assert.equal(
+        res.result?.isError,
+        true,
+        `${name} must reject a non-string ${key} instead of querying/mutating with an empty key`,
+      );
+      assert.match(toolContentText(res.result), /non-empty string/i, `${name}.${key} must fail fast via requireString`);
+      requiredStringKeysChecked++;
+    }
+  }
+  // Guard the guard: if this drops to zero the enumeration silently stopped covering anything.
+  assert.ok(requiredStringKeysChecked >= 3, "expected at least the known required-string-key debug tools to be checked");
+});
+
+// ---- spec ↔ tool parity guard (Slice 3) -------------------------------------------------------
+
+test("the spec↔tool parity guard reports drift on an injected skew and none in parity", () => {
+  const doc = parseSpec(
+    JSON.stringify({
+      openapi: "3.1.0",
+      paths: {
+        "/a": { get: { operationId: "readA", responses: { "200": {} } } },
+        "/b": { post: { operationId: "mutateB", responses: { "201": {} } } },
+        "/c": { post: { operationId: "hiddenC", "x-mcp": false, responses: { "202": {} } } },
+      },
+    }),
+  );
+  const projection = collectMcpToolProjection(doc);
+  // A snapshot identical to the current projection is in parity.
+  assert.deepEqual(diffMcpToolProjection(projection, projection), []);
+
+  // Inject skew: drop one op, flip another's mutating/excluded facts.
+  const skewed = projection
+    .filter((p) => p.operationId !== "readA")
+    .map((p) => (p.operationId === "hiddenC" ? { ...p, excluded: false } : p));
+  const drift = diffMcpToolProjection(skewed, projection);
+  assert.ok(drift.length >= 2, "both a missing op and a changed fact must be reported");
+  assert.ok(drift.some((l) => l.includes("readA")), "the dropped op must be reported");
+  assert.ok(drift.some((l) => l.includes("hiddenC")), "the flipped exclusion must be reported");
 });
 
 // ---- resource + prompt ------------------------------------------------------------------------

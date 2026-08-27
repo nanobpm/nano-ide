@@ -5,6 +5,7 @@ import {
   evaluateSecurity,
   isObjectSchema,
   isSafeOperationId,
+  isMutatingMethod,
   type OpenApiDoc,
   type OpenApiSchema,
   operationsWithoutId,
@@ -13,6 +14,8 @@ import {
   resolveSchema,
   responseSchemaForStatus,
   sharedRequestBodySchemas,
+  sharedSecretSchemeName,
+  sharedSecretSchemeNames,
   toRouteMatcher,
   undeclaredPathParams,
   undeclaredSecuritySchemes,
@@ -436,6 +439,18 @@ test("isSafeOperationId rejects path separators and traversal; collectOperations
   assert.deepEqual(operationsWithUnsafeId(evil), ["GET /x (../../etc/passwd)"]);
 });
 
+test("isMutatingMethod: the HTTP safe verbs (get/head/options) are read-only, everything else mutates", () => {
+  // OPTIONS is a CORS/preflight metadata probe — a safe, non-mutating verb (RFC 9110 §9.2.1). It must
+  // NOT be flagged mutating, or an `options` operation is wrongly marked destructive in tools/list and
+  // captured as a "mutating" fact by the spec↔tool parity snapshot.
+  for (const safe of ["get", "head", "options"] as const) {
+    assert.equal(isMutatingMethod(safe), false, `${safe} must be treated as read-only`);
+  }
+  for (const mutating of ["put", "post", "delete", "patch"] as const) {
+    assert.equal(isMutatingMethod(mutating), true, `${mutating} must be treated as mutating`);
+  }
+});
+
 test("object validation uses own-property checks (prototype keys don't satisfy required or bypass additionalProperties)", () => {
   // A prototype key must NOT satisfy `required` (own-property semantics).
   const req = { type: "object", properties: { toString: { type: "string" } }, required: ["toString"] };
@@ -632,6 +647,83 @@ test("evaluateSecurity: alternative requirements are OR (any one satisfied autho
   // Neither presented → 401.
   assert.equal(evaluateSecurity(doc, op, noHeader, noQuery, env).status, 401);
 });
+
+test("sharedSecretSchemeName: exactly one apiKey header scheme with x-nano-secret-env is the guard", () => {
+  assert.equal(sharedSecretSchemeName(secured), "webhookKey");
+  assert.deepEqual(sharedSecretSchemeNames(secured), ["webhookKey"]);
+});
+
+test("sharedSecretSchemeName: no candidate scheme → undefined (mutations stay closed)", () => {
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: { securitySchemes: { oauth: { type: "oauth2" } } },
+    paths: {},
+  };
+  assert.equal(sharedSecretSchemeName(doc), undefined);
+  assert.deepEqual(sharedSecretSchemeNames(doc), []);
+});
+
+test("sharedSecretSchemeName: MULTIPLE candidate schemes are an explicit misconfiguration, not a silent first-wins", () => {
+  // Two apiKey header schemes both carry x-nano-secret-env: which one guards mutations would
+  // otherwise depend on object iteration (authoring) order — surface it loudly instead.
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      securitySchemes: {
+        primary: { type: "apiKey", in: "header", name: "X-A", "x-nano-secret-env": "A_KEY" },
+        secondary: { type: "apiKey", in: "header", name: "X-B", "x-nano-secret-env": "B_KEY" },
+      },
+    },
+    paths: {},
+  };
+  // The full candidate list is exposed (source of truth) …
+  assert.deepEqual(sharedSecretSchemeNames(doc), ["primary", "secondary"]);
+  // … and the selector refuses to pick one silently.
+  assert.throws(
+    () => sharedSecretSchemeName(doc),
+    /multiple shared-secret schemes.*primary, secondary/s,
+  );
+});
+
+test("sharedSecretSchemeNames: a declared-but-EMPTY x-nano-secret-env is still a candidate (→ 500 downstream, not a silent 401)", () => {
+  // An empty `x-nano-secret-env` is a misconfiguration, not "no scheme": a truthiness test would
+  // drop it so the guard reports a misleading "no shared-secret scheme" (401). A structural presence
+  // check keeps it selected so `evaluateSecurity` surfaces it as a 500, mirroring how it treats an
+  // empty env-var pointer.
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      securitySchemes: {
+        webhookKey: { type: "apiKey", in: "header", name: "X-Key", "x-nano-secret-env": "" },
+      },
+    },
+    paths: {},
+  };
+  assert.deepEqual(sharedSecretSchemeNames(doc), ["webhookKey"]);
+  assert.equal(sharedSecretSchemeName(doc), "webhookKey");
+});
+
+test("sharedSecretSchemeNames: a malformed (null) scheme entry is skipped, not a bare TypeError", () => {
+  // A mistakenly empty scheme (`webhookKey:` with no body) parses as `null` in YAML. Dereferencing
+  // it (`scheme.type`) would throw a bare TypeError; a non-object scheme is not a valid apiKey
+  // shared-secret candidate, so it is skipped and the real candidate is still selected. Built via
+  // JSON.parse so the runtime-invalid `null` scheme reaches the function (types forbid it).
+  const doc: OpenApiDoc = parseSpec(
+    JSON.stringify({
+      openapi: "3.0.0",
+      components: {
+        securitySchemes: {
+          brokenEmpty: null,
+          webhookKey: { type: "apiKey", in: "header", name: "X-Key", "x-nano-secret-env": "KEY" },
+        },
+      },
+      paths: {},
+    }),
+  );
+  assert.deepEqual(sharedSecretSchemeNames(doc), ["webhookKey"]);
+  assert.equal(sharedSecretSchemeName(doc), "webhookKey");
+});
+
 
 test("responseSchemaForStatus: a documented-but-bodyless status suppresses the default fallback", () => {
   const ops = collectOperations({

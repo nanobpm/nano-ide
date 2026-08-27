@@ -93,6 +93,8 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.browser.json",
 		"gen:runtime": "node scripts/gen-runtime.mjs",
 		"check:runtime": "node scripts/gen-runtime.mjs --check",
+		"gen:mcp-tools": "node --experimental-strip-types scripts/gen-mcp-tools.ts",
+		"check:mcp": "node --experimental-strip-types scripts/gen-mcp-tools.ts --check",
 		"test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
 		"test:conformance": "node --test --experimental-strip-types \"src/context/conformance/**/*.conformance.ts\"",
 		"check:pii": "node --experimental-strip-types scripts/check-pii.ts",

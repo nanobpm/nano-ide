@@ -99,6 +99,7 @@
 		"test:deno": "deno test -A --no-check src/"
 	},
 	"dependencies": {
+		"@modelcontextprotocol/sdk": "^1.30.0",
 		"@nanobpm/nano-app-schema": "^0.9.0",
 		"@nanobpm/nano-sdk": "^1.2.5",
 		"@nanobpm/workflow": "^0.14.0",

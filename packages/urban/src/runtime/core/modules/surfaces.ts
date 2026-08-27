@@ -14,6 +14,7 @@ import { completeUserTaskResponse, resolveFormResponse } from "./forms.ts";
 import { mountActions } from "./actions.ts";
 import { mountAgent } from "./agent.ts";
 import { mountApi } from "./api.ts";
+import { mountMcp } from "./mcp.ts";
 import { mountPages } from "./pages.ts";
 
 /** Escape HTML-significant characters before embedding a value in markup. */
@@ -210,6 +211,14 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
   const agent = mountAgent(ctx);
   routes.push(...agent.routes);
   enabled.push("agent@/app/agent");
+
+  // The runtime-served MCP surface (ADR 0067): `/app/mcp`, a Streamable-HTTP MCP endpoint mounted
+  // unconditionally (like `/app/agent`) so an MCP client always has a stable address. It projects
+  // the app's read-only OpenAPI operations as tools from the SAME enumeration `mountApi` routes
+  // from, plus framework-owned read-only process-debugging tools — zero app-side MCP code.
+  const mcp = mountMcp(ctx, app);
+  routes.push(...mcp.routes);
+  enabled.push("mcp@/app/mcp");
 
   // The pages surface (the schema-driven page runtime) mounts its own routes.
   const pages = mountPages(ctx, app);

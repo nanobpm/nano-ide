@@ -1,0 +1,447 @@
+// Red/Green tests for the runtime-served MCP surface (ADR 0067, Slice 1). They drive real
+// JSON-RPC over the mounted `/app/mcp` route through the SDK transport — an initialize/tools-list/
+// tools-call handshake against a booted app — and assert: every non-excluded read-only app
+// operation projects to a tool whose input schema matches the spec; a mutating operation is
+// withheld; a tool call flows through the SAME `mountApi` delegate + validation as the HTTP call;
+// the framework debug tools return engine truth and ADR 0065 projection data; and the system-brief
+// resource + orientation prompt are served. Access gating (loopback-only, flag) is covered too.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createNodeHost } from "../../adapters/node.ts";
+import { createLogger } from "../logger.ts";
+import type { AppApi, RuntimeContext } from "../context.ts";
+import type { AppManifest } from "../manifest.ts";
+import type {
+  EngineClient,
+  HostContext,
+  HttpRequest,
+  HttpResponse,
+  ProcessInstanceSnapshot,
+  SqliteDb,
+} from "../host.ts";
+import { makeRouter } from "../router.ts";
+import { makeGateway } from "./gateway.ts";
+import { DataLayer, type ProvisionedSource } from "./datasource.ts";
+import { InstanceStateStore } from "./instance-state-store.ts";
+import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
+import { isLoopbackRequest, mountMcp, readMcpConfig } from "./mcp.ts";
+
+// ---- fixtures ---------------------------------------------------------------------------------
+
+const SPEC = JSON.stringify({
+  openapi: "3.0.0",
+  components: {
+    schemas: {
+      Invoice: {
+        type: "object",
+        properties: { id: { type: "string" }, amount: { type: "integer", minimum: 1 } },
+        required: ["id", "amount"],
+        additionalProperties: false,
+      },
+    },
+  },
+  paths: {
+    "/invoices": {
+      get: {
+        operationId: "listInvoices",
+        summary: "List invoices",
+        parameters: [{ name: "limit", in: "query", required: true, schema: { type: "integer", minimum: 1 } }],
+        responses: { "200": {} },
+      },
+      post: {
+        operationId: "createInvoice",
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/Invoice" } } } },
+        responses: { "201": {} },
+      },
+    },
+    "/invoices/{id}": {
+      get: {
+        operationId: "getInvoice",
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        responses: { "200": {} },
+      },
+    },
+  },
+});
+
+const SYSTEM_BRIEF = JSON.stringify({ app: "T", processes: [] });
+
+const SPEC_PATH = "/app/openapi.json";
+const BRIEF_PATH = "/app/nano-generated/system-brief.json";
+
+function fakeEngine(overrides: Partial<EngineClient> = {}): EngineClient {
+  return {
+    deployResources: async () => ({ deployed: 0 }),
+    createInstance: async () => ({ processInstanceKey: "pi" }),
+    cancelInstance: async () => {},
+    publishMessage: async () => {},
+    searchUserTasks: async () => [],
+    openUserTasks: async () => [],
+    getForm: async () => null,
+    searchProcessInstances: async () => [],
+    searchElementInstances: async () => [],
+    searchElementInstanceWaitStates: async () => [],
+    getElementInstance: async () => null,
+    completeUserTask: async () => {},
+    registerWorker: async (jobType) => ({ jobType, unsubscribe: async () => {} }),
+    close: async () => {},
+    ...overrides,
+  };
+}
+
+interface Harness {
+  router: (r: HttpRequest) => Promise<HttpResponse>;
+  imported: string[];
+}
+
+function buildHarness(opts: {
+  modules?: Record<string, Record<string, unknown>>;
+  engine?: EngineClient;
+  data?: DataLayer;
+  env?: (v: string) => string | undefined;
+  manifestExtra?: Record<string, unknown>;
+  briefExists?: boolean;
+} = {}): Harness {
+  const modules = opts.modules ?? {};
+  const engine = opts.engine ?? fakeEngine();
+  const data = opts.data ?? new DataLayer(new Map(), undefined, {});
+  const env = opts.env ?? (() => undefined);
+  const imported: string[] = [];
+  const briefExists = opts.briefExists ?? true;
+  const host: HostContext = {
+    runtime: "node",
+    env,
+    readTextFile: async (p: string) => {
+      if (p === BRIEF_PATH) return SYSTEM_BRIEF;
+      return SPEC;
+    },
+    listDir: async () => [],
+    exists: async (p: string) => (p === BRIEF_PATH ? briefExists : false),
+    openSqlite: () => {
+      throw new Error("sqlite not used in this harness");
+    },
+    importModule: (path: string) => {
+      imported.push(path);
+      const mod = modules[path];
+      if (!mod) return Promise.reject(new Error(`no module at ${path}`));
+      return Promise.resolve(mod);
+    },
+    serveHttp: async () => ({ port: 0, stop: async () => {} }),
+    now: () => 0,
+    log: () => {},
+  };
+  const manifest: AppManifest = { schemaVersion: 1, id: "t", name: "T" };
+  Reflect.set(manifest, "api", { spec: "openapi.json" });
+  if (opts.manifestExtra) for (const [k, v] of Object.entries(opts.manifestExtra)) Reflect.set(manifest, k, v);
+  const app: AppApi = {
+    manifest: { schemaVersion: 1, id: "t", name: "T" },
+    data,
+    engine,
+    env: () => undefined,
+    now: () => 0,
+    wait: () => Promise.resolve(),
+    log: createLogger(() => {}),
+  };
+  const ctx: RuntimeContext = { root: "/app", manifest, engine, host };
+  const handle = mountMcp(ctx, app);
+  const router = makeRouter(handle.routes);
+  return { router: (r) => Promise.resolve(router(r)), imported };
+}
+
+// ---- MCP JSON-RPC driver ----------------------------------------------------------------------
+
+function mcpPost(body: unknown, headers: Record<string, string> = {}): HttpRequest {
+  const text = JSON.stringify(body);
+  return {
+    method: "POST",
+    path: "/app/mcp",
+    query: new URLSearchParams(),
+    headers: new Headers({
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      host: "localhost",
+      ...headers,
+    }),
+    text: () => Promise.resolve(text),
+  };
+}
+
+interface Session {
+  sessionId: string;
+  protocolVersion: string;
+  headers: Record<string, string>;
+}
+
+async function initialize(router: Harness["router"]): Promise<Session> {
+  const res = await router(
+    mcpPost({
+      jsonrpc: "2.0",
+      id: 0,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
+    }),
+  );
+  assert.equal(res.status ?? 200, 200, `initialize should be 200, got ${res.status}: ${res.body}`);
+  const sessionId = res.headers?.["mcp-session-id"];
+  assert.ok(sessionId, "initialize must assign an mcp-session-id");
+  const parsed = JSON.parse(res.body ?? "{}");
+  const protocolVersion = parsed.result?.protocolVersion ?? "2025-06-18";
+  const headers = { "mcp-session-id": sessionId, "mcp-protocol-version": protocolVersion };
+  await router(mcpPost({ jsonrpc: "2.0", method: "notifications/initialized" }, headers));
+  return { sessionId, protocolVersion, headers };
+}
+
+async function rpc(router: Harness["router"], session: Session, method: string, params: unknown, id = 1): Promise<{ result?: Record<string, unknown>; error?: { code: number; message: string } }> {
+  const res = await router(mcpPost({ jsonrpc: "2.0", id, method, params }, session.headers));
+  assert.equal(res.status ?? 200, 200, `${method} should be 200, got ${res.status}: ${res.body}`);
+  return JSON.parse(res.body ?? "{}");
+}
+
+async function connect(router: Harness["router"]): Promise<Session> {
+  return initialize(router);
+}
+
+function toolContentText(result: Record<string, unknown> | undefined): string {
+  assert.ok(result, "tools/call must return a result");
+  const content = result.content;
+  assert.ok(Array.isArray(content) && content.length > 0, "tool result must carry content");
+  const first = content[0];
+  assert.ok(first && typeof first === "object" && "text" in first, "tool content must be a text block");
+  return String(Reflect.get(first, "text"));
+}
+
+// ---- handshake --------------------------------------------------------------------------------
+
+test("the endpoint speaks the MCP initialize handshake for a booted app", async () => {
+  const { router } = buildHarness();
+  const session = await connect(router);
+  assert.ok(session.sessionId.length > 0);
+});
+
+test("a POST without a session and without an initialize request is a 400", async () => {
+  const { router } = buildHarness();
+  const res = await router(mcpPost({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }));
+  assert.equal(res.status, 400);
+});
+
+// ---- tool projection --------------------------------------------------------------------------
+
+test("every read-only app operation projects to a tool; mutating operations are withheld", async () => {
+  const { router } = buildHarness();
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+  const names = tools.map((t) => Reflect.get(t, "name"));
+  assert.ok(names.includes("getInvoice"), "read-only getInvoice must be a tool");
+  assert.ok(names.includes("listInvoices"), "read-only listInvoices must be a tool");
+  assert.ok(!names.includes("createInvoice"), "mutating createInvoice must NOT be a tool in this slice");
+});
+
+test("a projected tool's input schema matches the spec's params", async () => {
+  const { router } = buildHarness();
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+  const getInvoice = tools.find((t) => Reflect.get(t, "name") === "getInvoice");
+  const schema = Reflect.get(getInvoice ?? {}, "inputSchema");
+  assert.deepEqual(schema, {
+    type: "object",
+    properties: { id: { type: "string" } },
+    required: ["id"],
+  });
+  const listInvoices = tools.find((t) => Reflect.get(t, "name") === "listInvoices");
+  const listSchema = Reflect.get(listInvoices ?? {}, "inputSchema");
+  assert.deepEqual(listSchema, {
+    type: "object",
+    properties: { limit: { type: "integer", minimum: 1 } },
+    required: ["limit"],
+  });
+});
+
+test("a tool call routes through the SAME mountApi delegate as the HTTP call", async () => {
+  let seenParams: Record<string, unknown> | undefined;
+  const { router, imported } = buildHarness({
+    modules: {
+      "/app/operations/getInvoice": {
+        default: (input: { params: Record<string, unknown> }) => {
+          seenParams = input.params;
+          return { body: { id: "42", amount: 7 } };
+        },
+      },
+    },
+  });
+  const session = await connect(router);
+  const call = await rpc(router, session, "tools/call", { name: "getInvoice", arguments: { id: "42" } });
+  const text = toolContentText(call.result);
+  assert.deepEqual(JSON.parse(text), { id: "42", amount: 7 });
+  assert.deepEqual(seenParams, { id: "42" }, "the delegate must receive the validated path param");
+  assert.ok(imported.includes("/app/operations/getInvoice"), "the SAME api delegate module must be imported");
+  assert.notEqual(call.result?.isError, true);
+});
+
+test("a tool call with schema-invalid input fails validation identically to the HTTP call", async () => {
+  const { router } = buildHarness({
+    modules: {
+      "/app/operations/listInvoices": { default: () => ({ body: [] }) },
+    },
+  });
+  const session = await connect(router);
+  // limit=0 violates `minimum: 1` — the reused validator must reject before the delegate runs.
+  const call = await rpc(router, session, "tools/call", { name: "listInvoices", arguments: { limit: 0 } });
+  assert.equal(call.result?.isError, true, "a validation failure must surface as an error tool result");
+  const text = toolContentText(call.result);
+  assert.match(text, /validation failed/i);
+});
+
+// ---- framework debug tools --------------------------------------------------------------------
+
+test("the framework debug tools appear and return engine truth", async () => {
+  const snapshot: ProcessInstanceSnapshot = {
+    processInstanceKey: "pi-1",
+    state: "ACTIVE",
+  };
+  const engine = fakeEngine({ searchProcessInstances: async () => [snapshot] });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+  const names = tools.map((t) => Reflect.get(t, "name"));
+  assert.ok(names.includes("urban_debug_search_process_instances"));
+  assert.ok(names.includes("urban_debug_search_element_instance_wait_states"));
+  assert.ok(names.includes("urban_debug_get_element_instance"));
+  assert.ok(names.includes("urban_debug_search_user_tasks"));
+  assert.ok(names.includes("urban_debug_instance_state"));
+  assert.ok(names.includes("urban_debug_open_user_tasks"));
+
+  const call = await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_process_instances",
+    arguments: { state: "ACTIVE" },
+  });
+  const text = toolContentText(call.result);
+  assert.deepEqual(JSON.parse(text), [snapshot]);
+});
+
+test("the projection debug tools read the ADR 0065 canonical stores", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "urban-mcp-proj-"));
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const db: SqliteDb = host.openSqlite(join(dir, "test.db"));
+  try {
+    new InstanceStateStore(db, { clock: { now: () => 0 } }).ensureSchema();
+    new InstanceStateStore(db, { clock: { now: () => 0 } }).recordState("pi-7", "ACTIVE");
+    const openStore = new OpenUserTasksStore(db, { clock: { now: () => 0 } });
+    openStore.ensureSchema();
+    openStore.recordOpenTask("pi-7", { userTaskKey: "ut-1", elementId: "Task_A" });
+
+    const source: ProvisionedSource = {
+      name: "default",
+      driver: "sqlite",
+      db,
+      source: makeGateway(db),
+      migrationsApplied: [],
+      close: () => {},
+    };
+    const data = new DataLayer(new Map([["default", source]]), "default", {});
+    const { router } = buildHarness({ data });
+    const session = await connect(router);
+
+    const stateCall = await rpc(router, session, "tools/call", {
+      name: "urban_debug_instance_state",
+      arguments: { processInstanceKey: "pi-7" },
+    });
+    const state = JSON.parse(toolContentText(stateCall.result));
+    assert.equal(Reflect.get(state, "state"), "ACTIVE");
+
+    const tasksCall = await rpc(router, session, "tools/call", {
+      name: "urban_debug_open_user_tasks",
+      arguments: { processInstanceKey: "pi-7" },
+    });
+    const tasks = JSON.parse(toolContentText(tasksCall.result));
+    assert.ok(Array.isArray(tasks) && tasks.length === 1);
+    assert.equal(Reflect.get(tasks[0], "userTaskKey"), "ut-1");
+  } finally {
+    db.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// ---- resource + prompt ------------------------------------------------------------------------
+
+test("the system brief is served as an MCP resource", async () => {
+  const { router } = buildHarness();
+  const session = await connect(router);
+  const list = await rpc(router, session, "resources/list", {});
+  const resources = list.result?.resources;
+  assert.ok(Array.isArray(resources) && resources.length >= 1);
+  const uri = Reflect.get(resources[0], "uri");
+  const read = await rpc(router, session, "resources/read", { uri });
+  const contents = read.result?.contents;
+  assert.ok(Array.isArray(contents) && contents.length === 1);
+  assert.equal(Reflect.get(contents[0], "text"), SYSTEM_BRIEF);
+});
+
+test("the orientation prompt is registered and served", async () => {
+  const { router } = buildHarness();
+  const session = await connect(router);
+  const list = await rpc(router, session, "prompts/list", {});
+  const prompts = list.result?.prompts;
+  assert.ok(Array.isArray(prompts) && prompts.length >= 1);
+  const name = Reflect.get(prompts[0], "name");
+  assert.equal(name, "urban-orientation");
+  const get = await rpc(router, session, "prompts/get", { name });
+  const messages = get.result?.messages;
+  assert.ok(Array.isArray(messages) && messages.length >= 1);
+});
+
+// ---- access gating ----------------------------------------------------------------------------
+
+test("readMcpConfig defaults ON for loopback and honours env/manifest flags", () => {
+  const on = readMcpConfig({}, () => undefined);
+  assert.equal(on.enabled, true);
+  assert.equal(on.allowRemote, false);
+
+  const offByEnv = readMcpConfig({}, (n) => (n === "URBAN_MCP_ENABLED" ? "false" : undefined));
+  assert.equal(offByEnv.enabled, false);
+
+  const remoteByEnv = readMcpConfig({}, (n) => (n === "URBAN_MCP_ALLOW_REMOTE" ? "true" : undefined));
+  assert.equal(remoteByEnv.allowRemote, true);
+
+  const manifest: Record<string, unknown> = { mcp: { enabled: false } };
+  assert.equal(readMcpConfig(manifest, () => undefined).enabled, false);
+});
+
+test("isLoopbackRequest recognises loopback hosts and rejects remote ones", () => {
+  const mk = (host?: string): HttpRequest => ({
+    method: "POST",
+    path: "/app/mcp",
+    query: new URLSearchParams(),
+    headers: new Headers(host ? { host } : {}),
+    text: () => Promise.resolve(""),
+  });
+  assert.equal(isLoopbackRequest(mk("localhost:3000")), true);
+  assert.equal(isLoopbackRequest(mk("127.0.0.1:3000")), true);
+  assert.equal(isLoopbackRequest(mk("[::1]:3000")), true);
+  assert.equal(isLoopbackRequest(mk()), true);
+  assert.equal(isLoopbackRequest(mk("example.com")), false);
+});
+
+test("a disabled surface answers 404 and a remote caller is refused 403", async () => {
+  const disabled = buildHarness({ env: (v) => (v === "URBAN_MCP_ENABLED" ? "false" : undefined) });
+  const res404 = await disabled.router(mcpPost({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }));
+  assert.equal(res404.status, 404);
+
+  const loopbackOnly = buildHarness();
+  const res403 = await loopbackOnly.router(
+    mcpPost(
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+      { host: "example.com" },
+    ),
+  );
+  assert.equal(res403.status, 403);
+});

@@ -55,7 +55,7 @@ export interface ApiBinding {
 /** The canonical, non-configurable mount prefix for an app's OpenAPI operations. Operations always
  *  live under `/app/api` so page actions, links, and any `callRoute` can name an operation path as a
  *  stable framework constant (`/app/api/<op path>`) — there is no per-app `base` knob to drift. */
-const API_BASE = "/app/api";
+export const API_BASE = "/app/api";
 
 /** Pinned Swagger UI dist served from a CDN, so the docs UI adds zero bundle/runtime deps to an
  *  Urban app (matching the deps-free spirit of the rest of the surface — validators are standalone,
@@ -250,7 +250,7 @@ export function resolveOperationHandler(mod: Record<string, unknown>): Operation
   return undefined;
 }
 
-function readApiBinding(manifest: unknown): ApiBinding | undefined {
+export function readApiBinding(manifest: unknown): ApiBinding | undefined {
   const raw = manifest && typeof manifest === "object" ? Reflect.get(manifest, "api") : undefined;
   if (!raw || typeof raw !== "object") return undefined;
   const spec = Reflect.get(raw, "spec");

@@ -374,14 +374,17 @@ function readString(args: Record<string, unknown>, key: string): string | undefi
   return typeof v === "string" ? v : undefined;
 }
 
-/** Read a REQUIRED non-empty string argument, or throw `InvalidParams`. The canonical guard the
- *  mutating debug tools use for their identifying keys (processInstanceKey/incidentKey/jobKey/
- *  scopeKey): a missing, non-string, or empty value fails fast before any engine state is touched,
- *  rather than silently degrading to `""` and performing a broken/misleading mutation. */
+/** Read a REQUIRED non-empty string argument, TRIMMED, or throw `InvalidParams`. The canonical guard
+ *  the mutating debug tools use for their identifying keys (processInstanceKey/incidentKey/jobKey/
+ *  scopeKey): a missing, non-string, or blank value fails fast before any engine state is touched,
+ *  rather than silently degrading to `""` and performing a broken/misleading mutation. Presence AND
+ *  the returned value both go through {@link presentFormIdentifier} — the same trimmed-presence rule
+ *  {@link isBlankArg} (hence `missingRequiredArgs`) uses — so a padded key like `"  pi-1  "` cannot
+ *  pass the required-arg check yet reach the engine untrimmed and mis-target the entity. */
 function requireString(args: Record<string, unknown>, key: string): string {
-  const v = readString(args, key);
-  if (v === undefined || v === "") throw new McpError(ErrorCode.InvalidParams, `${key} must be a non-empty string`);
-  return v;
+  const present = presentFormIdentifier(readString(args, key));
+  if (present === undefined) throw new McpError(ErrorCode.InvalidParams, `${key} must be a non-empty string`);
+  return present;
 }
 
 function readStringArray(args: Record<string, unknown>, key: string): string[] | undefined {
@@ -707,27 +710,38 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
   // The projected app operation table (read AND mutating), derived from the same enumeration
   // `mountApi` routes. `x-mcp`-excluded operations are dropped (the security-relevant opt-out) as
   // are reserved-namespace ids; the read/mutate split is applied at annotation + guard time via
-  // `isMutatingOperation`, never a forked walker.
-  const loadProjectedOps = async (): Promise<OperationInfo[]> => {
-    const doc = await loadSpecDoc();
-    if (!doc) return [];
-    const projected = collectOperations(doc).filter((op) => !op.mcpExcluded);
-    // The `urban_debug_` namespace is framework-reserved (see DEBUG_PREFIX). A `urban_debug_*`
-    // operationId is a legal safe path segment, so an app could declare one — but `CallTool`
-    // resolves `debugByName` before app ops, so such an op would be shadowed by the framework
-    // tool AND surface a duplicate name in `tools/list`. Drop reserved-namespace app ops here
-    // (the single projection source both `tools/list` and `CallTool` read), warning per drop,
-    // so the collision is impossible by construction rather than order-dependent.
-    return projected.filter((op) => {
-      if (op.operationId.startsWith(DEBUG_PREFIX)) {
-        ctx.host.log("warn", "mcp: dropped app operation using reserved framework tool namespace", {
-          operationId: op.operationId,
-          reservedPrefix: DEBUG_PREFIX,
+  // `isMutatingOperation`, never a forked walker. Memoized PER parsed spec document (keyed on the
+  // cached doc promise `loadSpecDoc` returns): `tools/list` and `tools/call` both hit this on every
+  // request, so recomputing `collectOperations` + the reserved-namespace filter (and re-emitting its
+  // warn) each time is avoidable overhead and log spam. When the spec fails to load `loadSpecDoc`
+  // resets its promise, so the key changes and the projection is recomputed on the retry.
+  let projectedOps: { docKey: Promise<OpenApiDoc | undefined>; ops: Promise<OperationInfo[]> } | undefined;
+  const loadProjectedOps = (): Promise<OperationInfo[]> => {
+    const docKey = loadSpecDoc();
+    if (projectedOps?.docKey !== docKey) {
+      const ops = docKey.then((doc) => {
+        if (!doc) return [];
+        const projected = collectOperations(doc).filter((op) => !op.mcpExcluded);
+        // The `urban_debug_` namespace is framework-reserved (see DEBUG_PREFIX). A `urban_debug_*`
+        // operationId is a legal safe path segment, so an app could declare one — but `CallTool`
+        // resolves `debugByName` before app ops, so such an op would be shadowed by the framework
+        // tool AND surface a duplicate name in `tools/list`. Drop reserved-namespace app ops here
+        // (the single projection source both `tools/list` and `CallTool` read), warning per drop,
+        // so the collision is impossible by construction rather than order-dependent.
+        return projected.filter((op) => {
+          if (op.operationId.startsWith(DEBUG_PREFIX)) {
+            ctx.host.log("warn", "mcp: dropped app operation using reserved framework tool namespace", {
+              operationId: op.operationId,
+              reservedPrefix: DEBUG_PREFIX,
+            });
+            return false;
+          }
+          return true;
         });
-        return false;
-      }
-      return true;
-    });
+      });
+      projectedOps = { docKey, ops };
+    }
+    return projectedOps.ops;
   };
 
   const debugTools = buildDebugTools(app);

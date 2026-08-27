@@ -101,9 +101,16 @@ function fakeEngine(overrides: Partial<EngineClient> = {}): EngineClient {
   };
 }
 
+interface LogEntry {
+  level: "debug" | "info" | "warn" | "error";
+  msg: string;
+  fields?: Record<string, unknown>;
+}
+
 interface Harness {
   router: (r: HttpRequest) => Promise<HttpResponse>;
   imported: string[];
+  logs: LogEntry[];
 }
 
 function buildHarness(opts: {
@@ -122,6 +129,7 @@ function buildHarness(opts: {
   const imported: string[] = [];
   const briefExists = opts.briefExists ?? true;
   const spec = opts.spec ?? SPEC;
+  const logs: LogEntry[] = [];
   const host: HostContext = {
     runtime: "node",
     env,
@@ -142,7 +150,9 @@ function buildHarness(opts: {
     },
     serveHttp: async () => ({ port: 0, stop: async () => {} }),
     now: () => 0,
-    log: () => {},
+    log: (level, msg, fields) => {
+      logs.push({ level, msg, fields });
+    },
   };
   const manifest: AppManifest = { schemaVersion: 1, id: "t", name: "T" };
   Reflect.set(manifest, "api", { spec: "openapi.json" });
@@ -159,7 +169,7 @@ function buildHarness(opts: {
   const ctx: RuntimeContext = { root: "/app", manifest, engine, host };
   const handle = mountMcp(ctx, app, mountApi(ctx, app).routes);
   const router = makeRouter(handle.routes);
-  return { router: (r) => Promise.resolve(router(r)), imported };
+  return { router: (r) => Promise.resolve(router(r)), imported, logs };
 }
 
 // ---- MCP JSON-RPC driver ----------------------------------------------------------------------
@@ -450,6 +460,31 @@ test("an app operationId in the reserved urban_debug_ namespace can't shadow a f
   assert.deepEqual(JSON.parse(text), [snapshot]);
 });
 
+test("the reserved-namespace drop warns once, not on every tools/list and tools/call", async () => {
+  // The projected op table is memoized per parsed spec doc, so `collectOperations` + the reserved-
+  // namespace filter (which emits this warn) runs once — NOT on every request. Guards against the
+  // recompute/log-spam defect class: an app that accidentally declares a `urban_debug_*` op must not
+  // spam a warn on each of the many `tools/list`/`tools/call` requests a session makes.
+  const collidingSpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/shadow": {
+        get: { operationId: "urban_debug_search_process_instances", responses: { "200": {} } },
+      },
+    },
+  });
+  const engine = fakeEngine({ searchProcessInstances: async () => [] });
+  const { router, logs } = buildHarness({ engine, spec: collidingSpec });
+  const session = await connect(router);
+
+  await rpc(router, session, "tools/list", {});
+  await rpc(router, session, "tools/list", {});
+  await rpc(router, session, "tools/call", { name: "urban_debug_search_process_instances", arguments: { state: "ACTIVE" } });
+
+  const drops = logs.filter((l) => l.msg.includes("reserved framework tool namespace"));
+  assert.equal(drops.length, 1, "the reserved-namespace drop must warn exactly once across many requests");
+});
+
 test("the projection debug tools read the ADR 0065 canonical stores", async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-mcp-proj-"));
   const host = createNodeHost({ cwd: dir, log: () => {} });
@@ -648,6 +683,30 @@ test("an authorized mutating tool rejects a blank/non-string key or negative ret
     assert.match(toolContentText(res.result), call.why);
   }
   assert.deepEqual(touched, [], "no invalid mutating call may reach the engine");
+});
+
+test("an authorized mutating tool trims a padded identifying key before mutating the engine", async () => {
+  // A padded key like "  pi-1  " is "present" (the required-arg check trims via presentFormIdentifier),
+  // so it slips past presence validation. The tool's own `requireString` guard must apply the SAME
+  // trimmed-presence rule and forward the TRIMMED value, or the engine mutation targets a whitespace-
+  // padded entity that does not exist. This guards the drift between the presence check and the guard.
+  const cancelled: string[] = [];
+  const engine = fakeEngine({
+    cancelInstance: async ({ processInstanceKey }) => {
+      cancelled.push(processInstanceKey);
+    },
+  });
+  const { router } = buildHarness({
+    engine,
+    env: (v) => (v === "URBAN_MCP_ALLOW_MUTATIONS" ? "true" : undefined),
+  });
+  const session = await connect(router);
+  const ok = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "  pi-1  " },
+  });
+  assert.notEqual(ok.result?.isError, true, "a padded but present key must be accepted");
+  assert.deepEqual(cancelled, ["pi-1"], "the engine must receive the trimmed key, not the padded one");
 });
 
 // ---- spec ↔ tool parity guard (Slice 3) -------------------------------------------------------

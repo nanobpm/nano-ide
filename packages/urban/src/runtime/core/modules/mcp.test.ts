@@ -681,6 +681,29 @@ test("a mutating tool refused for a missing credential surfaces a 401 status wit
   );
 });
 
+test("a mutating tool refused because the OpenAPI spec failed to load surfaces a 500, not a 401", async () => {
+  // A broken/unparseable spec is a server misconfiguration: the guard cannot tell whether a
+  // shared-secret scheme exists, so it must surface a 500 (logged for operators) rather than a
+  // misleading 401 that looks like a missing credential.
+  const engine = fakeEngine({ cancelInstance: async () => assert.fail("must not run") });
+  // Valid JSON but not an object at the root — `parseSpec` throws, so `loadSpecDoc` fails to load.
+  const { router, logs } = buildHarness({ engine, spec: "[1, 2, 3]", env: guardEnv });
+  const session = await connect(router);
+  const refused = await rpc(router, session, "tools/call", {
+    name: "urban_debug_cancel_instance",
+    arguments: { processInstanceKey: "pi-1" },
+  });
+  assert.equal(refused.result?.isError, true, "a broken spec must refuse the mutation");
+  const payload = JSON.parse(toolContentText(refused.result));
+  assert.equal(payload.status, 500, "a spec-load failure must surface status 500, not 401");
+  assert.match(payload.error, /failed to load/i);
+  const loadWarns = logs.filter((l) => l.level === "warn" && l.msg.includes("failed to load the app OpenAPI spec"));
+  assert.equal(loadWarns.length >= 1, true, "the spec-load failure must be logged");
+  const misconfigLogs = logs.filter((l) => l.level === "error" && l.msg.includes("misconfigured"));
+  assert.equal(misconfigLogs.length, 1, "a 500-class refusal must be logged for operators");
+  assert.equal(misconfigLogs[0].fields?.tool, "urban_debug_cancel_instance");
+});
+
 test("an authorized mutating tool rejects a blank/non-string key or negative retries before touching the engine", async () => {
   const touched: string[] = [];
   const engine = fakeEngine({

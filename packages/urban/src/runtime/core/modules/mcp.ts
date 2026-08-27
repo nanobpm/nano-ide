@@ -689,21 +689,25 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
 
   // The parsed OpenAPI document, loaded lazily from the same spec `mountApi` reads and cached
   // (mirroring `mountApi`'s lazy `loadDoc`). Shared by the tool projection AND the mutation guard's
-  // shared-secret-scheme resolution, so both read one parse of one spec. A missing binding yields
-  // `undefined` (no app tools, no shared-secret scheme); a broken spec rejects and is not cached so
-  // a later request retries.
-  let docPromise: Promise<OpenApiDoc | undefined> | undefined;
-  const loadSpecDoc = (): Promise<OpenApiDoc | undefined> => {
+  // shared-secret-scheme resolution, so both read one parse of one spec. The absent-`doc` outcome is
+  // discriminated: `failed: false` is a legitimately-absent binding (no app tools, no shared-secret
+  // scheme); `failed: true` is a broken/unparseable spec (a server misconfiguration, already logged)
+  // — the mutation guard needs the distinction to answer a `401` (nothing to authorize against) vs a
+  // `500` (spec broken, can't even tell) rather than conflating both as unauthorized. A failure is
+  // not cached, so a later request retries.
+  type SpecLoad = { doc: OpenApiDoc } | { doc: undefined; failed: boolean };
+  let docPromise: Promise<SpecLoad> | undefined;
+  const loadSpecDoc = (): Promise<SpecLoad> => {
     if (!docPromise) {
-      docPromise = (async () => {
+      docPromise = (async (): Promise<SpecLoad> => {
         const binding = readApiBinding(ctx.manifest);
-        if (!binding) return undefined;
+        if (!binding) return { doc: undefined, failed: false };
         const text = await ctx.host.readTextFile(resolveAppPath(ctx.root, binding.spec));
-        return parseSpec(text);
+        return { doc: parseSpec(text) };
       })().catch((e) => {
         docPromise = undefined; // don't cache the failure — let a later request retry
         ctx.host.log("warn", "mcp: failed to load the app OpenAPI spec", { error: errorMessage(e) });
-        return undefined;
+        return { doc: undefined, failed: true };
       });
     }
     return docPromise;
@@ -717,11 +721,11 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
   // request, so recomputing `collectOperations` + the reserved-namespace filter (and re-emitting its
   // warn) each time is avoidable overhead and log spam. When the spec fails to load `loadSpecDoc`
   // resets its promise, so the key changes and the projection is recomputed on the retry.
-  let projectedOps: { docKey: Promise<OpenApiDoc | undefined>; ops: Promise<OperationInfo[]> } | undefined;
+  let projectedOps: { docKey: Promise<SpecLoad>; ops: Promise<OperationInfo[]> } | undefined;
   const loadProjectedOps = (): Promise<OperationInfo[]> => {
     const docKey = loadSpecDoc();
     if (projectedOps?.docKey !== docKey) {
-      const ops = docKey.then((doc) => {
+      const ops = docKey.then(({ doc }) => {
         if (!doc) return [];
         const projected = collectOperations(doc).filter((op) => !op.mcpExcluded);
         // The `urban_debug_` namespace is framework-reserved (see DEBUG_PREFIX). A `urban_debug_*`
@@ -769,22 +773,31 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
   // (`mcp.allowMutations` / `URBAN_MCP_ALLOW_MUTATIONS`) opens mutations credential-free, OR the
   // client presented the app's shared secret (the apiKey header scheme, via `x-nano-secret-env`).
   // With no shared-secret scheme configured and no opt-in, mutations are refused (fail closed).
+  const NO_SHARED_SECRET_SCHEME_ERROR =
+    "mutating MCP tools require the app's shared secret (an apiKey header security scheme with x-nano-secret-env), or the explicit mcp.allowMutations opt-in";
   const authorizeMutation = async (
     headers: Record<string, string | string[] | undefined>,
   ): Promise<SecurityDecision> => {
     if (config.allowMutations) return { ok: true };
-    const doc = await loadSpecDoc();
-    const schemeName = doc ? sharedSecretSchemeName(doc) : undefined;
-    if (!doc || !schemeName) {
+    const loaded = await loadSpecDoc();
+    if (!loaded.doc && loaded.failed) {
+      // A broken/unparseable spec is a server misconfiguration (500) — already logged by
+      // `loadSpecDoc` — not a missing credential (401): with no parsed spec we cannot even tell
+      // whether a shared-secret scheme exists to authorize against, so mirror `mountApi` and surface
+      // a 500 (the CallTool handler logs it) rather than a misleading 401.
       return {
         ok: false,
-        status: 401,
+        status: 500,
         error:
-          "mutating MCP tools require the app's shared secret (an apiKey header security scheme with x-nano-secret-env), or the explicit mcp.allowMutations opt-in",
+          "mutating MCP tools cannot be authorized: the app OpenAPI spec failed to load (server misconfiguration — see the logged 'mcp: failed to load the app OpenAPI spec' error)",
       };
     }
+    const schemeName = loaded.doc ? sharedSecretSchemeName(loaded.doc) : undefined;
+    if (!loaded.doc || !schemeName) {
+      return { ok: false, status: 401, error: NO_SHARED_SECRET_SCHEME_ERROR };
+    }
     return evaluateSecurity(
-      doc,
+      loaded.doc,
       sharedSecretOp(schemeName),
       (name) => readHeader(headers, name),
       () => undefined,

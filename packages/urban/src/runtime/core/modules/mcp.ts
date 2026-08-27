@@ -525,7 +525,7 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         properties: { elementInstanceKey: OPTIONAL_STRING },
         required: ["elementInstanceKey"],
       },
-      run: (args) => app.engine.getElementInstance(readPresentString(args, "elementInstanceKey") ?? ""),
+      run: (args) => app.engine.getElementInstance(requireString(args, "elementInstanceKey")),
     },
     {
       name: `${DEBUG_PREFIX}search_user_tasks`,
@@ -658,9 +658,9 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         required: ["processInstanceKey"],
       },
       run: (args) => {
+        const key = requireString(args, "processInstanceKey");
         const db = projectionDb();
         if (!db) return Promise.resolve(null);
-        const key = readPresentString(args, "processInstanceKey") ?? "";
         return Promise.resolve(new InstanceStateStore(db).getState(key) ?? null);
       },
     },
@@ -673,9 +673,9 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         required: ["processInstanceKey"],
       },
       run: (args) => {
+        const key = requireString(args, "processInstanceKey");
         const db = projectionDb();
         if (!db) return Promise.resolve([]);
-        const key = readPresentString(args, "processInstanceKey") ?? "";
         return Promise.resolve(new OpenUserTasksStore(db).openTasks(key));
       },
     },

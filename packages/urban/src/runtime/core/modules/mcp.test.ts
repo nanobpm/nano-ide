@@ -846,6 +846,73 @@ test("a read tool trims a padded filter value before querying the engine", async
   assert.deepEqual(seen, ["pi-1"], "the engine must receive the trimmed filter value, not the padded one");
 });
 
+test("every debug tool with a required string key rejects a non-string value before querying/mutating", async () => {
+  // Defect-class guard (not a single-line squash): `missingRequiredArgs` treats a present non-string
+  // (number/object) as provided, so any tool that declares a key `required` but reads it with a
+  // degrade-to-empty pattern (`readPresentString(...) ?? ""`) would let that value slip past the
+  // presence check and query/mutate with an empty key — a confusing empty result, not a fast failure.
+  // The canonical fix is that EVERY required string key is read via `requireString`, which fails fast
+  // with InvalidParams. This test enumerates the live tool list and asserts that invariant holds for
+  // ALL current and future debug tools, so a new tool cannot silently reintroduce the drift.
+  const { router } = buildHarness({
+    // Fully authorized so a rejection can only come from argument validation, not the mutation gate.
+    env: (v) => (v === "URBAN_MCP_ALLOW_MUTATIONS" ? "true" : undefined),
+  });
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+
+  // A valid dummy for a required key of a given JSON-schema type, used to satisfy the OTHER required
+  // keys so the rejection is attributable solely to the one non-string key we poke.
+  const dummyForType = (type: unknown): unknown => {
+    if (type === "string") return "dummy";
+    if (type === "integer" || type === "number") return 0;
+    if (type === "boolean") return false;
+    if (type === "object") return {};
+    if (type === "array") return [];
+    return "dummy";
+  };
+
+  let requiredStringKeysChecked = 0;
+  for (const tool of tools) {
+    const name = Reflect.get(tool, "name");
+    if (typeof name !== "string" || !name.startsWith("urban_debug_")) continue;
+    const schema = Reflect.get(tool, "inputSchema");
+    if (schema === null || typeof schema !== "object") continue;
+    const required = Reflect.get(schema, "required");
+    const properties = Reflect.get(schema, "properties");
+    if (!Array.isArray(required) || properties === null || typeof properties !== "object") continue;
+
+    const requiredStringKeys = required.filter((k) => {
+      if (typeof k !== "string") return false;
+      const prop = Reflect.get(properties, k);
+      return prop !== null && typeof prop === "object" && Reflect.get(prop, "type") === "string";
+    });
+
+    for (const key of requiredStringKeys) {
+      const args: Record<string, unknown> = {};
+      for (const other of required) {
+        if (typeof other !== "string") continue;
+        const prop = Reflect.get(properties, other);
+        args[other] = dummyForType(prop !== null && typeof prop === "object" ? Reflect.get(prop, "type") : undefined);
+      }
+      // Poke exactly one required string key with a present-but-non-string value.
+      args[key] = 123;
+      const res = await rpc(router, session, "tools/call", { name, arguments: args });
+      assert.equal(
+        res.result?.isError,
+        true,
+        `${name} must reject a non-string ${key} instead of querying/mutating with an empty key`,
+      );
+      assert.match(toolContentText(res.result), /non-empty string/i, `${name}.${key} must fail fast via requireString`);
+      requiredStringKeysChecked++;
+    }
+  }
+  // Guard the guard: if this drops to zero the enumeration silently stopped covering anything.
+  assert.ok(requiredStringKeysChecked >= 3, "expected at least the known required-string-key debug tools to be checked");
+});
+
 // ---- spec ↔ tool parity guard (Slice 3) -------------------------------------------------------
 
 test("the spec↔tool parity guard reports drift on an injected skew and none in parity", () => {

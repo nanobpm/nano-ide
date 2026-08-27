@@ -138,7 +138,7 @@ A fixed, app-agnostic tool family for process debugging, exposed for every app:
   Tool schemas carry parameters, not procedure — the workflow knowledge (orient
   first, preview before dispatch, escalations are for humans) stays prose, now
   discoverable over the same channel.
-- **A prompts entry** for the orientation ritual (check version/status, then act).
+- **A prompt entry** for the orientation ritual (check version/status, then act).
 
 ## Consequences
 

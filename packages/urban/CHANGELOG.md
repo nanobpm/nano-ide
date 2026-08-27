@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.86.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.85.0...@nanobpm/urban-0.86.0) (2026-08-27)
+
+
+### Features
+
+* **urban:** mutating MCP tools with shared-secret guard, x-mcp exclusion, and CI parity gate ([#494](https://github.com/nanobpm/nano-ide/issues/494)) ([ea362c6](https://github.com/nanobpm/nano-ide/commit/ea362c6fc0192b8c0b7620c9beaa601993bfceb5))
+
 ## [0.85.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.84.0...@nanobpm/urban-0.85.0) (2026-08-27)
 
 

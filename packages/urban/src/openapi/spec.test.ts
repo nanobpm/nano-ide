@@ -5,6 +5,7 @@ import {
   evaluateSecurity,
   isObjectSchema,
   isSafeOperationId,
+  isMutatingMethod,
   type OpenApiDoc,
   type OpenApiSchema,
   operationsWithoutId,
@@ -434,6 +435,18 @@ test("isSafeOperationId rejects path separators and traversal; collectOperations
   };
   assert.deepEqual(collectOperations(evil).map((o) => o.operationId), ["safeOp"]);
   assert.deepEqual(operationsWithUnsafeId(evil), ["GET /x (../../etc/passwd)"]);
+});
+
+test("isMutatingMethod: the HTTP safe verbs (get/head/options) are read-only, everything else mutates", () => {
+  // OPTIONS is a CORS/preflight metadata probe — a safe, non-mutating verb (RFC 9110 §9.2.1). It must
+  // NOT be flagged mutating, or an `options` operation is wrongly marked destructive in tools/list and
+  // captured as a "mutating" fact by the spec↔tool parity snapshot.
+  for (const safe of ["get", "head", "options"] as const) {
+    assert.equal(isMutatingMethod(safe), false, `${safe} must be treated as read-only`);
+  }
+  for (const mutating of ["put", "post", "delete", "patch"] as const) {
+    assert.equal(isMutatingMethod(mutating), true, `${mutating} must be treated as mutating`);
+  }
 });
 
 test("object validation uses own-property checks (prototype keys don't satisfy required or bypass additionalProperties)", () => {

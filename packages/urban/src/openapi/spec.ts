@@ -337,9 +337,11 @@ export function isMcpExcluded(ext: unknown): boolean {
   return isRecord(ext) && ext.exclude === true;
 }
 
-/** The HTTP methods MCP treats as read-only (safe, non-mutating). Every other method an operation
- *  can declare is a mutation whose tool is guarded (ADR 0067 Slice 3). */
-const READ_ONLY_METHODS: readonly HttpMethodLower[] = ["get", "head"];
+/** The HTTP methods MCP treats as read-only (safe, non-mutating). These are exactly the HTTP "safe"
+ *  verbs (RFC 9110 §9.2.1) that {@link HTTP_METHODS} can express: GET/HEAD, plus OPTIONS (a
+ *  CORS/preflight metadata probe that never mutates). Every other method an operation can declare is
+ *  a mutation whose tool is guarded (ADR 0067 Slice 3). */
+const READ_ONLY_METHODS: readonly HttpMethodLower[] = ["get", "head", "options"];
 
 /** Whether an operation's HTTP method mutates state — anything other than a safe read verb. Drives
  *  the MCP read/mutate split: read tools are unguarded on loopback, mutating tools are gated. */

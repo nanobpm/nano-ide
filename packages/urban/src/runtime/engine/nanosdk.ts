@@ -151,6 +151,20 @@ function presentEngineKey(value: unknown): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
+/** The non-empty, trimmed string form of a *required* engine key, or throws when the value is
+ *  absent/blank (including a whitespace-only string). A mutating seam operation addresses a
+ *  single entity by key, so a blank key is a caller bug that must fail fast with an actionable
+ *  message rather than reach the engine as an empty path segment / invalid changeset and surface
+ *  an opaque transport error. Reuses {@link presentEngineKey}'s trim-and-coerce rule so a padded
+ *  key like `" 5 "` is normalized identically to how read paths resolve it. */
+function requireEngineKey(value: unknown, name: string): string {
+  const key = presentEngineKey(value);
+  if (key === undefined) {
+    throw new Error(`${name} must be a non-empty key`);
+  }
+  return key;
+}
+
 /** A required text field (a wait-state discriminator's `jobType`/`messageName`/`signalName`),
  *  or `undefined` when absent or blank — the caller skips the row rather than emitting a typed
  *  wait state carrying an empty required string. Returns the trimmed value, matching the
@@ -749,7 +763,11 @@ export class SdkEngineClient implements EngineClient {
     // selectors, read at zero-wait consistency (an incident search is eventually consistent), and
     // map each row through the single `mapIncidentRow` gate, dropping malformed rows.
     const f: Record<string, unknown> = {};
-    if (filter?.processInstanceKey) f.processInstanceKey = filter.processInstanceKey;
+    // Normalize the request selectors the same way the response mapper normalizes keys: a
+    // whitespace-only/padded `processInstanceKey` must not reach the engine as a garbage filter
+    // segment (which would silently return surprising empty results).
+    const processInstanceKey = presentEngineKey(filter?.processInstanceKey);
+    if (processInstanceKey) f.processInstanceKey = processInstanceKey;
     if (filter?.state) f.state = filter.state;
     const body = await this.client.searchIncidents(
       { filter: f },
@@ -763,15 +781,24 @@ export class SdkEngineClient implements EngineClient {
   }
 
   async resolveIncident(input: { incidentKey: string }): Promise<void> {
-    await this.client.resolveIncident({ incidentKey: input.incidentKey });
+    await this.client.resolveIncident({
+      incidentKey: requireEngineKey(input.incidentKey, "incidentKey"),
+    });
   }
 
   async updateJobRetries(input: { jobKey: string; retries: number }): Promise<void> {
     // The "retry a failed job" operation: a job's remaining retries are the `retries` field of
     // the `updateJob` changeset. Bumping them back above zero makes a failed job activatable so a
     // paired `resolveIncident` can return it to the pool.
+    const jobKey = requireEngineKey(input.jobKey, "jobKey");
+    // `retries` serializes straight into the engine changeset, and `number` admits `NaN`,
+    // fractional, and negative values — none of which is a valid retry count. Reject them up
+    // front so a tool-driven call fails with a clear message instead of an opaque engine error.
+    if (!Number.isInteger(input.retries) || input.retries < 0) {
+      throw new Error("retries must be a non-negative integer");
+    }
     await this.client.updateJob({
-      jobKey: input.jobKey,
+      jobKey,
       changeset: { retries: input.retries },
     });
   }
@@ -785,7 +812,7 @@ export class SdkEngineClient implements EngineClient {
     // element instance too), so `scopeKey` maps straight onto `elementInstanceKey`. `local`
     // defaults to engine behaviour (propagate to the outermost scope) when unset.
     await this.client.createElementInstanceVariables({
-      elementInstanceKey: input.scopeKey,
+      elementInstanceKey: requireEngineKey(input.scopeKey, "scopeKey"),
       variables: input.variables,
       ...(input.local === undefined ? {} : { local: input.local }),
     });

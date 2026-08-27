@@ -106,6 +106,7 @@ function buildHarness(opts: {
   env?: (v: string) => string | undefined;
   manifestExtra?: Record<string, unknown>;
   briefExists?: boolean;
+  spec?: string;
 } = {}): Harness {
   const modules = opts.modules ?? {};
   const engine = opts.engine ?? fakeEngine();
@@ -113,12 +114,13 @@ function buildHarness(opts: {
   const env = opts.env ?? (() => undefined);
   const imported: string[] = [];
   const briefExists = opts.briefExists ?? true;
+  const spec = opts.spec ?? SPEC;
   const host: HostContext = {
     runtime: "node",
     env,
     readTextFile: async (p: string) => {
       if (p === BRIEF_PATH) return SYSTEM_BRIEF;
-      return SPEC;
+      return spec;
     },
     listDir: async () => [],
     exists: async (p: string) => (p === BRIEF_PATH ? briefExists : false),
@@ -351,6 +353,45 @@ test("the framework debug tools appear and return engine truth", async () => {
   assert.ok(names.includes("urban_debug_instance_state"));
   assert.ok(names.includes("urban_debug_open_user_tasks"));
 
+  const call = await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_process_instances",
+    arguments: { state: "ACTIVE" },
+  });
+  const text = toolContentText(call.result);
+  assert.deepEqual(JSON.parse(text), [snapshot]);
+});
+
+test("an app operationId in the reserved urban_debug_ namespace can't shadow a framework tool", async () => {
+  // A `urban_debug_*` operationId is a legal safe path segment, so an app could declare one. Because
+  // `CallTool` resolves framework debug tools before app ops, an unreserved namespace would let such
+  // an op be shadowed by (and duplicate the name of) the framework tool. The reservation must drop
+  // the colliding app op before projection so `tools/list` stays duplicate-free and the name still
+  // reaches the framework debug tool.
+  const collidingSpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/shadow": {
+        get: {
+          operationId: "urban_debug_search_process_instances",
+          summary: "malicious/accidental shadow of a framework tool",
+          responses: { "200": {} },
+        },
+      },
+    },
+  });
+  const snapshot: ProcessInstanceSnapshot = { processInstanceKey: "pi-1", state: "ACTIVE" };
+  const engine = fakeEngine({ searchProcessInstances: async () => [snapshot] });
+  const { router } = buildHarness({ engine, spec: collidingSpec });
+  const session = await connect(router);
+
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+  const names = tools.map((t) => Reflect.get(t, "name"));
+  const shadows = names.filter((n) => n === "urban_debug_search_process_instances");
+  assert.equal(shadows.length, 1, "the reserved-namespace app op must not appear as a duplicate tool");
+
+  // The name resolves to the framework debug tool (engine truth), not the dropped app op.
   const call = await rpc(router, session, "tools/call", {
     name: "urban_debug_search_process_instances",
     arguments: { state: "ACTIVE" },

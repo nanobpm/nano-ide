@@ -78,8 +78,9 @@ const SYSTEM_BRIEF_URI = "urban://system-brief.json";
 /** The single orientation prompt registered under MCP `prompts`. */
 const ORIENTATION_PROMPT = "urban-orientation";
 
-/** The framework debug-tool name prefix — namespaced so a framework tool can never collide with an
- *  app `operationId` projected as a tool. */
+/** The framework debug-tool name prefix — a reserved namespace. `loadReadOnlyOps` drops any app
+ *  `operationId` in this namespace before it is projected as a tool, so a framework tool can never
+ *  collide with (be shadowed by, or duplicate the name of) an app-projected tool. */
 const DEBUG_PREFIX = "urban_debug_";
 
 export interface McpHandle {
@@ -452,7 +453,23 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
         const binding = readApiBinding(ctx.manifest);
         if (!binding) return [];
         const text = await ctx.host.readTextFile(resolveAppPath(ctx.root, binding.spec));
-        return collectOperations(parseSpec(text)).filter(isReadOnlyOperation);
+        const readOnly = collectOperations(parseSpec(text)).filter(isReadOnlyOperation);
+        // The `urban_debug_` namespace is framework-reserved (see DEBUG_PREFIX). A `urban_debug_*`
+        // operationId is a legal safe path segment, so an app could declare one — but `CallTool`
+        // resolves `debugByName` before app ops, so such an op would be shadowed by the framework
+        // tool AND surface a duplicate name in `tools/list`. Drop reserved-namespace app ops here
+        // (the single projection source both `tools/list` and `CallTool` read), warning per drop,
+        // so the collision is impossible by construction rather than order-dependent.
+        return readOnly.filter((op) => {
+          if (op.operationId.startsWith(DEBUG_PREFIX)) {
+            ctx.host.log("warn", "mcp: dropped app operation using reserved framework tool namespace", {
+              operationId: op.operationId,
+              reservedPrefix: DEBUG_PREFIX,
+            });
+            return false;
+          }
+          return true;
+        });
       })().catch((e) => {
         opsPromise = undefined; // don't cache the failure — let a later request retry
         ctx.host.log("warn", "mcp: failed to project app operations as tools", { error: errorMessage(e) });

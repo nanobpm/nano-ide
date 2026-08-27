@@ -67,14 +67,17 @@ The seams are already in place:
 ## Decision
 
 Serve MCP **from the Urban runtime**, as a per-app generic surface mounted for every
-hosted app — one new core module (`packages/urban/src/runtime/core/modules/mcp.ts`),
+hosted app **when enabled** (a manifest/env flag, default-on for loopback — see
+Rollout) — one new core module (`packages/urban/src/runtime/core/modules/mcp.ts`),
 no new package (per the subpath-export rule). Four parts.
 
 ### 1. The endpoint
 
 A streamable-HTTP MCP endpoint at `/app/mcp` on the app's own HTTP server, mounted
-for every hosted app — unlike `/app/api-docs`, which `modules/api.ts` gates on
-`docsEnabled` (`binding.docs !== false`). Served by the runtime in-process with the app,
+for every hosted app when the surface is enabled — its gate is a single framework-level
+manifest/env flag (default-on for loopback; see Rollout), **not** a per-app authored
+binding like `/app/api-docs`, which `modules/api.ts` gates on `docsEnabled`
+(`binding.docs !== false`). Served by the runtime in-process with the app,
 so the exposed tools are **version-matched by construction** — the invariant the
 live-guide design protected by convention now holds structurally. Adds
 `@modelcontextprotocol/sdk` as a `packages/urban` dependency. Bind/guard posture
@@ -168,7 +171,8 @@ A fixed, app-agnostic tool family for process debugging, exposed for every app:
 1. **Read-only MCP module.** `/app/mcp` serving: app-operation tools (read-only
    operations only), the engine-truth *read* tools (existing seam methods suffice),
    projection read tools, the system-brief resource, and the orientation prompt.
-   Loopback-only. Ships behind a manifest/env flag, default on for loopback.
+   Loopback by default (LAN exposure via `network.bind`, per §1/§4). Ships behind a
+   manifest/env flag, default on for loopback.
 2. **Seam extension.** Incidents + `resolveIncident`/retry + `setVariables` on
    `EngineClient`: nano-sdk adapter, `WasmEngineClient`, conformance harness.
 3. **Mutation tools** (cancel/resolve/retry/set-variables + side-effecting app

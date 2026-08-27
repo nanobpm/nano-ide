@@ -360,17 +360,22 @@ export interface ElementInstanceWaitStateFilter {
 }
 
 /**
- * The lifecycle state of an incident, as {@link EngineClient.searchIncidents} reports it.
- * An `ACTIVE` incident is an open fault a human/agent can act on (resolve/retry); the other
- * values are terminal or transitional. Mirrors the engine's incident-state enum so a caller
- * narrows on it rather than probing a raw string.
+ * The engine's own incident-state enum — the lifecycle states an engine actually reports and
+ * that are valid as a search selector. An `ACTIVE` incident is an open fault a human/agent can
+ * act on (resolve/retry); the other values are terminal or transitional. This is the single
+ * source of truth for real engine states; {@link IncidentState} derives from it.
  */
-export type IncidentState =
-  | "ACTIVE"
-  | "MIGRATED"
-  | "PENDING"
-  | "RESOLVED"
-  | "UNKNOWN";
+export type EngineIncidentState = "ACTIVE" | "MIGRATED" | "PENDING" | "RESOLVED";
+
+/**
+ * The lifecycle state of an incident, as {@link EngineClient.searchIncidents} reports it.
+ * Extends {@link EngineIncidentState} with the client-side `"UNKNOWN"` sentinel — a fallback
+ * used when the engine returns an unrecognized/absent value, so an incident is surfaced rather
+ * than dropped for an odd state. Because `"UNKNOWN"` is not a real engine state, it is not a
+ * valid {@link IncidentFilter} selector. A caller narrows on this union rather than probing a
+ * raw string.
+ */
+export type IncidentState = EngineIncidentState | "UNKNOWN";
 
 /**
  * Selectors for an incident search: which process instance and/or lifecycle state to match.
@@ -379,7 +384,7 @@ export type IncidentState =
  */
 export interface IncidentFilter {
   processInstanceKey?: string;
-  state?: IncidentState;
+  state?: EngineIncidentState;
 }
 
 /**

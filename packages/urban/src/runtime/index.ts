@@ -97,6 +97,7 @@ export type {
   HttpResponse,
   HttpServer,
   IncidentState,
+  EngineIncidentState,
   IncidentFilter,
   IncidentSummary,
   JobHandler,

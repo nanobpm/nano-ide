@@ -122,16 +122,22 @@ A fixed, app-agnostic tool family for process debugging, exposed for every app:
 
 ### 4. Read/mutate split, resources, prompts
 
-- **Read tools on by default; mutations guarded.** Diagnostic tools (search, wait
-  states, variables, incidents, projections, and read-only app operations) are
-  **unauthenticated** — they need no credential, so loopback binding (the default;
-  see §1) is what limits their exposure, and binding to a LAN interface exposes them
-  unauthenticated. Mutating tools (cancel instance, resolve/retry
-  incident, set variables, side-effecting app operations) require the app's shared
-  secret, reusing Urban's existing operation-guard convention: an OpenAPI `apiKey`
-  security scheme whose expected value is an env pointer via `x-nano-secret-env`
-  (ADR 0059/0025/0027, e.g. `NANO_WEBHOOK_KEY`), presented as a header on the MCP
-  connection from the client config, or an explicit runtime opt-in.
+- **Framework debug tools: read on by default, mutations guarded.** The
+  framework-owned debug family splits by verb. Its read-only tools (search, wait
+  states, variables, incidents, projections) are **unauthenticated** — they need no
+  credential, so loopback binding (the default; see §1) is what limits their
+  exposure, and binding to a LAN interface exposes them unauthenticated. Its mutating
+  tools (cancel instance, resolve/retry incident, set variables) require the app's
+  shared secret, or an explicit runtime opt-in.
+- **App-operation tools inherit the OpenAPI `security` contract.** App operations are
+  guarded exactly as the runtime already enforces them: `evaluateSecurity`
+  (`modules/api.ts`) authorizes each call from the operation's declared `security`
+  requirements, which can guard *any* operation regardless of verb — so a read-only
+  app operation that carries a security requirement stays guarded, not open, and the
+  "always guarded" rule above is scoped to the framework's mutating debug tools. The
+  shared secret is an OpenAPI `apiKey` scheme whose expected value is an env pointer
+  via `x-nano-secret-env` (ADR 0059, e.g. `NANO_WEBHOOK_KEY`), presented as a header
+  on the MCP connection from the client config.
 - **Resources carry the prose.** The runtime serves its system brief
   (`/app/agent.json`) as an MCP resource; an app may register a **domain playbook**
   (nano-workforce's operator guide) as an additional resource through the module.

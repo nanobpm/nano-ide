@@ -608,6 +608,48 @@ test("with no shared-secret scheme and no opt-in, a mutating tool fails closed",
   assert.equal(refused.result?.isError, true, "a mutation must fail closed when nothing can authorize it");
 });
 
+test("an authorized mutating tool rejects a blank/non-string key or negative retries before touching the engine", async () => {
+  const touched: string[] = [];
+  const engine = fakeEngine({
+    cancelInstance: async () => {
+      touched.push("cancelInstance");
+    },
+    resolveIncident: async () => {
+      touched.push("resolveIncident");
+    },
+    updateJobRetries: async () => {
+      touched.push("updateJobRetries");
+    },
+    setVariables: async () => {
+      touched.push("setVariables");
+    },
+  });
+  // Fully authorized via the opt-in — so a rejection can only come from argument validation.
+  const { router } = buildHarness({
+    engine,
+    env: (v) => (v === "URBAN_MCP_ALLOW_MUTATIONS" ? "true" : undefined),
+  });
+  const session = await connect(router);
+
+  const badCalls: { name: string; arguments: Record<string, unknown>; why: RegExp }[] = [
+    // Blank strings are rejected upstream as a missing required parameter; a non-string value slips
+    // past that check (it is "present") and must be rejected by the tool's own argument guard.
+    { name: "urban_debug_cancel_instance", arguments: { processInstanceKey: "" }, why: /missing required/i },
+    { name: "urban_debug_cancel_instance", arguments: { processInstanceKey: 123 }, why: /non-empty string/i },
+    { name: "urban_debug_resolve_incident", arguments: { incidentKey: 7 }, why: /non-empty string/i },
+    { name: "urban_debug_set_variables", arguments: { scopeKey: 1, variables: { x: 1 } }, why: /non-empty string/i },
+    { name: "urban_debug_retry_job", arguments: { jobKey: 42, retries: 0 }, why: /non-empty string/i },
+    { name: "urban_debug_retry_job", arguments: { jobKey: "j-1", retries: -1 }, why: /non-negative integer/i },
+  ];
+
+  for (const call of badCalls) {
+    const res = await rpc(router, session, "tools/call", { name: call.name, arguments: call.arguments });
+    assert.equal(res.result?.isError, true, `${call.name} must reject invalid args: ${JSON.stringify(call.arguments)}`);
+    assert.match(toolContentText(res.result), call.why);
+  }
+  assert.deepEqual(touched, [], "no invalid mutating call may reach the engine");
+});
+
 // ---- spec ↔ tool parity guard (Slice 3) -------------------------------------------------------
 
 test("the spec↔tool parity guard reports drift on an injected skew and none in parity", () => {

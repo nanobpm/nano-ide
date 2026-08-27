@@ -47,7 +47,7 @@ if (check) {
     committed = JSON.parse(readFileSync(SNAPSHOT, "utf8"));
   } catch (e) {
     console.error(
-      `check:mcp: cannot read ${SNAPSHOT} (${e instanceof Error ? e.message : String(e)}) — run \`npm run gen:mcp-tools -w @nanobpm/urban\``,
+      `check:mcp: cannot read ${SNAPSHOT} (${e instanceof Error ? e.message : String(e)}) — run \`npm run gen:mcp-tools -w packages/urban\``,
     );
     process.exit(1);
   }
@@ -56,7 +56,7 @@ if (check) {
     console.error(
       "check:mcp: OpenAPI spec ↔ projected MCP tool list are out of parity:\n" +
         drift.map((line) => `  ${line}`).join("\n") +
-        "\n\nRegenerate + commit with `npm run gen:mcp-tools -w @nanobpm/urban`.",
+        "\n\nRegenerate + commit with `npm run gen:mcp-tools -w packages/urban`.",
     );
     process.exit(1);
   }

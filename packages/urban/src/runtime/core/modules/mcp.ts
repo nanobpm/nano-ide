@@ -374,6 +374,16 @@ function readString(args: Record<string, unknown>, key: string): string | undefi
   return typeof v === "string" ? v : undefined;
 }
 
+/** Read a REQUIRED non-empty string argument, or throw `InvalidParams`. The canonical guard the
+ *  mutating debug tools use for their identifying keys (processInstanceKey/incidentKey/jobKey/
+ *  scopeKey): a missing, non-string, or empty value fails fast before any engine state is touched,
+ *  rather than silently degrading to `""` and performing a broken/misleading mutation. */
+function requireString(args: Record<string, unknown>, key: string): string {
+  const v = readString(args, key);
+  if (v === undefined || v === "") throw new McpError(ErrorCode.InvalidParams, `${key} must be a non-empty string`);
+  return v;
+}
+
 function readStringArray(args: Record<string, unknown>, key: string): string[] | undefined {
   const v = args[key];
   if (!Array.isArray(v)) return undefined;
@@ -552,8 +562,9 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         required: ["processInstanceKey"],
       },
       run: async (args) => {
-        await app.engine.cancelInstance({ processInstanceKey: readString(args, "processInstanceKey") ?? "" });
-        return { cancelled: readString(args, "processInstanceKey") };
+        const processInstanceKey = requireString(args, "processInstanceKey");
+        await app.engine.cancelInstance({ processInstanceKey });
+        return { cancelled: processInstanceKey };
       },
     },
     {
@@ -567,8 +578,9 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         required: ["incidentKey"],
       },
       run: async (args) => {
-        await app.engine.resolveIncident({ incidentKey: readString(args, "incidentKey") ?? "" });
-        return { resolved: readString(args, "incidentKey") };
+        const incidentKey = requireString(args, "incidentKey");
+        await app.engine.resolveIncident({ incidentKey });
+        return { resolved: incidentKey };
       },
     },
     {
@@ -582,10 +594,12 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         required: ["jobKey", "retries"],
       },
       run: async (args) => {
+        const jobKey = requireString(args, "jobKey");
         const retries = readInteger(args, "retries");
-        if (retries === undefined) throw new McpError(ErrorCode.InvalidParams, "retries must be an integer");
-        await app.engine.updateJobRetries({ jobKey: readString(args, "jobKey") ?? "", retries });
-        return { jobKey: readString(args, "jobKey"), retries };
+        if (retries === undefined || retries < 0)
+          throw new McpError(ErrorCode.InvalidParams, "retries must be a non-negative integer");
+        await app.engine.updateJobRetries({ jobKey, retries });
+        return { jobKey, retries };
       },
     },
     {
@@ -603,15 +617,16 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         required: ["scopeKey", "variables"],
       },
       run: async (args) => {
+        const scopeKey = requireString(args, "scopeKey");
         const variables = readObject(args, "variables");
         if (variables === undefined) throw new McpError(ErrorCode.InvalidParams, "variables must be an object");
         const input: { scopeKey: string; variables: Record<string, unknown>; local?: boolean } = {
-          scopeKey: readString(args, "scopeKey") ?? "",
+          scopeKey,
           variables,
         };
         if (args.local === true) input.local = true;
         await app.engine.setVariables(input);
-        return { scopeKey: readString(args, "scopeKey"), set: Object.keys(variables) };
+        return { scopeKey, set: Object.keys(variables) };
       },
     },
     {

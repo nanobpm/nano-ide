@@ -88,6 +88,10 @@ function cancelEngine(opts: {
     searchElementInstances: notUsed("searchElementInstances"),
     searchElementInstanceWaitStates: notUsed("searchElementInstanceWaitStates"),
     getElementInstance: notUsed("getElementInstance"),
+    searchIncidents: notUsed("searchIncidents"),
+    resolveIncident: notUsed("resolveIncident"),
+    updateJobRetries: notUsed("updateJobRetries"),
+    setVariables: notUsed("setVariables"),
     registerWorker: notUsed("registerWorker"),
     close: notUsed("close"),
   };

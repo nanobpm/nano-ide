@@ -360,6 +360,50 @@ export interface ElementInstanceWaitStateFilter {
 }
 
 /**
+ * The lifecycle state of an incident, as {@link EngineClient.searchIncidents} reports it.
+ * An `ACTIVE` incident is an open fault a human/agent can act on (resolve/retry); the other
+ * values are terminal or transitional. Mirrors the engine's incident-state enum so a caller
+ * narrows on it rather than probing a raw string.
+ */
+export type IncidentState =
+  | "ACTIVE"
+  | "MIGRATED"
+  | "PENDING"
+  | "RESOLVED"
+  | "UNKNOWN";
+
+/**
+ * Selectors for an incident search: which process instance and/or lifecycle state to match.
+ * Used by {@link EngineClient.searchIncidents}. An eventually consistent (zero-wait) read; an
+ * unset selector matches every incident.
+ */
+export interface IncidentFilter {
+  processInstanceKey?: string;
+  state?: IncidentState;
+}
+
+/**
+ * A single incident (a stuck token — a job out of retries, an unhandled error, a failed
+ * gateway evaluation) as {@link EngineClient.searchIncidents} reports it. Carries the
+ * `incidentKey` a caller passes to {@link EngineClient.resolveIncident}, the owning
+ * `processInstanceKey`, and — when the incident is job-backed — the `jobKey` a caller passes
+ * to {@link EngineClient.updateJobRetries} to make the job retriable before resolving.
+ * `errorType`/`errorMessage` are the engine's fault description; they are free-form across
+ * engines (the live SDK reports a Camunda error-type enum, the in-process engine a coarser
+ * `kind`), so treat them as diagnostic text, not a stable taxonomy.
+ */
+export interface IncidentSummary {
+  readonly incidentKey: string;
+  readonly processInstanceKey: string;
+  readonly elementId?: string;
+  readonly elementInstanceKey?: string;
+  readonly jobKey?: string;
+  readonly errorType?: string;
+  readonly errorMessage?: string;
+  readonly state: IncidentState;
+}
+
+/**
  * A deployed form's form-js schema plus its identifying metadata, as
  * {@link EngineClient.getForm} returns it. `schema` is the parsed form-js document
  * (`{ type: "default", schemaVersion, components: [...] }`) that the surface renders
@@ -483,6 +527,42 @@ export interface EngineClient {
   getElementInstance(
     elementInstanceKey: string,
   ): Promise<ElementInstanceSummary | null>;
+  /**
+   * Search incidents by owning process instance and/or lifecycle state
+   * (`POST /v2/incidents/search`) — the open faults blocking one or more instances (a job out
+   * of retries, an unhandled error, a failed gateway evaluation). An eventually consistent
+   * (zero-wait) read; each {@link IncidentSummary} carries the `incidentKey` to pass to
+   * {@link resolveIncident} and, for a job-backed incident, the `jobKey` to pass to
+   * {@link updateJobRetries}. The debugging counterpart to the read accessors above: where
+   * they answer "how far has this instance progressed", this answers "why is it stuck".
+   */
+  searchIncidents(filter?: IncidentFilter): Promise<IncidentSummary[]>;
+  /**
+   * Resolve an open incident by key (`POST /v2/incidents/{incidentKey}/resolution`), unblocking
+   * the parked token: a job incident returns the job to the activatable pool (so it must have
+   * retries left first — see {@link updateJobRetries}), a gateway incident re-evaluates, an
+   * uncaught-error incident re-creates the service-task job. A mutating operation.
+   */
+  resolveIncident(input: { incidentKey: string }): Promise<void>;
+  /**
+   * Update the remaining retries of a job (`PATCH /v2/jobs/{jobKey}`) — the "retry a failed
+   * job" operation. Setting a failed job's retries back above zero makes it activatable again;
+   * paired with {@link resolveIncident}, this is how a stuck `jobNoRetries` incident is cleared
+   * (bump retries, then resolve). A mutating operation.
+   */
+  updateJobRetries(input: { jobKey: string; retries: number }): Promise<void>;
+  /**
+   * Set (merge) variables into a scope (`PUT /v2/element-instances/{scopeKey}/variables`).
+   * `scopeKey` is a process-instance key or an element-instance key; when `local` is `true` the
+   * variables are merged strictly into that local scope, otherwise (the default) they propagate
+   * to the outermost scope. A mutating operation used to repair state before resolving an
+   * incident or to steer an instance during debugging.
+   */
+  setVariables(input: {
+    scopeKey: string;
+    variables: Record<string, unknown>;
+    local?: boolean;
+  }): Promise<void>;
   /** Register a push worker for a job type. Draining is handled by the adapter. */
   registerWorker(
     jobType: string,
@@ -520,6 +600,10 @@ export const ENGINE_CLIENT_METHODS = [
   "searchElementInstances",
   "searchElementInstanceWaitStates",
   "getElementInstance",
+  "searchIncidents",
+  "resolveIncident",
+  "updateJobRetries",
+  "setVariables",
   "registerWorker",
   "close",
 ] as const satisfies readonly (keyof EngineClient)[];

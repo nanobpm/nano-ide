@@ -21,6 +21,9 @@ import type {
   WaitStateType,
   EngineJob,
   FormSchema,
+  IncidentFilter,
+  IncidentState,
+  IncidentSummary,
   JobHandler,
   ProcessInstanceSnapshot,
   ProcessInstanceState,
@@ -111,6 +114,26 @@ export function normalizeWaitStateType(raw: unknown): WaitStateType | undefined 
       return "CONDITION";
     default:
       return undefined;
+  }
+}
+
+/** Map the engine's incident `state` onto the transport-agnostic {@link IncidentState} union,
+ *  falling back to `"UNKNOWN"` for an unrecognized/absent value (an incident is never dropped
+ *  for an odd state — unlike element/process rows, whose state is a hard identity field — so a
+ *  caller still sees the fault). Case-insensitive so a casing tweak doesn't mis-map. */
+export function normalizeIncidentState(raw: unknown): IncidentState {
+  if (typeof raw !== "string") return "UNKNOWN";
+  switch (raw.toUpperCase()) {
+    case "ACTIVE":
+      return "ACTIVE";
+    case "MIGRATED":
+      return "MIGRATED";
+    case "PENDING":
+      return "PENDING";
+    case "RESOLVED":
+      return "RESOLVED";
+    default:
+      return "UNKNOWN";
   }
 }
 
@@ -285,6 +308,44 @@ export function mapElementInstanceWaitStateRow(
   }
 }
 
+/** Map one engine incident row onto an {@link IncidentSummary}, or `undefined` when the row is
+ *  malformed (missing the `incidentKey` or the owning `processInstanceKey` — the two identity
+ *  fields a caller needs to resolve/act on it). `jobKey`/`elementInstanceKey`/`errorType`/
+ *  `errorMessage` are best-effort diagnostics: present when the engine reports them, omitted
+ *  otherwise. The single source of truth `searchIncidents` extracts through. */
+export function mapIncidentRow(
+  row: Record<string, unknown>,
+  log: Log,
+): IncidentSummary | undefined {
+  const incidentKey = presentEngineKey(row.incidentKey);
+  if (incidentKey === undefined) {
+    log("warn", "skipping incident with no incidentKey in engine response");
+    return undefined;
+  }
+  const processInstanceKey = presentEngineKey(row.processInstanceKey);
+  if (processInstanceKey === undefined) {
+    log("warn", "skipping incident with no processInstanceKey in engine response", {
+      incidentKey,
+    });
+    return undefined;
+  }
+  const elementId = presentText(row.elementId);
+  const elementInstanceKey = presentEngineKey(row.elementInstanceKey);
+  const jobKey = presentEngineKey(row.jobKey);
+  const errorType = presentText(row.errorType);
+  const errorMessage = presentText(row.errorMessage);
+  return {
+    incidentKey,
+    processInstanceKey,
+    ...(elementId ? { elementId } : {}),
+    ...(elementInstanceKey ? { elementInstanceKey } : {}),
+    ...(jobKey ? { jobKey } : {}),
+    ...(errorType ? { errorType } : {}),
+    ...(errorMessage ? { errorMessage } : {}),
+    state: normalizeIncidentState(row.state),
+  };
+}
+
 /** A job as delivered to a nano-sdk job handler: the frame fields plus the
  *  acknowledgement actions the handler must call. */
 export interface NanoSdkActivatedJob {
@@ -383,6 +444,23 @@ export interface NanoSdkClient {
     consistency?: unknown,
     options?: unknown,
   ): Promise<Record<string, unknown>>;
+  searchIncidents(
+    input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
+  resolveIncident(
+    input: { incidentKey: string },
+    options?: unknown,
+  ): Promise<unknown>;
+  updateJob(
+    input: { jobKey: string; changeset: Record<string, unknown> },
+    options?: unknown,
+  ): Promise<unknown>;
+  createElementInstanceVariables(
+    input: { elementInstanceKey: string; variables: Record<string, unknown>; local?: boolean },
+    options?: unknown,
+  ): Promise<unknown>;
   createJobWorker(cfg: NanoSdkJobWorkerConfig): NanoSdkJobWorker;
   /** Stop every worker created on this client. Used on teardown to also drain a
    * REST-fallback worker, whose handle the `createJobWorker` proxy starts internally
@@ -664,6 +742,53 @@ export class SdkEngineClient implements EngineClient {
     }
     if (!isRecord(body)) return null;
     return mapElementInstanceRow(body, this.log) ?? null;
+  }
+
+  async searchIncidents(filter?: IncidentFilter): Promise<IncidentSummary[]> {
+    // Same shape as `searchElementInstances`: build the engine filter from the transport-agnostic
+    // selectors, read at zero-wait consistency (an incident search is eventually consistent), and
+    // map each row through the single `mapIncidentRow` gate, dropping malformed rows.
+    const f: Record<string, unknown> = {};
+    if (filter?.processInstanceKey) f.processInstanceKey = filter.processInstanceKey;
+    if (filter?.state) f.state = filter.state;
+    const body = await this.client.searchIncidents(
+      { filter: f },
+      { consistency: { waitUpToMs: 0 } },
+    );
+    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+    return items.flatMap((it) => {
+      const mapped = mapIncidentRow(it, this.log);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  async resolveIncident(input: { incidentKey: string }): Promise<void> {
+    await this.client.resolveIncident({ incidentKey: input.incidentKey });
+  }
+
+  async updateJobRetries(input: { jobKey: string; retries: number }): Promise<void> {
+    // The "retry a failed job" operation: a job's remaining retries are the `retries` field of
+    // the `updateJob` changeset. Bumping them back above zero makes a failed job activatable so a
+    // paired `resolveIncident` can return it to the pool.
+    await this.client.updateJob({
+      jobKey: input.jobKey,
+      changeset: { retries: input.retries },
+    });
+  }
+
+  async setVariables(input: {
+    scopeKey: string;
+    variables: Record<string, unknown>;
+    local?: boolean;
+  }): Promise<void> {
+    // A scope is addressed by its element-instance key (the process instance's root scope is an
+    // element instance too), so `scopeKey` maps straight onto `elementInstanceKey`. `local`
+    // defaults to engine behaviour (propagate to the outermost scope) when unset.
+    await this.client.createElementInstanceVariables({
+      elementInstanceKey: input.scopeKey,
+      variables: input.variables,
+      ...(input.local === undefined ? {} : { local: input.local }),
+    });
   }
 
   async registerWorker(

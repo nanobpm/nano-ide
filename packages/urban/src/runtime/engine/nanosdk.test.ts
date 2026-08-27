@@ -88,6 +88,22 @@ function fakeSdkClient(overrides: Partial<NanoSdkClient> = {}): NanoSdkClient & 
       calls.push("getElementInstance");
       return {};
     },
+    async searchIncidents() {
+      calls.push("searchIncidents");
+      return { items: [] };
+    },
+    async resolveIncident(input) {
+      calls.push("resolveIncident");
+      return { ...input };
+    },
+    async updateJob(input) {
+      calls.push("updateJob");
+      return { ...input };
+    },
+    async createElementInstanceVariables(input) {
+      calls.push("createElementInstanceVariables");
+      return { ...input };
+    },
     async completeUserTask() {
       calls.push("completeUserTask");
       return {};

@@ -71,7 +71,8 @@ no new package (per the subpath-export rule). Four parts.
 ### 1. The endpoint
 
 A streamable-HTTP MCP endpoint at `/app/mcp` on the app's own HTTP server, mounted
-unconditionally like `/app/api-docs`. Served by the runtime in-process with the app,
+for every hosted app — unlike `/app/api-docs`, which `modules/api.ts` gates on
+`docsEnabled` (`binding.docs !== false`). Served by the runtime in-process with the app,
 so the exposed tools are **version-matched by construction** — the invariant the
 live-guide design protected by convention now holds structurally. Adds
 `@modelcontextprotocol/sdk` as a `packages/urban` dependency. Bind/guard posture
@@ -88,8 +89,9 @@ The module projects the app's `openapi.yaml` into MCP tools using the *same*
 `operationId` → tool name, request-body schema → input schema, response → tool
 result. Dispatch resolves through the same delegate registry as HTTP. **No
 hand-authored tool definitions** — a second representation of the contract is exactly
-the drift class ADR 0053 forbids, and a CI guard (spec ↔ tool-list parity, the
-`layout:check` analogue) alarms if the projection ever diverges.
+the drift class ADR 0053 forbids, and a CI guard (spec ↔ tool-list parity, in the
+style of the repo's `check:*` drift gates such as `check:schema`) alarms if the
+projection ever diverges.
 
 The app declares only an **exclusion list** (convention: an `x-mcp` extension on the
 operation, defaulting to exposed). Operator-only doors stay operator-only — e.g.

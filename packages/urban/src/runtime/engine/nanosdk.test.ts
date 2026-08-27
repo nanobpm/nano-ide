@@ -807,7 +807,7 @@ test("setVariables normalizes the scopeKey and rejects a blank one", async () =>
 });
 
 test("updateJobRetries normalizes the jobKey and rejects a blank key or an invalid retry count", async () => {
-  let seen: { jobKey: string; changeset: { retries: number } } | undefined;
+  let seen: { jobKey: string; changeset: Record<string, unknown> } | undefined;
   const client = fakeSdkClient({
     async updateJob(input) {
       seen = input;

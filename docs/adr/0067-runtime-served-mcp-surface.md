@@ -56,7 +56,8 @@ The seams are already in place:
   (`packages/urban/src/runtime/engine/sdk.ts`) exposes the full nano-sdk, **including
   incidents**, when on the nano-sdk transport.
 - The runtime already serves per-app generic endpoints the app did not author —
-  `/app/agent`, `/app/agent.json`, `/app/api-docs` (`modules/agent.ts`) — and exposes
+  `/app/agent`, `/app/agent.json` (`modules/agent.ts`) and `/app/api-docs`
+  (`modules/api.ts`) — and exposes
   the native server as `UrbanApp.httpServer` precisely so surfaces can attach to it
   (the `/agentic` WebSocket precedent).
 
@@ -114,8 +115,10 @@ A fixed, app-agnostic tool family for process debugging, exposed for every app:
   states, variables, incidents, projections, and read-only app operations) need no
   credential beyond loopback. Mutating tools (cancel instance, resolve/retry
   incident, set variables, side-effecting app operations) require the app's shared
-  secret (the `NANO_PR_WEBHOOK_SECRET` pattern, presented as a header on the MCP
-  connection from the client config) or an explicit runtime opt-in.
+  secret, reusing Urban's existing operation-guard convention: an OpenAPI `apiKey`
+  security scheme whose expected value is an env pointer via `x-nano-secret-env`
+  (ADR 0059/0025/0027, e.g. `NANO_WEBHOOK_KEY`), presented as a header on the MCP
+  connection from the client config, or an explicit runtime opt-in.
 - **Resources carry the prose.** The runtime serves its system brief
   (`/app/agent.json`) as an MCP resource; an app may register a **domain playbook**
   (nano-workforce's operator guide) as an additional resource through the module.

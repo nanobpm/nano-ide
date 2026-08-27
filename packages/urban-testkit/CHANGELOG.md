@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.15.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.14.0...@nanobpm/urban-testkit-0.15.0) (2026-08-27)
+
+
+### Features
+
+* **urban:** extend EngineClient seam with incidents, resolve/retry, and setVariables ([#490](https://github.com/nanobpm/nano-ide/issues/490)) ([b7c0d48](https://github.com/nanobpm/nano-ide/commit/b7c0d48a6b81477e7cf68697a566b7db24ff8c96))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.81.0 to >=0.84.0
+
 ## [0.14.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.13.1...@nanobpm/urban-testkit-0.14.0) (2026-08-25)
 
 

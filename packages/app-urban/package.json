@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/nano-ide-app-urban",
-  "version": "1.1.44",
+  "version": "1.1.45",
   "description": "Urban app pack for the Nano RAD IDE: scaffolds and runs full-stack Urban apps (nano.app.json + processes/forms/db/workers, model-first or code-first) via the @nanobpm/urban toolkit (urban / create-urban-app), out-of-process on Node or Deno (ADR 0052).",
   "license": "Apache-2.0",
   "keywords": [
@@ -18,7 +18,7 @@
     "directory": "packages/app-urban"
   },
   "dependencies": {
-    "@nanobpm/urban": "^0.83.0",
+    "@nanobpm/urban": "^0.84.0",
     "create-urban-app": "^0.15.2"
   },
   "files": [

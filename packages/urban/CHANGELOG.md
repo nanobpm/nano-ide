@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.84.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.83.0...@nanobpm/urban-0.84.0) (2026-08-27)
+
+
+### Features
+
+* **urban:** extend EngineClient seam with incidents, resolve/retry, and setVariables ([#490](https://github.com/nanobpm/nano-ide/issues/490)) ([b7c0d48](https://github.com/nanobpm/nano-ide/commit/b7c0d48a6b81477e7cf68697a566b7db24ff8c96))
+
 ## [0.83.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.82.1...@nanobpm/urban-0.83.0) (2026-08-25)
 
 

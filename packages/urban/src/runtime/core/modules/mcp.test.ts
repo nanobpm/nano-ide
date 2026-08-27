@@ -824,6 +824,28 @@ test("an authorized mutating tool trims a padded identifying key before mutating
   assert.deepEqual(cancelled, ["pi-1"], "the engine must receive the trimmed key, not the padded one");
 });
 
+test("a read tool trims a padded filter value before querying the engine", async () => {
+  // The read path had the same drift the mutating guard closes: an optional filter value read raw
+  // reaches the engine untrimmed, so a padded key like "  pi-1  " becomes a filter that silently
+  // matches nothing. `readPresentString` — the single source of truth `requireString` derives from —
+  // applies the same trimmed-presence rule to optional reads, so search filters cannot mis-target.
+  const seen: (string | undefined)[] = [];
+  const engine = fakeEngine({
+    searchIncidents: async (filter) => {
+      seen.push(filter?.processInstanceKey);
+      return [];
+    },
+  });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+  const ok = await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_incidents",
+    arguments: { processInstanceKey: "  pi-1  " },
+  });
+  assert.notEqual(ok.result?.isError, true, "a padded filter value must be accepted");
+  assert.deepEqual(seen, ["pi-1"], "the engine must receive the trimmed filter value, not the padded one");
+});
+
 // ---- spec ↔ tool parity guard (Slice 3) -------------------------------------------------------
 
 test("the spec↔tool parity guard reports drift on an injected skew and none in parity", () => {

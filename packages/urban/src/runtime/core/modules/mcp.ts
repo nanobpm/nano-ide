@@ -379,15 +379,27 @@ function readString(args: Record<string, unknown>, key: string): string | undefi
   return typeof v === "string" ? v : undefined;
 }
 
+/** Read an OPTIONAL string argument in its TRIMMED present form, or `undefined` when it is missing,
+ *  non-string, or blank/whitespace-only. The canonical read for identifying keys and filter values
+ *  (processInstanceKey/elementId/assignee/candidateGroup): it applies the SAME
+ *  {@link presentFormIdentifier} trimmed-presence rule that `missingRequiredArgs`/{@link isBlankArg}
+ *  use for presence, so a padded value like `"  pi-1  "` normalizes to `"pi-1"` instead of reaching
+ *  the engine untrimmed — where a filter would silently match nothing and a keyed lookup would target
+ *  a whitespace-padded entity that does not exist. The single source of truth {@link requireString}
+ *  also derives from, so required and optional reads cannot drift on how they normalize. */
+function readPresentString(args: Record<string, unknown>, key: string): string | undefined {
+  return presentFormIdentifier(readString(args, key));
+}
+
 /** Read a REQUIRED non-empty string argument, TRIMMED, or throw `InvalidParams`. The canonical guard
  *  the mutating debug tools use for their identifying keys (processInstanceKey/incidentKey/jobKey/
  *  scopeKey): a missing, non-string, or blank value fails fast before any engine state is touched,
- *  rather than silently degrading to `""` and performing a broken/misleading mutation. Presence AND
- *  the returned value both go through {@link presentFormIdentifier} — the same trimmed-presence rule
- *  {@link isBlankArg} (hence `missingRequiredArgs`) uses — so a padded key like `"  pi-1  "` cannot
- *  pass the required-arg check yet reach the engine untrimmed and mis-target the entity. */
+ *  rather than silently degrading to `""` and performing a broken/misleading mutation. Derived from
+ *  {@link readPresentString} — the same trimmed-presence rule {@link isBlankArg} (hence
+ *  `missingRequiredArgs`) uses — so a padded key like `"  pi-1  "` cannot pass the required-arg check
+ *  yet reach the engine untrimmed and mis-target the entity. */
 function requireString(args: Record<string, unknown>, key: string): string {
-  const present = presentFormIdentifier(readString(args, key));
+  const present = readPresentString(args, key);
   if (present === undefined) throw new McpError(ErrorCode.InvalidParams, `${key} must be a non-empty string`);
   return present;
 }
@@ -496,9 +508,9 @@ function buildDebugTools(app: AppApi): DebugTool[] {
       },
       run: (args) => {
         const filter: ElementInstanceWaitStateFilter = {};
-        const pik = readString(args, "processInstanceKey");
+        const pik = readPresentString(args, "processInstanceKey");
         if (pik) filter.processInstanceKey = pik;
-        const elementId = readString(args, "elementId");
+        const elementId = readPresentString(args, "elementId");
         if (elementId) filter.elementId = elementId;
         const waitStateType = readWaitStateType(args, "waitStateType");
         if (waitStateType) filter.waitStateType = waitStateType;
@@ -513,7 +525,7 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         properties: { elementInstanceKey: OPTIONAL_STRING },
         required: ["elementInstanceKey"],
       },
-      run: (args) => app.engine.getElementInstance(readString(args, "elementInstanceKey") ?? ""),
+      run: (args) => app.engine.getElementInstance(readPresentString(args, "elementInstanceKey") ?? ""),
     },
     {
       name: `${DEBUG_PREFIX}search_user_tasks`,
@@ -529,11 +541,11 @@ function buildDebugTools(app: AppApi): DebugTool[] {
       },
       run: (args) => {
         const filter: UserTaskFilter & { state?: UserTaskState } = {};
-        const pik = readString(args, "processInstanceKey");
+        const pik = readPresentString(args, "processInstanceKey");
         if (pik) filter.processInstanceKey = pik;
-        const assignee = readString(args, "assignee");
+        const assignee = readPresentString(args, "assignee");
         if (assignee) filter.assignee = assignee;
-        const candidateGroup = readString(args, "candidateGroup");
+        const candidateGroup = readPresentString(args, "candidateGroup");
         if (candidateGroup) filter.candidateGroup = candidateGroup;
         const state = readUserTaskState(args, "state");
         if (state) filter.state = state;
@@ -553,7 +565,7 @@ function buildDebugTools(app: AppApi): DebugTool[] {
       },
       run: (args) => {
         const filter: IncidentFilter = {};
-        const pik = readString(args, "processInstanceKey");
+        const pik = readPresentString(args, "processInstanceKey");
         if (pik) filter.processInstanceKey = pik;
         const state = readIncidentState(args, "state");
         if (state) filter.state = state;
@@ -648,7 +660,7 @@ function buildDebugTools(app: AppApi): DebugTool[] {
       run: (args) => {
         const db = projectionDb();
         if (!db) return Promise.resolve(null);
-        const key = readString(args, "processInstanceKey") ?? "";
+        const key = readPresentString(args, "processInstanceKey") ?? "";
         return Promise.resolve(new InstanceStateStore(db).getState(key) ?? null);
       },
     },
@@ -663,7 +675,7 @@ function buildDebugTools(app: AppApi): DebugTool[] {
       run: (args) => {
         const db = projectionDb();
         if (!db) return Promise.resolve([]);
-        const key = readString(args, "processInstanceKey") ?? "";
+        const key = readPresentString(args, "processInstanceKey") ?? "";
         return Promise.resolve(new OpenUserTasksStore(db).openTasks(key));
       },
     },

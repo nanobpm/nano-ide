@@ -636,14 +636,19 @@ export class WasmEngineClient implements EngineClient {
     if (filter?.state !== undefined && filter.state !== "ACTIVE") return [];
     const snapshot = this.#snapshot();
     const keyIndex = activeElementKeyIndex(snapshot);
+    // Normalize the request selector the same way the response mapper normalizes keys: a
+    // whitespace-only/padded `processInstanceKey` must not silently filter out every row (a blank
+    // selector is treated as absent, matching the presence rule used elsewhere in this file and the
+    // `SdkEngineClient` adapter — No Drift Surfaces).
+    const wantInstanceKey = presentKey(filter?.processInstanceKey);
     const out: IncidentSummary[] = [];
     for (const inc of records(snapshot.incidents)) {
       const incidentKey = presentKey(inc.key);
       const processInstanceKey = presentKey(inc.instanceKey);
       if (incidentKey === undefined || processInstanceKey === undefined) continue;
       if (
-        filter?.processInstanceKey !== undefined &&
-        processInstanceKey !== filter.processInstanceKey
+        wantInstanceKey !== undefined &&
+        processInstanceKey !== wantInstanceKey
       ) {
         continue;
       }
@@ -671,7 +676,7 @@ export class WasmEngineClient implements EngineClient {
    *  {@link updateJobRetries}). Drains afterward so a re-activated job is served, mirroring a live
    *  push engine (parity with `SdkEngineClient`, whose engine serves it server-side). */
   async resolveIncident(input: { incidentKey: string }): Promise<void> {
-    this.#liveEngine.resolveIncident(input.incidentKey);
+    this.#liveEngine.resolveIncident(requireKey(input.incidentKey, "incidentKey"));
     await this.drain();
   }
 
@@ -680,7 +685,15 @@ export class WasmEngineClient implements EngineClient {
    *  return it to the pool. Drains afterward for the same push-parity reason as the other
    *  mutating calls. */
   async updateJobRetries(input: { jobKey: string; retries: number }): Promise<void> {
-    this.#liveEngine.updateRetries(input.jobKey, input.retries);
+    const jobKey = requireKey(input.jobKey, "jobKey");
+    // `retries` reaches the engine as the job's remaining retry count, and `number` admits `NaN`,
+    // fractional, and negative values — none of which is a valid retry count. Reject them up front
+    // so a tool-driven call fails with a clear message instead of an opaque engine error, matching
+    // `SdkEngineClient.updateJobRetries`.
+    if (!Number.isInteger(input.retries) || input.retries < 0) {
+      throw new Error("retries must be a non-negative integer");
+    }
+    this.#liveEngine.updateRetries(jobKey, input.retries);
     await this.drain();
   }
 
@@ -694,7 +707,7 @@ export class WasmEngineClient implements EngineClient {
     local?: boolean;
   }): Promise<void> {
     this.#liveEngine.setVariables(
-      input.scopeKey,
+      requireKey(input.scopeKey, "scopeKey"),
       JSON.stringify(input.variables),
       input.local ?? false,
     );
@@ -1533,6 +1546,21 @@ export function presentKey(v: unknown): string | undefined {
  *  leak in as a garbage identifier. Exported for the coercion-defect-class guard in the tests. */
 export function presentString(v: unknown): string | undefined {
   return typeof v === "string" ? present(v) : undefined;
+}
+
+/** The non-empty, trimmed string form of a *required* engine key, or throws when the value is
+ *  absent/blank (including a whitespace-only or padded string). A mutating seam op addresses a
+ *  single entity by key, so a blank key is a caller bug that must fail fast with an actionable
+ *  message rather than reach the WASM engine as a garbage identifier and surface an opaque error —
+ *  matching `SdkEngineClient`'s `requireEngineKey` so the two adapters stay behaviour-identical (No
+ *  Drift Surfaces). Reuses {@link presentKey}'s trim-and-coerce rule so a padded key like `" 5 "`
+ *  is normalized identically to how read paths resolve it. Exported for the guard in the tests. */
+export function requireKey(value: unknown, name: string): string {
+  const key = presentKey(value);
+  if (key === undefined) {
+    throw new Error(`${name} must be a non-empty key`);
+  }
+  return key;
 }
 
 /** Parse a form-js schema from a read-model `FormResult.schema`: the engine serializes it as a

@@ -53,7 +53,8 @@ The seams are already in place:
 - The `EngineClient` seam (`packages/urban/src/runtime/core/host.ts`) already exposes
   `searchProcessInstances`, `searchElementInstanceWaitStates`, `getElementInstance`,
   `cancelInstance`, `publishMessage`, `searchUserTasks`; `AppApi.sdk`
-  (`packages/urban/src/runtime/engine/sdk.ts`) exposes the full nano-sdk, **including
+  (declared in `packages/urban/src/runtime/core/context.ts`, typed as `EngineSdkClient`
+  from `packages/urban/src/runtime/engine/sdk.ts`) exposes the full nano-sdk, **including
   incidents**, when on the nano-sdk transport.
 - The runtime already serves per-app generic endpoints the app did not author —
   `/app/agent`, `/app/agent.json` (`modules/agent.ts`) and `/app/api-docs`

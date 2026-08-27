@@ -396,6 +396,37 @@ test("the projection debug tools read the ADR 0065 canonical stores", async () =
 
 // ---- resource + prompt ------------------------------------------------------------------------
 
+test("a debug tool call missing a required parameter is rejected before its handler runs", async () => {
+  let handlerRan = false;
+  const engine = fakeEngine({
+    getElementInstance: async () => {
+      handlerRan = true;
+      return null;
+    },
+  });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+  // `urban_debug_get_element_instance` declares `elementInstanceKey` required; omitting it must
+  // fail validation up front rather than substitute an empty string and query the engine with it.
+  const call = await rpc(router, session, "tools/call", {
+    name: "urban_debug_get_element_instance",
+    arguments: {},
+  });
+  assert.equal(call.result?.isError, true, "a missing required debug-tool arg must surface as an error result");
+  const text = toolContentText(call.result);
+  assert.match(text, /missing required parameter/i);
+  assert.match(text, /elementInstanceKey/);
+  assert.equal(handlerRan, false, "the debug handler must not run for a missing required-arg call");
+
+  // An empty string is treated as absent too — it is exactly the masked-invalid-call the guard closes.
+  const emptyCall = await rpc(router, session, "tools/call", {
+    name: "urban_debug_get_element_instance",
+    arguments: { elementInstanceKey: "" },
+  });
+  assert.equal(emptyCall.result?.isError, true, "an empty required arg must also be rejected");
+  assert.equal(handlerRan, false, "the debug handler must not run for an empty required-arg call");
+});
+
 test("the system brief is served as an MCP resource", async () => {
   const { router } = buildHarness();
   const session = await connect(router);

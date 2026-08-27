@@ -205,6 +205,22 @@ function missingPathParams(op: OperationInfo, args: Record<string, unknown>): st
     .map((p) => p.name);
 }
 
+/** The `required` string keys a tool's `inputSchema` declares but the call omitted (absent, or not a
+ *  non-empty string). Derived from the schema's own `required` array — the single source of truth —
+ *  so declaring a field required is enough to have missing calls rejected rather than silently
+ *  substituted with an empty string. */
+function missingRequiredArgs(inputSchema: Record<string, unknown>, args: Record<string, unknown>): string[] {
+  const required = inputSchema.required;
+  if (!Array.isArray(required)) return [];
+  const missing: string[] = [];
+  for (const key of required) {
+    if (typeof key !== "string") continue;
+    const value = args[key];
+    if (typeof value !== "string" || value.length === 0) missing.push(key);
+  }
+  return missing;
+}
+
 /** Reconstruct the HTTP request an operation tool call is equivalent to, ready to hand to the
  *  reused `mountApi` router. The JSON body is the tool's `body` argument (when the op declares one).
  */
@@ -502,6 +518,15 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi): McpHandle {
       const args = isRecord(request.params.arguments) ? request.params.arguments : {};
       const debug = debugByName.get(name);
       if (debug) {
+        const missing = missingRequiredArgs(debug.inputSchema, args);
+        if (missing.length > 0) {
+          // Fail fast like an operation-tool validation error, instead of substituting an empty
+          // string that makes an invalid call look like a legitimate "not found" result.
+          return textResult(
+            { error: `validation failed: missing required parameter(s): ${missing.join(", ")}` },
+            true,
+          );
+        }
         try {
           return textResult(await debug.run(args));
         } catch (e) {

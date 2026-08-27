@@ -57,6 +57,7 @@ import type {
   UserTaskState,
   WaitStateType,
 } from "../host.ts";
+import { resolveBindMode } from "../manifest.ts";
 import { json, makeRouter, type Route } from "../router.ts";
 import { API_BASE, mountApi, readApiBinding } from "./api.ts";
 import { resolveAppPath } from "./datasource.ts";
@@ -192,6 +193,16 @@ function toolQuery(op: OperationInfo, args: Record<string, unknown>): URLSearchP
     }
   }
   return query;
+}
+
+/** The required path parameters an operation declares that the tool `args` did not supply. Unlike
+ *  an HTTP request (whose path can't structurally omit a segment), a tool call can leave a
+ *  `{param}` unset; `fillPath` would then substitute an empty string and silently mis-route (a 404
+ *  route mismatch, or worse a different route shape), so a missing path arg is rejected up front. */
+function missingPathParams(op: OperationInfo, args: Record<string, unknown>): string[] {
+  return op.parameters
+    .filter((p) => p.in === "path" && (args[p.name] === undefined || args[p.name] === null))
+    .map((p) => p.name);
 }
 
 /** Reconstruct the HTTP request an operation tool call is equivalent to, ready to hand to the
@@ -390,6 +401,10 @@ function buildDebugTools(app: AppApi): DebugTool[] {
  */
 export function mountMcp(ctx: RuntimeContext, app: AppApi): McpHandle {
   const config = readMcpConfig(ctx.manifest, ctx.host.env);
+  // The effective HTTP bind interface. When the app is bound to all interfaces, the
+  // client-controlled `Host` header is not a trustworthy loopback signal (a remote caller can send
+  // `Host: localhost`), so a loopback-only surface must refuse EVERY caller rather than trust it.
+  const bindMode = resolveBindMode(ctx.manifest, ctx.host.env);
 
   // Reuse the app's OpenAPI dispatch VERBATIM: `mountApi` owns the `/app/api` router (validation +
   // delegate registry). A tool call is reconstructed into the operation's HTTP request and routed
@@ -423,6 +438,15 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi): McpHandle {
     op: OperationInfo,
     args: Record<string, unknown>,
   ): Promise<{ content: { type: "text"; text: string }[]; isError?: boolean }> => {
+    const missing = missingPathParams(op, args);
+    if (missing.length > 0) {
+      // Surface as an error tool result (like a reused-validator failure), not a silent 404 from an
+      // empty-string substitution — the calling agent sees exactly which required params it omitted.
+      return textResult(
+        { error: `validation failed: missing required path parameter(s): ${missing.join(", ")}` },
+        true,
+      );
+    }
     const res = await apiRouter(toHttpRequest(op, args));
     const status = res.status ?? 200;
     return textResult(res.body ?? "", status >= 400);
@@ -588,8 +612,18 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi): McpHandle {
 
   const handle = async (req: HttpRequest): Promise<HttpResponse> => {
     if (!config.enabled) return json({ error: "MCP surface is disabled" }, 404);
-    if (!config.allowRemote && !isLoopbackRequest(req)) {
-      return json({ error: "MCP surface is loopback-only" }, 403);
+    if (!config.allowRemote) {
+      // Bound to all interfaces, `Host` can't be trusted as a loopback proof: refuse everyone
+      // unless remote access is explicitly opted in (mcp.allowRemote / URBAN_MCP_ALLOW_REMOTE).
+      if (bindMode === "all") {
+        return json(
+          { error: "MCP surface is loopback-only, but the app is bound to all interfaces; set mcp.allowRemote to expose it" },
+          403,
+        );
+      }
+      if (!isLoopbackRequest(req)) {
+        return json({ error: "MCP surface is loopback-only" }, 403);
+      }
     }
     const method = req.method.toUpperCase();
     // The string-body host seam cannot hold open an SSE stream, so the optional GET server→client

@@ -299,6 +299,29 @@ test("a tool call with schema-invalid input fails validation identically to the 
   assert.match(text, /validation failed/i);
 });
 
+test("a tool call missing a required path parameter is rejected before dispatch", async () => {
+  let delegateRan = false;
+  const { router } = buildHarness({
+    modules: {
+      "/app/operations/getInvoice": {
+        default: () => {
+          delegateRan = true;
+          return { body: { id: "x" } };
+        },
+      },
+    },
+  });
+  const session = await connect(router);
+  // `getInvoice` declares a required `{id}` path param; omitting it must fail validation up front
+  // rather than silently substitute an empty string and 404 (or mis-route to a different shape).
+  const call = await rpc(router, session, "tools/call", { name: "getInvoice", arguments: {} });
+  assert.equal(call.result?.isError, true, "a missing required path param must surface as an error result");
+  const text = toolContentText(call.result);
+  assert.match(text, /missing required path parameter/i);
+  assert.match(text, /\bid\b/);
+  assert.equal(delegateRan, false, "the delegate must not run for a missing-path-param tool call");
+});
+
 // ---- framework debug tools --------------------------------------------------------------------
 
 test("the framework debug tools appear and return engine truth", async () => {
@@ -444,4 +467,28 @@ test("a disabled surface answers 404 and a remote caller is refused 403", async 
     ),
   );
   assert.equal(res403.status, 403);
+});
+
+test("a loopback-only surface bound to all interfaces refuses even a loopback Host", async () => {
+  // With bind=all the client-controlled `Host` header can't prove loopback, so every caller is
+  // refused unless remote access is explicitly opted in.
+  const boundAll = buildHarness({ env: (v) => (v === "URBAN_BIND" ? "all" : undefined) });
+  const refused = await boundAll.router(
+    mcpPost({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, { host: "localhost" }),
+  );
+  assert.equal(refused.status, 403, "a loopback Host must not bypass the gate when bound to all interfaces");
+
+  // Manifest `network.bind: "all"` is honoured the same way.
+  const boundAllManifest = buildHarness({ manifestExtra: { network: { bind: "all" } } });
+  const refused2 = await boundAllManifest.router(
+    mcpPost({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }, { host: "127.0.0.1" }),
+  );
+  assert.equal(refused2.status, 403);
+
+  // Opting into remote access lets the all-interfaces bind serve again.
+  const remote = buildHarness({
+    env: (v) => (v === "URBAN_BIND" ? "all" : v === "URBAN_MCP_ALLOW_REMOTE" ? "true" : undefined),
+  });
+  const session = await connect(remote.router);
+  assert.ok(session.sessionId.length > 0, "allowRemote must let an all-interfaces bind serve");
 });

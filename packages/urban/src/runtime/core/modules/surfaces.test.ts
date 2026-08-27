@@ -408,3 +408,19 @@ test("/api/complete rejects a body with no userTaskKey", async () => {
   assert.equal(res.status, 400);
 });
 
+
+test("MCP is listed as an active surface only when config-enabled, but its route is always mounted", () => {
+  // Default: MCP enabled -> listed as an active surface.
+  const on = mountSurfaces(ctxWith({}), fakeApp);
+  const onEnabled = on.describe().enabled;
+  assert.ok(Array.isArray(onEnabled) && onEnabled.includes("mcp@/app/mcp"), "an enabled MCP surface is listed as active");
+
+  // Config-disabled (URBAN_MCP_ENABLED=false): the handler 404s, so it must NOT appear as active,
+  // yet the route stays mounted for a stable address.
+  const base = ctxWith({});
+  const offCtx = { ...base, host: { ...base.host, env: (v: string) => (v === "URBAN_MCP_ENABLED" ? "false" : undefined) } };
+  const off = mountSurfaces(offCtx, fakeApp);
+  const offEnabled = off.describe().enabled;
+  assert.ok(Array.isArray(offEnabled) && !offEnabled.includes("mcp@/app/mcp"), "a disabled MCP surface must not be listed as active");
+  assert.ok(off.routes.some((r) => r.path === "/app/mcp"), "the MCP route stays mounted even when disabled");
+});

@@ -218,7 +218,9 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
   // from, plus framework-owned read-only process-debugging tools — zero app-side MCP code.
   const mcp = mountMcp(ctx, app, api.routes);
   routes.push(...mcp.routes);
-  enabled.push("mcp@/app/mcp");
+  // The route is always mounted (stable address), but only claim MCP as an active surface when it
+  // actually answers — a config-disabled surface 404s, so listing it here would be inaccurate.
+  if (mcp.enabled) enabled.push("mcp@/app/mcp");
 
   // The pages surface (the schema-driven page runtime) mounts its own routes.
   const pages = mountPages(ctx, app);

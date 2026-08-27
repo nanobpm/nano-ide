@@ -29,7 +29,7 @@ import { makeGateway } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
-import { isLoopbackRequest, missingRequiredArgs, mountMcp, readMcpConfig } from "./mcp.ts";
+import { isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readMcpConfig } from "./mcp.ts";
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
@@ -604,4 +604,24 @@ test("a loopback-only surface bound to all interfaces refuses even a loopback Ho
   });
   const session = await connect(remote.router);
   assert.ok(session.sessionId.length > 0, "allowRemote must let an all-interfaces bind serve");
+});
+
+test("newSessionId mints a fresh id and never throws when Web Crypto is absent", () => {
+  // With Web Crypto present it delegates to randomUUID (unique across calls).
+  const a = newSessionId();
+  const b = newSessionId();
+  assert.ok(a.length > 0 && b.length > 0, "a session id must be non-empty");
+  assert.notEqual(a, b, "successive session ids must differ");
+
+  // Core treats Web Crypto as optional: in a host without `crypto` the generator must fall back
+  // rather than throw (a bare `crypto.randomUUID()` would throw a ReferenceError here).
+  const savedCrypto = Reflect.getOwnPropertyDescriptor(globalThis, "crypto");
+  try {
+    Reflect.deleteProperty(globalThis, "crypto");
+    const fallback = newSessionId();
+    assert.ok(fallback.length > 0, "the fallback id must be non-empty when crypto is unavailable");
+    assert.notEqual(fallback, newSessionId(), "fallback ids must still differ");
+  } finally {
+    if (savedCrypto) Reflect.defineProperty(globalThis, "crypto", savedCrypto);
+  }
 });

@@ -86,7 +86,19 @@ const DEBUG_PREFIX = "urban_debug_";
 export interface McpHandle {
   readonly name: string;
   routes: Route[];
+  /** Whether the surface actually answers vs. 404s (config-enabled). The route is always mounted
+   *  for a stable address, so callers deriving an "active surfaces" list must gate on this. */
+  readonly enabled: boolean;
   describe(): Record<string, unknown>;
+}
+
+/** Mint a fresh MCP session id, host-agnostically. Prefers the Web Crypto `randomUUID` (a global,
+ *  not `node:crypto`) where present, with a time+random fallback so a host without `crypto` never
+ *  throws — mirroring how core treats Web Crypto as optional (see `mintRootRequestKey`). */
+export function newSessionId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.();
+  if (uuid) return uuid;
+  return `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /** The resolved MCP access policy for this app. */
@@ -628,7 +640,7 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
 
   const createSession = async (): Promise<Session> => {
     const transport = new WebStandardStreamableHTTPServerTransport({
-      sessionIdGenerator: () => crypto.randomUUID(),
+      sessionIdGenerator: () => newSessionId(),
       enableJsonResponse: true,
       onsessionclosed: (id) => {
         sessions.delete(id);
@@ -738,6 +750,7 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
   return {
     name: "mcp",
     routes,
+    enabled: config.enabled,
     describe: () => ({
       mcp: { path: MCP_PATH, enabled: config.enabled, loopbackOnly: !config.allowRemote },
     }),

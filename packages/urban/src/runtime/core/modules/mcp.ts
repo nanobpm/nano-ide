@@ -813,7 +813,15 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
           "mutating MCP tools cannot be authorized: the app OpenAPI spec failed to load (server misconfiguration — see the logged 'mcp: failed to load the app OpenAPI spec' error)",
       };
     }
-    const schemeName = loaded.doc ? sharedSecretSchemeName(loaded.doc) : undefined;
+    // A misconfigured spec — more than one candidate shared-secret scheme, so which one guards
+    // mutations would depend on authoring order — is a 500 (see `sharedSecretSchemeName`), not a
+    // missing/bad credential. Surface it like the other misconfiguration branches above.
+    let schemeName: string | undefined;
+    try {
+      schemeName = loaded.doc ? sharedSecretSchemeName(loaded.doc) : undefined;
+    } catch (e) {
+      return { ok: false, status: 500, error: errorMessage(e) };
+    }
     if (!loaded.doc || !schemeName) {
       return { ok: false, status: 401, error: NO_SHARED_SECRET_SCHEME_ERROR };
     }

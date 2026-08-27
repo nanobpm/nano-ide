@@ -418,21 +418,45 @@ export function diffMcpToolProjection(
 }
 
 /**
- * The name of the app's shared-secret security scheme (ADR 0067/0059): the first `apiKey` scheme in
+ * Every app shared-secret security scheme (ADR 0067/0059): the `apiKey` schemes in
  * `components.securitySchemes` presented in a request HEADER and pointing at an env var via
- * `x-nano-secret-env`. This is the credential the framework MUTATING MCP tools require — REUSING the
+ * `x-nano-secret-env`, in document (authoring) order. Single source of truth for both the guard
+ * selector (`sharedSecretSchemeName`) and its ambiguity check — a mutating MCP tool REUSES the
  * app's existing shared secret (the same one a `webhook` trigger or a guarded operation already
- * uses) instead of minting an MCP-specific synonym. `undefined` when the app declares no such
- * scheme, in which case the mutating tools stay closed unless an explicit runtime opt-in is set.
+ * uses) instead of minting an MCP-specific synonym.
  */
-export function sharedSecretSchemeName(doc: OpenApiDoc): string | undefined {
+export function sharedSecretSchemeNames(doc: OpenApiDoc): string[] {
   const schemes = doc.components?.securitySchemes ?? {};
+  const names: string[] = [];
   for (const [name, scheme] of Object.entries(schemes)) {
     if (scheme.type === "apiKey" && (scheme.in ?? "header") === "header" && scheme["x-nano-secret-env"]) {
-      return name;
+      names.push(name);
     }
   }
-  return undefined;
+  return names;
+}
+
+/**
+ * The name of the app's single shared-secret security scheme (ADR 0067/0059) — the credential the
+ * framework MUTATING MCP tools require. `undefined` when the app declares no such scheme, in which
+ * case the mutating tools stay closed unless an explicit runtime opt-in is set.
+ *
+ * THROWS when the spec declares MORE THAN ONE candidate: which scheme becomes "the" MCP mutation
+ * guard would otherwise depend on `securitySchemes` object iteration (authoring) order, silently
+ * guarding with an unintended secret (or rejecting a different, valid shared-secret header). That is
+ * an incoherent spec, surfaced loudly — the caller maps it to a 500 misconfiguration — rather than
+ * resolved by an invisible "first wins" rule. Derived from `sharedSecretSchemeNames` (no drift).
+ */
+export function sharedSecretSchemeName(doc: OpenApiDoc): string | undefined {
+  const names = sharedSecretSchemeNames(doc);
+  if (names.length > 1) {
+    throw new Error(
+      `OpenAPI spec declares multiple shared-secret schemes (apiKey header with x-nano-secret-env): ` +
+        `${names.join(", ")}. Exactly one may serve as the MCP mutation guard — remove the extras so ` +
+        "the guard scheme is unambiguous.",
+    );
+  }
+  return names[0];
 }
 
 /**

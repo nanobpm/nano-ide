@@ -14,6 +14,8 @@ import {
   resolveSchema,
   responseSchemaForStatus,
   sharedRequestBodySchemas,
+  sharedSecretSchemeName,
+  sharedSecretSchemeNames,
   toRouteMatcher,
   undeclaredPathParams,
   undeclaredSecuritySchemes,
@@ -645,6 +647,44 @@ test("evaluateSecurity: alternative requirements are OR (any one satisfied autho
   // Neither presented → 401.
   assert.equal(evaluateSecurity(doc, op, noHeader, noQuery, env).status, 401);
 });
+
+test("sharedSecretSchemeName: exactly one apiKey header scheme with x-nano-secret-env is the guard", () => {
+  assert.equal(sharedSecretSchemeName(secured), "webhookKey");
+  assert.deepEqual(sharedSecretSchemeNames(secured), ["webhookKey"]);
+});
+
+test("sharedSecretSchemeName: no candidate scheme → undefined (mutations stay closed)", () => {
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: { securitySchemes: { oauth: { type: "oauth2" } } },
+    paths: {},
+  };
+  assert.equal(sharedSecretSchemeName(doc), undefined);
+  assert.deepEqual(sharedSecretSchemeNames(doc), []);
+});
+
+test("sharedSecretSchemeName: MULTIPLE candidate schemes are an explicit misconfiguration, not a silent first-wins", () => {
+  // Two apiKey header schemes both carry x-nano-secret-env: which one guards mutations would
+  // otherwise depend on object iteration (authoring) order — surface it loudly instead.
+  const doc: OpenApiDoc = {
+    openapi: "3.0.0",
+    components: {
+      securitySchemes: {
+        primary: { type: "apiKey", in: "header", name: "X-A", "x-nano-secret-env": "A_KEY" },
+        secondary: { type: "apiKey", in: "header", name: "X-B", "x-nano-secret-env": "B_KEY" },
+      },
+    },
+    paths: {},
+  };
+  // The full candidate list is exposed (source of truth) …
+  assert.deepEqual(sharedSecretSchemeNames(doc), ["primary", "secondary"]);
+  // … and the selector refuses to pick one silently.
+  assert.throws(
+    () => sharedSecretSchemeName(doc),
+    /multiple shared-secret schemes.*primary, secondary/s,
+  );
+});
+
 
 test("responseSchemaForStatus: a documented-but-bodyless status suppresses the default fallback", () => {
   const ops = collectOperations({

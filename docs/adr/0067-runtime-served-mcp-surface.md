@@ -15,7 +15,9 @@ First consumer: nanobpm/nano-workforce (adoption tracked separately there).
 
 Urban apps are increasingly **operated and debugged by AI coding agents**. The worked
 example is nano-workforce: it serves a live, instance-keyed markdown operator guide
-over REST (`GET /app/api/agent`) that a human copy-pastes into an agent — or that a
+over REST (`GET /app/api/agent` — nano-workforce's own OpenAPI operation under the
+framework `/app/api` base, distinct from the framework-mounted static `/app/agent`
+brief of ADR 0060) that a human copy-pastes into an agent — or that a
 bootstrap skill (`skills/nano-workforce/SKILL.md`) fetches on demand — after which the
 agent drives the app's OpenAPI operations with **prose-described `curl`** recipes.
 

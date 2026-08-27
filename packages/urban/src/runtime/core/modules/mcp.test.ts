@@ -550,6 +550,13 @@ test("readMcpConfig defaults ON for loopback and honours env/manifest flags", ()
 
   const manifest: Record<string, unknown> = { mcp: { enabled: false } };
   assert.equal(readMcpConfig(manifest, () => undefined).enabled, false);
+
+  // Non-boolean manifest values are ignored (strict type check, like `readApiBinding`): they fall
+  // back to the defaults rather than coercing — e.g. the string "false" is NOT a boolean `false`.
+  const stringy: Record<string, unknown> = { mcp: { enabled: "false", allowRemote: "true" } };
+  const resolved = readMcpConfig(stringy, () => undefined);
+  assert.equal(resolved.enabled, true, "a non-boolean `enabled` must fall back to the default (ON)");
+  assert.equal(resolved.allowRemote, false, "a non-boolean `allowRemote` must fall back to the default (OFF)");
 });
 
 test("isLoopbackRequest recognises loopback hosts and rejects remote ones", () => {
@@ -614,14 +621,22 @@ test("newSessionId mints a fresh id and never throws when Web Crypto is absent",
   assert.notEqual(a, b, "successive session ids must differ");
 
   // Core treats Web Crypto as optional: in a host without `crypto` the generator must fall back
-  // rather than throw (a bare `crypto.randomUUID()` would throw a ReferenceError here).
+  // rather than throw (a bare `crypto.randomUUID()` would throw a ReferenceError here). Prove the
+  // fallback branch actually ran by removing `crypto` and asserting the `sess-` prefix it mints.
   const savedCrypto = Reflect.getOwnPropertyDescriptor(globalThis, "crypto");
+  assert.notEqual(
+    savedCrypto?.configurable,
+    false,
+    "test requires globalThis.crypto to be configurable to simulate a host without Web Crypto",
+  );
   try {
-    Reflect.deleteProperty(globalThis, "crypto");
+    Reflect.defineProperty(globalThis, "crypto", { value: undefined, configurable: true, writable: true });
+    assert.equal(globalThis.crypto, undefined, "crypto must actually be absent to exercise the fallback branch");
     const fallback = newSessionId();
-    assert.ok(fallback.length > 0, "the fallback id must be non-empty when crypto is unavailable");
+    assert.ok(fallback.startsWith("sess-"), "the id must come from the time+random fallback when crypto is unavailable");
     assert.notEqual(fallback, newSessionId(), "fallback ids must still differ");
   } finally {
     if (savedCrypto) Reflect.defineProperty(globalThis, "crypto", savedCrypto);
+    else Reflect.deleteProperty(globalThis, "crypto");
   }
 });

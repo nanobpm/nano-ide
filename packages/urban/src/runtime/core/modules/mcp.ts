@@ -1,6 +1,8 @@
 // mcp — the runtime-served Model Context Protocol surface (ADR 0067). A Streamable-HTTP MCP
-// endpoint the Urban runtime mounts UNCONDITIONALLY at `GET/POST /app/mcp`, exactly like the
-// `/app/agent` brief and `/app/api-docs` docs surfaces — so an MCP client (`copilot mcp add
+// endpoint the Urban runtime mounts UNCONDITIONALLY at `/app/mcp` (it answers `POST`, plus `DELETE`
+// to end a session; the optional `GET` server→client stream is declined with 405 at the string-body
+// host seam), exactly like the `/app/agent` brief and `/app/api-docs` docs surfaces — so an MCP
+// client (`copilot mcp add
 // --transport http <name> http://localhost:<port>/app/mcp`) discovers an app's operations as
 // tools with ZERO app-side MCP code.
 //
@@ -122,8 +124,13 @@ function isRecord(v: unknown): v is Record<string, unknown> {
  */
 export function readMcpConfig(manifest: unknown, env: (name: string) => string | undefined): McpConfig {
   const raw = manifest && typeof manifest === "object" ? Reflect.get(manifest, "mcp") : undefined;
-  const manifestEnabled = isRecord(raw) ? Reflect.get(raw, "enabled") : undefined;
-  const manifestAllowRemote = isRecord(raw) ? Reflect.get(raw, "allowRemote") : undefined;
+  // Honour manifest flags only when they are actual booleans (mirroring `readApiBinding`'s strict
+  // type checks), so a stray non-boolean value falls back to the default instead of coercing
+  // surprisingly (e.g. the string `"false"` is not a boolean `false`).
+  const rawEnabled = isRecord(raw) ? Reflect.get(raw, "enabled") : undefined;
+  const rawAllowRemote = isRecord(raw) ? Reflect.get(raw, "allowRemote") : undefined;
+  const manifestEnabled = typeof rawEnabled === "boolean" ? rawEnabled : undefined;
+  const manifestAllowRemote = typeof rawAllowRemote === "boolean" ? rawAllowRemote : undefined;
   const envEnabled = env("URBAN_MCP_ENABLED");
   const envAllowRemote = env("URBAN_MCP_ALLOW_REMOTE");
   const enabled = envEnabled === "false" ? false : envEnabled === "true" ? true : manifestEnabled !== false;

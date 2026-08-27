@@ -74,6 +74,13 @@ const MCP_PATH = "/app/mcp";
 /** The header carrying the Streamable-HTTP session id (MCP spec). */
 const SESSION_HEADER = "mcp-session-id";
 
+/** Hard upper bound on concurrently-resident MCP sessions. Each session is a live `Server` +
+ *  transport pair, so an unbounded session map is a memory/handle-exhaustion vector: any local
+ *  process can repeatedly `initialize` without reusing its `mcp-session-id` and pin a fresh pair
+ *  each time. Capping the map (LRU-evicted, refreshed on use — see `evictExcessSessions` /
+ *  `touchSession`) categorically bounds growth regardless of client behaviour or timing. */
+const MAX_SESSIONS = 256;
+
 /** The MCP resource URI for the app's system brief (the `/app/agent.json` content). */
 const SYSTEM_BRIEF_URI = "urban://system-brief.json";
 
@@ -102,6 +109,41 @@ export function newSessionId(): string {
   if (uuid) return uuid;
   return `sess-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
+
+/** Mark a session as most-recently-used. A `Map` preserves insertion order, so deleting and
+ *  re-inserting a live entry moves it to the tail — which makes the first key the least-recently-used
+ *  entry that `evictExcessSessions` reaps first. Refreshing on every use is what keeps an active
+ *  session from being evicted out from under a client that is still talking to it. */
+function touchSession<S>(sessions: Map<string, S>, id: string, session: S): void {
+  sessions.delete(id);
+  sessions.set(id, session);
+}
+
+/** Bound the live-session map to `max` by evicting least-recently-used entries (the `Map`'s leading
+ *  keys, given `touchSession` re-inserts on use), closing each victim best-effort so its transport /
+ *  server releases. This is the categorical fix for the unbounded-growth vector: no client can pin
+ *  more than `max` server/transport pairs, whatever its `initialize` cadence. Exported for a direct
+ *  unit test of the LRU eviction contract. */
+export async function evictExcessSessions<S>(
+  sessions: Map<string, S>,
+  max: number,
+  close: (session: S) => Promise<void>,
+): Promise<void> {
+  while (sessions.size > max) {
+    const oldest = sessions.keys().next().value;
+    if (oldest === undefined) break;
+    const victim = sessions.get(oldest);
+    sessions.delete(oldest);
+    if (victim !== undefined) {
+      try {
+        await close(victim);
+      } catch {
+        // Best-effort: a victim whose transport is already torn down must not abort eviction.
+      }
+    }
+  }
+}
+
 
 /** The resolved MCP access policy for this app. */
 interface McpConfig {
@@ -723,6 +765,8 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
 
     const sessionId = req.headers.get(SESSION_HEADER) ?? undefined;
     let session = sessionId ? sessions.get(sessionId) : undefined;
+    // Refresh an existing session's recency so an actively-used session is never the LRU victim.
+    if (session && sessionId) touchSession(sessions, sessionId, session);
     if (!session) {
       const messages = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
       if (!messages.some((m) => isInitializeRequest(m))) {
@@ -742,7 +786,12 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
     // A newly-initialized session assigns its id during handleRequest — register it so the client's
     // follow-up requests (carrying `mcp-session-id`) resolve back to this same server/transport.
     const assignedId = session.transport.sessionId;
-    if (assignedId && !sessions.has(assignedId)) sessions.set(assignedId, session);
+    if (assignedId && !sessions.has(assignedId)) {
+      sessions.set(assignedId, session);
+      // Enforce the hard cap once the freshly-initialized session is registered, evicting the
+      // least-recently-used pairs (never this one — it is now the newest) so the map stays bounded.
+      await evictExcessSessions(sessions, MAX_SESSIONS, (s) => s.server.close());
+    }
     return toHttpResponse(webResponse);
   };
 

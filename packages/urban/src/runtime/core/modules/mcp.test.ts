@@ -29,7 +29,7 @@ import { makeGateway } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
 import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
-import { isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readMcpConfig } from "./mcp.ts";
+import { evictExcessSessions, isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readMcpConfig } from "./mcp.ts";
 
 // ---- fixtures ---------------------------------------------------------------------------------
 
@@ -639,4 +639,45 @@ test("newSessionId mints a fresh id and never throws when Web Crypto is absent",
     if (savedCrypto) Reflect.defineProperty(globalThis, "crypto", savedCrypto);
     else Reflect.deleteProperty(globalThis, "crypto");
   }
+});
+
+test("evictExcessSessions caps the session map by evicting least-recently-used pairs, closing each", async () => {
+  // Guards the defect class the reviewer flagged: an unbounded `sessions` map is a memory/handle
+  // exhaustion vector. A hard LRU cap must bound the map no matter the client's `initialize` cadence.
+  const closed: string[] = [];
+  const sessions = new Map<string, { id: string }>();
+  for (const id of ["a", "b", "c", "d"]) sessions.set(id, { id });
+
+  await evictExcessSessions(sessions, 2, async (s) => {
+    closed.push(s.id);
+  });
+
+  assert.equal(sessions.size, 2, "the map must be trimmed down to the cap");
+  assert.deepEqual([...sessions.keys()], ["c", "d"], "the two most-recently-inserted survive");
+  assert.deepEqual(closed, ["a", "b"], "evicted (LRU) sessions must be closed, in eviction order");
+
+  // Under the cap it is a no-op and closes nothing.
+  const noop: string[] = [];
+  await evictExcessSessions(sessions, 5, async (s) => {
+    noop.push(s.id);
+  });
+  assert.equal(sessions.size, 2);
+  assert.deepEqual(noop, [], "nothing is evicted while under the cap");
+});
+
+test("evictExcessSessions keeps closing when a victim's close() rejects (best-effort)", async () => {
+  // A victim whose transport is already torn down must not abort eviction of the rest, or a single
+  // dead session could wedge the cap and re-open the unbounded-growth hole.
+  const closed: string[] = [];
+  const sessions = new Map<string, { id: string }>();
+  for (const id of ["x", "y", "z"]) sessions.set(id, { id });
+
+  await evictExcessSessions(sessions, 1, async (s) => {
+    closed.push(s.id);
+    if (s.id === "x") throw new Error("transport already closed");
+  });
+
+  assert.equal(sessions.size, 1);
+  assert.deepEqual([...sessions.keys()], ["z"], "the newest entry survives despite a failing close");
+  assert.deepEqual(closed, ["x", "y"], "both LRU victims are attempted even though the first rejected");
 });

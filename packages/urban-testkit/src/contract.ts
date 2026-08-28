@@ -302,25 +302,43 @@ export function runEngineClientContract(
     });
   });
 
-  test(`${label}: a user task surfaces as a USER_TASK wait state`, async () => {
+  test(`${label}: a USER_TASK wait-state filter is rejected (deployed floor is JOB|MESSAGE)`, async () => {
     await withEngine(async (engine) => {
+      // A native user task parks for a human. It is discoverable — but through the user-task
+      // read channel (`searchUserTasks`/`openUserTasks`), NOT the wait-state read model.
       await engine.deployResources(res(USER_TASK_BPMN));
       const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "human" });
 
-      const waits = await waitForValue(async () => {
-        const found = await engine.searchElementInstanceWaitStates({
-          processInstanceKey,
-          waitStateType: "USER_TASK",
-        });
+      const tasks = await waitForValue(async () => {
+        const found = await engine.openUserTasks({ processInstanceKey });
         return found.length > 0 ? found : undefined;
       });
-      assert.equal(waits.length, 1);
-      const ut = waits[0];
-      assert.equal(ut.elementId, "review");
-      assert.equal(ut.processInstanceKey, processInstanceKey);
-      if (ut.waitStateType === "USER_TASK") {
-        assert.ok(ut.userTaskKey, "a USER_TASK wait state carries the user task key");
-      }
+      assert.equal(tasks.length, 1, "the user task is read via the user-task channel");
+      assert.equal(tasks[0]?.elementId, "review");
+
+      // The deployed gateway's wait-state read model implements only JOB|MESSAGE, so a
+      // `waitStateType: "USER_TASK"` filter is rejected (HTTP 422 against a live gateway). This
+      // leg runs against the WASM adapter *and* the live SDK adapter, so an app authoring this
+      // filter cannot ship green in emulation while a real engine rejects it — the exact
+      // parity gap this contract exists to prevent (issue nanobpm/nano-ide#497).
+      await assert.rejects(
+        engine.searchElementInstanceWaitStates({ processInstanceKey, waitStateType: "USER_TASK" }),
+        (err: unknown) => {
+          assert.ok(err instanceof Error, "expected an Error");
+          assert.match(err.message, /USER_TASK/);
+          return true;
+        },
+        "a USER_TASK wait-state filter must be rejected, not silently emulated",
+      );
+
+      // And an unfiltered wait-state search does not surface the user task as a park — the
+      // emulation reports only the floor kinds a live engine would (here: none).
+      const waits = await engine.searchElementInstanceWaitStates({ processInstanceKey });
+      assert.deepEqual(
+        waits.filter((w) => w.waitStateType === "USER_TASK"),
+        [],
+        "a user task must not appear as a USER_TASK wait state",
+      );
     });
   });
 }

@@ -32,7 +32,7 @@ import type {
   UserTaskFilter,
   WorkerSubscription,
 } from "../core/host.ts";
-import { isBpmnError } from "../core/host.ts";
+import { assertDeployedWaitStateType, isBpmnError } from "../core/host.ts";
 import {
   buildFormSchema,
   parseFormSchema,
@@ -709,10 +709,14 @@ export class SdkEngineClient implements EngineClient {
   async searchElementInstanceWaitStates(
     filter?: ElementInstanceWaitStateFilter,
   ): Promise<ElementInstanceWaitState[]> {
-    // The wait-states search surfaces *every* park (job/message/timer/signal/condition/user
-    // task), not just user tasks. Same zero-wait read + per-row mapping-gate shape as
-    // `searchElementInstances`; the SDK nests park-specific fields under `details`, which
-    // `mapElementInstanceWaitStateRow` unwraps.
+    // The wait-states search surfaces the parks the deployed engine's read model serves.
+    // A `waitStateType` selector outside the deployed floor (`JOB | MESSAGE`) is rejected by
+    // the gateway with HTTP 422; fail fast client-side with a clear error instead, so the
+    // divergence is caught offline and identically to the WASM adapter (No Drift Surfaces).
+    assertDeployedWaitStateType(filter?.waitStateType);
+    // Same zero-wait read + per-row mapping-gate shape as `searchElementInstances`; the SDK
+    // nests park-specific fields under `details`, which `mapElementInstanceWaitStateRow`
+    // unwraps.
     const f: Record<string, unknown> = {};
     if (filter?.processInstanceKey) f.processInstanceKey = filter.processInstanceKey;
     if (filter?.elementId) f.elementId = filter.elementId;

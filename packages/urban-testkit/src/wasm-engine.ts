@@ -25,6 +25,7 @@ import type {
 } from "@nanobpm/engine-wasm/readmodel-types";
 import {
   applyAmbientLineage,
+  assertDeployedWaitStateType,
   type EngineClient,
   type ElementInstanceSummary,
   type ElementInstanceFilter,
@@ -590,14 +591,20 @@ export class WasmEngineClient implements EngineClient {
   }
 
   /**
-   * Search element-instance *wait states* — every park, not only user tasks — derived from the
-   * snapshot's `jobs` (JOB), `messageSubscriptions` (MESSAGE), `timers` (TIMER),
-   * `signalSubscriptions` (SIGNAL) and `userTasks` (USER_TASK). A park row carries its
-   * `elementId` + owning process instance but not the element-instance key, so it is joined to
-   * the same instance's `activeElements` to resolve the key `searchElementInstances` reports —
-   * the two stay consistent. `CONDITION` parks are not modelled by the WASM engine and so never
-   * appear. This mirrors the *effective* behaviour of the gateway-backed `SdkEngineClient`,
-   * which the engine serves server-side; only the derivation site differs.
+   * Search element-instance *wait states* — the parks the deployed engine's read model
+   * serves, derived from the snapshot's `jobs` (JOB) and `messageSubscriptions` (MESSAGE). A
+   * park row carries its `elementId` + owning process instance but not the element-instance
+   * key, so it is joined to the same instance's `activeElements` to resolve the key
+   * `searchElementInstances` reports — the two stay consistent.
+   *
+   * **Deployed floor (`JOB | MESSAGE`).** This synthesizes only the park kinds the deployed
+   * nanobpmn gateway implements ({@link DEPLOYED_WAIT_STATE_TYPES}), and rejects a
+   * `waitStateType` filter outside it with {@link UnsupportedWaitStateTypeError} — exactly as
+   * the gateway-backed `SdkEngineClient` does (the live gateway answers HTTP 422). A
+   * `USER_TASK` park is *not* synthesized here (it is read via `searchUserTasks`), nor are
+   * `TIMER`/`SIGNAL`/`CONDITION`, so the emulation cannot report a park a real engine would
+   * not — a query that passes here passes against a live engine too. Ref:
+   * Magikcraft/nano-bpm#1042.
    */
   async searchElementInstanceWaitStates(
     filter?: ElementInstanceWaitStateFilter,
@@ -1419,13 +1426,21 @@ export function deriveElementInstances(
 }
 
 /** Derive element-instance wait states from the snapshot's park collections (see
- *  {@link WasmEngineClient.searchElementInstanceWaitStates}). Each park's element-instance key
- *  is resolved through {@link activeElementKeyIndex}; the `processInstanceKey`/`elementId`/
- *  `waitStateType` selectors are applied client-side. */
+ *  {@link WasmEngineClient.searchElementInstanceWaitStates}). Synthesizes only the deployed
+ *  floor (`JOB | MESSAGE`, {@link DEPLOYED_WAIT_STATE_TYPES}) — the park kinds the deployed
+ *  gateway's read model serves — so the emulation cannot report a park a live engine would
+ *  not. A `waitStateType` filter outside the floor is rejected with
+ *  {@link UnsupportedWaitStateTypeError} (the gateway answers HTTP 422). Each park's
+ *  element-instance key is resolved through {@link activeElementKeyIndex}; the
+ *  `processInstanceKey`/`elementId`/`waitStateType` selectors are applied client-side. */
 export function deriveWaitStates(
   snapshot: Record<string, unknown>,
   filter?: ElementInstanceWaitStateFilter,
 ): ElementInstanceWaitState[] {
+  // Reject an out-of-floor `waitStateType` up front, mirroring the gateway-backed
+  // `SdkEngineClient` (which fails the same filter with HTTP 422). Enforced through the shared
+  // guard so the floor has one canonical definition (No Drift Surfaces).
+  assertDeployedWaitStateType(filter?.waitStateType);
   const keyIndex = activeElementKeyIndex(snapshot);
   const out: ElementInstanceWaitState[] = [];
   const accept = (w: ElementInstanceWaitState): void => {
@@ -1461,40 +1476,10 @@ export function deriveWaitStates(
       ...(correlationKey ? { correlationKey } : {}),
     });
   }
-  // TIMER parks.
-  for (const timer of records(snapshot.timers)) {
-    const identity = waitStateIdentity(timer, keyIndex);
-    if (identity === undefined) continue;
-    accept({ ...identity, waitStateType: "TIMER" });
-  }
-  // SIGNAL parks — a SIGNAL without a signalName is malformed; skip it.
-  for (const sub of records(snapshot.signalSubscriptions)) {
-    const identity = waitStateIdentity(sub, keyIndex);
-    if (identity === undefined) continue;
-    const signalName = presentString(sub.signalName);
-    if (signalName === undefined) continue;
-    accept({ ...identity, waitStateType: "SIGNAL", signalName });
-  }
-  // USER_TASK parks — the snapshot carries the element-instance key directly on the task row.
-  for (const task of records(snapshot.userTasks)) {
-    const processInstanceKey = presentKey(task.instanceKey);
-    const elementId = presentString(task.elementId);
-    const elementInstanceKey = presentKey(task.elementInstanceKey);
-    const userTaskKey = presentKey(task.key);
-    if (
-      processInstanceKey === undefined || elementId === undefined ||
-      elementInstanceKey === undefined || userTaskKey === undefined
-    ) {
-      continue;
-    }
-    accept({
-      elementInstanceKey,
-      processInstanceKey,
-      elementId,
-      waitStateType: "USER_TASK",
-      userTaskKey,
-    });
-  }
+  // TIMER/SIGNAL/USER_TASK/CONDITION parks are deliberately *not* synthesized: the deployed
+  // gateway's read model does not serve them (`assertDeployedWaitStateType` rejects a filter
+  // for them, and an unfiltered search must not surface a park a live engine would omit). A
+  // user-task park is read through `searchUserTasks`, not here. Ref: Magikcraft/nano-bpm#1042.
   return out;
 }
 

@@ -133,6 +133,14 @@ export { BpmnError, isBpmnError } from "./core/host.ts";
 // double / adapter iterates it to prove at runtime that it implements the full interface,
 // catching the "fake lags the SDK" seam-lag class categorically.
 export { ENGINE_CLIENT_METHODS } from "./core/host.ts";
+// Deployed wait-state floor (issue nanobpm/nano-ide#497): the `waitStateType` values the
+// deployed gateway actually serves, plus the shared guard both EngineClient adapters use so
+// a filter outside the floor fails identically in emulation and against a live engine.
+export {
+  assertDeployedWaitStateType,
+  DEPLOYED_WAIT_STATE_TYPES,
+  UnsupportedWaitStateTypeError,
+} from "./core/host.ts";
 
 // Connector packs (ADR 0050, in-process port)
 export {

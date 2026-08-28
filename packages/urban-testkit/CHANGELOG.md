@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.15.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.15.0...@nanobpm/urban-testkit-0.15.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **urban:** pin wait-state parity to the deployed JOB|MESSAGE floor ([#499](https://github.com/nanobpm/nano-ide/issues/499)) ([0a92e65](https://github.com/nanobpm/nano-ide/commit/0a92e65a59662a0aa17a6af4e27e8b420f92be44))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.81.0 to >=0.86.1
+
 ## [0.15.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.14.0...@nanobpm/urban-testkit-0.15.0) (2026-08-27)
 
 

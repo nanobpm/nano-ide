@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.86.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.86.0...@nanobpm/urban-0.86.1) (2026-08-28)
+
+
+### Bug Fixes
+
+* **urban:** pin wait-state parity to the deployed JOB|MESSAGE floor ([#499](https://github.com/nanobpm/nano-ide/issues/499)) ([0a92e65](https://github.com/nanobpm/nano-ide/commit/0a92e65a59662a0aa17a6af4e27e8b420f92be44))
+
 ## [0.86.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.85.0...@nanobpm/urban-0.86.0) (2026-08-27)
 
 

@@ -13,6 +13,11 @@ import {
   type NanoSdkJobWorkerConfig,
 } from "./nanosdk.ts";
 import { BpmnError } from "../core/host.ts";
+import {
+  assertDeployedWaitStateType,
+  DEPLOYED_WAIT_STATE_TYPES,
+  UnsupportedWaitStateTypeError,
+} from "../core/host.ts";
 import { __resetExecStoreForTests, installExecStore, runInJobContext } from "../core/execContext.ts";
 import { readLineage } from "../core/lineage.ts";
 import { createNodeHost } from "../adapters/node.ts";
@@ -498,6 +503,27 @@ test("normalizeWaitStateType maps the wait-state kinds (case-insensitive) and re
   assert.equal(normalizeWaitStateType(3), undefined);
 });
 
+test("assertDeployedWaitStateType: allows the floor and an absent selector, rejects the rest", () => {
+  // The deployed floor is exactly JOB|MESSAGE — the single source of truth both adapters gate on.
+  assert.deepEqual([...DEPLOYED_WAIT_STATE_TYPES], ["JOB", "MESSAGE"]);
+  // In-floor and absent selectors are no-ops (no throw).
+  assert.doesNotThrow(() => assertDeployedWaitStateType(undefined));
+  assert.doesNotThrow(() => assertDeployedWaitStateType("JOB"));
+  assert.doesNotThrow(() => assertDeployedWaitStateType("MESSAGE"));
+  // Every canonical type outside the floor is rejected with a typed, descriptive error.
+  for (const waitStateType of ["USER_TASK", "TIMER", "SIGNAL", "CONDITION"] as const) {
+    assert.throws(
+      () => assertDeployedWaitStateType(waitStateType),
+      (err: unknown) => {
+        assert.ok(err instanceof UnsupportedWaitStateTypeError);
+        assert.equal(err.waitStateType, waitStateType);
+        assert.match(err.message, /HTTP 422/);
+        return true;
+      },
+    );
+  }
+});
+
 test("searchElementInstances passes zero-wait consistency, maps rows, and forwards selectors", async () => {
   let seenInput: unknown;
   let seenConsistency: unknown;
@@ -650,33 +676,65 @@ test("searchElementInstanceWaitStates forwards a waitStateType selector and read
           {
             elementInstanceKey: "9",
             processInstanceKey: "3",
-            elementId: "ut",
-            waitStateType: "USER_TASK",
-            taskKey: "42",
+            elementId: "catch",
+            waitStateType: "MESSAGE",
+            messageName: "Go",
+            correlationKey: "K1",
           },
           {
             elementInstanceKey: "11",
             processInstanceKey: "3",
-            elementId: "ut2",
-            waitStateType: "USER_TASK",
-          }, // USER_TASK with no taskKey/userTaskKey → dropped (invalid identity)
+            elementId: "catch2",
+            waitStateType: "MESSAGE",
+          }, // MESSAGE with no messageName → dropped (invalid identity)
           { elementInstanceKey: "10", processInstanceKey: "3", elementId: "?" }, // no waitStateType → dropped
         ],
       };
     },
   });
   const engine = new SdkEngineClient(client);
-  const out = await engine.searchElementInstanceWaitStates({ waitStateType: "USER_TASK" });
-  assert.deepEqual(seenInput, { filter: { waitStateType: "USER_TASK" } });
+  const out = await engine.searchElementInstanceWaitStates({ waitStateType: "MESSAGE" });
+  assert.deepEqual(seenInput, { filter: { waitStateType: "MESSAGE" } });
   assert.deepEqual(out, [
     {
       elementInstanceKey: "9",
       processInstanceKey: "3",
-      elementId: "ut",
-      waitStateType: "USER_TASK",
-      userTaskKey: "42",
+      elementId: "catch",
+      waitStateType: "MESSAGE",
+      messageName: "Go",
+      correlationKey: "K1",
     },
   ]);
+});
+
+test("searchElementInstanceWaitStates rejects a waitStateType outside the deployed floor without calling the gateway", async () => {
+  // The deployed gateway's read model implements only JOB|MESSAGE and 422s any other filter
+  // value. The SDK adapter must fail fast client-side (not issue the call), so an app authoring
+  // `waitStateType: "USER_TASK"` cannot ship green then blow up at runtime (issue
+  // nanobpm/nano-ide#497).
+  let called = false;
+  const client = fakeSdkClient({
+    searchElementInstanceWaitStates: async () => {
+      called = true;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  for (const waitStateType of ["USER_TASK", "TIMER", "SIGNAL", "CONDITION"] as const) {
+    await assert.rejects(
+      engine.searchElementInstanceWaitStates({ waitStateType }),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.match(err.message, /unsupported waitStateType/);
+        assert.match(err.message, new RegExp(waitStateType));
+        return true;
+      },
+    );
+  }
+  assert.equal(called, false, "the gateway must not be called for an out-of-floor filter");
+  // An in-floor filter still reaches the gateway.
+  await engine.searchElementInstanceWaitStates({ waitStateType: "JOB" });
+  assert.equal(called, true);
 });
 
 test("searchElementInstanceWaitStates drops parks missing their required discriminator field", async () => {

@@ -296,10 +296,19 @@ export interface ElementInstanceSummary {
 
 /**
  * The kind of wait an element instance is parked in, as a
- * `/v2/element-instances/wait-states/search` result reports it. Unlike a user-task search,
- * this surfaces *every* park — a `JOB` (a service task awaiting a worker), a `MESSAGE`
- * (an event awaiting correlation), a `TIMER`, a `SIGNAL`, a `CONDITION`, as well as a
- * `USER_TASK` — so a consumer can read "what is this instance blocked on" beyond user tasks.
+ * `/v2/element-instances/wait-states/search` result reports it. This is the *canonical*
+ * six-type contract (Zeebe's, as of 2026): a `JOB` (a service task awaiting a worker), a
+ * `MESSAGE` (an event awaiting correlation), a `TIMER`, a `SIGNAL`, a `CONDITION`, as well
+ * as a `USER_TASK`.
+ *
+ * **Not every deployed engine implements the whole union.** It is forward-looking on
+ * purpose (the response mapper and {@link normalizeWaitStateType} tolerate all six so a
+ * newer engine's rows map cleanly), but the *currently deployed* nanobpmn gateway's
+ * read-model floor is narrower — see {@link DEPLOYED_WAIT_STATE_TYPES}. A
+ * {@link ElementInstanceWaitStateFilter} whose `waitStateType` falls outside that floor is
+ * rejected (the gateway answers HTTP 422); {@link assertDeployedWaitStateType} enforces the
+ * same floor client-side so the divergence surfaces as a clear error offline, in tests, and
+ * against a live engine alike. Ref: Magikcraft/nano-bpm#1042.
  */
 export type WaitStateType =
   | "JOB"
@@ -308,6 +317,59 @@ export type WaitStateType =
   | "TIMER"
   | "SIGNAL"
   | "CONDITION";
+
+/**
+ * The `waitStateType` values the *currently deployed* nanobpmn gateway's wait-state read
+ * model actually implements — the **deployed floor**, a strict subset of the canonical
+ * {@link WaitStateType} union. The gateway's read model is a snapshot of the Zeebe contract
+ * taken 2026-06-09 (the same day Zeebe extended it with `USER_TASK`, then `TIMER`/`SIGNAL`/
+ * `CONDITION`), so it recognizes only `JOB | MESSAGE` and rejects any other filter value
+ * with HTTP 422.
+ *
+ * This constant is the **single source of truth** for that floor: the SDK-backed and
+ * WASM-backed {@link EngineClient} adapters both gate through {@link assertDeployedWaitStateType},
+ * and the WASM emulation synthesizes only these park kinds — so a test cannot pass against
+ * the emulation while a real gateway would 422 (No Drift Surfaces). Widen it (adding a leg
+ * backed by the real gateway) only once the engine actually serves the richer type — the
+ * tracking gap is Magikcraft/nano-bpm#1042.
+ */
+export const DEPLOYED_WAIT_STATE_TYPES: readonly WaitStateType[] = ["JOB", "MESSAGE"];
+
+/**
+ * Thrown when a wait-state search is asked to filter on a {@link WaitStateType} the deployed
+ * gateway's read model does not implement (outside {@link DEPLOYED_WAIT_STATE_TYPES}). It
+ * fails fast client-side with a clear, offline-detectable error rather than letting the call
+ * reach the gateway and surface as an opaque HTTP 422 "did not match any variant of untagged
+ * enum WaitStateTypeFilterProperty". Ref: Magikcraft/nano-bpm#1042.
+ */
+export class UnsupportedWaitStateTypeError extends Error {
+  readonly waitStateType: string;
+  readonly supported: readonly WaitStateType[];
+  constructor(waitStateType: string) {
+    super(
+      `unsupported waitStateType "${waitStateType}": the deployed nanobpmn gateway's ` +
+        `wait-state read model implements only ${DEPLOYED_WAIT_STATE_TYPES.join(" | ")} and ` +
+        `rejects any other value with HTTP 422. Ref: Magikcraft/nano-bpm#1042.`,
+    );
+    this.name = "UnsupportedWaitStateTypeError";
+    this.waitStateType = waitStateType;
+    this.supported = DEPLOYED_WAIT_STATE_TYPES;
+  }
+}
+
+/**
+ * Assert a wait-state filter's `waitStateType` is within the deployed floor
+ * ({@link DEPLOYED_WAIT_STATE_TYPES}), throwing {@link UnsupportedWaitStateTypeError}
+ * otherwise. An absent selector is always allowed (the search is unfiltered by type). Both
+ * {@link EngineClient} adapters call this before issuing a wait-state search, so the floor is
+ * enforced identically whether the query runs against a live gateway or the in-process
+ * emulation. No-ops for an in-floor type.
+ */
+export function assertDeployedWaitStateType(waitStateType?: WaitStateType): void {
+  if (waitStateType !== undefined && !DEPLOYED_WAIT_STATE_TYPES.includes(waitStateType)) {
+    throw new UnsupportedWaitStateTypeError(waitStateType);
+  }
+}
 
 /**
  * A single parked (waiting) element instance as
@@ -352,6 +414,10 @@ export interface ElementInstanceFilter {
  * Selectors for an element-instance *wait-state* search: which process instance, element,
  * and/or kind of wait to match. Used by {@link EngineClient.searchElementInstanceWaitStates}.
  * There is deliberately no lifecycle-`state` selector — a wait state is always an active park.
+ *
+ * A `waitStateType` selector must fall within the deployed floor
+ * ({@link DEPLOYED_WAIT_STATE_TYPES}); a value outside it is rejected with
+ * {@link UnsupportedWaitStateTypeError} (the live gateway answers HTTP 422).
  */
 export interface ElementInstanceWaitStateFilter {
   processInstanceKey?: string;
@@ -512,11 +578,19 @@ export interface EngineClient {
   ): Promise<ElementInstanceSummary[]>;
   /**
    * Search the *wait states* of element instances
-   * (`POST /v2/element-instances/wait-states/search`) — every park, not only user tasks. A
-   * `JOB` park (a service task awaiting a worker), a `MESSAGE` park (an event awaiting
-   * correlation), a `TIMER`/`SIGNAL`/`CONDITION`, plus `USER_TASK`. A zero-wait read; each
-   * result is discriminated by `waitStateType` (see {@link ElementInstanceWaitState}), so a
-   * consumer can read the job/message parks a {@link searchUserTasks} cannot surface.
+   * (`POST /v2/element-instances/wait-states/search`) — the parks the deployed engine's
+   * read model serves. A zero-wait read; each result is discriminated by `waitStateType`
+   * (see {@link ElementInstanceWaitState}), so a consumer can read the job/message parks a
+   * {@link searchUserTasks} cannot surface.
+   *
+   * **Deployed floor.** The currently deployed nanobpmn gateway implements only
+   * `JOB | MESSAGE` ({@link DEPLOYED_WAIT_STATE_TYPES}) — a `USER_TASK` park is read via
+   * {@link searchUserTasks}, not here. A `waitStateType` filter outside the floor is rejected
+   * with {@link UnsupportedWaitStateTypeError} (the live gateway answers HTTP 422); an
+   * unfiltered search returns only in-floor parks. The `waitStateType` union is
+   * forward-looking (richer engines may serve more), but this adapter contract pins the
+   * floor so a query cannot pass in emulation while a real engine rejects it. Ref:
+   * Magikcraft/nano-bpm#1042.
    */
   searchElementInstanceWaitStates(
     filter?: ElementInstanceWaitStateFilter,

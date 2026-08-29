@@ -68,6 +68,15 @@ jobs:
       - name: MCP tool projection is in parity with the spec
         run: npm run check:mcp -w packages/urban
 
+      # `check:mcp` above pins the projection over a minimal SYNTHETIC fixture — which is exactly
+      # why the `$ref`-body defect shipped (the fixture never contained a `$ref`-bodied op, a real
+      # consumer spec does). This step holds the SAME projection to VENDORED, pinned, REAL consumer
+      # `openapi.yaml` documents (nano-workforce first) and fails the build if any projected tool is
+      # not self-contained (P0 #502) or an object body would not round-trip (P1 #503). No running
+      # instance needed. See packages/urban/src/openapi/consumer-specs/README.md.
+      - name: MCP projection conforms over real consumer specs
+        run: npm run check:mcp-conformance -w packages/urban
+
   # db/migrations/*.sql are forward-only and applied in lexical filename order, so
   # the numeric prefix is load-bearing (see scripts/lib/migration-order.mjs). Two
   # branches that fork off the same state can each pick "the next free prefix N"

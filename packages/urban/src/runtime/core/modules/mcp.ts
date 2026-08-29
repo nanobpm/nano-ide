@@ -367,7 +367,7 @@ function toHttpRequest(
  *  `collectOperations`). As defence in depth, if that metadata is somehow still a bare `$ref` (it
  *  should never be after resolution), re-resolve it via {@link resolveSchema} against `doc` so the
  *  classification below never keys off an opaque `#/components/...` pointer. */
-function effectiveRequestBodySchema(
+export function effectiveRequestBodySchema(
   op: OperationInfo,
   doc: OpenApiDoc | undefined,
 ): OpenApiSchema | undefined {
@@ -380,7 +380,7 @@ function effectiveRequestBodySchema(
  *  expects as a JSON object/array rather than a bare scalar. Classified from the RESOLVED schema so a
  *  `$ref`-bodied op (e.g. `previewDeliveryGraph`, whose object `type` is only visible after P0's
  *  resolution) is recognized, not merely an inline-`type` object body. */
-function structuredBodyKind(schema: OpenApiSchema | undefined): "object" | "array" | undefined {
+export function structuredBodyKind(schema: OpenApiSchema | undefined): "object" | "array" | undefined {
   if (!schema) return undefined;
   if (isObjectSchema(schema)) return "object";
   if (schemaHasType(schema, "array")) return "array";
@@ -396,7 +396,7 @@ function structuredBodyKind(schema: OpenApiSchema | undefined): "object" | "arra
  *  passes through untouched (still serialized by the transport). A string that does not parse to the
  *  declared shape is a CLEAR tool error naming the expected shape — never a silently double-encoded
  *  (and 4xx-rejected) request. */
-function normalizeBodyArg(
+export function normalizeBodyArg(
   op: OperationInfo,
   args: Record<string, unknown>,
   doc: OpenApiDoc | undefined,

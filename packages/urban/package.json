@@ -95,6 +95,7 @@
 		"check:runtime": "node scripts/gen-runtime.mjs --check",
 		"gen:mcp-tools": "node --experimental-strip-types scripts/gen-mcp-tools.ts",
 		"check:mcp": "node --experimental-strip-types scripts/gen-mcp-tools.ts --check",
+		"check:mcp-conformance": "node --experimental-strip-types scripts/check-mcp-conformance.ts",
 		"test": "node --test --experimental-strip-types \"src/**/*.test.ts\"",
 		"test:conformance": "node --test --experimental-strip-types \"src/context/conformance/**/*.conformance.ts\"",
 		"check:pii": "node --experimental-strip-types scripts/check-pii.ts",

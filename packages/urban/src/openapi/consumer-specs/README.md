@@ -26,9 +26,11 @@ The guard needs **no running instance** — it projects the vendored file direct
 | `nano-workforce.openapi.yaml` | [`nanobpm/nano-workforce`](https://github.com/nanobpm/nano-workforce) | `2018020a290c2f416e703e3584b27f92ccf27753` |
 
 The pin is the single source of truth in code: `CONSUMER_SPECS` in
-`../../runtime/core/modules/mcp-conformance.ts` (`ref` field) records the same commit,
-and `mcp-conformance.test.ts` asserts the two agree so the table and the vendored
-bytes can never silently drift.
+`../../runtime/mcp-conformance.ts` (`ref` field) records the same commit. Keep the
+table above in sync with that `ref` when refreshing a pin. `mcp-conformance.test.ts`
+asserts each `ref` is a full 40-hex commit SHA (so a mutable branch/tag pin cannot
+make the guard non-deterministic); it does not verify the table ↔ code ↔ vendored
+bytes provenance, so update both together by hand.
 
 ## Refreshing a pinned spec
 

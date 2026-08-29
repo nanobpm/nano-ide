@@ -39,8 +39,10 @@ const SPECS_DIR = resolve(HERE, "../openapi/consumer-specs");
 
 /** A vendored, pinned consumer OpenAPI spec the MCP projection is held to. Pinned to a specific
  *  commit so the guard is deterministic and offline (no live-instance dependency). The `ref` here is
- *  the single in-code source of truth for the pin — `mcp-conformance.test.ts` asserts it matches the
- *  vendored bytes' provenance, and `consumer-specs/README.md` documents the same commit. */
+ *  the single in-code source of truth for the pin — `mcp-conformance.test.ts` asserts it is a full
+ *  40-hex commit SHA (so a mutable branch/tag ref can't make the guard non-deterministic), and
+ *  `consumer-specs/README.md` documents the same commit. The test does not verify that `ref` matches
+ *  the vendored bytes' provenance, so keep code, README, and bytes in sync when refreshing a pin. */
 export interface ConsumerSpec {
   /** Short label used in violation messages, e.g. "nano-workforce". */
   label: string;

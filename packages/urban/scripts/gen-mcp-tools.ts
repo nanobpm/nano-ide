@@ -22,6 +22,7 @@ import { dirname, resolve } from "node:path";
 import {
   collectMcpToolProjection,
   diffMcpToolProjection,
+  findAllToolSchemaViolations,
   type McpToolProjection,
   parseSpec,
 } from "../src/openapi/spec.ts";
@@ -30,16 +31,38 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const FIXTURE = resolve(HERE, "../src/openapi/mcp-parity.fixture.yaml");
 const SNAPSHOT = resolve(HERE, "../src/openapi/mcp-tools.snapshot.json");
 
+function doc() {
+  return parseSpec(readFileSync(FIXTURE, "utf8"));
+}
+
 function project(): McpToolProjection[] {
-  return collectMcpToolProjection(parseSpec(readFileSync(FIXTURE, "utf8")));
+  return collectMcpToolProjection(doc());
 }
 
 function serialize(projection: McpToolProjection[]): string {
   return `${JSON.stringify(projection, null, 2)}\n`;
 }
 
+/** Every projected tool must expose a self-contained input schema: no unresolved `$ref` (an MCP
+ *  client cannot follow `#/components/...`) and an explicit `type` on `body`. This runs on BOTH
+ *  regenerate and `--check`, so a fixture that would ship an opaque tool schema fails loudly instead
+ *  of being written into the snapshot (ADR 0067). */
+function assertSelfContained(): void {
+  const violations = findAllToolSchemaViolations(doc());
+  if (violations.length > 0) {
+    console.error(
+      "check:mcp: a projected MCP tool input schema is not self-contained:\n" +
+        violations.map((line) => `  ${line}`).join("\n") +
+        "\n\nResolve the offending component `$ref`(s) in the projection (openapi/spec.ts).",
+    );
+    process.exit(1);
+  }
+}
+
 const check = process.argv.includes("--check");
 const current = project();
+
+assertSelfContained();
 
 if (check) {
   let committed: McpToolProjection[];

@@ -2,7 +2,12 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   collectOperations,
+  collectMcpToolProjection,
+  diffMcpToolProjection,
   evaluateSecurity,
+  findAllToolSchemaViolations,
+  findSchemaRefLeaks,
+  findToolSchemaViolations,
   isObjectSchema,
   isSafeOperationId,
   isMutatingMethod,
@@ -12,10 +17,12 @@ import {
   operationsWithUnsafeId,
   parseSpec,
   resolveSchema,
+  resolveSchemaDeep,
   responseSchemaForStatus,
   sharedRequestBodySchemas,
   sharedSecretSchemeName,
   sharedSecretSchemeNames,
+  toolInputSchema,
   toRouteMatcher,
   undeclaredPathParams,
   undeclaredSecuritySchemes,
@@ -177,6 +184,163 @@ test("resolveSchema follows a local $ref and guards cycles", () => {
   assert.equal(resolved?.type, "object");
   const cyclic: OpenApiDoc = { openapi: "3.0.0", components: { schemas: { A: { $ref: "#/components/schemas/A" } } }, paths: {} };
   assert.equal(resolveSchema(cyclic, { $ref: "#/components/schemas/A" }), undefined);
+});
+
+test("resolveSchemaDeep inlines nested $refs into a self-contained, $ref-free schema", () => {
+  const nestedDoc: OpenApiDoc = {
+    openapi: "3.1.0",
+    components: {
+      schemas: {
+        Submit: {
+          type: "object",
+          required: ["root"],
+          properties: { root: { $ref: "#/components/schemas/Node" }, note: { type: "string" } },
+        },
+        Node: {
+          type: "object",
+          required: ["id"],
+          properties: { id: { type: "string" }, meta: { $ref: "#/components/schemas/Meta" } },
+        },
+        Meta: { type: "object", properties: { label: { type: "string" } } },
+      },
+    },
+    paths: {},
+  };
+  const resolved = resolveSchemaDeep(nestedDoc, { $ref: "#/components/schemas/Submit" });
+  // A bare `$ref` body with no inline `type` resolves to an explicit `type: object`, and the nested
+  // `Node` ref inside `root` (and the deeper `Meta` ref inside `Node`) are inlined too — no `$ref`
+  // survives at any depth.
+  assert.equal(resolved?.type, "object");
+  assert.ok(!JSON.stringify(resolved).includes("$ref"));
+  const root = resolved?.properties?.root;
+  assert.equal(root?.type, "object");
+  assert.equal(root?.properties?.id?.type, "string");
+  assert.equal(root?.properties?.meta?.type, "object");
+  assert.equal(root?.properties?.meta?.properties?.label?.type, "string");
+});
+
+test("resolveSchemaDeep inlines a diamond (same component in sibling branches) without a false cycle", () => {
+  const diamond: OpenApiDoc = {
+    openapi: "3.1.0",
+    components: {
+      schemas: {
+        Pair: {
+          type: "object",
+          properties: { left: { $ref: "#/components/schemas/Leaf" }, right: { $ref: "#/components/schemas/Leaf" } },
+        },
+        Leaf: { type: "object", properties: { v: { type: "integer" } } },
+      },
+    },
+    paths: {},
+  };
+  const resolved = resolveSchemaDeep(diamond, { $ref: "#/components/schemas/Pair" });
+  assert.equal(resolved?.properties?.left?.properties?.v?.type, "integer");
+  assert.equal(resolved?.properties?.right?.properties?.v?.type, "integer");
+});
+
+test("resolveSchemaDeep fails loudly on an irreducible cycle rather than leaking a $ref", () => {
+  const cyclic: OpenApiDoc = {
+    openapi: "3.1.0",
+    components: { schemas: { A: { type: "object", properties: { self: { $ref: "#/components/schemas/A" } } } } },
+    paths: {},
+  };
+  assert.throws(
+    () => resolveSchemaDeep(cyclic, { $ref: "#/components/schemas/A" }),
+    /\$ref cycle/,
+  );
+});
+
+test("resolveSchemaDeep fails loudly on a dangling/non-local $ref rather than leaking it", () => {
+  assert.throws(
+    () => resolveSchemaDeep(doc, { $ref: "#/components/schemas/Missing" }),
+    /does not resolve to a local component/,
+  );
+  assert.throws(
+    () => resolveSchemaDeep(doc, { $ref: "https://example.com/external.json#/X" }),
+    /does not resolve to a local component/,
+  );
+});
+
+test("collectOperations exposes the resolved request-body schema as operation metadata", () => {
+  // Downstream consumers (ADR 0067 P1) read the resolved body type from `requestBodySchemaResolved`;
+  // the raw `requestBodySchema` keeps its `$ref` for the type deriver + shared-ref fingerprinting.
+  const create = collectOperations(doc).find((o) => o.operationId === "createInvoice");
+  assert.equal(create?.requestBodySchema?.$ref, "#/components/schemas/Invoice");
+  assert.equal(create?.requestBodySchemaResolved?.type, "object");
+  assert.ok(!JSON.stringify(create?.requestBodySchemaResolved).includes("$ref"));
+});
+
+test("toolInputSchema resolves a $ref body to a self-contained typed schema", () => {
+  const create = collectOperations(doc).find((o) => o.operationId === "createInvoice");
+  assert.ok(create);
+  const schema = toolInputSchema(create);
+  assert.ok(!JSON.stringify(schema).includes("$ref"));
+  assert.deepEqual(schema, {
+    type: "object",
+    properties: {
+      body: {
+        type: "object",
+        properties: { id: { type: "string" }, amount: { type: "integer", minimum: 1 } },
+        required: ["id", "amount"],
+        additionalProperties: false,
+      },
+    },
+    required: ["body"],
+  });
+});
+
+test("findSchemaRefLeaks reports every surviving $ref path, empty when self-contained", () => {
+  assert.deepEqual(findSchemaRefLeaks({ type: "object", properties: { a: { type: "string" } } }), []);
+  assert.deepEqual(
+    findSchemaRefLeaks({ properties: { body: { $ref: "#/components/schemas/X" } } }),
+    ["properties.body"],
+  );
+});
+
+test("findToolSchemaViolations flags a leaked $ref and a body missing an explicit type", () => {
+  assert.deepEqual(findToolSchemaViolations("ok", { type: "object", properties: { body: { type: "object" } } }), []);
+  const leak = findToolSchemaViolations("leaky", { type: "object", properties: { body: { $ref: "#/components/schemas/X" } } });
+  assert.equal(leak.length, 2); // both the $ref leak AND the missing body type
+  assert.ok(leak.some((m) => /leaks an unresolved \$ref/.test(m)));
+  assert.ok(leak.some((m) => /body has no explicit `type`/.test(m)));
+  const untyped = findToolSchemaViolations("untyped", { type: "object", properties: { body: { properties: {} } } });
+  assert.deepEqual(untyped, ["untyped: inputSchema.properties.body has no explicit `type`"]);
+});
+
+test("findAllToolSchemaViolations passes a resolved-body doc and catches a would-be $ref leak", () => {
+  // The real doc (a $ref body) is self-contained AFTER projection resolution — no violations.
+  assert.deepEqual(findAllToolSchemaViolations(doc), []);
+  // Excluded ops are never advertised, so their schema is not asserted.
+  const excludedDoc: OpenApiDoc = {
+    openapi: "3.1.0",
+    components: { schemas: { Invoice: { type: "object", properties: { id: { type: "string" } } } } },
+    paths: {
+      "/x": {
+        post: {
+          operationId: "hiddenOp",
+          "x-mcp": false,
+          requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/Invoice" } } } },
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  assert.deepEqual(findAllToolSchemaViolations(excludedDoc), []);
+});
+
+test("collectMcpToolProjection carries a self-contained inputSchema; diff catches an inputSchema skew", () => {
+  const projection = collectMcpToolProjection(doc);
+  const create = projection.find((p) => p.operationId === "createInvoice");
+  assert.equal(create?.inputSchema?.type, "object");
+  assert.ok(!JSON.stringify(create?.inputSchema).includes("$ref"));
+  // A snapshot whose body schema regressed to a $ref (or otherwise differs) is reported as drift.
+  const stale = projection.map((p) =>
+    p.operationId === "createInvoice"
+      ? { ...p, inputSchema: { type: "object", properties: { body: { $ref: "#/components/schemas/Invoice" } }, required: ["body"] } }
+      : p,
+  );
+  const drift = diffMcpToolProjection(stale, projection);
+  assert.ok(drift.some((line) => /createInvoice: inputSchema changed/.test(line)));
 });
 
 test("validateValue enforces the JSON-Schema subset via $ref", () => {

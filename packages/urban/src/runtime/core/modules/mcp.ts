@@ -55,6 +55,7 @@ import {
   parseSpec,
   type SecurityDecision,
   sharedSecretSchemeName,
+  toolInputSchema,
 } from "../../../openapi/spec.ts";
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage } from "../guards.ts";
@@ -250,26 +251,10 @@ function isMutatingOperation(op: OperationInfo): boolean {
   return isMutatingMethod(op.method);
 }
 
-/** A JSON Schema (OpenAPI object subset) describing a tool's input, derived from an operation's
- *  path/query parameters and its request-body schema. Keeping the property schemas verbatim from the
- *  spec means the tool input schema and the HTTP validation share one source of truth. */
-function toolInputSchema(op: OperationInfo): Record<string, unknown> {
-  const properties: Record<string, unknown> = {};
-  const required: string[] = [];
-  for (const p of op.parameters) {
-    if (p.in === "path" || p.in === "query") {
-      properties[p.name] = p.schema ?? {};
-      if (p.required) required.push(p.name);
-    }
-  }
-  if (op.requestBodySchema) {
-    properties.body = op.requestBodySchema;
-    if (op.requestBodyRequired) required.push("body");
-  }
-  const schema: Record<string, unknown> = { type: "object", properties };
-  if (required.length > 0) schema.required = required;
-  return schema;
-}
+/** A JSON Schema (OpenAPI object subset) describing a tool's input is derived once, in
+ *  `openapi/spec.ts`'s {@link toolInputSchema}, from an operation's resolved (`$ref`-free) parameter
+ *  and request-body metadata — so the tool input schema the runtime advertises and the schema the CI
+ *  parity guard pins are the SAME derivation (one source of truth, ADR 0053/0067). */
 
 /** Substitute an operation's `{param}` path-template segments with the supplied arguments, building
  *  the request path under the shared `/app/api` base so dispatch hits the exact `mountApi` route. */

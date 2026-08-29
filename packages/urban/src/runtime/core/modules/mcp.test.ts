@@ -327,6 +327,34 @@ test("a projected tool's input schema matches the spec's params", async () => {
   });
 });
 
+test("a $ref-bodied tool projects a self-contained body schema (no $ref, explicit type)", async () => {
+  // createInvoice's requestBody is `{ $ref: "#/components/schemas/Invoice" }` — a bare $ref with no
+  // inline `type`. An MCP client cannot resolve `#/components/...` outside the document, so the
+  // projected tool schema MUST inline the concrete Invoice shape (ADR 0067). Regression guard for the
+  // leak that shipped an opaque `#/components/...` pointer into `inputSchema.properties.body`.
+  const { router } = buildHarness();
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+  const createInvoice = tools.find((t) => Reflect.get(t, "name") === "createInvoice");
+  const schema = Reflect.get(createInvoice ?? {}, "inputSchema");
+  assert.deepEqual(schema, {
+    type: "object",
+    properties: {
+      body: {
+        type: "object",
+        properties: { id: { type: "string" }, amount: { type: "integer", minimum: 1 } },
+        required: ["id", "amount"],
+        additionalProperties: false,
+      },
+    },
+    required: ["body"],
+  });
+  // Self-containment holds structurally: the serialized schema carries no `$ref` token at all.
+  assert.ok(!JSON.stringify(schema).includes("$ref"), "projected body schema must not leak a $ref");
+});
+
 test("a tool call routes through the SAME mountApi delegate as the HTTP call", async () => {
   let seenParams: Record<string, unknown> | undefined;
   const { router, imported } = buildHarness({

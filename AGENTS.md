@@ -102,6 +102,37 @@ packages use — copy it rather than inventing a variant:
   with `Cannot find module @nanobpm/workflow` until root `npm run build` has emitted
   the dependency's `dist/`. Working order: **build → typecheck → test → lint**.
 
+## Generated Derived Artifacts Are Shared-State Merge Hazards
+
+Several surfaces are **committed derived artifacts, gated on drift**: a file is
+regenerated wholesale from a source (a spec, a fixture, code) and a fail-on-drift
+CI check keeps the committed copy honest. Current gates:
+
+| Derived artifact | Regenerate | Drift gate |
+| --- | --- | --- |
+| `packages/urban/src/openapi/mcp-tools.snapshot.json` — the MCP tool projection (ADR 0067) | `npm run gen:mcp-tools -w packages/urban` | `npm run check:mcp -w packages/urban` (+ `check:mcp-conformance` over real consumer specs) |
+| `packages/urban/src/runtime/core/modules/runtime.gen.ts` | `npm run gen:runtime -w packages/urban` | `npm run check:runtime -w packages/urban` |
+| `db/migrations/NNN_*.sql` prefixes (see below) | — | `npm run check:migrations` |
+
+Two rules follow, and they bite agents and humans alike:
+
+- **Regenerate and review in the same PR.** When you touch the *source* of a
+  derived artifact — e.g. the MCP projection walker in `openapi/spec.ts`, or the
+  `mcp-parity.fixture.yaml` it captures — regenerate the artifact and run its
+  drift gate *before pushing*. A fixture/code edit without a matching regenerated
+  snapshot is a guaranteed red CI. The MCP guard additionally asserts each tool
+  `body` is self-contained (no `$ref`, explicit `type`).
+- **Don't parallelize two tasks that both rewrite one wholesale artifact.** The
+  snapshot — like a migration prefix — is captured *wholesale*, so two branches
+  that each append to the fixture and regenerate are **green in isolation but red
+  on `main`**: the second merge's `check:mcp` regenerates against the *combined*
+  fixture and diffs, and if the first task's projection change altered shared
+  entries, the second's pinned snapshot is already stale before it lands. Merge
+  such slices into one task, or serialize them (`dependsOn`) so one regenerates on
+  top of the other's merged output. A "rebase if a sibling lands first"
+  landing-order hack is **not** an acceptable remedy — decompose so the collision
+  cannot occur.
+
 ## Database Migrations
 
 Migrations live in `db/migrations/NNN_description.sql`, are forward-only and

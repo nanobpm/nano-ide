@@ -50,9 +50,13 @@ import {
   collectOperations,
   evaluateSecurity,
   isMutatingMethod,
+  isObjectSchema,
   type OpenApiDoc,
+  type OpenApiSchema,
   type OperationInfo,
   parseSpec,
+  resolveSchema,
+  schemaHasType,
   type SecurityDecision,
   sharedSecretSchemeName,
   toolInputSchema,
@@ -336,6 +340,10 @@ function toHttpRequest(
   args: Record<string, unknown>,
   forwardHeaders: Record<string, string | string[] | undefined>,
 ): HttpRequest {
+  // `args.body` is expected to already be the structured value the operation declares — a
+  // pre-encoded JSON-string body is normalized upstream by `normalizeBodyArg` (called in
+  // `dispatchOperationTool`) so `JSON.stringify` here serializes an object/array ONCE rather than
+  // double-encoding a quoted string the door would reject (ADR 0067).
   const bodyText = op.requestBodySchema !== undefined && args.body !== undefined
     ? JSON.stringify(args.body)
     : "";
@@ -352,6 +360,76 @@ function toHttpRequest(
     headers,
     text: () => Promise.resolve(bodyText),
   };
+}
+
+/** The operation's effective request-body schema for classifying a tool-call `body`: P0's resolved,
+ *  `$ref`-free schema ({@link OperationInfo.requestBodySchemaResolved}, produced by
+ *  `collectOperations`). As defence in depth, if that metadata is somehow still a bare `$ref` (it
+ *  should never be after resolution), re-resolve it via {@link resolveSchema} against `doc` so the
+ *  classification below never keys off an opaque `#/components/...` pointer. */
+function effectiveRequestBodySchema(
+  op: OperationInfo,
+  doc: OpenApiDoc | undefined,
+): OpenApiSchema | undefined {
+  const schema = op.requestBodySchemaResolved ?? op.requestBodySchema;
+  if (schema?.$ref) return doc ? resolveSchema(doc, schema) : undefined;
+  return schema;
+}
+
+/** Whether the operation declares a STRUCTURED (object/array) request body — the shapes the app door
+ *  expects as a JSON object/array rather than a bare scalar. Classified from the RESOLVED schema so a
+ *  `$ref`-bodied op (e.g. `previewDeliveryGraph`, whose object `type` is only visible after P0's
+ *  resolution) is recognized, not merely an inline-`type` object body. */
+function structuredBodyKind(schema: OpenApiSchema | undefined): "object" | "array" | undefined {
+  if (!schema) return undefined;
+  if (isObjectSchema(schema)) return "object";
+  if (schemaHasType(schema, "array")) return "array";
+  return undefined;
+}
+
+/** Normalize a tool-call `body` argument for FAITHFUL transport (ADR 0067). A client that saw an
+ *  opaque input schema — or that coerces non-primitive args — may send `body` as a pre-encoded JSON
+ *  *string* instead of the object/array the operation declares. Left as-is, `toHttpRequest`'s
+ *  `JSON.stringify` would DOUBLE-encode it into a quoted string and the door would reject it with
+ *  "expected object, got string". So when the op declares an object/array body and `body` arrives as
+ *  a string, parse it once so it round-trips as the structured value. A genuine object/array argument
+ *  passes through untouched (still serialized by the transport). A string that does not parse to the
+ *  declared shape is a CLEAR tool error naming the expected shape — never a silently double-encoded
+ *  (and 4xx-rejected) request. */
+function normalizeBodyArg(
+  op: OperationInfo,
+  args: Record<string, unknown>,
+  doc: OpenApiDoc | undefined,
+): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+  const body = args.body;
+  const kind = structuredBodyKind(effectiveRequestBodySchema(op, doc));
+  if (body === undefined || kind === undefined || typeof body !== "string") {
+    return { ok: true, args };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return {
+      ok: false,
+      error:
+        `validation failed: the "body" argument was sent as a string but this operation expects a JSON ${kind}; the string is not valid JSON`,
+    };
+  }
+  const parsedKind = Array.isArray(parsed)
+    ? "array"
+    : parsed !== null && typeof parsed === "object"
+      ? "object"
+      : undefined;
+  if (parsedKind !== kind) {
+    const got = parsedKind ?? (parsed === null ? "null" : typeof parsed);
+    return {
+      ok: false,
+      error:
+        `validation failed: the "body" argument was sent as a string but this operation expects a JSON ${kind}; it parsed to a ${got}`,
+    };
+  }
+  return { ok: true, args: { ...args, body: parsed } };
 }
 
 /** Wrap a value as an MCP tool text result. A JSON payload is stringified; `isError` flags a
@@ -838,10 +916,16 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
         true,
       );
     }
+    // Faithful body transport (ADR 0067): a client may send an object/array `body` pre-encoded as a
+    // JSON string. Normalize it to the structured value from the operation's RESOLVED body schema so
+    // it is not double-encoded by `toHttpRequest`; a string that cannot parse to the declared shape
+    // is a clear tool error rather than a silent 4xx from a double-encoded body.
+    const normalized = normalizeBodyArg(op, args, (await loadSpecDoc()).doc);
+    if (!normalized.ok) return textResult({ error: normalized.error }, true);
     // Forward the MCP connection's headers so the reused router enforces the operation's own
     // OpenAPI `security` (a mutating — or secured read — app op is guarded exactly as its HTTP
     // route). A `401`/`403`/`500` from that enforcement flows back as an error tool result.
-    const res = await apiRouter(toHttpRequest(op, args, headers));
+    const res = await apiRouter(toHttpRequest(op, normalized.args, headers));
     const status = res.status ?? 200;
     return textResult(res.body ?? "", status >= 400);
   };

@@ -64,5 +64,36 @@
       "type": "object",
       "properties": {}
     }
+  },
+  {
+    "operationId": "bulkCreateWidgets",
+    "method": "post",
+    "mutating": true,
+    "excluded": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "required": [
+            "items"
+          ],
+          "properties": {
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "dryRun": {
+              "type": "boolean"
+            }
+          }
+        }
+      },
+      "required": [
+        "body"
+      ]
+    }
   }
 ]

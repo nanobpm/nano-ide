@@ -356,6 +356,65 @@ test("a $ref-bodied tool projects a self-contained body schema (no $ref, explici
   assert.ok(!JSON.stringify(schema).includes("$ref"), "projected body schema must not leak a $ref");
 });
 
+test("an object body reaches the door as an object; a pre-encoded JSON-string body is parsed, not double-encoded; a malformed string body is a clear error", async () => {
+  // `createInvoice`'s requestBody is `{ $ref: "#/components/schemas/Invoice" }` — an object body
+  // whose concrete `type` is only visible after the projection resolver inlines the component. The
+  // transport must classify it as an object body FROM THE RESOLVED SCHEMA (not the raw `$ref`) so the
+  // string-parse path triggers for exactly this motivating shape, not merely an inline-`type` body.
+  let seenBody: unknown = "unset";
+  const { router } = buildHarness({
+    modules: {
+      "/app/operations/createInvoice": {
+        default: (input: { body: unknown }) => {
+          seenBody = input.body;
+          return { body: { ok: true } };
+        },
+      },
+    },
+  });
+  const session = await connect(router);
+
+  // 1. A genuine object argument reaches the door (the reused delegate) AS AN OBJECT.
+  const objCall = await rpc(router, session, "tools/call", {
+    name: "createInvoice",
+    arguments: { body: { id: "7", amount: 3 } },
+  });
+  assert.notEqual(objCall.result?.isError, true, `object body call must succeed: ${toolContentText(objCall.result)}`);
+  assert.deepEqual(seenBody, { id: "7", amount: 3 }, "an object body argument must reach the door as an object");
+
+  // 2. A PRE-ENCODED JSON-string body is accepted and parsed — NOT double-encoded into a quoted
+  //    string the door would reject with "expected object, got string".
+  seenBody = "unset";
+  const strCall = await rpc(router, session, "tools/call", {
+    name: "createInvoice",
+    arguments: { body: JSON.stringify({ id: "9", amount: 5 }) },
+  });
+  assert.notEqual(strCall.result?.isError, true, `pre-encoded string body must be accepted: ${toolContentText(strCall.result)}`);
+  assert.deepEqual(seenBody, { id: "9", amount: 5 }, "a pre-encoded JSON-string body must be parsed to an object at the door");
+
+  // 3. A malformed string body is a CLEAR tool error naming the expected shape — never a silent 4xx
+  //    from a forwarded double-encoded body, and the delegate must not run.
+  seenBody = "unset";
+  const badCall = await rpc(router, session, "tools/call", {
+    name: "createInvoice",
+    arguments: { body: "{not valid json" },
+  });
+  assert.equal(badCall.result?.isError, true, "a malformed string body must return an isError result");
+  assert.match(toolContentText(badCall.result), /object/i, "the error must name the expected object shape");
+  assert.equal(seenBody, "unset", "the door delegate must not run for a malformed string body");
+
+  // 4. A string that parses to the WRONG shape (a scalar) is likewise a clear error, not a
+  //    double-encoded forward — the object body path fails loudly on a non-object.
+  seenBody = "unset";
+  const wrongShape = await rpc(router, session, "tools/call", {
+    name: "createInvoice",
+    arguments: { body: "42" },
+  });
+  assert.equal(wrongShape.result?.isError, true, "a string parsing to a scalar must return an isError result");
+  assert.match(toolContentText(wrongShape.result), /object/i, "the error must name the expected object shape");
+  assert.equal(seenBody, "unset", "the door delegate must not run for a wrong-shape string body");
+});
+
 test("a tool call routes through the SAME mountApi delegate as the HTTP call", async () => {
   let seenParams: Record<string, unknown> | undefined;
   const { router, imported } = buildHarness({

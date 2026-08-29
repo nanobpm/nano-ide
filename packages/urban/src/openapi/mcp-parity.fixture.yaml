@@ -19,6 +19,11 @@
 #                                          self-contained (no `$ref`, explicit
 #                                          `type`) — an MCP client cannot resolve
 #                                          `#/components/...` outside this document.
+#   - an INLINE object-body op (POST)    → its request body declares `type: object`
+#                                          inline, exercising the faithful object-body
+#                                          transport path (object arg → door receives
+#                                          an object; a pre-encoded JSON string is
+#                                          parsed, not double-encoded).
 #
 # Edit this fixture ONLY together with a reviewed `npm run gen:mcp-tools`.
 openapi: 3.1.0
@@ -93,3 +98,25 @@ paths:
       responses:
         "200":
           description: ok
+  /widgets/bulk:
+    post:
+      operationId: bulkCreateWidgets
+      summary: "Bulk create widgets (mutating — inline `type: object` request body, object-arg round-trip case)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - items
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: string
+                dryRun:
+                  type: boolean
+      responses:
+        "201":
+          description: created

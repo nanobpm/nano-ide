@@ -42,13 +42,30 @@ import {
 ```
 
 The vocab/parser modules are **browser-safe** (no `Buffer`, no Node-only imports), so the cockpit derive
-runs in-browser. Kinds: `message`, `tool-call`, `tool-result`, `turn`, `step`, `lifecycle`, plus the
-raw `stream-chunk` fallback that preserves byte-level replay fidelity. A stored chunk is decoded as a
-structured event **only** when it is a JSON object carrying `TRANSCRIPT_EVENT_MARKER` at the current
+runs in-browser. Kinds: `message`, `tool-call`, `tool-result`, `turn`, `step`, `lifecycle`, `permission`,
+plus the raw `stream-chunk` fallback that preserves byte-level replay fidelity. A stored chunk is decoded
+as a structured event **only** when it is a JSON object carrying `TRANSCRIPT_EVENT_MARKER` at the current
 version — otherwise it is retained verbatim, so a raw ANSI frame that happens to be JSON is never
 mis-classified. `TRANSCRIPT_EVENT_MARKER` + `parseTranscriptEvent` are the canonical detection surface
 the whole package family (e.g. the cockpit's structured-stream drill-in) imports from here — never a
 private copy.
+
+### Permission events (ACP `session/request_permission`)
+
+`permission` is a **first-class core kind** (not an extension): ACP's `session/request_permission` is
+protocol-universal — every Urban app with ACP agents gets permission prompts — so it lives beside
+`tool-call`/`tool-result` in `CORE_TRANSCRIPT_VOCAB`. A single decoder handles both phases (`request`
+and `resolution`), branching on `phase`; the fold pairs a request with its resolution by `callId` into a
+`DerivedPermission` on `DerivedView.permissions` and `DerivedTurn.permissions` (mirroring how a
+`tool-call` pairs with its `tool-result`). `optionKindAllows(kind)` is the single source of truth for
+whether a chosen ACP option allows or rejects the action.
+
+```ts
+import { optionKindAllows, type DerivedPermission } from "@nanobpm/agentic/transcript";
+
+optionKindAllows("allow-once"); // true   (allow-* → allow)
+optionKindAllows("reject-always"); // false (reject-* → reject)
+```
 
 ### Extending the vocabulary (merge, don't fork)
 
@@ -56,12 +73,12 @@ A downstream app adds its own kind + parse handler **without editing this packag
 
 ```ts
 const appVocab = mergeTranscriptVocab(CORE_TRANSCRIPT_VOCAB, {
-  permission: (body, offset) =>
-    typeof body.requestId === "string"
-      ? { kind: "message", offset, role: "system", text: `permission(${body.requestId})` }
+  annotation: (body, offset) =>
+    typeof body.noteId === "string"
+      ? { kind: "message", offset, role: "system", text: `annotation(${body.noteId})` }
       : undefined, // reject malformed → raw fallback
 });
-parseTranscriptEvent({ offset, chunk }, appVocab); // the one parser, now aware of `permission`
+parseTranscriptEvent({ offset, chunk }, appVocab); // the one parser, now aware of `annotation`
 ```
 
 ### Migration for nano-workforce
@@ -74,7 +91,9 @@ shared copy:
    `TRANSCRIPT_EVENT_VERSION`, `utf8ByteLength`, the event types, …). The public API — symbol names,
    the `"nwfTranscriptEvent"` marker string, and version `1` — is preserved verbatim, so this is a
    drop-in.
-2. Register nano-workforce's app-specific `permission` kind (nano-workforce#559) via
-   `mergeTranscriptVocab(CORE_TRANSCRIPT_VOCAB, { permission: … })` instead of editing a forked parser.
+2. nano-workforce's `permission` kind (nano-workforce#559) is now **first-class in this package** —
+   import `PermissionPolicy`, `PermissionOption`, `PermissionOptionKind`, `optionKindAllows`,
+   `PermissionRequestEvent`, `PermissionResolutionEvent`, and `DerivedPermission` from here instead of
+   registering it via `mergeTranscriptVocab` or maintaining a forked shape.
 3. **Delete** `app/agentic/transcript-events.ts` (and fold its `transcript-events.drift.test.ts` marker
    guard into the shared package's guard, already ported here as `events.drift.test.ts`).

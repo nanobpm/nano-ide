@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.88.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.87.1...@nanobpm/urban-0.88.0) (2026-08-29)
+
+
+### Features
+
+* **urban:** real-spec MCP projection conformance guard (P2 [#504](https://github.com/nanobpm/nano-ide/issues/504)) ([#509](https://github.com/nanobpm/nano-ide/issues/509)) ([9964785](https://github.com/nanobpm/nano-ide/commit/9964785a058809fa3517dab7272cd6aa7d87aac6))
+
 ## [0.87.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.87.0...@nanobpm/urban-0.87.1) (2026-08-29)
 
 

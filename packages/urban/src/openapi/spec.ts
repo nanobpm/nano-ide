@@ -481,7 +481,10 @@ export function findSchemaRefLeaks(value: unknown, path = ""): string[] {
     }
     if (v && typeof v === "object") {
       for (const [k, child] of Object.entries(v)) {
-        if (k === "$ref") leaks.push(p || "<root>");
+        // A JSON-Schema `$ref` is a *string* pointer; only that form is an unresolvable leak. A
+        // property literally named `$ref` with a non-string value is an ordinary schema key, so
+        // recurse into it (real leaks can still hide nested beneath such a property).
+        if (k === "$ref" && typeof child === "string") leaks.push(p || "<root>");
         else visit(child, p ? `${p}.${k}` : k);
       }
     }

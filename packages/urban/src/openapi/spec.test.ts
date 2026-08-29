@@ -295,6 +295,17 @@ test("findSchemaRefLeaks reports every surviving $ref path, empty when self-cont
     findSchemaRefLeaks({ properties: { body: { $ref: "#/components/schemas/X" } } }),
     ["properties.body"],
   );
+  // A property literally named `$ref` whose value is NOT a string is an ordinary schema key, not a
+  // JSON-Schema reference — it must not be reported as a leak, and real leaks nested beneath it are
+  // still caught.
+  assert.deepEqual(
+    findSchemaRefLeaks({ type: "object", properties: { $ref: { type: "string" } } }),
+    [],
+  );
+  assert.deepEqual(
+    findSchemaRefLeaks({ properties: { $ref: { body: { $ref: "#/components/schemas/X" } } } }),
+    ["properties.$ref.body"],
+  );
 });
 
 test("findToolSchemaViolations flags a leaked $ref and a body missing an explicit type", () => {

@@ -338,7 +338,8 @@ test("a $ref-bodied tool projects a self-contained body schema (no $ref, explici
   const tools = list.result?.tools;
   assert.ok(Array.isArray(tools));
   const createInvoice = tools.find((t) => Reflect.get(t, "name") === "createInvoice");
-  const schema = Reflect.get(createInvoice ?? {}, "inputSchema");
+  assert.ok(createInvoice, "createInvoice must be present in tools/list before checking its schema");
+  const schema = Reflect.get(createInvoice, "inputSchema");
   assert.deepEqual(schema, {
     type: "object",
     properties: {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.8.0...@nanobpm/agentic-0.9.0) (2026-08-29)
+
+
+### Features
+
+* **agentic/transcript:** lift `permission` event kind into the core vocab ([#514](https://github.com/nanobpm/nano-ide/issues/514)) ([#515](https://github.com/nanobpm/nano-ide/issues/515)) ([ae5c5db](https://github.com/nanobpm/nano-ide/commit/ae5c5db021eeb73423ebaf92339ebec59a56607b))
+
 ## [0.8.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.7.0...@nanobpm/agentic-0.8.0) (2026-08-26)
 
 

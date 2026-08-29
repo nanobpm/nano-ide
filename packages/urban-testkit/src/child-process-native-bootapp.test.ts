@@ -2,9 +2,10 @@
 //
 // The testkit no longer rewrites `<bpmn:callActivity>` at deploy time: deployed XML reaches the
 // engine unmodified, so an un-mocked call activity executes natively — the engine instantiates the
-// called process as a real child instance, the parent parks until the child completes, and the
-// child's variables propagate back. This proves that end-to-end through `bootTestApp` (the deploy
-// path a real Urban app uses), not just against the raw engine.
+// called process as a real child instance and the parent parks until the child completes. This
+// proves that end-to-end through `bootTestApp` (the deploy path a real Urban app uses), not just
+// against the raw engine. (Child→parent variable *propagation* is tracked separately and is NOT
+// asserted here — see the NOTE in the first test.)
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -13,8 +14,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bootTestApp } from "./boot-app.ts";
 
-// Parent: start → callActivity(fulfilment) → userTask review. `propagateAllChildVariables` surfaces
-// the child's output on the parent so we can observe the native child ran and merged back.
+// Parent: start → callActivity(fulfilment) → userTask review. The child is declared with
+// `propagateAllChildVariables`, but this test only observes that the native child ran to
+// completion and the parent parked past the call activity — it does not assert variable
+// propagation (tracked separately; see the NOTE below).
 const PARENT_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
              xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
@@ -33,7 +36,8 @@ const PARENT_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
 </definitions>`;
 
 // The real called process: a service task backed by a real worker handler. Native execution runs
-// this child for real (no mock stands in for it), and its output flows back to the parent.
+// this child for real (no mock stands in for it), and it runs to completion before the parent
+// continues.
 const FULFILMENT_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
              xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"

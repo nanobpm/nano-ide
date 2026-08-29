@@ -415,6 +415,71 @@ test("an object body reaches the door as an object; a pre-encoded JSON-string bo
   assert.equal(seenBody, "unset", "the door delegate must not run for a wrong-shape string body");
 });
 
+test("an array body reaches the door as an array; a pre-encoded JSON-string array body is parsed, not double-encoded; a wrong-shape string is a clear error", async () => {
+  // Mirror of the object-body transport test for the ARRAY branch: `structuredBodyKind` can return
+  // "array" and `normalizeBodyArg` has an `Array.isArray(parsed)` path, so a regression in array
+  // handling must be caught here. `createBatch`'s requestBody declares a `type: array` body — the
+  // transport must classify it as an array body and parse a pre-encoded JSON-string array once so it
+  // round-trips as an array rather than being double-encoded into a quoted string the door rejects.
+  const arraySpec = JSON.stringify({
+    openapi: "3.0.0",
+    paths: {
+      "/batch": {
+        post: {
+          operationId: "createBatch",
+          requestBody: {
+            required: true,
+            content: { "application/json": { schema: { type: "array", items: { type: "string" } } } },
+          },
+          responses: { "201": {} },
+        },
+      },
+    },
+  });
+  let seenBody: unknown = "unset";
+  const { router } = buildHarness({
+    spec: arraySpec,
+    modules: {
+      "/app/operations/createBatch": {
+        default: (input: { body: unknown }) => {
+          seenBody = input.body;
+          return { body: { ok: true } };
+        },
+      },
+    },
+  });
+  const session = await connect(router);
+
+  // 1. A genuine array argument reaches the door (the reused delegate) AS AN ARRAY.
+  const arrCall = await rpc(router, session, "tools/call", {
+    name: "createBatch",
+    arguments: { body: ["a", "b"] },
+  });
+  assert.notEqual(arrCall.result?.isError, true, `array body call must succeed: ${toolContentText(arrCall.result)}`);
+  assert.deepEqual(seenBody, ["a", "b"], "an array body argument must reach the door as an array");
+
+  // 2. A PRE-ENCODED JSON-string array body is accepted and parsed — NOT double-encoded into a quoted
+  //    string the door would reject with "expected array, got string".
+  seenBody = "unset";
+  const strCall = await rpc(router, session, "tools/call", {
+    name: "createBatch",
+    arguments: { body: JSON.stringify(["a", "b"]) },
+  });
+  assert.notEqual(strCall.result?.isError, true, `pre-encoded string array body must be accepted: ${toolContentText(strCall.result)}`);
+  assert.deepEqual(seenBody, ["a", "b"], "a pre-encoded JSON-string array body must be parsed to an array at the door");
+
+  // 3. A string that parses to the WRONG shape (an object) is a clear error naming the expected
+  //    array shape, not a double-encoded forward — and the delegate must not run.
+  seenBody = "unset";
+  const wrongShape = await rpc(router, session, "tools/call", {
+    name: "createBatch",
+    arguments: { body: JSON.stringify({ not: "an array" }) },
+  });
+  assert.equal(wrongShape.result?.isError, true, "a string parsing to an object must return an isError result");
+  assert.match(toolContentText(wrongShape.result), /array/i, "the error must name the expected array shape");
+  assert.equal(seenBody, "unset", "the door delegate must not run for a wrong-shape string array body");
+});
+
 test("a tool call routes through the SAME mountApi delegate as the HTTP call", async () => {
   let seenParams: Record<string, unknown> | undefined;
   const { router, imported } = buildHarness({

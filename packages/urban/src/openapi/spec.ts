@@ -106,6 +106,11 @@ export interface OpenApiParameter {
   in: "path" | "query" | "header" | "cookie";
   required?: boolean;
   schema?: OpenApiSchema;
+  /** The parameter's schema with every local component `$ref` inlined (via {@link resolveSchemaDeep}),
+   *  so a consumer that cannot resolve `#/components/...` — e.g. an MCP client reading the projected
+   *  tool `inputSchema` — sees a self-contained schema. Absent when the parameter declares no schema.
+   *  The raw {@link schema} is retained for the type deriver, which maps a `$ref` to its named type. */
+  resolvedSchema?: OpenApiSchema;
 }
 
 export interface OpenApiMediaType {
@@ -178,6 +183,16 @@ export interface OperationInfo {
   path: string;
   parameters: OpenApiParameter[];
   requestBodySchema?: OpenApiSchema;
+  /** The request-body schema with every local component `$ref` deeply inlined (via
+   *  {@link resolveSchemaDeep}), so it is self-contained: no `$ref`, and an explicit `type` where the
+   *  referenced component declared one. This is what the MCP tool projection copies into a tool's
+   *  `inputSchema.properties.body` — an MCP client cannot resolve `#/components/...` outside the
+   *  original document, so the projected schema must carry the concrete shape. The raw
+   *  {@link requestBodySchema} is retained alongside it for the type deriver (which maps a `$ref` to
+   *  its named TypeScript type) and for `sharedRequestBodySchemas` (which fingerprints shared refs).
+   *  Absent exactly when {@link requestBodySchema} is absent. Downstream slices (ADR 0067) read the
+   *  resolved body `type` from here rather than re-resolving a possibly-`$ref` raw schema. */
+  requestBodySchemaResolved?: OpenApiSchema;
   requestBodyRequired: boolean;
   /** Every documented JSON response, keyed by status code ("200","400",…,"default"), in a stable
    *  order. The type layer unions these into the operation's response type; the runtime validates a
@@ -254,6 +269,62 @@ export function resolveSchema(
   return current;
 }
 
+/** Deeply inline every local component `$ref` in a schema, returning a self-contained schema with no
+ *  `$ref` anywhere in its tree (top-level chain plus nested `properties`/`items`/
+ *  `additionalProperties`/`allOf`/`oneOf`/`anyOf`). This is the resolver the MCP tool projection uses
+ *  so a tool's `inputSchema` carries the concrete shape rather than an opaque `#/components/...`
+ *  pointer an MCP client cannot follow (ADR 0067). It reuses the same local-ref semantics as
+ *  {@link resolveSchema}, extended to recurse into subschemas.
+ *
+ *  Cycles and unresolvable refs FAIL LOUDLY rather than leak a `$ref`:
+ *   - a `$ref` that reappears on its own resolution path (an irreducible cycle — a schema that
+ *     cannot be finitely inlined) throws;
+ *   - a `$ref` that is non-local or dangles (no matching `#/components/schemas/*`) throws.
+ *  `seenRefs` tracks refs on the CURRENT path only, so a component referenced twice in sibling
+ *  branches (a diamond) inlines fine — only genuine self-reference is rejected. */
+export function resolveSchemaDeep(
+  doc: OpenApiDoc,
+  schema: OpenApiSchema | undefined,
+  seenRefs: ReadonlySet<string> = new Set(),
+): OpenApiSchema | undefined {
+  if (!schema) return undefined;
+  let current: OpenApiSchema = schema;
+  let seen = seenRefs;
+  while (current.$ref) {
+    const ref = current.$ref;
+    if (seen.has(ref)) {
+      throw new Error(
+        `OpenAPI schema $ref cycle: ${[...seen, ref].join(" -> ")} cannot be inlined into a self-contained schema`,
+      );
+    }
+    const name = refName(ref);
+    const next = name ? doc.components?.schemas?.[name] : undefined;
+    if (!next) {
+      throw new Error(
+        `OpenAPI schema $ref "${ref}" does not resolve to a local component — a self-contained schema cannot contain an unresolvable $ref`,
+      );
+    }
+    seen = new Set(seen).add(ref);
+    current = next;
+  }
+  const out: OpenApiSchema = { ...current };
+  delete out.$ref;
+  if (current.properties) {
+    out.properties = Object.fromEntries(
+      Object.entries(current.properties).map(([k, v]) => [k, resolveSchemaDeep(doc, v, seen) ?? {}]),
+    );
+  }
+  if (current.items) out.items = resolveSchemaDeep(doc, current.items, seen);
+  if (current.additionalProperties && typeof current.additionalProperties === "object") {
+    out.additionalProperties = resolveSchemaDeep(doc, current.additionalProperties, seen);
+  }
+  for (const key of ["allOf", "oneOf", "anyOf"] as const) {
+    const arr = current[key];
+    if (arr) out[key] = arr.map((s) => resolveSchemaDeep(doc, s, seen) ?? {});
+  }
+  return out;
+}
+
 function firstJsonSchema(
   content: Record<string, unknown> | undefined,
 ): OpenApiSchema | undefined {
@@ -289,12 +360,31 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
       if (!isRecord(opRaw)) continue;
       const operationId = typeof opRaw.operationId === "string" ? opRaw.operationId : undefined;
       if (!operationId || !isSafeOperationId(operationId)) continue;
+      // Resolve exclusion BEFORE any deep `$ref` inlining. An `x-mcp`-excluded operation is never
+      // advertised as a tool, so its schema is never projected or self-containment-guarded; doing
+      // its (throwing) deep resolution eagerly would let a dangling/cyclic `$ref` on an EXCLUDED
+      // door crash projection/guards for the whole document — even though that door is withheld.
+      // Excluded ops therefore carry no `resolvedSchema`/`requestBodySchemaResolved` (unused).
+      const mcpExcluded = isMcpExcluded(opRaw["x-mcp"]);
       const opParams = Array.isArray(opRaw.parameters) ? opRaw.parameters : [];
-      const parameters = normalizeParameters([...pathParams, ...opParams]);
+      const parameters = normalizeParameters([...pathParams, ...opParams]).map((p) => ({
+        ...p,
+        // Inline any local component `$ref` so the projected MCP tool schema is self-contained. The
+        // raw `p.schema` is kept for the type deriver; the tool projection reads `resolvedSchema`.
+        resolvedSchema: mcpExcluded ? undefined : resolveSchemaDeep(doc, p.schema),
+      }));
       const requestBody = isRecord(opRaw.requestBody) ? opRaw.requestBody : undefined;
       const requestBodySchema = firstJsonSchema(
         isRecord(requestBody?.content) ? requestBody.content : undefined,
       );
+      // Deeply inline component `$ref`s so downstream consumers (the MCP tool projection, ADR 0067)
+      // get a self-contained, explicitly-typed body schema — never an opaque `#/components/...`
+      // pointer. Raw `requestBodySchema` is retained (deriver + shared-ref fingerprinting). A cyclic
+      // or unresolvable body ref fails loudly here rather than leaking a `$ref` — but only for a
+      // projected (non-excluded) op; an excluded op skips this throwing work (see above).
+      const requestBodySchemaResolved = mcpExcluded
+        ? undefined
+        : resolveSchemaDeep(doc, requestBodySchema);
       const responses = isRecord(opRaw.responses) ? opRaw.responses : {};
       // Effective security: an operation's own `security` (even an explicit `[]`, which opts out of
       // a document-level default) wins; otherwise inherit the document-level default; otherwise open.
@@ -308,11 +398,12 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         path,
         parameters,
         requestBodySchema,
+        requestBodySchemaResolved,
         requestBodyRequired: requestBody?.required === true,
         responseSchemas: collectResponseSchemas(responses),
         security,
         eject: opRaw["x-urban-eject"] === true,
-        mcpExcluded: isMcpExcluded(opRaw["x-mcp"]),
+        mcpExcluded,
         summary: typeof opRaw.summary === "string" ? opRaw.summary : undefined,
       });
     }
@@ -349,15 +440,114 @@ export function isMutatingMethod(method: HttpMethodLower): boolean {
   return !READ_ONLY_METHODS.includes(method);
 }
 
-/** One operation's MCP-tool projection facts: its id, HTTP method, whether it mutates, and whether
- *  `x-mcp` excludes it from projection. This is the shared unit the runtime MCP surface AND the CI
- *  spec↔tool parity guard both read — a single derivation of "which operations become tools", never
- *  a second walker (ADR 0053). */
+/** A JSON Schema (OpenAPI object subset) describing a tool's input, derived from an operation's
+ *  path/query parameters and its request-body schema. It is the SINGLE derivation both the runtime
+ *  MCP surface (`tools/list`) and the CI parity guard read, so a tool's advertised input schema and
+ *  the HTTP validation it dispatches to can never drift (ADR 0053/0067).
+ *
+ *  Every property schema is taken from the operation's resolved (`$ref`-free) metadata — the
+ *  parameters' `resolvedSchema` and the body's `requestBodySchemaResolved`, both produced by
+ *  {@link resolveSchemaDeep} in {@link collectOperations} — so the emitted schema is self-contained:
+ *  an MCP client, which cannot follow a `#/components/...` pointer outside the original document,
+ *  sees the concrete shape (and an explicit `type` on the body). */
+export function toolInputSchema(op: OperationInfo): Record<string, unknown> {
+  const properties: Record<string, unknown> = {};
+  const required: string[] = [];
+  for (const p of op.parameters) {
+    if (p.in === "path" || p.in === "query") {
+      properties[p.name] = p.resolvedSchema ?? p.schema ?? {};
+      if (p.required) required.push(p.name);
+    }
+  }
+  const body = op.requestBodySchemaResolved;
+  if (body) {
+    properties.body = body;
+    if (op.requestBodyRequired) required.push("body");
+  }
+  const schema: Record<string, unknown> = { type: "object", properties };
+  if (required.length > 0) schema.required = required;
+  return schema;
+}
+
+/** Walk a JSON value (a projected tool schema) and return a pointer for every `$ref` still present.
+ *  Empty means the schema is self-contained — no `#/components/...` an MCP client cannot resolve. The
+ *  path is a dotted trail to each leak (e.g. `properties.body.properties.foo`). Pure/total. */
+export function findSchemaRefLeaks(value: unknown, path = ""): string[] {
+  const leaks: string[] = [];
+  const visit = (v: unknown, p: string): void => {
+    if (Array.isArray(v)) {
+      v.forEach((item, i) => visit(item, `${p}[${i}]`));
+      return;
+    }
+    if (v && typeof v === "object") {
+      for (const [k, child] of Object.entries(v)) {
+        // A JSON-Schema `$ref` is a *string* pointer; only that form is an unresolvable leak. A
+        // property literally named `$ref` with a non-string value is an ordinary schema key, so
+        // recurse into it (real leaks can still hide nested beneath such a property).
+        if (k === "$ref" && typeof child === "string") leaks.push(p || "<root>");
+        else visit(child, p ? `${p}.${k}` : k);
+      }
+    }
+  };
+  visit(value, path);
+  return leaks;
+}
+
+/** Whether a (record-typed) schema declares an explicit JSON-Schema `type` — a non-empty string or a
+ *  non-empty array of types. Operates on a raw record (not a typed {@link OpenApiSchema}) so it can
+ *  vet a projected tool schema's `body` property without an unchecked cast. */
+function hasExplicitType(schema: Record<string, unknown>): boolean {
+  const t = schema.type;
+  if (typeof t === "string") return t.length > 0;
+  return Array.isArray(t) && t.length > 0;
+}
+
+/** Self-containment violations in one projected tool's `inputSchema`: any surviving `$ref` (an
+ *  MCP client cannot resolve `#/components/...`), and — when the tool has a `body` property — a
+ *  `body` that carries no explicit `type` (so the client cannot tell it is an object/array and
+ *  mis-encodes the argument). Empty means the schema is a usable, self-contained input contract.
+ *  This is the pure assertion the `check:mcp` guard runs over every projected tool (ADR 0067). */
+export function findToolSchemaViolations(
+  operationId: string,
+  inputSchema: Record<string, unknown>,
+): string[] {
+  const violations: string[] = [];
+  for (const leak of findSchemaRefLeaks(inputSchema)) {
+    violations.push(`${operationId}: inputSchema leaks an unresolved $ref at ${leak}`);
+  }
+  const properties = isRecord(inputSchema.properties) ? inputSchema.properties : undefined;
+  const body = properties && isRecord(properties.body) ? properties.body : undefined;
+  if (body && !hasExplicitType(body)) {
+    violations.push(`${operationId}: inputSchema.properties.body has no explicit \`type\``);
+  }
+  return violations;
+}
+
+/** Every self-containment violation across all projected (non-excluded) tools for a document — the
+ *  aggregate the `check:mcp` guard fails on. Excluded operations are skipped: they are withheld from
+ *  the live tool surface, so their schema is never advertised to a client. */
+export function findAllToolSchemaViolations(doc: OpenApiDoc): string[] {
+  const violations: string[] = [];
+  for (const op of collectOperations(doc)) {
+    if (op.mcpExcluded) continue;
+    violations.push(...findToolSchemaViolations(op.operationId, toolInputSchema(op)));
+  }
+  return violations;
+}
+
+/** One operation's MCP-tool projection facts: its id, HTTP method, whether it mutates, whether
+ *  `x-mcp` excludes it from projection, and its self-contained input schema. This is the shared unit
+ *  the runtime MCP surface AND the CI spec↔tool parity guard both read — a single derivation of
+ *  "which operations become tools and what each accepts", never a second walker (ADR 0053). */
 export interface McpToolProjection {
   operationId: string;
   method: HttpMethodLower;
   mutating: boolean;
   excluded: boolean;
+  /** The tool's `inputSchema` as advertised to an MCP client (absent for an excluded op, which is
+   *  never advertised). Captured in the snapshot so a projection change — including a body `$ref`
+   *  that stops being resolved — is caught by `check:mcp` drift, not discovered by a client. */
+  inputSchema?: Record<string, unknown>;
 }
 
 /**
@@ -366,7 +556,7 @@ export interface McpToolProjection {
  * `excluded: true`) rather than dropped, so the parity guard can positively assert that an
  * `x-mcp`-excluded door is present-but-withheld — the runtime drops them when it builds the live
  * tool list. Derived entirely from {@link collectOperations}, so it can never diverge from what
- * `mountApi` routes.
+ * `mountApi` routes. A non-excluded op also carries its self-contained {@link toolInputSchema}.
  */
 export function collectMcpToolProjection(doc: OpenApiDoc): McpToolProjection[] {
   return collectOperations(doc).map((op) => ({
@@ -374,6 +564,7 @@ export function collectMcpToolProjection(doc: OpenApiDoc): McpToolProjection[] {
     method: op.method,
     mutating: isMutatingMethod(op.method),
     excluded: op.mcpExcluded,
+    ...(op.mcpExcluded ? {} : { inputSchema: toolInputSchema(op) }),
   }));
 }
 
@@ -407,6 +598,12 @@ export function diffMcpToolProjection(
           `excluded:${snap.excluded}} vs spec {method:${cur.method}, mutating:${cur.mutating}, ` +
           `excluded:${cur.excluded}}`,
       );
+    }
+    if (JSON.stringify(snap.inputSchema ?? null) !== JSON.stringify(cur.inputSchema ?? null)) {
+      // Emit a concise, constant-size line rather than inlining both full `inputSchema` payloads:
+      // for a non-trivial schema that would explode CI logs and bury the signal. The committed
+      // snapshot's own diff carries the exact field-level detail; this line just names the drift.
+      drift.push(`~ ${id}: inputSchema changed (regenerate the snapshot to see the field-level diff)`);
     }
   }
   for (const id of snapshotById.keys()) {

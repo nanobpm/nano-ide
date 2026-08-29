@@ -1,5 +1,45 @@
 [
   {
+    "operationId": "previewDeliveryGraph",
+    "method": "post",
+    "mutating": true,
+    "excluded": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "body": {
+          "type": "object",
+          "required": [
+            "root"
+          ],
+          "properties": {
+            "root": {
+              "type": "object",
+              "required": [
+                "id"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "weight": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "body"
+      ]
+    }
+  },
+  {
     "operationId": "reindexWidgets",
     "method": "post",
     "mutating": true,
@@ -9,12 +49,20 @@
     "operationId": "listWidgets",
     "method": "get",
     "mutating": false,
-    "excluded": false
+    "excluded": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
   },
   {
     "operationId": "createWidget",
     "method": "post",
     "mutating": true,
-    "excluded": false
+    "excluded": false,
+    "inputSchema": {
+      "type": "object",
+      "properties": {}
+    }
   }
 ]

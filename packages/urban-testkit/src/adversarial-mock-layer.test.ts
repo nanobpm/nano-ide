@@ -1,8 +1,9 @@
 // Adversarial completeness & regression for the mock layer (epic #296, S5).
 //
-// This suite proves the *merged* mock layer — job-worker mocking (S1+S2, `worker-mock.ts`) and
-// child-process / call-activity mocking (S3, `child-process-mock.ts`) — is airtight along the
-// axes a future regression is most likely to break silently:
+// This suite proves the *merged* mock layer — job-worker mocking (S1+S2, `worker-mock.ts`) — and
+// native call-activity execution (the engine now runs call activities directly; the testkit no
+// longer rewrites them) are airtight along the axes a future regression is most likely to break
+// silently:
 //
 //   1. Negative / isolation — a mock on one type/process must not leak onto another, un-mocked
 //      types/processes must still run real code, and removing a mock must restore real behaviour.
@@ -107,7 +108,7 @@ const THREE_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
 </definitions>`;
 
 /** Parent with two call activities in sequence (childA → childB) then a user task — for
- *  per-child-process isolation. */
+ *  native call-activity execution of multiple, distinct children. */
 const PARENT_TWO = `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
              xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
@@ -127,8 +128,8 @@ const PARENT_TWO = `<?xml version="1.0" encoding="UTF-8"?>
   </process>
 </definitions>`;
 
-/** A real child process carrying a marker service task, so a test can prove the real called
- *  process never runs when its call activity is mocked (the worker counter stays 0). */
+/** A real child process carrying a marker service task, so a test can prove the native call
+ *  activity actually runs the called process (the worker counter increments). */
 function childModel(processId: string, taskType: string): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
@@ -261,7 +262,7 @@ test("isolation: removing one of several mocks restores only that type's real be
   });
 });
 
-test("isolation: mocking child-process X does not affect un-mocked child-process Y", async () => {
+test("native call activity: two un-mocked call activities each instantiate and run their deployed child", async () => {
   await withEngine(
     [
       { name: "parent.bpmn", xml: PARENT_TWO },
@@ -273,47 +274,38 @@ test("isolation: mocking child-process X does not affect un-mocked child-process
       let childBReal = 0;
       await engine.registerWorker("childAwork", () => {
         childAReal += 1;
-        return {};
+        return { fromA: 1 };
       });
       await engine.registerWorker("childBwork", () => {
         childBReal += 1;
         return { childBRealRan: true };
       });
 
-      // Only childA is mocked; childB keeps its native call-activity pass-through.
-      engine.mockChildProcess("childA").completeWith({ fromA: 1 });
-
       const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "parent" });
       const [inst] = await engine.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
-      assert.equal(inst?.state, "ACTIVE", "both call activities resolved; the parent parked on the user task");
-      assert.equal(childAReal, 0, "the mocked child process A never executed its real called process");
-      assert.equal(childBReal, 0, "an un-mocked call activity is a native pass-through — it does not run the child either");
-      const vars = instanceVariables(engine, processInstanceKey);
-      assert.equal(vars.fromA, 1, "only the mocked child A merged variables; B stayed a bare pass-through");
-      assert.equal(vars.childBRealRan, undefined, "child B's real called process did not run");
+      assert.equal(inst?.state, "ACTIVE", "both call activities resolved natively; the parent parked on the user task");
+      assert.deepEqual(engine.snapshot().activeElementIds, ["review"], "the parent parked past both call activities");
+      // Both children ran their REAL called processes exactly once — native execution, not a rewrite
+      // (a deploy-time rewrite would have auto-completed the call activities and run neither worker).
+      assert.equal(childAReal, 1, "child A's real called process ran exactly once (native execution)");
+      assert.equal(childBReal, 1, "child B's real called process ran exactly once (native execution)");
+      // NOTE: child→parent variable propagation (`propagateAllChildVariables`) is tracked separately
+      // (Magikcraft/nano-bpm#1057) and intentionally not asserted here.
     },
   );
 });
 
-test("isolation: a worker mock and a child-process mock keyed the same name never cross-fire", async () => {
-  // A worker mock keyed "shared" and a child-process mock keyed "shared" live in separate
-  // registries on separate dispatch seams (job dispatch vs. the synthetic call-activity job).
-  // They must not intercept each other's dispatch.
-  await withEngine(
-    [
-      { name: "svc.bpmn", xml: SVC_BPMN.replace(/"work"/g, '"shared"') },
-    ],
-    async (engine) => {
-      engine.mockChildProcess("shared").completeWith({ fromChild: true }); // unrelated registry
-      engine.mockWorker("shared").completeWith({ fromWorker: true });
-      const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "svc" });
-      const [inst] = await engine.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
-      assert.equal(inst?.state, "COMPLETED", "the service-task job was serviced by the worker mock");
-      // The child-process registry entry never fired (there is no call activity), so no error and
-      // the worker mock alone drove the instance to completion.
-      assert.equal(incidentReasons(engine).length, 0, "no cross-fire between the two same-named registries");
-    },
-  );
+test("native call activity: a call activity to an un-deployed child raises an incident (no silent auto-complete)", async () => {
+  // Removing the deploy-time rewrite means an un-deployed called process is a real incident, not a
+  // silent pass-through: the engine parks the parent on the call activity with a recoverable
+  // `CalledElementError`. Consumers must deploy the child (production-faithful behaviour).
+  await withEngine([{ name: "parent.bpmn", xml: PARENT_TWO }], async (engine) => {
+    const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "parent" });
+    const [inst] = await engine.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
+    assert.equal(inst?.state, "ACTIVE", "the parent parked on the call activity rather than completing");
+    assert.deepEqual(engine.snapshot().activeElementIds, ["caA"], "the parent parked on the first call activity");
+    assert.ok(incidentReasons(engine).length > 0, "the un-deployed called process raised an incident");
+  });
 });
 
 // =============================================================================================

@@ -54,7 +54,6 @@ function sibling(name: string): string {
 }
 
 const workerMockSrc = sibling("worker-mock.ts");
-const childMockSrc = sibling("child-process-mock.ts");
 const hostSrc = firstExisting(
   [
     "../../urban/src/runtime/core/host.ts",
@@ -323,21 +322,6 @@ test("completeness: every EngineJob field is reachable by a tested when(...) pre
         `new matchable condition field must come with a predicate + test. Fields reached by tests: ` +
         `${[...reachable].sort().join(", ")}`,
     );
-  }
-});
-
-test("completeness: the child-process builder reuses the shared MockOutcome kinds (no second model)", () => {
-  // S3 must not invent a parallel outcome model. Its builder methods must produce only kinds that
-  // exist in the shared MockOutcome union, and it must import (not redefine) MockOutcome.
-  assert.ok(
-    /import\s+type\s*\{[^}]*\bMockOutcome\b[^}]*\}\s*from\s*"\.\/worker-mock\.ts"/.test(childMockSrc),
-    "child-process-mock.ts must import MockOutcome from ./worker-mock.ts (derivation over duplication)",
-  );
-  const kinds = new Set(mockOutcomeKinds());
-  const childKinds = matchAll(childMockSrc, /#set\(\{\s*kind:\s*"([^"]+)"/g);
-  assert.ok(childKinds.length >= 2, `expected the child-process builder to set ≥2 outcomes, got ${childKinds.length}`);
-  for (const k of childKinds) {
-    assert.ok(kinds.has(k), `child-process builder produces kind "${k}" that is not a shared MockOutcome variant`);
   }
 });
 

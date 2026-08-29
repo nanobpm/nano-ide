@@ -1,14 +1,14 @@
 // Determinism guard for the mock layer (epic #296, S5).
 //
 // The whole test kit is deterministic under a virtual clock: the drain reaches a fixpoint without
-// wall-clock time or randomness. The mock layer (job-worker mocking + child-process mocking) must
-// preserve that. This file guards it two ways:
+// wall-clock time or randomness. The mock layer (job-worker mocking) — and native call-activity
+// execution, which the engine now runs directly — must preserve that. This file guards it two ways:
 //
-//   • Runtime: mocks of every deterministically-terminal outcome drive an instance to quiescence,
-//     and a *second* explicit `drain()` is a no-op (a true fixpoint, not a moving target).
-//   • Static: the mock modules — `worker-mock.ts`, `child-process-mock.ts`, and the mock
-//     interception added to `wasm-engine.ts` — contain NO `setTimeout` / `setInterval` /
-//     wall-clock (`Date.now()`, `new Date()`, `performance.now()`) / `Math.random()` usage. This
+//   • Runtime: mocks of every deterministically-terminal outcome (and a native call activity) drive
+//     an instance to quiescence, and a *second* explicit `drain()` is a no-op (a true fixpoint, not
+//     a moving target).
+//   • Static: the mock modules — `worker-mock.ts` and the mock interception added to
+//     `wasm-engine.ts` — contain NO `setTimeout` / `setInterval` / wall-clock (`Date.now()`, `new Date()`, `performance.now()`) / `Math.random()` usage. This
 //     is the regression net: a future edit that sneaks real time or randomness into the mock path
 //     fails CI here even if it happens not to flake in a given run.
 //
@@ -126,32 +126,29 @@ test("determinism: a worker incident outcome drains to a fixpoint; a redundant d
   });
 });
 
-test("determinism: a child-process completeWith drains to a fixpoint; a redundant drain is a no-op", async () => {
+test("determinism: a native call activity drains to a fixpoint; a redundant drain is a no-op", async () => {
   await withEngine(
     [
       { name: "parent.bpmn", xml: PARENT_BPMN },
       { name: "child.bpmn", xml: CHILD_BPMN },
     ],
     async (engine) => {
-      engine.mockChildProcess("child").completeWith({ done: true });
+      // The child's service task runs for real (native execution); the parent parks on its user
+      // task once the child completes. A redundant drain at the same instant must change nothing.
+      await engine.registerWorker("cwork", async () => ({ done: true }));
       await engine.createInstance({ processDefinitionId: "parent" });
       await assertRedundantDrainIsNoop(engine);
     },
   );
 });
 
-test("determinism: a child-process failWith incident drains to a fixpoint; a redundant drain is a no-op", async () => {
-  await withEngine(
-    [
-      { name: "parent.bpmn", xml: PARENT_BPMN },
-      { name: "child.bpmn", xml: CHILD_BPMN },
-    ],
-    async (engine) => {
-      engine.mockChildProcess("child").failWith({ message: "child failed" });
-      await engine.createInstance({ processDefinitionId: "parent" });
-      await assertRedundantDrainIsNoop(engine);
-    },
-  );
+test("determinism: a native call activity to an un-deployed child drains to a fixpoint; a redundant drain is a no-op", async () => {
+  // The child is deliberately NOT deployed, so the engine raises a recoverable incident on the call
+  // activity. That incident state must be a fixpoint — a redundant drain must not re-raise or spin.
+  await withEngine([{ name: "parent.bpmn", xml: PARENT_BPMN }], async (engine) => {
+    await engine.createInstance({ processDefinitionId: "parent" });
+    await assertRedundantDrainIsNoop(engine);
+  });
 });
 
 test("determinism: repeated identical runs produce byte-identical mock-driven variable snapshots", async () => {
@@ -246,10 +243,6 @@ test("determinism (static): worker-mock.ts uses no wall-clock or randomness", ()
   assertNoForbidden("worker-mock.ts", readSibling("worker-mock.ts"));
 });
 
-test("determinism (static): child-process-mock.ts uses no wall-clock or randomness", () => {
-  assertNoForbidden("child-process-mock.ts", readSibling("child-process-mock.ts"));
-});
-
 test("determinism (static): the wasm-engine.ts mock-interception seam uses no wall-clock or randomness", () => {
   const src = readSibling("wasm-engine.ts");
   // Scope to exactly the methods that implement mock dispatch/registration — the seam this epic
@@ -258,13 +251,10 @@ test("determinism (static): the wasm-engine.ts mock-interception seam uses no wa
   const seams = [
     "async drain(",
     "#dispatchableJobTypes(",
-    "#runChildProcessJob(",
     "async #runJob(",
     "#failFromError(",
     "mockWorker(",
     "clearWorkerMock(",
-    "mockChildProcess(",
-    "clearChildProcessMock(",
     "observeJobs(",
   ];
   for (const sig of seams) {

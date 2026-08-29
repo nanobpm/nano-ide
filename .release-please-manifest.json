@@ -4,7 +4,7 @@
   "packages/app-embedded-graalvm-native": "1.2.1",
   "packages/app-embedded-jvm": "1.2.1",
   "packages/app-embedded-nano": "1.2.1",
-  "packages/app-urban": "1.1.48",
+  "packages/app-urban": "1.1.49",
   "packages/app-workflow": "1.2.1",
   "packages/connector-slack": "1.0.1",
   "packages/create-urban-app": "0.15.2",
@@ -23,7 +23,7 @@
   "packages/theme-solarized": "1.0.0",
   "packages/theme-synthwave": "1.0.0",
   "packages/trigger-mqtt": "1.1.1",
-  "packages/urban": "0.86.1",
+  "packages/urban": "0.87.0",
   "packages/urban-agent-client": "0.1.8",
   "packages/urban-testkit": "0.15.1",
   "packages/workflow": "0.14.0"

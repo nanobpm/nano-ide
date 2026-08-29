@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.87.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.86.1...@nanobpm/urban-0.87.0) (2026-08-29)
+
+
+### Features
+
+* **urban:** self-contained MCP tool input schemas — resolve component $refs ([#502](https://github.com/nanobpm/nano-ide/issues/502)) ([#505](https://github.com/nanobpm/nano-ide/issues/505)) ([23ea4de](https://github.com/nanobpm/nano-ide/commit/23ea4de7cefe222709ba76cb56ade69c02051d39))
+
 ## [0.86.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.86.0...@nanobpm/urban-0.86.1) (2026-08-28)
 
 

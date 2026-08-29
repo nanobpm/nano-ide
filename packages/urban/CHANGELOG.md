@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.87.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.87.0...@nanobpm/urban-0.87.1) (2026-08-29)
+
+
+### Bug Fixes
+
+* **urban:** faithful object-body MCP tool transport, never double-encode ([#507](https://github.com/nanobpm/nano-ide/issues/507)) ([5df575f](https://github.com/nanobpm/nano-ide/commit/5df575ff107089138dd8bd4e16bb232eceb55bf8))
+
 ## [0.87.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.86.1...@nanobpm/urban-0.87.0) (2026-08-29)
 
 

@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.15.1...@nanobpm/urban-testkit-1.0.0) (2026-08-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **urban-testkit:** `@nanobpm/urban-testkit` no longer rewrites call activities at deploy time and removes `mockChildProcess`/`clearChildProcessMock`. Consumers relying on the unmocked auto-complete must deploy the called process (or the engine raises a recoverable incident); consumers using `mockChildProcess` must deploy a real child process instead.
+
+### Features
+
+* **urban-testkit:** remove deploy-time callActivity rewrite — execute call activities natively ([#513](https://github.com/nanobpm/nano-ide/issues/513)) ([bb7028a](https://github.com/nanobpm/nano-ide/commit/bb7028ab19263eda357b2d38ff70754b172014c6))
+
 ## [0.15.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-0.15.0...@nanobpm/urban-testkit-0.15.1) (2026-08-28)
 
 

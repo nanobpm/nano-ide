@@ -328,6 +328,52 @@ test("findAllToolSchemaViolations passes a resolved-body doc and catches a would
   assert.deepEqual(findAllToolSchemaViolations(excludedDoc), []);
 });
 
+test("an x-mcp-excluded op with a dangling/cyclic $ref never crashes projection or guards", () => {
+  // An EXCLUDED door is withheld from the tool surface, so its schema is never advertised — a
+  // broken `$ref` on it must not make the whole document's projection/guards throw. Regression:
+  // deep resolution used to run eagerly, before the exclusion check.
+  const excludedBrokenDoc: OpenApiDoc = {
+    openapi: "3.1.0",
+    components: { schemas: { Cyclic: { $ref: "#/components/schemas/Cyclic" } } },
+    paths: {
+      "/hidden": {
+        post: {
+          operationId: "hiddenBroken",
+          "x-mcp": false,
+          parameters: [{ name: "q", in: "query", schema: { $ref: "#/components/schemas/Missing" } }],
+          requestBody: { content: { "application/json": { schema: { $ref: "#/components/schemas/Cyclic" } } } },
+          responses: { "200": {} },
+        },
+      },
+      "/shown": {
+        post: {
+          operationId: "shownOp",
+          requestBody: { content: { "application/json": { schema: { type: "object", properties: { id: { type: "string" } } } } } },
+          responses: { "200": {} },
+        },
+      },
+    },
+  };
+  const ops = collectOperations(excludedBrokenDoc);
+  const hidden = ops.find((o) => o.operationId === "hiddenBroken");
+  assert.equal(hidden?.mcpExcluded, true);
+  assert.equal(hidden?.requestBodySchemaResolved, undefined);
+  assert.deepEqual(findAllToolSchemaViolations(excludedBrokenDoc), []);
+  const projection = collectMcpToolProjection(excludedBrokenDoc);
+  assert.equal(projection.find((p) => p.operationId === "hiddenBroken")?.excluded, true);
+  assert.equal(projection.find((p) => p.operationId === "shownOp")?.inputSchema?.type, "object");
+});
+
+test("diffMcpToolProjection reports an inputSchema skew concisely, not by inlining payloads", () => {
+  const projection = collectMcpToolProjection(doc);
+  const big = { type: "object", properties: { body: { type: "object", properties: { huge: { type: "string" } } } }, required: ["body"] };
+  const stale = projection.map((p) => (p.operationId === "createInvoice" ? { ...p, inputSchema: big } : p));
+  const drift = diffMcpToolProjection(stale, projection);
+  const line = drift.find((l) => /createInvoice: inputSchema changed/.test(l));
+  assert.ok(line, "expected an inputSchema-changed drift line for createInvoice");
+  assert.ok(!line?.includes("huge"), "drift line must not inline the full schema payload");
+});
+
 test("collectMcpToolProjection carries a self-contained inputSchema; diff catches an inputSchema skew", () => {
   const projection = collectMcpToolProjection(doc);
   const create = projection.find((p) => p.operationId === "createInvoice");

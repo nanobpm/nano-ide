@@ -360,12 +360,18 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
       if (!isRecord(opRaw)) continue;
       const operationId = typeof opRaw.operationId === "string" ? opRaw.operationId : undefined;
       if (!operationId || !isSafeOperationId(operationId)) continue;
+      // Resolve exclusion BEFORE any deep `$ref` inlining. An `x-mcp`-excluded operation is never
+      // advertised as a tool, so its schema is never projected or self-containment-guarded; doing
+      // its (throwing) deep resolution eagerly would let a dangling/cyclic `$ref` on an EXCLUDED
+      // door crash projection/guards for the whole document — even though that door is withheld.
+      // Excluded ops therefore carry no `resolvedSchema`/`requestBodySchemaResolved` (unused).
+      const mcpExcluded = isMcpExcluded(opRaw["x-mcp"]);
       const opParams = Array.isArray(opRaw.parameters) ? opRaw.parameters : [];
       const parameters = normalizeParameters([...pathParams, ...opParams]).map((p) => ({
         ...p,
         // Inline any local component `$ref` so the projected MCP tool schema is self-contained. The
         // raw `p.schema` is kept for the type deriver; the tool projection reads `resolvedSchema`.
-        resolvedSchema: resolveSchemaDeep(doc, p.schema),
+        resolvedSchema: mcpExcluded ? undefined : resolveSchemaDeep(doc, p.schema),
       }));
       const requestBody = isRecord(opRaw.requestBody) ? opRaw.requestBody : undefined;
       const requestBodySchema = firstJsonSchema(
@@ -374,8 +380,11 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
       // Deeply inline component `$ref`s so downstream consumers (the MCP tool projection, ADR 0067)
       // get a self-contained, explicitly-typed body schema — never an opaque `#/components/...`
       // pointer. Raw `requestBodySchema` is retained (deriver + shared-ref fingerprinting). A cyclic
-      // or unresolvable body ref fails loudly here rather than leaking a `$ref`.
-      const requestBodySchemaResolved = resolveSchemaDeep(doc, requestBodySchema);
+      // or unresolvable body ref fails loudly here rather than leaking a `$ref` — but only for a
+      // projected (non-excluded) op; an excluded op skips this throwing work (see above).
+      const requestBodySchemaResolved = mcpExcluded
+        ? undefined
+        : resolveSchemaDeep(doc, requestBodySchema);
       const responses = isRecord(opRaw.responses) ? opRaw.responses : {};
       // Effective security: an operation's own `security` (even an explicit `[]`, which opts out of
       // a document-level default) wins; otherwise inherit the document-level default; otherwise open.
@@ -394,7 +403,7 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         responseSchemas: collectResponseSchemas(responses),
         security,
         eject: opRaw["x-urban-eject"] === true,
-        mcpExcluded: isMcpExcluded(opRaw["x-mcp"]),
+        mcpExcluded,
         summary: typeof opRaw.summary === "string" ? opRaw.summary : undefined,
       });
     }
@@ -588,10 +597,10 @@ export function diffMcpToolProjection(
       );
     }
     if (JSON.stringify(snap.inputSchema ?? null) !== JSON.stringify(cur.inputSchema ?? null)) {
-      drift.push(
-        `~ ${id}: inputSchema changed — snapshot ${JSON.stringify(snap.inputSchema ?? null)} ` +
-          `vs spec ${JSON.stringify(cur.inputSchema ?? null)}`,
-      );
+      // Emit a concise, constant-size line rather than inlining both full `inputSchema` payloads:
+      // for a non-trivial schema that would explode CI logs and bury the signal. The committed
+      // snapshot's own diff carries the exact field-level detail; this line just names the drift.
+      drift.push(`~ ${id}: inputSchema changed (regenerate the snapshot to see the field-level diff)`);
     }
   }
   for (const id of snapshotById.keys()) {

@@ -342,6 +342,13 @@ export const CORE_TRANSCRIPT_VOCAB: TranscriptVocab = Object.freeze(Object.assig
       const toolName = str(body, "toolName");
       const title = str(body, "title");
       const reason = str(body, "reason");
+      // Reject a present-but-non-string optional field rather than silently dropping it, mirroring the
+      // `by` treatment in the resolution path below: a present-but-invalid value is a producer bug, and
+      // swallowing it would make the typed event diverge from the on-wire JSON ("malformed → raw
+      // fallback, never a silent mis-decode").
+      if (body.toolName !== undefined && toolName === undefined) return undefined;
+      if (body.title !== undefined && title === undefined) return undefined;
+      if (body.reason !== undefined && reason === undefined) return undefined;
       const event: PermissionRequestEvent = { kind: "permission", phase: "request", offset, callId, policy, options };
       return {
         ...event,
@@ -392,8 +399,8 @@ export const CORE_TRANSCRIPT_EVENT_KINDS: readonly Exclude<TranscriptEventKind, 
  * brand-new kind or deliberately override a core decoder. Returns a NEW frozen, NULL-PROTOTYPE vocab —
  * neither input is mutated — so the core stays canonical AND `kind in vocab` / `Object.keys(vocab)`
  * only ever see own decoders (an inherited "toString"/"constructor" key can never masquerade as one).
- * This is the EXTENSION POINT a downstream app uses to add its own kind (e.g. nano-workforce#559's
- * `permission`) without editing this package: one schema, extended by merge, never a second parser.
+ * This is the EXTENSION POINT a downstream app uses to add its own kind (e.g. a synthetic `annotation`
+ * kind) without editing this package: one schema, extended by merge, never a second parser.
  */
 export function mergeTranscriptVocab(base: TranscriptVocab, ...extensions: TranscriptVocab[]): TranscriptVocab {
   return Object.freeze(Object.assign(Object.create(null), base, ...extensions));

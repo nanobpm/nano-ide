@@ -14,6 +14,7 @@ import {
   deriveViewFromChunks,
   encodeTranscriptEvent,
   mergeTranscriptVocab,
+  optionKindAllows,
   parseTranscriptEvent,
   type TranscriptEvent,
   type TranscriptVocab,
@@ -149,31 +150,32 @@ test("vocab maps are null-prototype so inherited keys never leak into `in` / Obj
   }
 });
 
-test("EXTENSION POINT: a downstream app registers its own `permission` kind via mergeTranscriptVocab", () => {
-  // Mirrors nano-workforce#559: an app adds a `permission` kind + parse handler WITHOUT editing this
-  // package. The synthetic extra kind is decoded (here into a message the core fold understands) and
-  // parses through the one parser; the core vocab stays untouched.
+test("EXTENSION POINT: a downstream app registers a brand-new kind via mergeTranscriptVocab", () => {
+  // An app adds an app-specific kind + parse handler WITHOUT editing this package. The synthetic
+  // extra kind is decoded (here into a message the core fold understands) and parses through the one
+  // parser; the core vocab stays untouched. (`permission` itself is now a first-class core kind — see
+  // the dedicated permission tests below — so this uses a genuinely non-core kind.)
   const appVocab: TranscriptVocab = mergeTranscriptVocab(CORE_TRANSCRIPT_VOCAB, {
-    permission: (body, offset) => {
-      const requestId = typeof body.requestId === "string" ? body.requestId : undefined;
-      if (requestId === undefined) return undefined; // reject malformed → raw fallback
-      const granted = body.granted === true;
-      return { kind: "message", offset, role: "system", text: `permission(${requestId}):${granted ? "granted" : "denied"}` };
+    annotation: (body, offset) => {
+      const noteId = typeof body.noteId === "string" ? body.noteId : undefined;
+      if (noteId === undefined) return undefined; // reject malformed → raw fallback
+      const pinned = body.pinned === true;
+      return { kind: "message", offset, role: "system", text: `annotation(${noteId}):${pinned ? "pinned" : "loose"}` };
     },
   });
 
-  const granted = parseTranscriptEvent({ offset: 10, chunk: env("permission", { requestId: "req-1", granted: true }) }, appVocab);
-  assert.deepEqual(granted, { kind: "message", offset: 10, role: "system", text: "permission(req-1):granted" });
+  const pinned = parseTranscriptEvent({ offset: 10, chunk: env("annotation", { noteId: "n-1", pinned: true }) }, appVocab);
+  assert.deepEqual(pinned, { kind: "message", offset: 10, role: "system", text: "annotation(n-1):pinned" });
 
-  // A malformed extension envelope (missing requestId) still falls back to raw — no throw, no crash.
+  // A malformed extension envelope (missing noteId) still falls back to raw — no throw, no crash.
   assert.equal(
-    parseTranscriptEvent({ offset: 11, chunk: env("permission", { granted: false }) }, appVocab).kind,
+    parseTranscriptEvent({ offset: 11, chunk: env("annotation", { pinned: false }) }, appVocab).kind,
     "stream-chunk",
   );
 
-  // The package's core vocab never learned `permission` — the extension did not fork or mutate it.
-  assert.equal(parseTranscriptEvent({ offset: 10, chunk: env("permission", { requestId: "req-1", granted: true }) }).kind, "stream-chunk");
-  assert.equal(CORE_TRANSCRIPT_VOCAB.permission, undefined);
+  // The package's core vocab never learned `annotation` — the extension did not fork or mutate it.
+  assert.equal(parseTranscriptEvent({ offset: 10, chunk: env("annotation", { noteId: "n-1", pinned: true }) }).kind, "stream-chunk");
+  assert.equal(CORE_TRANSCRIPT_VOCAB.annotation, undefined);
 });
 
 test("encodeTranscriptEvent round-trips every non-raw kind through the one parser", () => {
@@ -294,6 +296,208 @@ test("deriveViewFromChunks: a mixed log derives typed structure while retaining 
   assert.equal(view.turns.length, 1);
   assert.deepEqual(view.messages.map((m) => m.text), ["hi"]);
   assert.equal(view.rawChunkCount, 1);
+});
+
+test("core vocab decodes a permission REQUEST with all optional fields", () => {
+  const chunk = env("permission", {
+    phase: "request",
+    callId: "p1",
+    policy: "escalate",
+    options: [
+      { optionId: "o1", name: "Allow once", kind: "allow-once" },
+      { optionId: "o2", name: "Reject", kind: "reject-always" },
+    ],
+    toolName: "bash",
+    title: "Run command?",
+    reason: "The agent wants to run `rm -rf build`",
+  });
+  assert.deepEqual(parseTranscriptEvent({ offset: 1, chunk }), {
+    kind: "permission",
+    phase: "request",
+    offset: 1,
+    callId: "p1",
+    policy: "escalate",
+    options: [
+      { optionId: "o1", name: "Allow once", kind: "allow-once" },
+      { optionId: "o2", name: "Reject", kind: "reject-always" },
+    ],
+    toolName: "bash",
+    title: "Run command?",
+    reason: "The agent wants to run `rm -rf build`",
+  });
+});
+
+test("core vocab decodes a minimal permission REQUEST (no optional fields)", () => {
+  const chunk = env("permission", {
+    phase: "request",
+    callId: "p2",
+    policy: "yolo",
+    options: [{ optionId: "o1", name: "Allow", kind: "allow-always" }],
+  });
+  assert.deepEqual(parseTranscriptEvent({ offset: 2, chunk }), {
+    kind: "permission",
+    phase: "request",
+    offset: 2,
+    callId: "p2",
+    policy: "yolo",
+    options: [{ optionId: "o1", name: "Allow", kind: "allow-always" }],
+  });
+});
+
+test("core vocab decodes a permission RESOLUTION, with and without provenance", () => {
+  const withBy = env("permission", { phase: "resolution", callId: "p1", optionId: "o1", allowed: true, by: "operator" });
+  assert.deepEqual(parseTranscriptEvent({ offset: 3, chunk: withBy }), {
+    kind: "permission",
+    phase: "resolution",
+    offset: 3,
+    callId: "p1",
+    optionId: "o1",
+    allowed: true,
+    by: "operator",
+  });
+  const noBy = env("permission", { phase: "resolution", callId: "p1", optionId: "o2", allowed: false });
+  assert.deepEqual(parseTranscriptEvent({ offset: 4, chunk: noBy }), {
+    kind: "permission",
+    phase: "resolution",
+    offset: 4,
+    callId: "p1",
+    optionId: "o2",
+    allowed: false,
+  });
+});
+
+test("core vocab: malformed permission envelopes fall back to raw (never a silent mis-decode)", () => {
+  const cases: Record<string, Record<string, unknown>> = {
+    "missing callId": { phase: "request", policy: "escalate", options: [{ optionId: "o", name: "n", kind: "allow-once" }] },
+    "unknown phase": { phase: "maybe", callId: "p" },
+    "missing phase": { callId: "p" },
+    "bad policy": { phase: "request", callId: "p", policy: "sometimes", options: [{ optionId: "o", name: "n", kind: "allow-once" }] },
+    "empty options": { phase: "request", callId: "p", policy: "yolo", options: [] },
+    "missing options": { phase: "request", callId: "p", policy: "yolo" },
+    "bad option kind": { phase: "request", callId: "p", policy: "yolo", options: [{ optionId: "o", name: "n", kind: "allow-sometimes" }] },
+    "option missing name": { phase: "request", callId: "p", policy: "yolo", options: [{ optionId: "o", kind: "allow-once" }] },
+    "request non-string toolName": { phase: "request", callId: "p", policy: "yolo", toolName: 123, options: [{ optionId: "o", name: "n", kind: "allow-once" }] },
+    "request non-string title": { phase: "request", callId: "p", policy: "yolo", title: 123, options: [{ optionId: "o", name: "n", kind: "allow-once" }] },
+    "request non-string reason": { phase: "request", callId: "p", policy: "yolo", reason: true, options: [{ optionId: "o", name: "n", kind: "allow-once" }] },
+    "resolution missing optionId": { phase: "resolution", callId: "p", allowed: true },
+    "resolution non-boolean allowed": { phase: "resolution", callId: "p", optionId: "o", allowed: "yes" },
+    "resolution bad by (unknown)": { phase: "resolution", callId: "p", optionId: "o", allowed: true, by: "robot" },
+    "resolution bad by (non-string)": { phase: "resolution", callId: "p", optionId: "o", allowed: true, by: 7 },
+  };
+  for (const [label, body] of Object.entries(cases)) {
+    assert.equal(
+      parseTranscriptEvent({ offset: 0, chunk: env("permission", body) }).kind,
+      "stream-chunk",
+      `${label} must fall back to a raw stream-chunk`,
+    );
+  }
+});
+
+test("optionKindAllows: allow-* allow, reject-* reject (single source of truth)", () => {
+  assert.equal(optionKindAllows("allow-once"), true);
+  assert.equal(optionKindAllows("allow-always"), true);
+  assert.equal(optionKindAllows("reject-once"), false);
+  assert.equal(optionKindAllows("reject-always"), false);
+});
+
+test("encodeTranscriptEvent round-trips permission request + resolution through the one parser", () => {
+  const events: TranscriptEvent[] = [
+    {
+      kind: "permission",
+      phase: "request",
+      offset: 0,
+      callId: "p1",
+      policy: "escalate",
+      options: [{ optionId: "o1", name: "Allow once", kind: "allow-once" }],
+      toolName: "bash",
+      title: "t",
+      reason: "r",
+    },
+    { kind: "permission", phase: "resolution", offset: 1, callId: "p1", optionId: "o1", allowed: true, by: "auto" },
+  ];
+  for (const original of events) {
+    const chunk = encodeTranscriptEvent(original);
+    assert.deepEqual(parseTranscriptEvent({ offset: original.offset, chunk }), original);
+  }
+});
+
+test("deriveView: pairs a permission request with its resolution by callId (flat + per-turn)", () => {
+  const view = deriveView([
+    { kind: "turn", offset: 0, index: 0 },
+    {
+      kind: "permission",
+      phase: "request",
+      offset: 1,
+      callId: "p1",
+      policy: "escalate",
+      options: [{ optionId: "o1", name: "Allow", kind: "allow-once" }],
+      toolName: "bash",
+    },
+    { kind: "permission", phase: "resolution", offset: 2, callId: "p1", optionId: "o1", allowed: true, by: "operator" },
+  ]);
+  assert.equal(view.permissions.length, 1);
+  assert.deepEqual(view.permissions[0]?.resolved, { allowed: true, optionId: "o1", offset: 2, by: "operator" });
+  assert.equal(view.permissions[0]?.toolName, "bash");
+  // The same resolved card is paired inside its owning turn.
+  assert.equal(view.turns[0]?.permissions.length, 1);
+  assert.deepEqual(view.turns[0]?.permissions[0]?.resolved, { allowed: true, optionId: "o1", offset: 2, by: "operator" });
+});
+
+test("deriveView: an unresolved permission request stays pending (no resolution)", () => {
+  const view = deriveView([
+    {
+      kind: "permission",
+      phase: "request",
+      offset: 0,
+      callId: "p1",
+      policy: "yolo",
+      options: [{ optionId: "o1", name: "Allow", kind: "allow-always" }],
+    },
+  ]);
+  assert.equal(view.turns.length, 1); // request opens an implicit turn 0
+  assert.equal(view.permissions.length, 1);
+  assert.equal(view.permissions[0]?.resolved, undefined);
+});
+
+test("deriveView: resolutions pair to the correct request across turns, interleaved and out of order", () => {
+  const req = (offset: number, callId: string): TranscriptEvent => ({
+    kind: "permission",
+    phase: "request",
+    offset,
+    callId,
+    policy: "escalate",
+    options: [{ optionId: "o", name: "Allow", kind: "allow-once" }],
+  });
+  const view = deriveView([
+    { kind: "turn", offset: 0, index: 0 },
+    req(1, "a"),
+    req(2, "b"),
+    { kind: "turn", offset: 3, index: 1 },
+    req(4, "c"),
+    { kind: "permission", phase: "resolution", offset: 5, callId: "c", optionId: "o", allowed: true },
+    { kind: "permission", phase: "resolution", offset: 6, callId: "a", optionId: "o", allowed: false },
+    { kind: "permission", phase: "resolution", offset: 7, callId: "b", optionId: "o", allowed: true },
+  ]);
+  assert.deepEqual(
+    view.permissions.map((p) => [p.callId, p.resolved?.allowed]),
+    [["a", false], ["b", true], ["c", true]],
+  );
+  assert.deepEqual(
+    view.turns[0]?.permissions.map((p) => [p.callId, p.resolved?.allowed]),
+    [["a", false], ["b", true]],
+  );
+  assert.deepEqual(
+    view.turns[1]?.permissions.map((p) => [p.callId, p.resolved?.allowed]),
+    [["c", true]],
+  );
+});
+
+test("deriveView: a resolution with no matching open request is ignored (no throw)", () => {
+  const view = deriveView([
+    { kind: "permission", phase: "resolution", offset: 0, callId: "ghost", optionId: "o", allowed: true },
+  ]);
+  assert.equal(view.permissions.length, 0);
+  assert.equal(view.turns.length, 0); // a lone resolution opens no turn
 });
 
 test("ONE-PARSER guard: every declared core kind is handled by the single parseTranscriptEvent fold", () => {

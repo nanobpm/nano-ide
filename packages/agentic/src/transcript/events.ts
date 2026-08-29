@@ -67,7 +67,8 @@ export type TranscriptEventKind =
   | "tool-result"
   | "turn"
   | "step"
-  | "lifecycle";
+  | "lifecycle"
+  | "permission";
 
 /** The message roles the derived history distinguishes (assistant is authoritative for derivation). */
 export type TranscriptRole = "assistant" | "user" | "system" | "tool";
@@ -127,6 +128,81 @@ export interface LifecycleEvent extends TranscriptEventBase {
   readonly phase: "open" | "completed" | "exited";
 }
 
+// --- Permission (ACP `session/request_permission`) — core kind (#514, lifted from nano-workforce#559) --
+// A `permission` event models ACP's `session/request_permission`: the agent asks the operator to
+// allow/deny a proposed action (usually a tool call), and the operator (or an auto policy) resolves it.
+// It is decoded here (the ONE parser) and folded here (the ONE fold) into a paired {@link DerivedPermission}.
+// ACP's `session/request_permission` is protocol-universal — every Urban app with ACP agents gets
+// permission prompts — so it lives beside `tool-call`/`tool-result` in the core vocab, not as an
+// app-specific extension. These exported types are the SINGLE SOURCE OF TRUTH every consumer (cockpit
+// render, escalation bridge) imports; they must never reinvent a divergent permission shape. The wire
+// shape is pinned by `wire:transcript.permission` in nano-workforce's `app/contracts.ts` — do not reshape it.
+
+/**
+ * The role's permission policy the PRODUCER tags a request with. `"escalate"` means a human must be
+ * asked (the cockpit renders an Allow/Deny prompt, the escalation bridge raises a user task);
+ * `"yolo"` means the action is auto-allowed and never prompts a human. Cockpit + bridge branch on this.
+ */
+export type PermissionPolicy = "escalate" | "yolo";
+
+/** The kind of a permission option — mirrors ACP's option kinds (allow/reject × once/always). */
+export type PermissionOptionKind = "allow-once" | "allow-always" | "reject-once" | "reject-always";
+
+/** Pure, canonical: does a permission option kind ALLOW (true) or REJECT (false) the proposed action?
+ *  The `allow-*` vs `reject-*` prefix is the single source of truth. This lives beside
+ *  {@link PermissionOptionKind} so every consumer (the cockpit render seam and the permission-escalation
+ *  bridge) derives allow/deny from ONE implementation — the two paths can never disagree on what a
+ *  chosen option means (no drift surface). */
+export function optionKindAllows(kind: PermissionOptionKind): boolean {
+  return kind === "allow-once" || kind === "allow-always";
+}
+
+/** One offered permission option (ACP `options[]` member): a stable id, a label, and its kind. */
+export interface PermissionOption {
+  readonly optionId: string;
+  readonly name: string;
+  readonly kind: PermissionOptionKind;
+}
+
+/**
+ * A permission REQUEST: the agent asks the operator to allow/deny a proposed action. The `callId`
+ * pairs the eventual {@link PermissionResolutionEvent} back to this request (mirroring how
+ * `tool-call`/`tool-result` pair by `callId`).
+ */
+export interface PermissionRequestEvent extends TranscriptEventBase {
+  readonly kind: "permission";
+  readonly phase: "request";
+  /** Stable id pairing this request to its resolution. */
+  readonly callId: string;
+  /** The producer-tagged policy the cockpit + bridge branch on. */
+  readonly policy: PermissionPolicy;
+  /** The offered options — always at least one (the decoder rejects an empty list). */
+  readonly options: readonly PermissionOption[];
+  /** The tool the proposed action would invoke, when known. */
+  readonly toolName?: string;
+  /** A short human-readable title for the prompt. */
+  readonly title?: string;
+  /** A longer human-readable reason for the prompt. */
+  readonly reason?: string;
+}
+
+/**
+ * A permission RESOLUTION: the operator's (or an auto policy's) decision, carrying the same `callId`,
+ * the chosen `optionId`, and whether the action was `allowed`.
+ */
+export interface PermissionResolutionEvent extends TranscriptEventBase {
+  readonly kind: "permission";
+  readonly phase: "resolution";
+  /** The `callId` of the {@link PermissionRequestEvent} this resolves. */
+  readonly callId: string;
+  /** The chosen option's id. */
+  readonly optionId: string;
+  /** True = allowed, false = denied. */
+  readonly allowed: boolean;
+  /** Provenance of the decision, when supplied. */
+  readonly by?: "operator" | "auto";
+}
+
 /** The core, closed typed transcript-event union. Merging vocab lets an app decode custom *envelope*
  * kinds, but each decoder returns one of these variants — the union itself does not grow for consumers. */
 export type TranscriptEvent =
@@ -136,7 +212,9 @@ export type TranscriptEvent =
   | ToolResultEvent
   | TurnEvent
   | StepEvent
-  | LifecycleEvent;
+  | LifecycleEvent
+  | PermissionRequestEvent
+  | PermissionResolutionEvent;
 
 /** A stored chunk as the store/read path exposes it (mirrors `TranscriptChunk`). */
 export interface StoredChunk {
@@ -174,6 +252,32 @@ function toRole(value: string | undefined): TranscriptRole {
 /** A structural guard: a non-null, non-array object is a plain record of unknown values. */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const PERMISSION_OPTION_KINDS: readonly PermissionOptionKind[] = [
+  "allow-once",
+  "allow-always",
+  "reject-once",
+  "reject-always",
+];
+
+/**
+ * Decode ACP's `options[]` into typed {@link PermissionOption}s, or `undefined` if the array is
+ * missing/empty or any member is malformed (so the whole request envelope is rejected → `stream-chunk`).
+ */
+function decodePermissionOptions(value: unknown): PermissionOption[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const options: PermissionOption[] = [];
+  for (const raw of value) {
+    if (!isRecord(raw)) return undefined;
+    const optionId = str(raw, "optionId");
+    const name = str(raw, "name");
+    const kindRaw = str(raw, "kind");
+    const kind = PERMISSION_OPTION_KINDS.find((k) => k === kindRaw);
+    if (optionId === undefined || name === undefined || kind === undefined) return undefined;
+    options.push({ optionId, name, kind });
+  }
+  return options;
 }
 
 /**
@@ -224,6 +328,58 @@ export const CORE_TRANSCRIPT_VOCAB: TranscriptVocab = Object.freeze(Object.assig
     if (phase !== "open" && phase !== "completed" && phase !== "exited") return undefined;
     return { kind: "lifecycle", offset, phase };
   },
+  // A single `permission` decoder handles BOTH shapes (never a parser fork), branching on `phase`.
+  // Malformed envelopes return `undefined` and fall back to `stream-chunk`, like the other decoders.
+  permission: (body, offset) => {
+    const callId = str(body, "callId");
+    if (callId === undefined) return undefined;
+    const phase = str(body, "phase");
+    if (phase === "request") {
+      const policy = str(body, "policy");
+      if (policy !== "escalate" && policy !== "yolo") return undefined;
+      const options = decodePermissionOptions(body.options);
+      if (options === undefined) return undefined;
+      const toolName = str(body, "toolName");
+      const title = str(body, "title");
+      const reason = str(body, "reason");
+      // Reject a present-but-non-string optional field rather than silently dropping it, mirroring the
+      // `by` treatment in the resolution path below: a present-but-invalid value is a producer bug, and
+      // swallowing it would make the typed event diverge from the on-wire JSON ("malformed → raw
+      // fallback, never a silent mis-decode").
+      if (body.toolName !== undefined && toolName === undefined) return undefined;
+      if (body.title !== undefined && title === undefined) return undefined;
+      if (body.reason !== undefined && reason === undefined) return undefined;
+      const event: PermissionRequestEvent = { kind: "permission", phase: "request", offset, callId, policy, options };
+      return {
+        ...event,
+        ...(toolName !== undefined ? { toolName } : {}),
+        ...(title !== undefined ? { title } : {}),
+        ...(reason !== undefined ? { reason } : {}),
+      };
+    }
+    if (phase === "resolution") {
+      const optionId = str(body, "optionId");
+      if (optionId === undefined) return undefined;
+      if (typeof body.allowed !== "boolean") return undefined;
+      const by = str(body, "by");
+      // Reject a malformed `by` rather than silently dropping it: a present-but-unknown provenance is a
+      // producer bug, and swallowing it would make the typed event diverge from the on-wire JSON. This
+      // covers BOTH a present-but-non-string `by` (e.g. `by: 123`, where str() coerces to undefined) and
+      // a string that isn't a known provenance — either way the on-wire `by` is present but invalid.
+      if (body.by !== undefined && by === undefined) return undefined;
+      if (by !== undefined && by !== "operator" && by !== "auto") return undefined;
+      const event: PermissionResolutionEvent = {
+        kind: "permission",
+        phase: "resolution",
+        offset,
+        callId,
+        optionId,
+        allowed: body.allowed,
+      };
+      return { ...event, ...(by !== undefined ? { by } : {}) };
+    }
+    return undefined;
+  },
 } satisfies TranscriptVocab));
 
 /** The core event kinds the parser decodes from an envelope (every kind except the raw `stream-chunk`
@@ -235,6 +391,7 @@ export const CORE_TRANSCRIPT_EVENT_KINDS: readonly Exclude<TranscriptEventKind, 
   "turn",
   "step",
   "lifecycle",
+  "permission",
 ]);
 
 /**
@@ -242,8 +399,8 @@ export const CORE_TRANSCRIPT_EVENT_KINDS: readonly Exclude<TranscriptEventKind, 
  * brand-new kind or deliberately override a core decoder. Returns a NEW frozen, NULL-PROTOTYPE vocab —
  * neither input is mutated — so the core stays canonical AND `kind in vocab` / `Object.keys(vocab)`
  * only ever see own decoders (an inherited "toString"/"constructor" key can never masquerade as one).
- * This is the EXTENSION POINT a downstream app uses to add its own kind (e.g. nano-workforce#559's
- * `permission`) without editing this package: one schema, extended by merge, never a second parser.
+ * This is the EXTENSION POINT a downstream app uses to add its own kind (e.g. a synthetic `annotation`
+ * kind) without editing this package: one schema, extended by merge, never a second parser.
  */
 export function mergeTranscriptVocab(base: TranscriptVocab, ...extensions: TranscriptVocab[]): TranscriptVocab {
   return Object.freeze(Object.assign(Object.create(null), base, ...extensions));
@@ -323,12 +480,35 @@ export interface DerivedMessage {
   readonly offset: number;
 }
 
+/**
+ * A derived permission: a permission REQUEST paired with its RESOLUTION by `callId` (resolution absent
+ * while the request is still pending), mirroring how {@link DerivedTool} pairs a call with its result.
+ * The cockpit and the escalation bridge read THIS — they never re-parse the log.
+ */
+export interface DerivedPermission {
+  readonly callId: string;
+  readonly policy: PermissionPolicy;
+  readonly options: readonly PermissionOption[];
+  readonly toolName?: string;
+  readonly title?: string;
+  readonly reason?: string;
+  readonly offset: number;
+  /** The resolution, once present (pending request → `undefined`). */
+  readonly resolved?: {
+    readonly allowed: boolean;
+    readonly optionId: string;
+    readonly by?: "operator" | "auto";
+    readonly offset: number;
+  };
+}
+
 /** A derived turn: the messages, tool cards and step count folded within one turn boundary. */
 export interface DerivedTurn {
   readonly index: number;
   readonly startOffset: number;
   readonly messages: readonly DerivedMessage[];
   readonly tools: readonly DerivedTool[];
+  readonly permissions: readonly DerivedPermission[];
   readonly steps: number;
 }
 
@@ -340,6 +520,8 @@ export interface DerivedView {
   readonly messages: readonly DerivedMessage[];
   /** Every tool card across all turns, in offset order. */
   readonly tools: readonly DerivedTool[];
+  /** Every permission across all turns, in offset order (each request paired to its resolution by `callId`). */
+  readonly permissions: readonly DerivedPermission[];
   /** Total retained raw bytes (UTF-8) across `stream-chunk` events — the byte-replay fidelity accounting. */
   readonly rawByteLength: number;
   /** Number of retained raw chunks. */
@@ -355,6 +537,7 @@ interface MutableTurn {
   startOffset: number;
   messages: DerivedMessage[];
   tools: DerivedTool[];
+  permissions: DerivedPermission[];
   steps: number;
 }
 
@@ -368,6 +551,16 @@ interface PendingTool {
   toolsIndex: number;
   turn: MutableTurn;
   turnToolIndex: number;
+}
+
+/** A pending (unresolved) permission request, remembered by where it lives in both the flat `permissions`
+ * list and its owning turn's list — so a later resolution replaces the pending card in both lists in O(1),
+ * mirroring {@link PendingTool}. */
+interface PendingPermission {
+  permission: DerivedPermission;
+  permissionsIndex: number;
+  turn: MutableTurn;
+  turnPermissionIndex: number;
 }
 
 /**
@@ -386,8 +579,10 @@ export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
   const turns: MutableTurn[] = [];
   const messages: DerivedMessage[] = [];
   const tools: DerivedTool[] = [];
+  const permissions: DerivedPermission[] = [];
   const openTools = new Map<string, PendingTool>();
   let anonymousTool: PendingTool | undefined;
+  const openPermissions = new Map<string, PendingPermission>();
   let rawByteLength = 0;
   let rawChunkCount = 0;
   let lifecycle: "open" | "completed" | "exited" = "open";
@@ -396,7 +591,7 @@ export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
 
   const ensureTurn = (offset: number): MutableTurn => {
     if (current === undefined) {
-      current = { index: turns.length, startOffset: offset, messages: [], tools: [], steps: 0 };
+      current = { index: turns.length, startOffset: offset, messages: [], tools: [], permissions: [], steps: 0 };
       turns.push(current);
     }
     return current;
@@ -406,7 +601,7 @@ export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
     eventCount++;
     switch (event.kind) {
       case "turn": {
-        current = { index: event.index ?? turns.length, startOffset: event.offset, messages: [], tools: [], steps: 0 };
+        current = { index: event.index ?? turns.length, startOffset: event.offset, messages: [], tools: [], permissions: [], steps: 0 };
         turns.push(current);
         break;
       }
@@ -446,6 +641,35 @@ export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
         }
         break;
       }
+      case "permission": {
+        // A `permission` event is one of two phases (same discriminant `kind`); branch on `phase`. A
+        // REQUEST opens a pending DerivedPermission (paired to its turn); a RESOLUTION folds back into
+        // the open request by `callId` in O(1) — mirroring the tool-call/tool-result pending-map pairing.
+        if (event.phase === "request") {
+          const permission: DerivedPermission = {
+            policy: event.policy,
+            options: event.options,
+            offset: event.offset,
+            callId: event.callId,
+            ...(event.toolName !== undefined ? { toolName: event.toolName } : {}),
+            ...(event.title !== undefined ? { title: event.title } : {}),
+            ...(event.reason !== undefined ? { reason: event.reason } : {}),
+          };
+          const permissionsIndex = permissions.push(permission) - 1;
+          const turn = ensureTurn(event.offset);
+          const turnPermissionIndex = turn.permissions.push(permission) - 1;
+          openPermissions.set(event.callId, { permission, permissionsIndex, turn, turnPermissionIndex });
+        } else {
+          const pending = openPermissions.get(event.callId);
+          if (pending !== undefined) {
+            const resolved = withResolution(pending.permission, event);
+            permissions[pending.permissionsIndex] = resolved;
+            pending.turn.permissions[pending.turnPermissionIndex] = resolved;
+            openPermissions.delete(event.callId);
+          }
+        }
+        break;
+      }
       case "lifecycle": {
         lifecycle = event.phase;
         break;
@@ -459,9 +683,10 @@ export function deriveView(events: Iterable<TranscriptEvent>): DerivedView {
   }
 
   return {
-    turns: turns.map((t) => ({ index: t.index, startOffset: t.startOffset, messages: t.messages, tools: t.tools, steps: t.steps })),
+    turns: turns.map((t) => ({ index: t.index, startOffset: t.startOffset, messages: t.messages, tools: t.tools, permissions: t.permissions, steps: t.steps })),
     messages,
     tools,
+    permissions,
     rawByteLength,
     rawChunkCount,
     lifecycle,
@@ -474,6 +699,19 @@ function withResult(tool: DerivedTool, result: ToolResultEvent): DerivedTool {
   return {
     ...tool,
     result: { ok: result.ok, offset: result.offset, ...(result.content !== undefined ? { content: result.content } : {}) },
+  };
+}
+
+/** Replace a pending permission with its resolution: a new card carrying the operator's decision. */
+function withResolution(permission: DerivedPermission, resolution: PermissionResolutionEvent): DerivedPermission {
+  return {
+    ...permission,
+    resolved: {
+      allowed: resolution.allowed,
+      optionId: resolution.optionId,
+      offset: resolution.offset,
+      ...(resolution.by !== undefined ? { by: resolution.by } : {}),
+    },
   };
 }
 

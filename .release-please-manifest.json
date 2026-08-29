@@ -1,5 +1,5 @@
 {
-  "packages/agentic": "0.8.0",
+  "packages/agentic": "0.9.0",
   "packages/app-deno-gui": "1.1.1",
   "packages/app-embedded-graalvm-native": "1.2.1",
   "packages/app-embedded-jvm": "1.2.1",
@@ -24,7 +24,7 @@
   "packages/theme-synthwave": "1.0.0",
   "packages/trigger-mqtt": "1.1.1",
   "packages/urban": "0.88.0",
-  "packages/urban-agent-client": "0.1.8",
+  "packages/urban-agent-client": "0.1.9",
   "packages/urban-testkit": "1.0.0",
   "packages/workflow": "0.14.0"
 }

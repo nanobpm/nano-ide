@@ -31,7 +31,6 @@ import { createTestHost, type TestHost } from "./test-host.ts";
 import { createWasmEngineClient, type WasmEngineClient } from "./wasm-engine.ts";
 import { SurfaceCoverage } from "./coverage.ts";
 import type { MockWorkerBuilder } from "./worker-mock.ts";
-import type { MockChildProcessBuilder } from "./child-process-mock.ts";
 
 /** A route invocation against the in-process router (no socket is opened). */
 export interface RouteRequest {
@@ -107,17 +106,6 @@ export interface TestApp {
    * Delegates to {@link WasmEngineClient.mockWorker}.
    */
   mockWorker(taskType: string): MockWorkerBuilder;
-  /**
-   * Register (or fetch) a child-process (call-activity) mock for `processId` (epic #296, S3).
-   * The returned {@link MockChildProcessBuilder} lets a test resolve a parent's call activity to
-   * `processId` — `completeWith(vars)` continues the parent with `vars` merged, `failWith(...)`
-   * raises an incident — **without** deploying/executing the real called process, while un-mocked
-   * call activities keep the engine's native behaviour. Reuses the shared outcome model. Opt-in
-   * and zero-cost when unused; call the builder's `.reset()` (or
-   * `engine.clearChildProcessMock(processId)`) to restore native behaviour. Delegates to
-   * {@link WasmEngineClient.mockChildProcess}.
-   */
-  mockChildProcess(processId: string): MockChildProcessBuilder;
   /**
    * The coverage-exhaustive gate (S4), present only when `bootTestApp` was called with
    * `{ coverage: true }`. Pre-declared with the app's "operations" (from its OpenAPI spec)
@@ -366,7 +354,6 @@ export async function bootTestApp(root: string, opts: BootTestAppOptions = {}): 
       logs: testHost.logs,
       now: () => scheduler.now(),
       mockWorker: (taskType: string) => engine.mockWorker(taskType),
-      mockChildProcess: (processId: string) => engine.mockChildProcess(processId),
       snapshot: () => engine.snapshot(),
       settle,
       advanceTime,

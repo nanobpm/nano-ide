@@ -589,9 +589,14 @@ export class WasmEngineClient implements EngineClient {
     parentProcessInstanceKey?: string;
     rootProcessInstanceKey?: string;
   }): Promise<ProcessInstanceSnapshot[]> {
-    const wanted = filter?.processInstanceKeys
-      ? new Set(filter.processInstanceKeys)
-      : undefined;
+    // Normalize the wanted keys through the shared presence rule (`presentKey`) so a padded key
+    // (`" 123 "`) matches the normalized row keys below, and treat an empty/all-blank list as
+    // *absent* (no key filter) rather than a set that matches nothing — mirroring
+    // `SdkEngineClient`, whose `$in` filter is only sent when it has ≥1 present key. No Drift Surfaces.
+    const wantedKeys = filter?.processInstanceKeys
+      ?.map((k) => presentKey(k))
+      .filter((k): k is string => k !== undefined);
+    const wanted = wantedKeys && wantedKeys.length > 0 ? new Set(wantedKeys) : undefined;
     // Delegate to the engine's real REST read channel (`POST /process-instances/search`)
     // instead of scraping the primary-state snapshot. The read model does not yet honour
     // filter/sort/page fields server-side (it returns every instance — the write/index side is

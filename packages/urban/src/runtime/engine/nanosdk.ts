@@ -677,8 +677,19 @@ export class SdkEngineClient implements EngineClient {
   }): Promise<UserTaskSummary[]> {
     // User tasks are an eventually consistent read; ask for zero-wait consistency so
     // the search reflects what is currently visible without blocking.
+    // Normalize the process-instance key selectors through the shared presence rule so a
+    // blank/whitespace-only selector is *dropped* rather than forwarded as a present filter that
+    // silently matches nothing, and a padded key (`" 123 "`) matches the normalized keys we
+    // surface — mirroring `WasmEngineClient` (which normalizes via `presentKey`) and
+    // `searchProcessInstances` below (No Drift Surfaces).
+    const f: Record<string, unknown> = { ...(filter ?? {}) };
+    for (const sel of ["processInstanceKey", "parentProcessInstanceKey", "rootProcessInstanceKey"] as const) {
+      const normalized = presentEngineKey(filter?.[sel]);
+      if (normalized) f[sel] = normalized;
+      else delete f[sel];
+    }
     const body = await this.client.searchUserTasks(
-      { filter: { ...(filter ?? {}) } },
+      { filter: f },
       { consistency: { waitUpToMs: 0 } },
     );
     const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
@@ -774,7 +785,13 @@ export class SdkEngineClient implements EngineClient {
   }): Promise<ProcessInstanceSnapshot[]> {
     const f: Record<string, unknown> = {};
     if (filter?.state) f.state = filter.state;
-    const keys = filter?.processInstanceKeys?.filter((k) => k != null && k !== "");
+    // Normalize each requested key through the shared presence rule (drop blank/whitespace-only
+    // entries, trim padded ones like `" 123 "`) so the `$in` filter carries only present keys that
+    // match the normalized keys we surface — mirroring `WasmEngineClient` and the selector
+    // handling above (No Drift Surfaces).
+    const keys = filter?.processInstanceKeys
+      ?.map((k) => presentEngineKey(k))
+      .filter((k): k is string => k !== undefined);
     if (keys && keys.length > 0) f.processInstanceKey = { $in: keys };
     // Parent/root selectors let the reduced path query a subject's native descendants
     // server-side. Normalize each through the shared presence rule so a blank selector is

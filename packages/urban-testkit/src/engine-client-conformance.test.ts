@@ -418,6 +418,32 @@ test("EngineClient seam: parent/root linkage correlates a native-child user task
       allTasks.length,
       "a whitespace-only user-task processInstanceKey selector is dropped, not matched-against literally",
     );
+
+    // Defect-class guard (No Drift Surfaces): `searchProcessInstances({ processInstanceKeys })` must
+    // normalize each wanted key through the shared presence rule before matching — a padded key
+    // (`" <key> "`) still resolves its instance, and an empty/all-blank list is treated as *absent*
+    // (no key filter → matches everything) rather than a set that matches nothing. This mirrors
+    // `SdkEngineClient`, whose `$in` filter carries only present keys and is omitted when none remain.
+    const allInstances = await engine.searchProcessInstances({});
+    const [paddedRoot] = await engine.searchProcessInstances({
+      processInstanceKeys: [`  ${rootKey}  `],
+    });
+    assert.ok(
+      paddedRoot !== undefined && paddedRoot.processInstanceKey === rootKey,
+      "a padded processInstanceKeys entry is trimmed and still matches its instance",
+    );
+    const emptyKeyList = await engine.searchProcessInstances({ processInstanceKeys: [] });
+    assert.equal(
+      emptyKeyList.length,
+      allInstances.length,
+      "an empty processInstanceKeys list is treated as absent (matches everything), not matching nothing",
+    );
+    const blankKeyList = await engine.searchProcessInstances({ processInstanceKeys: ["   ", ""] });
+    assert.equal(
+      blankKeyList.length,
+      allInstances.length,
+      "an all-blank processInstanceKeys list is treated as absent (matches everything), not matching nothing",
+    );
   } finally {
     await engine.close();
   }

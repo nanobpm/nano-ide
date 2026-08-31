@@ -164,6 +164,19 @@ export interface TranscriptStream {
   readonly firstOffset?: number;
   /** One past the highest offset ever recorded (the resume high-water mark). */
   readonly nextOffset: number;
+  /**
+   * Total UTF-8 byte size of the currently *retained* chunk payloads — the sum of
+   * `utf8ByteLength(chunk)` over exactly the chunks {@link TranscriptStore.read}
+   * would return. Tracks the retained window (drops on eviction / sweep), so a
+   * consumer can render a per-stream size without reading the payloads back.
+   */
+  readonly byteLength: number;
+  /**
+   * Count of currently *retained* chunks — `read(stream).length`. Because
+   * retention evicts the head and `nextOffset` is a high-water mark (not a count),
+   * this cannot be derived from the offset window and is tracked from the chunks.
+   */
+  readonly chunkCount: number;
 }
 
 /**
@@ -231,6 +244,8 @@ interface DbStreamRow {
   completed_at: string | null;
   first_offset: number | null;
   next_offset: number;
+  byte_length: number;
+  chunk_count: number;
 }
 
 /** The raw chunk row shape as read from SQLite. */
@@ -260,6 +275,49 @@ function toStatus(value: string): TranscriptStatus {
   throw new TranscriptCorruptionError(`invalid transcript status in DB: ${JSON.stringify(value)}`);
 }
 
+/**
+ * The per-stream metadata projection: every stream column plus the two retained-window
+ * aggregates computed over the chunk table. `byte_length` is the summed UTF-8 byte size
+ * of the retained chunk payloads (`length(CAST(chunk AS BLOB))` is the UTF-8 byte count,
+ * matching {@link utf8ByteLength}); `chunk_count` is the retained chunk count. Both are
+ * scoped to the joined `stream`, so they reflect exactly the chunks {@link TranscriptStore.read}
+ * would return and shrink as retention evicts the head — the app "past sessions" list can
+ * render per-row size/count without reading every payload back (nano-workforce#233). Computed
+ * on read (not stored columns) so the drift-guarded canonical schema stays untouched.
+ *
+ * Both aggregates come from a single grouped {@link streamMetadataFrom} LEFT JOIN rather
+ * than two correlated subqueries, so the chunk table is scanned once per query (not twice
+ * per stream). The `COALESCE(..., 0)` keeps streams with no retained chunks at zero, since
+ * the LEFT JOIN yields `NULL` aggregates for them.
+ */
+const STREAM_METADATA_SELECT = `s.*,
+    COALESCE(agg.byte_length, 0) AS byte_length,
+    COALESCE(agg.chunk_count, 0) AS chunk_count`;
+
+/**
+ * The `FROM` clause pairing the stream table with a single grouped aggregate of its chunks,
+ * feeding {@link STREAM_METADATA_SELECT}. One `GROUP BY` pass computes both the summed UTF-8
+ * byte size and the retained chunk count per stream.
+ *
+ * `chunkFilter` scopes the aggregate subquery. `list()` leaves it empty and groups every
+ * stream's chunks in one scan ({@link STREAM_METADATA_FROM_ALL}); `get()` passes
+ * `WHERE c.stream = ?` ({@link STREAM_METADATA_FROM_ONE}) so a single-stream lookup only
+ * aggregates that stream's chunks via the `(stream, chunk_offset)` primary key, instead of
+ * grouping the entire chunk table just to keep one row after the outer `WHERE s.stream = ?`.
+ */
+const streamMetadataFrom = (chunkFilter: string): string => `${TRANSCRIPT_STREAM_TABLE} s
+    LEFT JOIN (SELECT c.stream AS stream,
+                      SUM(length(CAST(c.chunk AS BLOB))) AS byte_length,
+                      COUNT(*) AS chunk_count
+                 FROM ${TRANSCRIPT_CHUNK_TABLE} c${chunkFilter}
+                GROUP BY c.stream) agg ON agg.stream = s.stream`;
+
+/** `list()` variant: aggregate every stream's chunks in one grouped scan. */
+const STREAM_METADATA_FROM_ALL = streamMetadataFrom("");
+
+/** `get()` variant: aggregate only the requested stream's chunks (bound `stream = ?`). */
+const STREAM_METADATA_FROM_ONE = streamMetadataFrom("\n                WHERE c.stream = ?");
+
 function toStream(row: DbStreamRow): TranscriptStream {
   const out: {
     stream: string;
@@ -269,12 +327,16 @@ function toStream(row: DbStreamRow): TranscriptStream {
     completedAt?: string;
     firstOffset?: number;
     nextOffset: number;
+    byteLength: number;
+    chunkCount: number;
   } = {
     stream: row.stream,
     lifecycle: toLifecycle(row.lifecycle),
     status: toStatus(row.status),
     createdAt: row.created_at,
     nextOffset: row.next_offset,
+    byteLength: row.byte_length,
+    chunkCount: row.chunk_count,
   };
   if (row.completed_at !== null) out.completedAt = row.completed_at;
   if (row.first_offset !== null) out.firstOffset = row.first_offset;
@@ -873,8 +935,8 @@ export class TranscriptStore {
   /** Look up a single stream's transcript metadata. */
   get(stream: string): TranscriptStream | undefined {
     const rows = this.#db.all<DbStreamRow>(
-      `SELECT * FROM ${TRANSCRIPT_STREAM_TABLE} WHERE stream = ?`,
-      [stream],
+      `SELECT ${STREAM_METADATA_SELECT} FROM ${STREAM_METADATA_FROM_ONE} WHERE s.stream = ?`,
+      [stream, stream],
     );
     const row = rows[0];
     return row === undefined ? undefined : toStream(row);
@@ -883,7 +945,9 @@ export class TranscriptStore {
   /** Every stream's metadata, ordered by first open then stream id. */
   list(): TranscriptStream[] {
     return this.#db
-      .all<DbStreamRow>(`SELECT * FROM ${TRANSCRIPT_STREAM_TABLE} ORDER BY created_at, stream`)
+      .all<DbStreamRow>(
+        `SELECT ${STREAM_METADATA_SELECT} FROM ${STREAM_METADATA_FROM_ALL} ORDER BY s.created_at, s.stream`,
+      )
       .map(toStream);
   }
 

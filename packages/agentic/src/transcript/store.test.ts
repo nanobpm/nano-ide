@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { TranscriptLifecycleError, TranscriptStore } from "./store.ts";
 import { TRANSCRIPT_STREAM_TABLE } from "./schema.ts";
+import { utf8ByteLength } from "./events.ts";
 import { openTestDb, type TestDb } from "./test-db.ts";
 
 /** A hand-driven clock so retention/timestamps are deterministic. */
@@ -52,6 +53,81 @@ test("record persists chunks and tracks the offset window", () => {
     store.read("s").map((c) => c.chunk),
     ["c0", "c1", "c2"],
   );
+});
+
+/** Sum the UTF-8 byte length of a stream's retained chunks — the read-side oracle. */
+function readByteLength(store: TranscriptStore, stream: string): number {
+  return store.read(stream).reduce((sum, c) => sum + utf8ByteLength(c.chunk), 0);
+}
+
+test("stream metadata carries byteLength and chunkCount (empty on open)", () => {
+  const store = newStore();
+  const meta = store.open("s", "long-lived");
+  assert.equal(meta.byteLength, 0);
+  assert.equal(meta.chunkCount, 0);
+});
+
+test("byteLength / chunkCount equal a full read + utf8ByteLength (derived-vs-read equivalence)", () => {
+  const store = newStore();
+  // Mix single- and multi-byte payloads so byteLength ≠ character/chunk count.
+  store.record(
+    "s",
+    [
+      { offset: 0, chunk: "hello" },
+      { offset: 1, chunk: "→ünïcödé★" },
+      { offset: 2, chunk: "𐍈 four-byte" },
+    ],
+    "long-lived",
+  );
+  const meta = store.get("s");
+  assert.equal(meta?.chunkCount, store.read("s").length);
+  assert.equal(meta?.chunkCount, 3);
+  assert.equal(meta?.byteLength, readByteLength(store, "s"));
+  // The aggregate must count bytes, not characters — a multi-byte stream is larger.
+  assert.ok((meta?.byteLength ?? 0) > "hello→ünïcödé★𐍈 four-byte".length);
+});
+
+test("byteLength / chunkCount track the retained window across truncateBefore eviction", () => {
+  const store = newStore();
+  store.record("s", chunks(6), "long-lived");
+  const before = store.get("s");
+  assert.equal(before?.chunkCount, 6);
+  assert.equal(before?.byteLength, readByteLength(store, "s"));
+  // Evict the head — the aggregates must shrink to the retained window, staying
+  // consistent with firstOffset (they cannot be derived from the offsets alone).
+  store.truncateBefore("s", 3);
+  const after = store.get("s");
+  assert.equal(after?.chunkCount, 3);
+  assert.equal(after?.chunkCount, store.read("s").length);
+  assert.equal(after?.byteLength, readByteLength(store, "s"));
+  assert.notEqual(after?.byteLength, before?.byteLength, "eviction decrements byteLength");
+});
+
+test("list() exposes byteLength / chunkCount per stream", () => {
+  const store = newStore();
+  store.record("a", chunks(2), "long-lived");
+  store.record("b", chunks(5), "long-lived");
+  const byStream = new Map(store.list().map((s) => [s.stream, s]));
+  assert.equal(byStream.get("a")?.chunkCount, 2);
+  assert.equal(byStream.get("a")?.byteLength, readByteLength(store, "a"));
+  assert.equal(byStream.get("b")?.chunkCount, 5);
+  assert.equal(byStream.get("b")?.byteLength, readByteLength(store, "b"));
+});
+
+test("get() aggregates only the requested stream's chunks (no cross-stream leakage)", () => {
+  const store = newStore();
+  // Other streams carrying chunks must not inflate the requested stream's
+  // aggregates: get() must scope byte_length/chunk_count to `stream = ?`, never
+  // fold in siblings' chunks.
+  store.record("a", chunks(2), "long-lived");
+  store.record("b", chunks(5), "long-lived");
+  store.record("c", chunks(4), "long-lived");
+  const a = store.get("a");
+  assert.equal(a?.chunkCount, 2);
+  assert.equal(a?.byteLength, readByteLength(store, "a"));
+  const b = store.get("b");
+  assert.equal(b?.chunkCount, 5);
+  assert.equal(b?.byteLength, readByteLength(store, "b"));
 });
 
 test("record is idempotent by (stream, offset) — re-recording writes nothing", () => {

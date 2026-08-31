@@ -114,6 +114,22 @@ test("list() exposes byteLength / chunkCount per stream", () => {
   assert.equal(byStream.get("b")?.byteLength, readByteLength(store, "b"));
 });
 
+test("get() aggregates only the requested stream's chunks (no cross-stream leakage)", () => {
+  const store = newStore();
+  // Other streams carrying chunks must not inflate the requested stream's
+  // aggregates: get() must scope byte_length/chunk_count to `stream = ?`, never
+  // fold in siblings' chunks.
+  store.record("a", chunks(2), "long-lived");
+  store.record("b", chunks(5), "long-lived");
+  store.record("c", chunks(4), "long-lived");
+  const a = store.get("a");
+  assert.equal(a?.chunkCount, 2);
+  assert.equal(a?.byteLength, readByteLength(store, "a"));
+  const b = store.get("b");
+  assert.equal(b?.chunkCount, 5);
+  assert.equal(b?.byteLength, readByteLength(store, "b"));
+});
+
 test("record is idempotent by (stream, offset) — re-recording writes nothing", () => {
   const store = newStore();
   store.record("s", chunks(3));

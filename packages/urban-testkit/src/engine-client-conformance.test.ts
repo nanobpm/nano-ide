@@ -143,3 +143,100 @@ test("EngineClient seam: searchIncidents / setVariables / updateJobRetries / res
     await engine.close();
   }
 });
+
+// Behavioural parity for the three engine-truth READ methods added by nanobpm/nano-ide#526/#527/#528
+// (`searchVariables`, `searchJobs`, `getProcessDefinitionXml`). The surface guard above already
+// fails if an adapter lags one; these cases pin the *behaviour contract* both adapters must satisfy,
+// driven purely through the public `EngineClient` seam. The scenario is the "is it actually stuck?"
+// read path: an instance is created but its `work` worker is NEVER registered, so the job parks
+// CREATED-and-queued (no `worker` leased). An operator then reads the parked token's variables, sees
+// the queued job (whose `jobKey` feeds `updateJobRetries`), and fetches the deployed BPMN by the key
+// the instance carries — each a read, no mutation.
+test("EngineClient seam: searchVariables / searchJobs / getProcessDefinitionXml read a parked instance", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    await engine.deployResources([
+      { name: "incident_repair.bpmn", content: SERVICE_TASK_BPMN, contentType: "text/xml" },
+    ]);
+
+    // Deliberately DO NOT register the `work` worker: the job parks CREATED (queued, unleased).
+    const { processInstanceKey } = await engine.createInstance({
+      processDefinitionId: "incident_repair",
+      variables: { alpha: "one", beta: 2 },
+    });
+
+    // searchVariables — the seeded process variables are readable, each with its serialized-JSON
+    // `value`, and scoped to the process instance.
+    const vars = await engine.searchVariables({ processInstanceKey });
+    const alpha = vars.find((v) => v.name === "alpha");
+    const beta = vars.find((v) => v.name === "beta");
+    assert.ok(alpha !== undefined, "alpha variable is returned");
+    assert.equal(alpha.value, '"one"', "a string value arrives JSON-encoded");
+    assert.equal(alpha.scopeKey, processInstanceKey);
+    assert.equal(alpha.processInstanceKey, processInstanceKey);
+    assert.ok(alpha.variableKey.length > 0, "each variable carries its own variableKey");
+    assert.equal(alpha.isTruncated, false);
+    assert.ok(beta !== undefined, "beta variable is returned");
+    assert.equal(beta.value, "2", "a numeric value arrives JSON-encoded");
+    // Filtering: by name it narrows to that one variable; a foreign instance returns none.
+    const byName = await engine.searchVariables({ processInstanceKey, name: "alpha" });
+    assert.deepEqual(
+      byName.map((v) => v.name),
+      ["alpha"],
+      "name filter returns exactly the matching variable",
+    );
+    assert.deepEqual(await engine.searchVariables({ processInstanceKey: "does-not-exist" }), []);
+
+    // searchJobs — the parked `work` job is CREATED-and-queued: a `worker` is NOT set (nothing has
+    // leased it), which is the leased-vs-queued signal. Its `jobKey` is the handle `updateJobRetries`
+    // takes with no incident detour.
+    const jobs = await engine.searchJobs({ processInstanceKey });
+    assert.equal(jobs.length, 1, "the parked service-task job is returned");
+    const job = jobs[0];
+    assert.equal(job.type, "work");
+    assert.equal(job.state, "CREATED", "a parked job reports the REST/v2 CREATED spelling");
+    assert.equal(job.elementId, "work");
+    assert.equal(job.processInstanceKey, processInstanceKey);
+    assert.ok(job.jobKey.length > 0, "the job carries the jobKey retry_job consumes");
+    assert.equal(job.worker, undefined, "a queued (unleased) job has NO worker set");
+    // Filtering: a matching state returns it; a non-matching state or a "leased by X" worker filter
+    // excludes the queued job — the same selector contract both adapters honour.
+    assert.equal((await engine.searchJobs({ processInstanceKey, state: "CREATED" })).length, 1);
+    assert.equal((await engine.searchJobs({ processInstanceKey, state: "COMPLETED" })).length, 0);
+    assert.equal((await engine.searchJobs({ processInstanceKey, type: "work" })).length, 1);
+    assert.equal((await engine.searchJobs({ processInstanceKey, type: "other" })).length, 0);
+    assert.equal(
+      (await engine.searchJobs({ processInstanceKey, worker: "some-agent" })).length,
+      0,
+      "an unleased job cannot match a leased-by-worker filter",
+    );
+    // End-to-end: the jobKey searchJobs surfaced is the exact handle updateJobRetries accepts —
+    // no engine-API detour and no incident required (this job is not behind one).
+    await engine.updateJobRetries({ jobKey: job.jobKey, retries: 5 });
+
+    // getProcessDefinitionXml — the instance carries its processDefinitionKey (via
+    // searchProcessInstances), which fetches the deployed BPMN XML; an unknown/blank key is absent.
+    const [instance] = await engine.searchProcessInstances({
+      processInstanceKeys: [processInstanceKey],
+    });
+    assert.ok(instance !== undefined, "the instance is found");
+    assert.ok(
+      instance.processDefinitionKey !== undefined && instance.processDefinitionKey.length > 0,
+      "the instance carries its processDefinitionKey (instance → key → deployed XML)",
+    );
+    const xml = await engine.getProcessDefinitionXml(instance.processDefinitionKey);
+    assert.ok(typeof xml === "string" && xml.includes("incident_repair"), "deployed BPMN is returned");
+    assert.equal(
+      await engine.getProcessDefinitionXml("does-not-exist"),
+      null,
+      "an unknown processDefinitionKey is typed-absent (null)",
+    );
+    assert.equal(
+      await engine.getProcessDefinitionXml("   "),
+      null,
+      "a blank processDefinitionKey is typed-absent (null)",
+    );
+  } finally {
+    await engine.close();
+  }
+});

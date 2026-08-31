@@ -22,6 +22,7 @@ import type {
   FormResult,
   ProcessInstanceSearchQueryResult,
   UserTaskSearchQueryResult,
+  VariableSearchQueryResult,
 } from "@nanobpm/engine-wasm/readmodel-types";
 import {
   applyAmbientLineage,
@@ -35,9 +36,13 @@ import {
   isBpmnError,
   type IncidentFilter,
   type IncidentSummary,
+  type JobFilter,
   type JobHandler,
+  type JobSummary,
   type UserTaskState,
   type UserTaskFilter,
+  type VariableFilter,
+  type VariableSummary,
   type WorkerSubscription,
 } from "@nanobpm/urban/runtime";
 import { applyOutcome, MockWorkerBuilder } from "./worker-mock.ts";
@@ -63,6 +68,7 @@ export { type ProcessInstanceState, wasmStateToProcessInstanceState };
 export interface ProcessInstanceSnapshot {
   readonly processInstanceKey: string;
   readonly state: ProcessInstanceState;
+  readonly processDefinitionKey?: string;
 }
 
 /** Narrow an untyped JSON value to a plain object. Used to bridge the wasm
@@ -557,7 +563,12 @@ export class WasmEngineClient implements EngineClient {
       const state = wasmStateToProcessInstanceState(inst.state);
       if (state === undefined) continue;
       if (filter?.state !== undefined && state !== filter.state) continue;
-      out.push({ processInstanceKey: key, state });
+      const processDefinitionKey = presentKey(inst.processDefinitionKey);
+      out.push({
+        processInstanceKey: key,
+        state,
+        ...(processDefinitionKey ? { processDefinitionKey } : {}),
+      });
     }
     return out;
   }
@@ -665,6 +676,126 @@ export class WasmEngineClient implements EngineClient {
       });
     }
     return out;
+  }
+
+  /** Search process variables — the read counterpart to {@link setVariables}. Delegates to the
+   *  engine's real REST read channel (`POST /v2/variables/search`) and parses through the derived
+   *  `VariableSearchQueryResult` DTO. The read model does not yet honour filter/sort/page fields
+   *  server-side (it returns every variable), so the `processInstanceKey`/`scopeKey`/`name`
+   *  selectors are applied client-side — mirroring the *effective* behaviour of the gateway-backed
+   *  `SdkEngineClient`, which gets them honoured server-side; only the filtering site differs. Each
+   *  row carries its serialized JSON `value` and the engine's `isTruncated` flag. */
+  async searchVariables(filter?: VariableFilter): Promise<VariableSummary[]> {
+    const body: VariableSearchQueryResult = JSON.parse(
+      this.#liveEngine.searchVariables("{}"),
+    );
+    const wantInstanceKey = presentKey(filter?.processInstanceKey);
+    const wantScopeKey = presentKey(filter?.scopeKey);
+    const wantName = present(filter?.name);
+    const out: VariableSummary[] = [];
+    // Same untyped-JSON defence as `searchProcessInstances`: `searchRows` guards the body and
+    // drops non-object rows so a malformed/changed engine response can't throw while mapping.
+    for (const row of searchRows(body)) {
+      const variableKey = presentKey(row.variableKey);
+      const processInstanceKey = presentKey(row.processInstanceKey);
+      const name = presentString(row.name);
+      if (variableKey === undefined || processInstanceKey === undefined || name === undefined) {
+        continue;
+      }
+      // A process-level variable is scoped to the process instance itself; fall back to the
+      // process-instance key when the engine omits `scopeKey`, matching `SdkEngineClient`.
+      const scopeKey = presentKey(row.scopeKey) ?? processInstanceKey;
+      if (wantInstanceKey !== undefined && processInstanceKey !== wantInstanceKey) continue;
+      if (wantScopeKey !== undefined && scopeKey !== wantScopeKey) continue;
+      if (wantName !== undefined && name !== wantName) continue;
+      // The engine serializes `value` as a JSON string; keep a string as-is, otherwise JSON-encode
+      // so the field is always a string the caller can `JSON.parse` (parity with `SdkEngineClient`).
+      const value = typeof row.value === "string" ? row.value : JSON.stringify(row.value ?? null);
+      out.push({
+        variableKey,
+        name,
+        value,
+        scopeKey,
+        processInstanceKey,
+        isTruncated: row.isTruncated === true,
+      });
+    }
+    return out;
+  }
+
+  /** Search jobs — the "is it actually stuck" read (a `CREATED` job WITH a `worker` set is leased,
+   *  one with NONE set is queued) and the on-tool source of a `jobKey` for {@link updateJobRetries}.
+   *  Derived from the snapshot's `jobs` (the WASM engine has no `/jobs/search` read channel): each
+   *  snapshot job carries `key`/`jobType`/`instanceKey`/`elementId`/`retries`/`state`. The pull-based
+   *  WASM engine locks a job to a worker only transiently inside {@link drain}, so a parked job has
+   *  no `worker`/`deadline` — both are emitted only when the snapshot carries them (matching
+   *  `JobSummary`'s optional fields). The `processInstanceKey`/`state`/`type`/`elementId`/`worker`
+   *  selectors are applied client-side, mirroring the effective behaviour of the gateway-backed
+   *  `SdkEngineClient`. */
+  async searchJobs(filter?: JobFilter): Promise<JobSummary[]> {
+    const wantInstanceKey = presentKey(filter?.processInstanceKey);
+    const wantState = present(filter?.state);
+    const wantType = present(filter?.type);
+    const wantElementId = present(filter?.elementId);
+    const wantWorker = present(filter?.worker);
+    const out: JobSummary[] = [];
+    for (const job of records(this.#snapshot().jobs)) {
+      const jobKey = presentKey(job.key);
+      const type = presentString(job.jobType);
+      const processInstanceKey = presentKey(job.instanceKey);
+      if (jobKey === undefined || type === undefined || processInstanceKey === undefined) continue;
+      // The snapshot spells job state in PascalCase (e.g. `"Created"`); normalize to the REST/v2
+      // enum spelling the gateway-backed `SdkEngineClient` reports so the two adapters agree.
+      const state = normalizeJobState(job.state);
+      if (state === "") continue;
+      const worker = presentString(job.worker);
+      const elementId = presentString(job.elementId);
+      const deadline = presentString(job.deadline);
+      const retries = typeof job.retries === "number" && Number.isFinite(job.retries)
+        ? job.retries
+        : undefined;
+      if (wantInstanceKey !== undefined && processInstanceKey !== wantInstanceKey) continue;
+      if (wantState !== undefined && state !== wantState) continue;
+      if (wantType !== undefined && type !== wantType) continue;
+      if (wantElementId !== undefined && elementId !== wantElementId) continue;
+      // An unset `worker` cannot match a `worker` selector — a queued job is excluded from a
+      // "leased by worker X" search, matching the live engine's server-side filter.
+      if (wantWorker !== undefined && worker !== wantWorker) continue;
+      out.push({
+        jobKey,
+        type,
+        state,
+        processInstanceKey,
+        ...(worker ? { worker } : {}),
+        ...(retries !== undefined ? { retries } : {}),
+        ...(elementId ? { elementId } : {}),
+        ...(deadline ? { deadline } : {}),
+      });
+    }
+    return out;
+  }
+
+  /** Fetch the deployed BPMN XML of a process definition by key — the deployed routing model (with
+   *  its FEEL gateway conditions), the source of truth for WHY an instance routed where it did. The
+   *  WASM engine has no `/v2/process-definitions/{key}/xml` read channel, but its event log retains a
+   *  `ProcessDeployed` event carrying `process_definition_key` + the full `process.xml`, so this
+   *  scans the log for the matching key — engine truth, no side-channel capture. Returns `null` for
+   *  a blank/unknown key (mirroring `SdkEngineClient.getProcessDefinitionXml`, which returns `null`
+   *  on a 404). */
+  async getProcessDefinitionXml(processDefinitionKey: string): Promise<string | null> {
+    const key = presentKey(processDefinitionKey);
+    if (key === undefined) return null;
+    // The most recent deploy of a key wins if a key ever recurred; scan newest-first.
+    const events = this.#parseArray(this.#liveEngine.events());
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.type !== "ProcessDeployed") continue;
+      if (presentKey(ev.process_definition_key) !== key) continue;
+      const process = isRecord(ev.process) ? ev.process : undefined;
+      const xml = presentString(process?.xml);
+      if (xml !== undefined) return xml;
+    }
+    return null;
   }
 
   /** Resolve an open incident by key, returning the parked token to progress (a job incident
@@ -1248,6 +1379,18 @@ function requireCreated(created: unknown): string {
 /** The `Record<string, unknown>` elements of an unknown value (non-records dropped). */
 function records(v: unknown): Record<string, unknown>[] {
   return Array.isArray(v) ? v.filter(isRecord) : [];
+}
+
+/** Normalize the WASM snapshot's PascalCase job state (`"Created"`, `"TimedOut"`) to the REST/v2
+ *  `JobStateEnum` spelling the gateway-backed `SdkEngineClient` reports (`"CREATED"`,
+ *  `"TIMED_OUT"`), by inserting `_` at camel boundaries and upper-casing — so the two adapters
+ *  report the same `state` string (No Drift Surfaces). Idempotent on an already-SCREAMING_SNAKE
+ *  value; `""` for a blank/absent state (the caller drops such a row). */
+function normalizeJobState(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  const t = raw.trim();
+  if (t === "") return "";
+  return t.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toUpperCase();
 }
 
 /** Build a `(processInstanceKey, elementId) → elementInstanceKey` index from each instance's

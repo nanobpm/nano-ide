@@ -91,6 +91,9 @@ function fakeEngine(overrides: Partial<EngineClient> = {}): EngineClient {
     searchElementInstanceWaitStates: async () => [],
     getElementInstance: async () => null,
     searchIncidents: async () => [],
+    searchVariables: async () => [],
+    searchJobs: async () => [],
+    getProcessDefinitionXml: async () => null,
     resolveIncident: async () => {},
     updateJobRetries: async () => {},
     setVariables: async () => {},
@@ -565,6 +568,9 @@ test("the framework debug tools appear and return engine truth", async () => {
   assert.ok(names.includes("urban_debug_search_user_tasks"));
   assert.ok(names.includes("urban_debug_instance_state"));
   assert.ok(names.includes("urban_debug_open_user_tasks"));
+  assert.ok(names.includes("urban_debug_search_variables"));
+  assert.ok(names.includes("urban_debug_search_jobs"));
+  assert.ok(names.includes("urban_debug_get_process_definition_xml"));
 
   const call = await rpc(router, session, "tools/call", {
     name: "urban_debug_search_process_instances",
@@ -572,6 +578,97 @@ test("the framework debug tools appear and return engine truth", async () => {
   });
   const text = toolContentText(call.result);
   assert.deepEqual(JSON.parse(text), [snapshot]);
+});
+
+test("urban_debug_search_variables / search_jobs / get_process_definition_xml are read tools returning engine truth", async () => {
+  const variable = {
+    variableKey: "v-1",
+    name: "prKey",
+    value: '"owner/repo#7"',
+    scopeKey: "pi-1",
+    processInstanceKey: "pi-1",
+    isTruncated: false,
+  };
+  const job = {
+    jobKey: "j-1",
+    type: "senior:pr-review",
+    state: "CREATED",
+    processInstanceKey: "pi-1",
+    retries: 3,
+    elementId: "review",
+  };
+  const seenVarFilters: unknown[] = [];
+  const seenJobFilters: unknown[] = [];
+  const seenXmlKeys: string[] = [];
+  const engine = fakeEngine({
+    searchVariables: async (filter) => {
+      seenVarFilters.push(filter);
+      return [variable];
+    },
+    searchJobs: async (filter) => {
+      seenJobFilters.push(filter);
+      return [job];
+    },
+    getProcessDefinitionXml: async (key) => {
+      seenXmlKeys.push(key);
+      return key === "pd-1" ? "<bpmn:definitions/>" : null;
+    },
+  });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+
+  // All three tools are read tools — they serve on loopback with no credential.
+  const vars = await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_variables",
+    arguments: { processInstanceKey: "pi-1", name: "prKey" },
+  });
+  assert.notEqual(vars.result?.isError, true, "search_variables is a read tool (no credential needed)");
+  assert.deepEqual(JSON.parse(toolContentText(vars.result)), [variable]);
+  assert.deepEqual(seenVarFilters, [{ processInstanceKey: "pi-1", name: "prKey" }]);
+
+  const jobs = await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_jobs",
+    arguments: { processInstanceKey: "pi-1", state: "CREATED" },
+  });
+  assert.notEqual(jobs.result?.isError, true, "search_jobs is a read tool (no credential needed)");
+  assert.deepEqual(JSON.parse(toolContentText(jobs.result)), [job]);
+  assert.deepEqual(seenJobFilters, [{ processInstanceKey: "pi-1", state: "CREATED" }]);
+
+  const xml = await rpc(router, session, "tools/call", {
+    name: "urban_debug_get_process_definition_xml",
+    arguments: { processDefinitionKey: "pd-1" },
+  });
+  assert.notEqual(xml.result?.isError, true, "get_process_definition_xml is a read tool");
+  // The deployed XML is a raw string, surfaced verbatim (not JSON-wrapped).
+  assert.equal(toolContentText(xml.result), "<bpmn:definitions/>");
+  assert.deepEqual(seenXmlKeys, ["pd-1"]);
+
+  // An unknown key returns typed-absent (null) rather than erroring.
+  const absent = await rpc(router, session, "tools/call", {
+    name: "urban_debug_get_process_definition_xml",
+    arguments: { processDefinitionKey: "nope" },
+  });
+  assert.equal(toolContentText(absent.result), "null");
+});
+
+test("the three new debug read tools expose self-contained ($ref-free) input schemas", async () => {
+  const { router } = buildHarness({ engine: fakeEngine() });
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+  const names = tools.map((t) => Reflect.get(t, "name"));
+  for (const name of [
+    "urban_debug_search_variables",
+    "urban_debug_search_jobs",
+    "urban_debug_get_process_definition_xml",
+  ]) {
+    assert.ok(names.includes(name), `${name} must appear in tools/list`);
+    const tool: unknown = tools[names.indexOf(name)];
+    const schema: unknown = Reflect.get(tool ?? {}, "inputSchema");
+    assert.equal(Reflect.get(schema ?? {}, "type"), "object", `${name} schema is an object`);
+    assert.ok(!JSON.stringify(schema).includes("$ref"), `${name} schema must be $ref-free`);
+  }
 });
 
 test("an app operationId in the reserved urban_debug_ namespace can't shadow a framework tool", async () => {

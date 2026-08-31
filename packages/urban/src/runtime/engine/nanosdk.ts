@@ -24,12 +24,16 @@ import type {
   IncidentFilter,
   IncidentState,
   IncidentSummary,
+  JobFilter,
   JobHandler,
+  JobSummary,
   ProcessInstanceSnapshot,
   ProcessInstanceState,
   UserTaskState,
   UserTaskSummary,
   UserTaskFilter,
+  VariableFilter,
+  VariableSummary,
   WorkerSubscription,
 } from "../core/host.ts";
 import { assertDeployedWaitStateType, isBpmnError } from "../core/host.ts";
@@ -360,6 +364,99 @@ export function mapIncidentRow(
   };
 }
 
+/** Map one engine variable row onto a {@link VariableSummary}, or `undefined` when the row is
+ *  malformed (missing the `variableKey`, owning `processInstanceKey`, or `name` — the identity a
+ *  caller needs). `value` is the engine's serialized JSON value (a string); a non-string value is
+ *  JSON-encoded so the field is always a string a caller can `JSON.parse`. `scopeKey` falls back to
+ *  the process-instance key for a process-level variable that omits it. `isTruncated` is the
+ *  engine's large-value-clipped flag, defaulting to `false`. The single source of truth
+ *  `searchVariables` extracts through. */
+export function mapVariableRow(
+  row: Record<string, unknown>,
+  log: Log,
+): VariableSummary | undefined {
+  const variableKey = presentEngineKey(row.variableKey);
+  if (variableKey === undefined) {
+    log("warn", "skipping variable with no variableKey in engine response");
+    return undefined;
+  }
+  const processInstanceKey = presentEngineKey(row.processInstanceKey);
+  if (processInstanceKey === undefined) {
+    log("warn", "skipping variable with no processInstanceKey in engine response", {
+      variableKey,
+    });
+    return undefined;
+  }
+  const name = presentText(row.name);
+  if (name === undefined) {
+    log("warn", "skipping variable with no name in engine response", { variableKey });
+    return undefined;
+  }
+  // A process-level variable is scoped to the process instance itself; the engine may omit
+  // `scopeKey` for it, so fall back to the process-instance key rather than dropping the row.
+  const scopeKey = presentEngineKey(row.scopeKey) ?? processInstanceKey;
+  // The engine serializes `value` as a JSON string. Keep a string as-is; encode any other type
+  // (an object/array/number a permissive engine might inline) so the field is always a string the
+  // caller can `JSON.parse`.
+  const value = typeof row.value === "string" ? row.value : JSON.stringify(row.value ?? null);
+  return {
+    variableKey,
+    name,
+    value,
+    scopeKey,
+    processInstanceKey,
+    isTruncated: row.isTruncated === true,
+  };
+}
+
+/** Map one engine job row onto a {@link JobSummary}, or `undefined` when the row is malformed
+ *  (missing the `jobKey`, `type`, or owning `processInstanceKey`). `worker`/`retries`/`elementId`/
+ *  `deadline` are best-effort diagnostics: present when the engine reports them, omitted otherwise
+ *  — an unset `worker` is the "queued, not leased" signal, so it must be absent rather than `""`.
+ *  `state` is passed through as a bare string (the engine's job-state enum is broad). The single
+ *  source of truth `searchJobs` extracts through. */
+export function mapJobRow(
+  row: Record<string, unknown>,
+  log: Log,
+): JobSummary | undefined {
+  const jobKey = presentEngineKey(row.jobKey);
+  if (jobKey === undefined) {
+    log("warn", "skipping job with no jobKey in engine response");
+    return undefined;
+  }
+  const type = presentText(row.type);
+  if (type === undefined) {
+    log("warn", "skipping job with no type in engine response", { jobKey });
+    return undefined;
+  }
+  const processInstanceKey = presentEngineKey(row.processInstanceKey);
+  if (processInstanceKey === undefined) {
+    log("warn", "skipping job with no processInstanceKey in engine response", { jobKey });
+    return undefined;
+  }
+  const state = presentText(row.state);
+  if (state === undefined) {
+    log("warn", "skipping job with no state in engine response", { jobKey });
+    return undefined;
+  }
+  const worker = presentText(row.worker);
+  const retries = typeof row.retries === "number" && Number.isFinite(row.retries)
+    ? row.retries
+    : undefined;
+  const elementId = presentText(row.elementId);
+  const deadline = presentText(row.deadline);
+  return {
+    jobKey,
+    type,
+    state,
+    processInstanceKey,
+    ...(worker ? { worker } : {}),
+    ...(retries !== undefined ? { retries } : {}),
+    ...(elementId ? { elementId } : {}),
+    ...(deadline ? { deadline } : {}),
+  };
+}
+
 /** A job as delivered to a nano-sdk job handler: the frame fields plus the
  *  acknowledgement actions the handler must call. */
 export interface NanoSdkActivatedJob {
@@ -463,6 +560,21 @@ export interface NanoSdkClient {
     consistency?: unknown,
     options?: unknown,
   ): Promise<Record<string, unknown>>;
+  searchVariables(
+    input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
+  searchJobs(
+    input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
+  getProcessDefinitionXml(
+    input: { processDefinitionKey: string },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<unknown>;
   resolveIncident(
     input: { incidentKey: string },
     options?: unknown,
@@ -680,7 +792,12 @@ export class SdkEngineClient implements EngineClient {
         });
         return [];
       }
-      return [{ processInstanceKey: String(key), state }];
+      const processDefinitionKey = presentEngineKey(it.processDefinitionKey);
+      return [{
+        processInstanceKey: String(key),
+        state,
+        ...(processDefinitionKey ? { processDefinitionKey } : {}),
+      }];
     });
   }
 
@@ -782,6 +899,82 @@ export class SdkEngineClient implements EngineClient {
       const mapped = mapIncidentRow(it, this.log);
       return mapped ? [mapped] : [];
     });
+  }
+
+  async searchVariables(filter?: VariableFilter): Promise<VariableSummary[]> {
+    // Same shape as `searchIncidents`: build the engine filter from the transport-agnostic
+    // selectors, read at zero-wait consistency (a variable search is eventually consistent), and
+    // map each row through the single `mapVariableRow` gate, dropping malformed rows.
+    const f: Record<string, unknown> = {};
+    const processInstanceKey = presentEngineKey(filter?.processInstanceKey);
+    if (processInstanceKey) f.processInstanceKey = processInstanceKey;
+    const scopeKey = presentEngineKey(filter?.scopeKey);
+    if (scopeKey) f.scopeKey = scopeKey;
+    const name = filter?.name?.trim();
+    if (name) f.name = name;
+    const body = await this.client.searchVariables(
+      { filter: f },
+      { consistency: { waitUpToMs: 0 } },
+    );
+    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+    return items.flatMap((it) => {
+      const mapped = mapVariableRow(it, this.log);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  async searchJobs(filter?: JobFilter): Promise<JobSummary[]> {
+    // Same shape as `searchIncidents`: build the engine filter from the transport-agnostic
+    // selectors, read at zero-wait consistency (a job search is eventually consistent), and map
+    // each row through the single `mapJobRow` gate, dropping malformed rows.
+    const f: Record<string, unknown> = {};
+    const processInstanceKey = presentEngineKey(filter?.processInstanceKey);
+    if (processInstanceKey) f.processInstanceKey = processInstanceKey;
+    const state = filter?.state?.trim();
+    if (state) f.state = state;
+    const type = filter?.type?.trim();
+    if (type) f.type = type;
+    const elementId = filter?.elementId?.trim();
+    if (elementId) f.elementId = elementId;
+    const worker = filter?.worker?.trim();
+    if (worker) f.worker = worker;
+    const body = await this.client.searchJobs(
+      { filter: f },
+      { consistency: { waitUpToMs: 0 } },
+    );
+    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+    return items.flatMap((it) => {
+      const mapped = mapJobRow(it, this.log);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  async getProcessDefinitionXml(
+    processDefinitionKey: string,
+  ): Promise<string | null> {
+    // A blank key can never address a definition — short-circuit to null rather than issue a
+    // `GET /v2/process-definitions//xml` with an empty segment. Normalize a padded-but-valid key so
+    // `" 5 "` addresses the same definition, mirroring `getElementInstance`.
+    const key = presentEngineKey(processDefinitionKey);
+    if (key === undefined) return null;
+    let xml: unknown;
+    try {
+      xml = await this.client.getProcessDefinitionXml(
+        { processDefinitionKey: key },
+        { consistency: { waitUpToMs: 0 } },
+      );
+    } catch (err) {
+      // A 404 (no such definition) is an expected "not found", not a fault — mirror `getForm`/
+      // `getElementInstance`, which treat a failed fetch as absence (null) rather than propagating.
+      this.log("warn", "getProcessDefinitionXml: engine fetch failed", {
+        processDefinitionKey: key,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    // The endpoint returns the raw BPMN XML as a string (204 → empty). Treat a blank/absent body
+    // as "no XML" (null) so a caller distinguishes "have it" from "don't".
+    return typeof xml === "string" && xml.trim() !== "" ? xml : null;
   }
 
   async resolveIncident(input: { incidentKey: string }): Promise<void> {

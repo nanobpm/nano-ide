@@ -44,6 +44,15 @@ class NoopEngine implements EngineClient {
   async searchIncidents() {
     return [];
   }
+  async searchVariables() {
+    return [];
+  }
+  async searchJobs() {
+    return [];
+  }
+  async getProcessDefinitionXml() {
+    return null;
+  }
   async resolveIncident() {}
   async updateJobRetries() {}
   async setVariables() {}

@@ -69,10 +69,12 @@ import type {
   HttpRequest,
   HttpResponse,
   IncidentFilter,
+  JobFilter,
   ProcessInstanceState,
   SqliteDb,
   UserTaskFilter,
   UserTaskState,
+  VariableFilter,
   WaitStateType,
 } from "../host.ts";
 import { presentFormIdentifier } from "../host.ts";
@@ -639,6 +641,70 @@ function buildDebugTools(app: AppApi): DebugTool[] {
         if (state) filter.state = state;
         return app.engine.searchIncidents(filter);
       },
+    },
+    {
+      name: `${DEBUG_PREFIX}search_variables`,
+      description:
+        "Engine truth: search process variables by process instance and/or scope, optionally by name — the read counterpart to set_variables. Reads only, eventually consistent. This is the only way to see a parked token's business payload (prKey, round, an escalation question/answer, resolution, directive); the projections carry lifecycle/position, not the payload. Each result carries the variableKey/name/serialized-JSON value/scopeKey/processInstanceKey/isTruncated.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          processInstanceKey: OPTIONAL_STRING,
+          scopeKey: OPTIONAL_STRING,
+          name: OPTIONAL_STRING,
+        },
+      },
+      run: (args) => {
+        const filter: VariableFilter = {};
+        const pik = readPresentString(args, "processInstanceKey");
+        if (pik) filter.processInstanceKey = pik;
+        const scopeKey = readPresentString(args, "scopeKey");
+        if (scopeKey) filter.scopeKey = scopeKey;
+        const name = readPresentString(args, "name");
+        if (name) filter.name = name;
+        return app.engine.searchVariables(filter);
+      },
+    },
+    {
+      name: `${DEBUG_PREFIX}search_jobs`,
+      description:
+        "Engine truth: search jobs by process instance, state, and/or type/elementId/worker. Reads only, eventually consistent. The 'is it actually stuck?' test: a CREATED job WITH a worker set has been leased by an agent, one with NONE set is merely queued. This is also the on-tool source of a jobKey for retry_job (the only other source is a jobNoRetries incident via search_incidents). Each result carries jobKey/type/state/processInstanceKey and the best-effort worker/retries/elementId/deadline.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          processInstanceKey: OPTIONAL_STRING,
+          state: OPTIONAL_STRING,
+          type: OPTIONAL_STRING,
+          elementId: OPTIONAL_STRING,
+          worker: OPTIONAL_STRING,
+        },
+      },
+      run: (args) => {
+        const filter: JobFilter = {};
+        const pik = readPresentString(args, "processInstanceKey");
+        if (pik) filter.processInstanceKey = pik;
+        const state = readPresentString(args, "state");
+        if (state) filter.state = state;
+        const type = readPresentString(args, "type");
+        if (type) filter.type = type;
+        const elementId = readPresentString(args, "elementId");
+        if (elementId) filter.elementId = elementId;
+        const worker = readPresentString(args, "worker");
+        if (worker) filter.worker = worker;
+        return app.engine.searchJobs(filter);
+      },
+    },
+    {
+      name: `${DEBUG_PREFIX}get_process_definition_xml`,
+      description:
+        "Engine truth: return the deployed BPMN XML of a process definition by key (the routing source of truth, with its FEEL gateway conditions) — reason about WHY an instance routed where it did without a repo checkout. Reads only; null when the key is unknown. An instance carries its processDefinitionKey via search_process_instances, so the path is instance → processDefinitionKey → deployed XML; pair with get_element_instance to locate the parked element.",
+      inputSchema: {
+        type: "object",
+        properties: { processDefinitionKey: OPTIONAL_STRING },
+        required: ["processDefinitionKey"],
+      },
+      run: (args) =>
+        app.engine.getProcessDefinitionXml(requireString(args, "processDefinitionKey")),
     },
     {
       name: `${DEBUG_PREFIX}cancel_instance`,

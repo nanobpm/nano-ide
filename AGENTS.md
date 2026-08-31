@@ -119,3 +119,35 @@ applied in lexical filename order.
 - **One source of truth for the DDL.** A store that also creates its schema in
   code (e.g. `PresenceStore.ensureSchema`) must mirror its migration exactly,
   guarded by a drift test — do not let the two shapes diverge.
+
+## Decomposing a Fan-Out Epic Over a Shared Surface
+
+When you split an epic into parallel slices, a slice that edits a **shared
+append-point** is not independent even when each PR is green on its own. The
+`EngineClient` runtime seam is the canonical example, and it has now collided
+twice (epics #488 and #525): adding a read method touches the *same five files
+at the same anchors* — the `EngineClient` interface and the
+`ENGINE_CLIENT_METHODS` exhaustiveness tuple (`runtime/core/host.ts`), both
+adapters (`engine/nanosdk.ts` and the testkit `WasmEngineClient`), the single
+`engine-client-conformance.test.ts`, and the `mcp.ts` tool registration.
+
+- **Same-anchor edits 3-way-conflict regardless of an "append-only" convention.**
+  Two slices that each append a method/member/registration at the same anchor
+  produce a git merge conflict; a blackboard note or a comment marker does **not**
+  prevent it. This is the same class as the migration-prefix collision above —
+  green in each PR alone, red only in the *union*.
+- **The conformance harness pins the whole set, so no single PR exercises the
+  merged state.** If slice A adds `{x, y}` and slice B adds `{x, z}`, A's CI runs
+  `{x, y}` and B's runs `{x, z}`, but **nothing** runs the merged `{x, y, z}` that
+  lands on `main`.
+- **Remedy at decomposition time, not via landing order.** Coarsen homogeneous
+  same-surface slices into **one** PR that owns the seam end-to-end (body:
+  `Closes #a`, `Closes #b`, `Closes #c`) — as epic #525 did in #529. Only split
+  them if you first land a genuine append-safe scaffold (self-registering entries
+  + a harness that iterates the method set) that removes the shared anchor. Do
+  **not** paper the collision over with a `dependsOn` edge added purely to
+  serialise otherwise-parallel work.
+
+See also the shared-runtime-seam fan-out checklist (the compiler-driven side of
+this: every test double, both adapters, and `runtime/index.ts` re-exports must
+move together) proposed in #496.

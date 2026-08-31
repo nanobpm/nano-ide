@@ -229,6 +229,10 @@ export type UserTaskState = "CREATED" | "COMPLETED" | "CANCELED" | "FAILED";
 export interface ProcessInstanceSnapshot {
   readonly processInstanceKey: string;
   readonly state: ProcessInstanceState;
+  /** The key of the deployed process definition this instance runs — the handle a caller feeds to
+   *  {@link EngineClient.getProcessDefinitionXml} to fetch the deployed BPMN (the instance →
+   *  `processDefinitionKey` → deployed XML path, no repo checkout). Absent when the engine omits it. */
+  readonly processDefinitionKey?: string;
 }
 
 /**
@@ -488,6 +492,76 @@ export interface FormSchema {
 }
 
 /**
+ * Selectors for a variable search: which process instance and/or scope to match, optionally
+ * narrowed to a single variable `name`. Used by {@link EngineClient.searchVariables}. An
+ * eventually consistent (zero-wait) read; an unset selector matches every variable in scope.
+ */
+export interface VariableFilter {
+  processInstanceKey?: string;
+  scopeKey?: string;
+  name?: string;
+}
+
+/**
+ * A single process variable as {@link EngineClient.searchVariables} reports it — the read
+ * counterpart to the write-only {@link EngineClient.setVariables}. Mirrors the engine's v2
+ * `/variables/search` row: the variable's own `variableKey`, its `name`, its serialized JSON
+ * `value` (a string — an object/array value arrives JSON-encoded, so a caller `JSON.parse`s it),
+ * the `scopeKey` it is directly defined in (a process-instance key for a process-level variable,
+ * an element-instance key for a local one) and the owning `processInstanceKey`. `isTruncated` is
+ * `true` when the engine clipped a large `value` for the read model — the caller then knows the
+ * `value` is a preview, not the whole payload. This is the only way to read a parked token's
+ * business payload (`prKey`, `round`, an escalation `question`/`answer`, `resolution`,
+ * `directive`); the ADR 0065 projections carry lifecycle/position, not the payload.
+ */
+export interface VariableSummary {
+  readonly variableKey: string;
+  readonly name: string;
+  readonly value: string;
+  readonly scopeKey: string;
+  readonly processInstanceKey: string;
+  readonly isTruncated: boolean;
+}
+
+/**
+ * Selectors for a job search: which process instance, lifecycle `state`, job `type`, `elementId`,
+ * and/or leasing `worker` to match. Used by {@link EngineClient.searchJobs}. `state` is kept a
+ * transport-agnostic bare string (the engine's job-state enum is broad and forward-looking — e.g.
+ * `CREATED`/`COMPLETED`/`FAILED`/`TIMED_OUT`), so a new engine state flows through without having
+ * to be enumerated here. An eventually consistent (zero-wait) read; an unset selector matches
+ * every job.
+ */
+export interface JobFilter {
+  processInstanceKey?: string;
+  state?: string;
+  type?: string;
+  elementId?: string;
+  worker?: string;
+}
+
+/**
+ * A single job as {@link EngineClient.searchJobs} reports it — mirrors the engine's v2
+ * `/jobs/search` row. Carries the `jobKey` a caller passes to
+ * {@link EngineClient.updateJobRetries} (the only source of a `jobKey` for a job NOT already
+ * behind a `jobNoRetries` incident, which {@link searchIncidents} surfaces), the job `type` and
+ * lifecycle `state` (a bare string — see {@link JobFilter}), the owning `processInstanceKey`, and
+ * the best-effort diagnostics `worker`/`retries`/`elementId`/`deadline`. The `worker` field is the
+ * "is it actually stuck" signal: a `CREATED` job WITH a `worker` set has been leased by an agent,
+ * while one with NONE set is merely queued — so `worker` is omitted (absent) when unset. `retries`,
+ * `elementId`, and `deadline` are likewise present when the engine reports them, omitted otherwise.
+ */
+export interface JobSummary {
+  readonly jobKey: string;
+  readonly type: string;
+  readonly state: string;
+  readonly processInstanceKey: string;
+  readonly worker?: string;
+  readonly retries?: number;
+  readonly elementId?: string;
+  readonly deadline?: string;
+}
+
+/**
  * EngineClient is the seam onto a Nano engine. The SDK/REST-backed adapter implements
  * it against a live engine; tests implement it in-memory. Core modules depend only on this.
  */
@@ -617,6 +691,40 @@ export interface EngineClient {
    */
   searchIncidents(filter?: IncidentFilter): Promise<IncidentSummary[]>;
   /**
+   * Search process variables by owning process instance and/or scope, optionally narrowed to a
+   * single `name` (`POST /v2/variables/search`). The read counterpart to the write-only
+   * {@link setVariables}: it is the only way to see a parked token's business payload (`prKey`,
+   * `round`, an escalation `question`/`answer`, `resolution`, `directive`) — the ADR 0065
+   * projections carry lifecycle/position, not the payload. An eventually consistent (zero-wait)
+   * read; each {@link VariableSummary} carries the variable's serialized JSON `value` (a string)
+   * and an `isTruncated` flag set when the engine clipped a large value for the read model.
+   */
+  searchVariables(filter?: VariableFilter): Promise<VariableSummary[]>;
+  /**
+   * Search jobs by owning process instance, lifecycle `state`, job `type`, `elementId`, and/or
+   * leasing `worker` (`POST /v2/jobs/search`). This is the "is it actually stuck" read: a
+   * `CREATED` job WITH a `worker` set has been leased by an agent, while one with NONE set is
+   * merely queued. It is also the on-tool source of a `jobKey` for {@link updateJobRetries} when
+   * the job is NOT behind an incident — {@link searchIncidents} only surfaces a `jobKey` for a
+   * job that already faulted (a `jobNoRetries` incident), so retrying an un-incidented job would
+   * otherwise be impossible without a direct engine-API call. An eventually consistent (zero-wait)
+   * read; each {@link JobSummary} carries the `jobKey` plus best-effort `worker`/`retries`/
+   * `elementId`/`deadline` diagnostics.
+   */
+  searchJobs(filter?: JobFilter): Promise<JobSummary[]>;
+  /**
+   * Fetch the deployed BPMN XML of a process definition by its `processDefinitionKey`
+   * (`GET /v2/process-definitions/{processDefinitionKey}/xml`), or `null` when the key is blank,
+   * unknown (a 404), or the definition carries no XML. This is the *deployed* model — the routing
+   * source of truth, including its FEEL gateway conditions — so an agent can reason about WHY an
+   * instance routed where it did without checking out `resources/processes/*.bpmn` from the app
+   * repo. An instance already carries its `processDefinitionKey` (via {@link searchProcessInstances}),
+   * so the path is instance → `processDefinitionKey` → deployed XML. A read is treated as absence
+   * (`null`) rather than propagating (mirroring {@link getForm}/{@link getElementInstance}), so a
+   * caller distinguishes "have it" from "don't" without a try/catch. A zero-wait read.
+   */
+  getProcessDefinitionXml(processDefinitionKey: string): Promise<string | null>;
+  /**
    * Resolve an open incident by key (`POST /v2/incidents/{incidentKey}/resolution`), unblocking
    * the parked token: a job incident returns the job to the activatable pool (so it must have
    * retries left first — see {@link updateJobRetries}), a gateway incident re-evaluates, an
@@ -680,6 +788,9 @@ export const ENGINE_CLIENT_METHODS = [
   "searchElementInstanceWaitStates",
   "getElementInstance",
   "searchIncidents",
+  "searchVariables",
+  "searchJobs",
+  "getProcessDefinitionXml",
   "resolveIncident",
   "updateJobRetries",
   "setVariables",

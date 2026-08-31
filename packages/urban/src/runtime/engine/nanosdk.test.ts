@@ -97,6 +97,18 @@ function fakeSdkClient(overrides: Partial<NanoSdkClient> = {}): NanoSdkClient & 
       calls.push("searchIncidents");
       return { items: [] };
     },
+    async searchVariables() {
+      calls.push("searchVariables");
+      return { items: [] };
+    },
+    async searchJobs() {
+      calls.push("searchJobs");
+      return { items: [] };
+    },
+    async getProcessDefinitionXml() {
+      calls.push("getProcessDefinitionXml");
+      return "";
+    },
     async resolveIncident(input) {
       calls.push("resolveIncident");
       return { ...input };

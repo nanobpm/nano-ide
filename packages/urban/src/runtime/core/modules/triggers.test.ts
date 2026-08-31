@@ -39,6 +39,9 @@ class MiniEngine implements EngineClient {
   async searchElementInstanceWaitStates(): Promise<[]> { return []; }
   async getElementInstance(): Promise<null> { return null; }
   async searchIncidents(): Promise<never[]> { return []; }
+  async searchVariables(): Promise<never[]> { return []; }
+  async searchJobs(): Promise<never[]> { return []; }
+  async getProcessDefinitionXml(): Promise<null> { return null; }
   async resolveIncident(): Promise<void> {}
   async updateJobRetries(): Promise<void> {}
   async setVariables(): Promise<void> {}

@@ -552,6 +552,64 @@ test("searchProcessInstances skips keyless and unrecognized-state rows", async (
   assert.deepEqual(out, [{ processInstanceKey: "10", state: "COMPLETED" }]);
 });
 
+test("searchProcessInstances normalizes the parent/root key selectors and drops blank ones", async () => {
+  // Guards the request-mapping defect class for the reduced path's parent/root selectors: a padded
+  // selector must be trimmed, a blank/whitespace-only selector must be dropped rather than sent as
+  // an empty filter that matches nothing — mirroring `searchUserTasks` (No Drift Surfaces).
+  let seenInput: { filter?: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    searchProcessInstances: async (input) => {
+      seenInput = input;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  await engine.searchProcessInstances({
+    parentProcessInstanceKey: " 42 ", // padded → trimmed to "42"
+    rootProcessInstanceKey: "   ", // whitespace-only → dropped
+  });
+  const filter = seenInput?.filter ?? {};
+  assert.equal(filter.parentProcessInstanceKey, "42", "padded parent selector is trimmed");
+  assert.equal("rootProcessInstanceKey" in filter, false, "whitespace-only root selector is dropped");
+  // A selector-only search carries no key `$in` and no page cap.
+  assert.deepEqual(seenInput, { filter: { parentProcessInstanceKey: "42" } });
+});
+
+test("searchProcessInstances surfaces the parent/root linkage keys and drops blank ones", async () => {
+  // Guards the linkage-output defect class: the parent/root keys the engine reports on an instance
+  // must be surfaced on the returned `ProcessInstanceSnapshot`, normalized through the same presence
+  // rule — a padded value trimmed, a blank/whitespace-only value omitted rather than an empty string.
+  const client = fakeSdkClient({
+    searchProcessInstances: async () => ({
+      items: [
+        {
+          processInstanceKey: 10,
+          state: "ACTIVE",
+          parentProcessInstanceKey: 20,
+          rootProcessInstanceKey: 30,
+        },
+        {
+          processInstanceKey: " 11 ", // padded → trimmed
+          state: "COMPLETED",
+          parentProcessInstanceKey: "  ", // whitespace-only → omitted
+          rootProcessInstanceKey: "", // blank → omitted
+        },
+      ],
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchProcessInstances();
+  assert.deepEqual(out, [
+    {
+      processInstanceKey: "10",
+      state: "ACTIVE",
+      parentProcessInstanceKey: "20",
+      rootProcessInstanceKey: "30",
+    },
+    { processInstanceKey: "11", state: "COMPLETED" },
+  ]);
+});
+
 test("normalizeProcessInstanceState maps the terminal set and rejects others", () => {
   assert.equal(normalizeProcessInstanceState("ACTIVE"), "ACTIVE");
   assert.equal(normalizeProcessInstanceState("completed"), "COMPLETED");

@@ -811,15 +811,19 @@ export class SdkEngineClient implements EngineClient {
     );
     const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
     return items.flatMap((it) => {
-      const key = it.processInstanceKey;
-      if (key == null || key === "") {
+      // Normalize the surfaced primary key through the shared presence rule (trim padded,
+      // drop blank/whitespace-only) so it matches the normalized parent/root linkage keys
+      // and the `searchUserTasks` mapping — the surfaced process-instance key must not drift
+      // between the two reduced-path searches (No Drift Surfaces).
+      const processInstanceKey = presentEngineKey(it.processInstanceKey);
+      if (!processInstanceKey) {
         this.log("warn", "skipping process instance with no key in engine response");
         return [];
       }
       const state = normalizeProcessInstanceState(it.state);
       if (!state) {
         this.log("warn", "skipping process instance with unrecognized state", {
-          processInstanceKey: String(key),
+          processInstanceKey,
           state: String(it.state),
         });
         return [];
@@ -828,7 +832,7 @@ export class SdkEngineClient implements EngineClient {
       const parentProcessInstanceKey = presentEngineKey(it.parentProcessInstanceKey);
       const rootProcessInstanceKey = presentEngineKey(it.rootProcessInstanceKey);
       return [{
-        processInstanceKey: String(key),
+        processInstanceKey,
         state,
         ...(processDefinitionKey ? { processDefinitionKey } : {}),
         ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),

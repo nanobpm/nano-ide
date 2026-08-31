@@ -441,6 +441,14 @@ export class WasmEngineClient implements EngineClient {
     // `body`/`items` come straight from an untyped `JSON.parse` boundary, so the DTO annotation
     // is a shape *claim*, not a runtime guarantee. `searchRows` guards the body and drops
     // non-object rows so a malformed/changed engine response can't throw downstream.
+    // Normalize the process-instance / parent / root selectors through the shared presence rule
+    // (`presentKey`) so a blank/whitespace-only selector is *dropped* (matches everything) rather
+    // than compared literally (which would silently filter out every row), and each row key is
+    // compared under the same rule. This mirrors `SdkEngineClient`, which has these honoured
+    // server-side after an identical `presentEngineKey` normalization (No Drift Surfaces).
+    const wantProcessInstanceKey = presentKey(filter?.processInstanceKey);
+    const wantRootProcessInstanceKey = presentKey(filter?.rootProcessInstanceKey);
+    const wantParentProcessInstanceKey = presentKey(filter?.parentProcessInstanceKey);
     return searchRows(body)
       // The read model does not yet honour the non-lifecycle selectors
       // (`processInstanceKey`/`assignee`/`candidateGroup` — the write/index side is
@@ -448,8 +456,8 @@ export class WasmEngineClient implements EngineClient {
       // *effective* behaviour of the gateway-backed `SdkEngineClient`, which gets them honoured
       // server-side; the results are identical, only the filtering site differs.
       .filter((t) =>
-        filter?.processInstanceKey === undefined ||
-        str(t.processInstanceKey) === filter.processInstanceKey
+        wantProcessInstanceKey === undefined ||
+        presentKey(t.processInstanceKey) === wantProcessInstanceKey
       )
       .filter((t) => filter?.assignee === undefined || t.assignee === filter.assignee)
       .filter((t) =>
@@ -463,12 +471,12 @@ export class WasmEngineClient implements EngineClient {
       // same optional accessor — absent → matches nothing — exactly as the live gateway would
       // against a read model that omits it (No Drift Surfaces).
       .filter((t) =>
-        filter?.rootProcessInstanceKey === undefined ||
-        str(t.rootProcessInstanceKey) === filter.rootProcessInstanceKey
+        wantRootProcessInstanceKey === undefined ||
+        presentKey(t.rootProcessInstanceKey) === wantRootProcessInstanceKey
       )
       .filter((t) =>
-        filter?.parentProcessInstanceKey === undefined ||
-        str(Reflect.get(t, "parentProcessInstanceKey")) === filter.parentProcessInstanceKey
+        wantParentProcessInstanceKey === undefined ||
+        presentKey(Reflect.get(t, "parentProcessInstanceKey")) === wantParentProcessInstanceKey
       )
       .flatMap((t) => {
         // A keyless row cannot be acted on — drop it (parity with `SdkEngineClient`, which logs
@@ -491,9 +499,19 @@ export class WasmEngineClient implements EngineClient {
         const processInstanceKey = presentKey(t.processInstanceKey);
         const parentProcessInstanceKey = presentKey(Reflect.get(t, "parentProcessInstanceKey"));
         const rootProcessInstanceKey = presentKey(t.rootProcessInstanceKey);
+        const variablesRaw = Reflect.get(t, "variables");
+        const variables = isRecord(variablesRaw) ? variablesRaw : undefined;
         return [{
           userTaskKey,
           elementId: typeof t.elementId === "string" ? t.elementId : undefined,
+          // Surface the row's variables when the engine carries them, mirroring the live
+          // `SdkEngineClient` (which maps `variables` through the same `isRecord` guard) so
+          // tests that rely on user-task variables see identical shape from both adapters
+          // (No Drift Surfaces). The engine's `UserTaskResult` read model does not declare
+          // `variables` today, so — exactly like `parentProcessInstanceKey` above — it is read
+          // through the optional accessor and flows through automatically if the engine starts
+          // carrying it; until then it is honestly absent.
+          ...(variables ? { variables } : {}),
           ...(formKey ? { formKey } : {}),
           ...(externalFormReference ? { externalFormReference } : {}),
           ...(processInstanceKey ? { processInstanceKey } : {}),
@@ -586,6 +604,13 @@ export class WasmEngineClient implements EngineClient {
       this.#liveEngine.searchProcessInstances("{}"),
     );
     const out: ProcessInstanceSnapshot[] = [];
+    // Normalize the parent/root selectors through the shared presence rule (`presentKey`) so a
+    // blank/whitespace-only selector is *dropped* (matches everything) rather than compared
+    // literally against normalized row keys — which would treat a padded/blank selector as present
+    // and silently filter out every row, diverging from `SdkEngineClient` (which normalizes each
+    // selector via `presentEngineKey` before sending it server-side). No Drift Surfaces.
+    const wantParentProcessInstanceKey = presentKey(filter?.parentProcessInstanceKey);
+    const wantRootProcessInstanceKey = presentKey(filter?.rootProcessInstanceKey);
     // Same untyped-JSON defence as `searchUserTasks`: `searchRows` guards the body and drops
     // non-object rows so a malformed/changed engine response can't throw while reading
     // `inst.processInstanceKey`.
@@ -604,14 +629,14 @@ export class WasmEngineClient implements EngineClient {
       const parentProcessInstanceKey = presentKey(inst.parentProcessInstanceKey);
       const rootProcessInstanceKey = presentKey(inst.rootProcessInstanceKey);
       if (
-        filter?.parentProcessInstanceKey !== undefined &&
-        parentProcessInstanceKey !== filter.parentProcessInstanceKey
+        wantParentProcessInstanceKey !== undefined &&
+        parentProcessInstanceKey !== wantParentProcessInstanceKey
       ) {
         continue;
       }
       if (
-        filter?.rootProcessInstanceKey !== undefined &&
-        rootProcessInstanceKey !== filter.rootProcessInstanceKey
+        wantRootProcessInstanceKey !== undefined &&
+        rootProcessInstanceKey !== wantRootProcessInstanceKey
       ) {
         continue;
       }

@@ -379,6 +379,45 @@ test("EngineClient seam: parent/root linkage correlates a native-child user task
     const [root] = await engine.searchProcessInstances({ processInstanceKeys: [rootKey] });
     assert.equal(root.parentProcessInstanceKey, undefined, "the root instance has no parent");
     assert.equal(root.rootProcessInstanceKey, rootKey, "the root instance's root is itself");
+
+    // Defect-class guard (No Drift Surfaces): a blank/whitespace-only parent/root selector must be
+    // normalized away (treated as *absent* → matches everything) rather than compared literally
+    // against normalized row keys — which would treat the padded selector as a present key that
+    // matches nothing and silently filter out every row. This mirrors `SdkEngineClient`, which
+    // drops such a selector via `presentEngineKey` before sending it server-side.
+    const blankParentInstances = await engine.searchProcessInstances({
+      parentProcessInstanceKey: "   ",
+    });
+    assert.equal(
+      blankParentInstances.length,
+      underRoot.length,
+      "a whitespace-only parentProcessInstanceKey selector is dropped, not matched-against literally",
+    );
+    const blankRootInstances = await engine.searchProcessInstances({ rootProcessInstanceKey: "  " });
+    assert.equal(
+      blankRootInstances.length,
+      underRoot.length,
+      "a whitespace-only rootProcessInstanceKey selector is dropped, not matched-against literally",
+    );
+    const allTasks = await engine.searchUserTasks({});
+    const blankRootTasks = await engine.searchUserTasks({ rootProcessInstanceKey: "   " });
+    assert.equal(
+      blankRootTasks.length,
+      allTasks.length,
+      "a whitespace-only user-task root selector is dropped, not matched-against literally",
+    );
+    const blankParentTasks = await engine.searchUserTasks({ parentProcessInstanceKey: " " });
+    assert.equal(
+      blankParentTasks.length,
+      allTasks.length,
+      "a whitespace-only user-task parent selector is dropped, not matched-against literally",
+    );
+    const blankPiKeyTasks = await engine.searchUserTasks({ processInstanceKey: "  " });
+    assert.equal(
+      blankPiKeyTasks.length,
+      allTasks.length,
+      "a whitespace-only user-task processInstanceKey selector is dropped, not matched-against literally",
+    );
   } finally {
     await engine.close();
   }

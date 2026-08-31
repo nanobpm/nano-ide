@@ -691,10 +691,16 @@ export class SdkEngineClient implements EngineClient {
       // The engine resolves a `formId="X"` linkage to the latest deployed form's key at
       // task creation, so `formKey` (not a form id) is the linkage it reports on the task;
       // no `resolveFormKeyByFormId` resolver is passed because the gateway already resolved it.
+      const processInstanceKey = presentEngineKey(it.processInstanceKey);
+      const parentProcessInstanceKey = presentEngineKey(it.parentProcessInstanceKey);
+      const rootProcessInstanceKey = presentEngineKey(it.rootProcessInstanceKey);
       return [{
         userTaskKey: String(userTaskKey),
         elementId: typeof it.elementId === "string" ? it.elementId : undefined,
         variables: isRecord(it.variables) ? it.variables : undefined,
+        ...(processInstanceKey ? { processInstanceKey } : {}),
+        ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),
+        ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
         ...pickFormLinkage(it),
       }];
     });
@@ -763,11 +769,20 @@ export class SdkEngineClient implements EngineClient {
   async searchProcessInstances(filter?: {
     processInstanceKeys?: string[];
     state?: ProcessInstanceState;
+    parentProcessInstanceKey?: string;
+    rootProcessInstanceKey?: string;
   }): Promise<ProcessInstanceSnapshot[]> {
     const f: Record<string, unknown> = {};
     if (filter?.state) f.state = filter.state;
     const keys = filter?.processInstanceKeys?.filter((k) => k != null && k !== "");
     if (keys && keys.length > 0) f.processInstanceKey = { $in: keys };
+    // Parent/root selectors let the reduced path query a subject's native descendants
+    // server-side. Normalize each through the shared presence rule so a blank selector is
+    // dropped rather than sent as an empty filter that would match nothing.
+    const parentProcessInstanceKey = presentEngineKey(filter?.parentProcessInstanceKey);
+    if (parentProcessInstanceKey) f.parentProcessInstanceKey = parentProcessInstanceKey;
+    const rootProcessInstanceKey = presentEngineKey(filter?.rootProcessInstanceKey);
+    if (rootProcessInstanceKey) f.rootProcessInstanceKey = rootProcessInstanceKey;
     // A process-instance search is an eventually consistent read; ask for zero-wait
     // consistency so it reflects what is currently visible without blocking. Cap the page
     // to the number of keys asked for (each key matches at most one instance), so a bounded
@@ -793,10 +808,14 @@ export class SdkEngineClient implements EngineClient {
         return [];
       }
       const processDefinitionKey = presentEngineKey(it.processDefinitionKey);
+      const parentProcessInstanceKey = presentEngineKey(it.parentProcessInstanceKey);
+      const rootProcessInstanceKey = presentEngineKey(it.rootProcessInstanceKey);
       return [{
         processInstanceKey: String(key),
         state,
         ...(processDefinitionKey ? { processDefinitionKey } : {}),
+        ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),
+        ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
       }];
     });
   }

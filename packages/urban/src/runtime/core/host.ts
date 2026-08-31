@@ -233,6 +233,18 @@ export interface ProcessInstanceSnapshot {
    *  {@link EngineClient.getProcessDefinitionXml} to fetch the deployed BPMN (the instance →
    *  `processDefinitionKey` → deployed XML path, no repo checkout). Absent when the engine omits it. */
   readonly processDefinitionKey?: string;
+  /** The key of this instance's *immediate* parent process instance — the caller that instantiated
+   *  it as a native child (a `<bpmn:callActivity>`). `undefined` for a top-level (root) instance,
+   *  and absent when the engine omits it (same optional/engine-provided convention as
+   *  `processDefinitionKey`). Lets a reduced-capability read path map a native child back to the
+   *  subject that spawned it without a raw-REST channel. */
+  readonly parentProcessInstanceKey?: string;
+  /** The key of this instance's *root* process instance — the top-level ancestor of the
+   *  call-activity hierarchy this instance belongs to (equal to `processInstanceKey` for a
+   *  top-level instance). `undefined`/absent when the engine omits it (only present for hierarchies
+   *  created on an engine version that reports it). Lets a reduced-capability read path correlate a
+   *  deep native descendant straight back to its root subject. */
+  readonly rootProcessInstanceKey?: string;
 }
 
 /**
@@ -251,6 +263,24 @@ export interface UserTaskSummary {
   readonly formKey?: string;
   /** An external form reference (a form linked outside the deployment), if any. */
   readonly externalFormReference?: string;
+  /** The key of the process instance this task belongs to. Absent when the engine omits it (same
+   *  optional/engine-provided convention as `processDefinitionKey`). For a task owned by a native
+   *  child instance, this is the child's own key — the handle a reduced-capability read path feeds
+   *  to {@link EngineClient.searchProcessInstances} to resolve the child's parent/root linkage. */
+  readonly processInstanceKey?: string;
+  /** The key of the *immediate* parent process instance of this task's owning instance — the caller
+   *  that spawned it as a native child. Absent when the engine's user-task read model omits it (as
+   *  it does today: the engine surfaces the parent linkage on {@link ProcessInstanceSnapshot}, so a
+   *  caller resolves it via `processInstanceKey` → `searchProcessInstances`). Declared here for
+   *  parity with the process-instance snapshot and to flow through automatically if the read model
+   *  starts carrying it. */
+  readonly parentProcessInstanceKey?: string;
+  /** The key of the *root* process instance of this task's owning instance — the top-level ancestor
+   *  of the call-activity hierarchy the task lives in. Absent when the engine omits it. Lets a
+   *  reduced-capability read path (`pollUserTasks` and other reconcile/affordance surfaces)
+   *  correlate a native-child (e.g. human-escalation grandchild) task straight back to its root
+   *  subject through the typed seam, with no raw-REST fallback. */
+  readonly rootProcessInstanceKey?: string;
 }
 
 /**
@@ -263,6 +293,14 @@ export interface UserTaskFilter {
   processInstanceKey?: string;
   assignee?: string;
   candidateGroup?: string;
+  /** Select only tasks whose owning instance has this *immediate* parent process instance. Honored
+   *  server-side by the live gateway where the read model supports it; the in-process testkit
+   *  applies it client-side against the row's parent linkage (absent today on the user-task read
+   *  model, so it matches nothing until the engine surfaces it there). */
+  parentProcessInstanceKey?: string;
+  /** Select only tasks whose owning instance belongs to this *root* process-instance hierarchy — the
+   *  selector a reduced-capability path uses to fetch every open task under one root subject. */
+  rootProcessInstanceKey?: string;
 }
 
 /**
@@ -636,6 +674,12 @@ export interface EngineClient {
   searchProcessInstances(filter?: {
     processInstanceKeys?: string[];
     state?: ProcessInstanceState;
+    /** Select only instances whose *immediate* parent is this process instance — the reduced-path
+     *  query for "the native children spawned by this subject". */
+    parentProcessInstanceKey?: string;
+    /** Select only instances belonging to this *root* process-instance hierarchy — "every instance
+     *  under this root subject", the deep-descendant correlation query. */
+    rootProcessInstanceKey?: string;
   }): Promise<ProcessInstanceSnapshot[]>;
   /**
    * Search element instances ("tokens") by process instance, element, and/or lifecycle state

@@ -69,6 +69,8 @@ export interface ProcessInstanceSnapshot {
   readonly processInstanceKey: string;
   readonly state: ProcessInstanceState;
   readonly processDefinitionKey?: string;
+  readonly parentProcessInstanceKey?: string;
+  readonly rootProcessInstanceKey?: string;
 }
 
 /** Narrow an untyped JSON value to a plain object. Used to bridge the wasm
@@ -421,6 +423,9 @@ export class WasmEngineClient implements EngineClient {
     variables?: Record<string, unknown>;
     formKey?: string;
     externalFormReference?: string;
+    processInstanceKey?: string;
+    parentProcessInstanceKey?: string;
+    rootProcessInstanceKey?: string;
   }[]> {
     // Delegate to the engine's real REST read channel (`POST /user-tasks/search`) instead of
     // scraping the primary-state snapshot. The read model honours the `{ state? }` filter
@@ -451,6 +456,20 @@ export class WasmEngineClient implements EngineClient {
         filter?.candidateGroup === undefined ||
         (Array.isArray(t.candidateGroups) && t.candidateGroups.includes(filter.candidateGroup))
       )
+      // Parent/root selectors mirror the live `SdkEngineClient`, which has them honoured
+      // server-side; apply them client-side here against the engine's row linkage. The user-task
+      // read model carries `rootProcessInstanceKey` (and the owning `processInstanceKey`) but not a
+      // `parentProcessInstanceKey` today, so a parent selector reads the row's parent through the
+      // same optional accessor — absent → matches nothing — exactly as the live gateway would
+      // against a read model that omits it (No Drift Surfaces).
+      .filter((t) =>
+        filter?.rootProcessInstanceKey === undefined ||
+        str(t.rootProcessInstanceKey) === filter.rootProcessInstanceKey
+      )
+      .filter((t) =>
+        filter?.parentProcessInstanceKey === undefined ||
+        str(Reflect.get(t, "parentProcessInstanceKey")) === filter.parentProcessInstanceKey
+      )
       .flatMap((t) => {
         // A keyless row cannot be acted on — drop it (parity with `SdkEngineClient`, which logs
         // and skips such a row). `presentKey` also normalises a numeric key to a trimmed string.
@@ -464,11 +483,22 @@ export class WasmEngineClient implements EngineClient {
         // string, so a non-string value can never coerce into a garbage `"[object Object]"` id.
         const formKey = presentKey(t.formKey);
         const externalFormReference = presentString(t.externalFormReference);
+        // Parent/root linkage the engine surfaces on the user-task row, mapped through the same
+        // presence rule as the live adapter so a native-child task correlates back to its
+        // parent/root subject through the typed seam. `parentProcessInstanceKey` is read via the
+        // optional accessor (the read model omits it today) so it flows through automatically if
+        // the engine starts carrying it — until then it is honestly absent.
+        const processInstanceKey = presentKey(t.processInstanceKey);
+        const parentProcessInstanceKey = presentKey(Reflect.get(t, "parentProcessInstanceKey"));
+        const rootProcessInstanceKey = presentKey(t.rootProcessInstanceKey);
         return [{
           userTaskKey,
           elementId: typeof t.elementId === "string" ? t.elementId : undefined,
           ...(formKey ? { formKey } : {}),
           ...(externalFormReference ? { externalFormReference } : {}),
+          ...(processInstanceKey ? { processInstanceKey } : {}),
+          ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),
+          ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
         }];
       });
   }
@@ -482,6 +512,9 @@ export class WasmEngineClient implements EngineClient {
     variables?: Record<string, unknown>;
     formKey?: string;
     externalFormReference?: string;
+    processInstanceKey?: string;
+    parentProcessInstanceKey?: string;
+    rootProcessInstanceKey?: string;
   }[]> {
     return this.searchUserTasks({ ...filter, state: "CREATED" });
   }
@@ -535,6 +568,8 @@ export class WasmEngineClient implements EngineClient {
   async searchProcessInstances(filter?: {
     processInstanceKeys?: string[];
     state?: ProcessInstanceState;
+    parentProcessInstanceKey?: string;
+    rootProcessInstanceKey?: string;
   }): Promise<ProcessInstanceSnapshot[]> {
     const wanted = filter?.processInstanceKeys
       ? new Set(filter.processInstanceKeys)
@@ -563,11 +598,30 @@ export class WasmEngineClient implements EngineClient {
       const state = wasmStateToProcessInstanceState(inst.state);
       if (state === undefined) continue;
       if (filter?.state !== undefined && state !== filter.state) continue;
+      // Parent/root selectors mirror the live `SdkEngineClient` (honoured server-side there);
+      // apply them client-side against the engine's row linkage. The process-instance read model
+      // carries both keys, so a native child/descendant is selectable by its parent or root.
+      const parentProcessInstanceKey = presentKey(inst.parentProcessInstanceKey);
+      const rootProcessInstanceKey = presentKey(inst.rootProcessInstanceKey);
+      if (
+        filter?.parentProcessInstanceKey !== undefined &&
+        parentProcessInstanceKey !== filter.parentProcessInstanceKey
+      ) {
+        continue;
+      }
+      if (
+        filter?.rootProcessInstanceKey !== undefined &&
+        rootProcessInstanceKey !== filter.rootProcessInstanceKey
+      ) {
+        continue;
+      }
       const processDefinitionKey = presentKey(inst.processDefinitionKey);
       out.push({
         processInstanceKey: key,
         state,
         ...(processDefinitionKey ? { processDefinitionKey } : {}),
+        ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),
+        ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
       });
     }
     return out;

@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.10](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-agent-client-0.1.9...@nanobpm/urban-agent-client-0.1.10) (2026-08-31)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @nanobpm/agentic bumped from ^0.9.0 to ^0.10.0
+
 ## [0.1.9](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-agent-client-0.1.8...@nanobpm/urban-agent-client-0.1.9) (2026-08-29)
 
 

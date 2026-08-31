@@ -679,7 +679,7 @@ export class WasmEngineClient implements EngineClient {
   }
 
   /** Search process variables — the read counterpart to {@link setVariables}. Delegates to the
-   *  engine's real REST read channel (`POST /variables/search`) and parses through the derived
+   *  engine's real REST read channel (`POST /v2/variables/search`) and parses through the derived
    *  `VariableSearchQueryResult` DTO. The read model does not yet honour filter/sort/page fields
    *  server-side (it returns every variable), so the `processInstanceKey`/`scopeKey`/`name`
    *  selectors are applied client-side — mirroring the *effective* behaviour of the gateway-backed
@@ -777,7 +777,7 @@ export class WasmEngineClient implements EngineClient {
 
   /** Fetch the deployed BPMN XML of a process definition by key — the deployed routing model (with
    *  its FEEL gateway conditions), the source of truth for WHY an instance routed where it did. The
-   *  WASM engine has no `/process-definitions/{key}/xml` read channel, but its event log retains a
+   *  WASM engine has no `/v2/process-definitions/{key}/xml` read channel, but its event log retains a
    *  `ProcessDeployed` event carrying `process_definition_key` + the full `process.xml`, so this
    *  scans the log for the matching key — engine truth, no side-channel capture. Returns `null` for
    *  a blank/unknown key (mirroring `SdkEngineClient.getProcessDefinitionXml`, which returns `null`

@@ -954,7 +954,7 @@ export class SdkEngineClient implements EngineClient {
     processDefinitionKey: string,
   ): Promise<string | null> {
     // A blank key can never address a definition — short-circuit to null rather than issue a
-    // `GET /process-definitions//xml` with an empty segment. Normalize a padded-but-valid key so
+    // `GET /v2/process-definitions//xml` with an empty segment. Normalize a padded-but-valid key so
     // `" 5 "` addresses the same definition, mirroring `getElementInstance`.
     const key = presentEngineKey(processDefinitionKey);
     if (key === undefined) return null;

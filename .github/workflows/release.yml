@@ -17,6 +17,20 @@ permissions:
   contents: write
   id-token: write
 
+# Publishing MUST be a singleton. CI can complete more than once for the same
+# main commit (a re-run, or a second triggering event), and each completion fires
+# this `workflow_run` — which was observed running two overlapping publish jobs on
+# the same sha. `scripts/publish.mjs` does non-atomic `npm publish` + tag push +
+# `gh release create`, so two concurrent runs race on tag/Release creation and the
+# OIDC publish of the same version. Serialize on a single group so at most one
+# publish runs at a time. `cancel-in-progress: false` QUEUES rather than cancels:
+# a publish must never be interrupted mid-flight (that could leave a version on npm
+# with no provenance Release), and the queued run re-checks and completes anything
+# the previous pass missed. Scoped by the triggering branch (always `main` here).
+concurrency:
+  group: release-publish-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest

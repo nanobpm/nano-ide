@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.90.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.89.0...@nanobpm/urban-0.90.0) (2026-08-31)
+
+
+### Features
+
+* **urban:** surface parent/root process-instance keys on the typed EngineClient seam ([#533](https://github.com/nanobpm/nano-ide/issues/533)) ([95943de](https://github.com/nanobpm/nano-ide/commit/95943de4208350263a0fafd8bfaa9e3da935c6ef))
+
 ## [0.89.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.88.1...@nanobpm/urban-0.89.0) (2026-08-31)
 
 

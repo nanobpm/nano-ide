@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.2.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.1.0...@nanobpm/urban-testkit-1.2.0) (2026-08-31)
+
+
+### Features
+
+* **urban:** surface parent/root process-instance keys on the typed EngineClient seam ([#533](https://github.com/nanobpm/nano-ide/issues/533)) ([95943de](https://github.com/nanobpm/nano-ide/commit/95943de4208350263a0fafd8bfaa9e3da935c6ef))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.81.0 to >=0.90.0
+
 ## [1.1.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.0.1...@nanobpm/urban-testkit-1.1.0) (2026-08-31)
 
 

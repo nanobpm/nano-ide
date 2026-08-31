@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.9.0...@nanobpm/agentic-0.10.0) (2026-08-31)
+
+
+### Features
+
+* **agentic:** canonical ACP→transcript-envelope bridge + published conformance vector ([#535](https://github.com/nanobpm/nano-ide/issues/535)) ([3512191](https://github.com/nanobpm/nano-ide/commit/35121917ec22796f8280ea6f4417e8dd6b36d39f))
+
 ## [0.9.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.8.0...@nanobpm/agentic-0.9.0) (2026-08-29)
 
 

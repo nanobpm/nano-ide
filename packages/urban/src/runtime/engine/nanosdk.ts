@@ -677,8 +677,19 @@ export class SdkEngineClient implements EngineClient {
   }): Promise<UserTaskSummary[]> {
     // User tasks are an eventually consistent read; ask for zero-wait consistency so
     // the search reflects what is currently visible without blocking.
+    // Normalize the process-instance key selectors through the shared presence rule so a
+    // blank/whitespace-only selector is *dropped* rather than forwarded as a present filter that
+    // silently matches nothing, and a padded key (`" 123 "`) matches the normalized keys we
+    // surface — mirroring `WasmEngineClient` (which normalizes via `presentKey`) and
+    // `searchProcessInstances` below (No Drift Surfaces).
+    const f: Record<string, unknown> = { ...(filter ?? {}) };
+    for (const sel of ["processInstanceKey", "parentProcessInstanceKey", "rootProcessInstanceKey"] as const) {
+      const normalized = presentEngineKey(filter?.[sel]);
+      if (normalized) f[sel] = normalized;
+      else delete f[sel];
+    }
     const body = await this.client.searchUserTasks(
-      { filter: { ...(filter ?? {}) } },
+      { filter: f },
       { consistency: { waitUpToMs: 0 } },
     );
     const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
@@ -691,10 +702,16 @@ export class SdkEngineClient implements EngineClient {
       // The engine resolves a `formId="X"` linkage to the latest deployed form's key at
       // task creation, so `formKey` (not a form id) is the linkage it reports on the task;
       // no `resolveFormKeyByFormId` resolver is passed because the gateway already resolved it.
+      const processInstanceKey = presentEngineKey(it.processInstanceKey);
+      const parentProcessInstanceKey = presentEngineKey(it.parentProcessInstanceKey);
+      const rootProcessInstanceKey = presentEngineKey(it.rootProcessInstanceKey);
       return [{
         userTaskKey: String(userTaskKey),
         elementId: typeof it.elementId === "string" ? it.elementId : undefined,
         variables: isRecord(it.variables) ? it.variables : undefined,
+        ...(processInstanceKey ? { processInstanceKey } : {}),
+        ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),
+        ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
         ...pickFormLinkage(it),
       }];
     });
@@ -763,11 +780,26 @@ export class SdkEngineClient implements EngineClient {
   async searchProcessInstances(filter?: {
     processInstanceKeys?: string[];
     state?: ProcessInstanceState;
+    parentProcessInstanceKey?: string;
+    rootProcessInstanceKey?: string;
   }): Promise<ProcessInstanceSnapshot[]> {
     const f: Record<string, unknown> = {};
     if (filter?.state) f.state = filter.state;
-    const keys = filter?.processInstanceKeys?.filter((k) => k != null && k !== "");
+    // Normalize each requested key through the shared presence rule (drop blank/whitespace-only
+    // entries, trim padded ones like `" 123 "`) so the `$in` filter carries only present keys that
+    // match the normalized keys we surface — mirroring `WasmEngineClient` and the selector
+    // handling above (No Drift Surfaces).
+    const keys = filter?.processInstanceKeys
+      ?.map((k) => presentEngineKey(k))
+      .filter((k): k is string => k !== undefined);
     if (keys && keys.length > 0) f.processInstanceKey = { $in: keys };
+    // Parent/root selectors let the reduced path query a subject's native descendants
+    // server-side. Normalize each through the shared presence rule so a blank selector is
+    // dropped rather than sent as an empty filter that would match nothing.
+    const parentProcessInstanceKey = presentEngineKey(filter?.parentProcessInstanceKey);
+    if (parentProcessInstanceKey) f.parentProcessInstanceKey = parentProcessInstanceKey;
+    const rootProcessInstanceKey = presentEngineKey(filter?.rootProcessInstanceKey);
+    if (rootProcessInstanceKey) f.rootProcessInstanceKey = rootProcessInstanceKey;
     // A process-instance search is an eventually consistent read; ask for zero-wait
     // consistency so it reflects what is currently visible without blocking. Cap the page
     // to the number of keys asked for (each key matches at most one instance), so a bounded
@@ -779,24 +811,32 @@ export class SdkEngineClient implements EngineClient {
     );
     const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
     return items.flatMap((it) => {
-      const key = it.processInstanceKey;
-      if (key == null || key === "") {
+      // Normalize the surfaced primary key through the shared presence rule (trim padded,
+      // drop blank/whitespace-only) so it matches the normalized parent/root linkage keys
+      // and the `searchUserTasks` mapping — the surfaced process-instance key must not drift
+      // between the two reduced-path searches (No Drift Surfaces).
+      const processInstanceKey = presentEngineKey(it.processInstanceKey);
+      if (!processInstanceKey) {
         this.log("warn", "skipping process instance with no key in engine response");
         return [];
       }
       const state = normalizeProcessInstanceState(it.state);
       if (!state) {
         this.log("warn", "skipping process instance with unrecognized state", {
-          processInstanceKey: String(key),
+          processInstanceKey,
           state: String(it.state),
         });
         return [];
       }
       const processDefinitionKey = presentEngineKey(it.processDefinitionKey);
+      const parentProcessInstanceKey = presentEngineKey(it.parentProcessInstanceKey);
+      const rootProcessInstanceKey = presentEngineKey(it.rootProcessInstanceKey);
       return [{
-        processInstanceKey: String(key),
+        processInstanceKey,
         state,
         ...(processDefinitionKey ? { processDefinitionKey } : {}),
+        ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),
+        ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
       }];
     });
   }

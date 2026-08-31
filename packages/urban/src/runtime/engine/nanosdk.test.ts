@@ -315,6 +315,72 @@ test("searchUserTasks surfaces the resolved form linkage", async () => {
   ]);
 });
 
+test("searchUserTasks normalizes the process-instance key selectors and drops blank ones", async () => {
+  // Guards the selector-normalization defect class: a padded selector (`" 42 "`) must reach the
+  // engine trimmed (so it matches the normalized keys the adapter surfaces), a blank/whitespace-only
+  // selector must be *dropped* (not forwarded as a present filter that silently matches nothing),
+  // and unrelated selectors must pass through untouched — mirroring `searchProcessInstances`.
+  let input: { filter?: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    searchUserTasks: async (i) => {
+      input = i;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  await engine.searchUserTasks({
+    processInstanceKey: " 42 ", // padded → trimmed to "42"
+    parentProcessInstanceKey: "   ", // whitespace-only → dropped
+    rootProcessInstanceKey: "", // blank → dropped
+    assignee: "alice", // unrelated selector passes through unchanged
+  });
+  const filter = input?.filter ?? {};
+  assert.equal(filter.processInstanceKey, "42", "padded key selector is trimmed");
+  assert.equal("parentProcessInstanceKey" in filter, false, "whitespace-only parent selector is dropped");
+  assert.equal("rootProcessInstanceKey" in filter, false, "blank root selector is dropped");
+  assert.equal(filter.assignee, "alice", "unrelated selectors pass through unchanged");
+});
+
+test("searchUserTasks surfaces the process-instance linkage keys and drops blank ones", async () => {
+  // Guards the linkage-output defect class: the three linkage keys the engine reports on a task
+  // (processInstanceKey/parentProcessInstanceKey/rootProcessInstanceKey) must be surfaced on the
+  // returned `UserTaskSummary`, normalized through the same presence rule — a padded value trimmed,
+  // a blank/whitespace-only value omitted rather than surfaced as an empty string.
+  const client = fakeSdkClient({
+    searchUserTasks: async () => ({
+      items: [
+        {
+          userTaskKey: 1,
+          elementId: "a",
+          processInstanceKey: 10,
+          parentProcessInstanceKey: 20,
+          rootProcessInstanceKey: 30,
+        },
+        {
+          userTaskKey: 2,
+          elementId: "b",
+          processInstanceKey: " 11 ", // padded → trimmed
+          parentProcessInstanceKey: "  ", // whitespace-only → omitted
+          rootProcessInstanceKey: "", // blank → omitted
+        },
+      ],
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const tasks = await engine.searchUserTasks();
+  assert.deepEqual(tasks, [
+    {
+      userTaskKey: "1",
+      elementId: "a",
+      variables: undefined,
+      processInstanceKey: "10",
+      parentProcessInstanceKey: "20",
+      rootProcessInstanceKey: "30",
+    },
+    { userTaskKey: "2", elementId: "b", variables: undefined, processInstanceKey: "11" },
+  ]);
+});
+
 test("getForm resolves by formKey and parses the serialized schema", async () => {
   let seen: unknown;
   const schema = { type: "default", schemaVersion: 18, components: [{ type: "textfield", key: "name" }] };
@@ -484,6 +550,64 @@ test("searchProcessInstances skips keyless and unrecognized-state rows", async (
   const engine = new SdkEngineClient(client);
   const out = await engine.searchProcessInstances();
   assert.deepEqual(out, [{ processInstanceKey: "10", state: "COMPLETED" }]);
+});
+
+test("searchProcessInstances normalizes the parent/root key selectors and drops blank ones", async () => {
+  // Guards the request-mapping defect class for the reduced path's parent/root selectors: a padded
+  // selector must be trimmed, a blank/whitespace-only selector must be dropped rather than sent as
+  // an empty filter that matches nothing — mirroring `searchUserTasks` (No Drift Surfaces).
+  let seenInput: { filter?: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    searchProcessInstances: async (input) => {
+      seenInput = input;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  await engine.searchProcessInstances({
+    parentProcessInstanceKey: " 42 ", // padded → trimmed to "42"
+    rootProcessInstanceKey: "   ", // whitespace-only → dropped
+  });
+  const filter = seenInput?.filter ?? {};
+  assert.equal(filter.parentProcessInstanceKey, "42", "padded parent selector is trimmed");
+  assert.equal("rootProcessInstanceKey" in filter, false, "whitespace-only root selector is dropped");
+  // A selector-only search carries no key `$in` and no page cap.
+  assert.deepEqual(seenInput, { filter: { parentProcessInstanceKey: "42" } });
+});
+
+test("searchProcessInstances surfaces the parent/root linkage keys and drops blank ones", async () => {
+  // Guards the linkage-output defect class: the parent/root keys the engine reports on an instance
+  // must be surfaced on the returned `ProcessInstanceSnapshot`, normalized through the same presence
+  // rule — a padded value trimmed, a blank/whitespace-only value omitted rather than an empty string.
+  const client = fakeSdkClient({
+    searchProcessInstances: async () => ({
+      items: [
+        {
+          processInstanceKey: 10,
+          state: "ACTIVE",
+          parentProcessInstanceKey: 20,
+          rootProcessInstanceKey: 30,
+        },
+        {
+          processInstanceKey: " 11 ", // padded → trimmed
+          state: "COMPLETED",
+          parentProcessInstanceKey: "  ", // whitespace-only → omitted
+          rootProcessInstanceKey: "", // blank → omitted
+        },
+      ],
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchProcessInstances();
+  assert.deepEqual(out, [
+    {
+      processInstanceKey: "10",
+      state: "ACTIVE",
+      parentProcessInstanceKey: "20",
+      rootProcessInstanceKey: "30",
+    },
+    { processInstanceKey: "11", state: "COMPLETED" },
+  ]);
 });
 
 test("normalizeProcessInstanceState maps the terminal set and rejects others", () => {

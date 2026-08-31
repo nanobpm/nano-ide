@@ -240,3 +240,211 @@ test("EngineClient seam: searchVariables / searchJobs / getProcessDefinitionXml 
     await engine.close();
   }
 });
+
+// Behavioural parity for the parent/root process-instance linkage the typed seam now carries
+// (nanobpm/nano-ide#532). The engine (`@nanobpm/engine-wasm` ≥ 0.8.6) exposes a native-child's
+// parent/root keys on both `searchProcessInstances` and `searchUserTasks`, but before this slice the
+// typed `EngineClient` seam dropped them — so the reduced-capability read path (`pollUserTasks` and
+// other reconcile/affordance surfaces) had NO in-repo way to correlate a deep native descendant
+// (e.g. a human-escalation grandchild) back to its parent/root subject without a raw-REST channel.
+//
+// This drives a REAL three-level native call-activity hierarchy through the public seam
+// (grand-parent → child → grandchild-with-a-user-task) and proves the correlation end-to-end
+// through the typed accessors alone: the grandchild's open user task carries its owning
+// `processInstanceKey` and the hierarchy `rootProcessInstanceKey`; `searchProcessInstances`'
+// parent/root selectors select the descendants; and the grandchild snapshot carries the immediate
+// `parentProcessInstanceKey` — so a caller maps user-task → owning instance → parent subject with no
+// raw-REST fallback and no weakened expectations. The scenario is engine-driven, so it would pass
+// against the live `SdkEngineClient` too. (Before the seam fix these keys were `undefined`, so every
+// linkage assertion below was red — the dropped-linkage gap this slice closes.)
+
+/** A native call-activity link to `processId`, flowing on to `next`. */
+function callActivity(id: string, processId: string, next: string): string {
+  return `<bpmn:callActivity id="${id}">` +
+    `<bpmn:extensionElements><zeebe:calledElement processId="${processId}"/></bpmn:extensionElements>` +
+    `<bpmn:incoming>in_${id}</bpmn:incoming><bpmn:outgoing>out_${id}</bpmn:outgoing>` +
+    `</bpmn:callActivity><bpmn:sequenceFlow id="out_${id}" sourceRef="${id}" targetRef="${next}"/>`;
+}
+
+// Grand-parent: start → callActivity(child) → end.
+const GRANDPARENT_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="defs_gp" targetNamespace="http://nanobpm.io/conformance">
+  <bpmn:process id="gp_lineage" isExecutable="true">
+    <bpmn:startEvent id="gs"><bpmn:outgoing>in_gca</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:sequenceFlow id="in_gca" sourceRef="gs" targetRef="gca"/>
+    ${callActivity("gca", "child_lineage", "ge")}
+    <bpmn:endEvent id="ge"><bpmn:incoming>out_gca</bpmn:incoming></bpmn:endEvent>
+  </bpmn:process>
+</bpmn:definitions>`;
+
+// Child: start → callActivity(grandchild) → end.
+const CHILD_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="defs_child" targetNamespace="http://nanobpm.io/conformance">
+  <bpmn:process id="child_lineage" isExecutable="true">
+    <bpmn:startEvent id="cs"><bpmn:outgoing>in_cca</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:sequenceFlow id="in_cca" sourceRef="cs" targetRef="cca"/>
+    ${callActivity("cca", "grandchild_lineage", "ce")}
+    <bpmn:endEvent id="ce"><bpmn:incoming>out_cca</bpmn:incoming></bpmn:endEvent>
+  </bpmn:process>
+</bpmn:definitions>`;
+
+// Grandchild: start → userTask(escalation) → end. The user task parks (no worker needed), standing
+// in for a human-escalation task owned by a deep native descendant.
+const GRANDCHILD_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="defs_gc" targetNamespace="http://nanobpm.io/conformance">
+  <bpmn:process id="grandchild_lineage" isExecutable="true">
+    <bpmn:startEvent id="gcs"><bpmn:outgoing>in_esc</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:sequenceFlow id="in_esc" sourceRef="gcs" targetRef="escalation"/>
+    <bpmn:userTask id="escalation">
+      <bpmn:extensionElements><zeebe:userTask/></bpmn:extensionElements>
+      <bpmn:incoming>in_esc</bpmn:incoming><bpmn:outgoing>out_esc</bpmn:outgoing>
+    </bpmn:userTask>
+    <bpmn:sequenceFlow id="out_esc" sourceRef="escalation" targetRef="gce"/>
+    <bpmn:endEvent id="gce"><bpmn:incoming>out_esc</bpmn:incoming></bpmn:endEvent>
+  </bpmn:process>
+</bpmn:definitions>`;
+
+test("EngineClient seam: parent/root linkage correlates a native-child user task to its parent/root subject", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    await engine.deployResources([
+      { name: "gp_lineage.bpmn", content: GRANDPARENT_BPMN, contentType: "text/xml" },
+      { name: "child_lineage.bpmn", content: CHILD_BPMN, contentType: "text/xml" },
+      { name: "grandchild_lineage.bpmn", content: GRANDCHILD_BPMN, contentType: "text/xml" },
+    ]);
+
+    // Start the top-level (root) instance. The native call activities instantiate the child and
+    // grandchild as real child instances; the grandchild parks on its user task.
+    const { processInstanceKey: rootKey } = await engine.createInstance({
+      processDefinitionId: "gp_lineage",
+    });
+
+    // The reduced path reaches for OPEN user tasks. There is exactly one — the grandchild's
+    // escalation task — and through the typed seam it now carries its owning `processInstanceKey`
+    // and the hierarchy `rootProcessInstanceKey`, so it correlates straight back to the root subject
+    // with NO raw-REST fallback.
+    const openTasks = await engine.openUserTasks();
+    assert.equal(openTasks.length, 1, "exactly the grandchild escalation task is open");
+    const task = openTasks[0];
+    assert.equal(task.elementId, "escalation");
+    assert.ok(
+      task.processInstanceKey !== undefined && task.processInstanceKey.length > 0,
+      "the user task carries its owning (grandchild) process-instance key",
+    );
+    assert.equal(
+      task.rootProcessInstanceKey,
+      rootKey,
+      "the user task's rootProcessInstanceKey correlates to the root subject through the seam",
+    );
+    const grandchildKey = task.processInstanceKey;
+    assert.notEqual(grandchildKey, rootKey, "the grandchild is a distinct instance from the root");
+
+    // Root-scoped selector: every instance in the hierarchy (root + child + grandchild) is
+    // selectable by the root key through the typed filter.
+    const underRoot = await engine.searchProcessInstances({ rootProcessInstanceKey: rootKey });
+    const underRootKeys = new Set(underRoot.map((i) => i.processInstanceKey));
+    assert.equal(underRoot.length, 3, "root selector returns the whole native hierarchy");
+    assert.ok(underRootKeys.has(rootKey) && underRootKeys.has(grandchildKey));
+    for (const inst of underRoot) {
+      assert.equal(inst.rootProcessInstanceKey, rootKey, "each instance reports the shared root");
+    }
+
+    // user-task → owning instance → immediate parent: resolve the grandchild's snapshot through the
+    // seam and read its parentProcessInstanceKey — the immediate (child) subject that spawned it.
+    const [grandchild] = await engine.searchProcessInstances({
+      processInstanceKeys: [grandchildKey],
+    });
+    assert.ok(grandchild !== undefined, "the grandchild instance is resolvable by its own key");
+    assert.equal(grandchild.rootProcessInstanceKey, rootKey);
+    const childKey = grandchild.parentProcessInstanceKey;
+    assert.ok(
+      childKey !== undefined && childKey !== rootKey && childKey !== grandchildKey,
+      "the grandchild carries a distinct immediate parentProcessInstanceKey (the child instance)",
+    );
+
+    // Parent-scoped selector: the grandchild is exactly the set of the child's native children.
+    const childrenOfChild = await engine.searchProcessInstances({
+      parentProcessInstanceKey: childKey,
+    });
+    assert.deepEqual(
+      childrenOfChild.map((i) => i.processInstanceKey),
+      [grandchildKey],
+      "the parent selector returns exactly the child's native descendant (the grandchild)",
+    );
+
+    // The root instance is the top of the hierarchy: no parent, root === itself.
+    const [root] = await engine.searchProcessInstances({ processInstanceKeys: [rootKey] });
+    assert.equal(root.parentProcessInstanceKey, undefined, "the root instance has no parent");
+    assert.equal(root.rootProcessInstanceKey, rootKey, "the root instance's root is itself");
+
+    // Defect-class guard (No Drift Surfaces): a blank/whitespace-only parent/root selector must be
+    // normalized away (treated as *absent* → matches everything) rather than compared literally
+    // against normalized row keys — which would treat the padded selector as a present key that
+    // matches nothing and silently filter out every row. This mirrors `SdkEngineClient`, which
+    // drops such a selector via `presentEngineKey` before sending it server-side.
+    const blankParentInstances = await engine.searchProcessInstances({
+      parentProcessInstanceKey: "   ",
+    });
+    assert.equal(
+      blankParentInstances.length,
+      underRoot.length,
+      "a whitespace-only parentProcessInstanceKey selector is dropped, not matched-against literally",
+    );
+    const blankRootInstances = await engine.searchProcessInstances({ rootProcessInstanceKey: "  " });
+    assert.equal(
+      blankRootInstances.length,
+      underRoot.length,
+      "a whitespace-only rootProcessInstanceKey selector is dropped, not matched-against literally",
+    );
+    const allTasks = await engine.searchUserTasks({});
+    const blankRootTasks = await engine.searchUserTasks({ rootProcessInstanceKey: "   " });
+    assert.equal(
+      blankRootTasks.length,
+      allTasks.length,
+      "a whitespace-only user-task root selector is dropped, not matched-against literally",
+    );
+    const blankParentTasks = await engine.searchUserTasks({ parentProcessInstanceKey: " " });
+    assert.equal(
+      blankParentTasks.length,
+      allTasks.length,
+      "a whitespace-only user-task parent selector is dropped, not matched-against literally",
+    );
+    const blankPiKeyTasks = await engine.searchUserTasks({ processInstanceKey: "  " });
+    assert.equal(
+      blankPiKeyTasks.length,
+      allTasks.length,
+      "a whitespace-only user-task processInstanceKey selector is dropped, not matched-against literally",
+    );
+
+    // Defect-class guard (No Drift Surfaces): `searchProcessInstances({ processInstanceKeys })` must
+    // normalize each wanted key through the shared presence rule before matching — a padded key
+    // (`" <key> "`) still resolves its instance, and an empty/all-blank list is treated as *absent*
+    // (no key filter → matches everything) rather than a set that matches nothing. This mirrors
+    // `SdkEngineClient`, whose `$in` filter carries only present keys and is omitted when none remain.
+    const allInstances = await engine.searchProcessInstances({});
+    const [paddedRoot] = await engine.searchProcessInstances({
+      processInstanceKeys: [`  ${rootKey}  `],
+    });
+    assert.ok(
+      paddedRoot !== undefined && paddedRoot.processInstanceKey === rootKey,
+      "a padded processInstanceKeys entry is trimmed and still matches its instance",
+    );
+    const emptyKeyList = await engine.searchProcessInstances({ processInstanceKeys: [] });
+    assert.equal(
+      emptyKeyList.length,
+      allInstances.length,
+      "an empty processInstanceKeys list is treated as absent (matches everything), not matching nothing",
+    );
+    const blankKeyList = await engine.searchProcessInstances({ processInstanceKeys: ["   ", ""] });
+    assert.equal(
+      blankKeyList.length,
+      allInstances.length,
+      "an all-blank processInstanceKeys list is treated as absent (matches everything), not matching nothing",
+    );
+  } finally {
+    await engine.close();
+  }
+});

@@ -73,9 +73,12 @@ for (const vector of ACP_TRANSCRIPT_VECTORS) {
 
     // …and it folds into a message or tool card (never leaves the derived view empty). A tool-result
     // only becomes a card once paired to its open call, so seed the matching tool-call first.
-    const seed = event.kind === "tool-result" && event.callId !== undefined
-      ? [parseTranscriptEvent({ offset: -1, chunk: acpUpdateToTranscriptChunk({ sessionUpdate: "tool_call", toolCallId: event.callId, title: "seed" }) ?? "" })]
-      : [];
+    let seed: readonly ReturnType<typeof parseTranscriptEvent>[] = [];
+    if (event.kind === "tool-result" && event.callId !== undefined) {
+      const seedChunk = acpUpdateToTranscriptChunk({ sessionUpdate: "tool_call", toolCallId: event.callId, title: "seed" });
+      assert.ok(seedChunk !== null, "seeding tool_call must produce a chunk");
+      seed = [parseTranscriptEvent({ offset: -1, chunk: seedChunk })];
+    }
     const view = deriveView([...seed, event]);
     const derivedCards = view.messages.length + view.tools.length;
     assert.ok(derivedCards >= 1, `${vector.sessionUpdate} must fold into a message/tool card`);

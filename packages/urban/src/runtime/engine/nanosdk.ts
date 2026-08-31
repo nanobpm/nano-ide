@@ -792,12 +792,11 @@ export class SdkEngineClient implements EngineClient {
         });
         return [];
       }
+      const processDefinitionKey = presentEngineKey(it.processDefinitionKey);
       return [{
         processInstanceKey: String(key),
         state,
-        ...(presentEngineKey(it.processDefinitionKey)
-          ? { processDefinitionKey: presentEngineKey(it.processDefinitionKey) }
-          : {}),
+        ...(processDefinitionKey ? { processDefinitionKey } : {}),
       }];
     });
   }

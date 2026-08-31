@@ -7,7 +7,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { PAGE_NODE_TYPES } from "../core/page-nodes.ts";
-import { RENDERERS, renderText, renderAppView, navLink, sameOriginPath, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell } from "./runtime.browser.js";
+import { RENDERERS, renderText, renderAppView, relayAppViewMessage, navLink, sameOriginPath, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell } from "./runtime.browser.js";
 
 // ── Minimal fake DOM ────────────────────────────────────────────────────────
 // Just enough of the Element/Document surface that el()/renderText touch:
@@ -573,4 +573,129 @@ test("#338: a param-scoped nav badge with no route param degrades to 0 without q
   const pill: any = link.children[link.children.length - 1];
   assert.equal(pill.textContent, "0", "badge degrades to 0 rather than an empty-string-filtered count");
   assert.equal(pill.hidden, false, "0 is shown (hideWhenZero is off) rather than a stale count");
+});
+
+// ── #518: App-View message relay (host-up + sibling-across bridge) ───────────
+// A nested App-View posts to `window.parent` (the Urban page). Before this fix
+// the page installed no bridge for those inbound postMessages, so a
+// `nano-navigate` never chained up to the console host (DI Preview did nothing)
+// and a sibling-directed message never reached the page's other App-Views
+// (Library "Reuse" filled nothing). relayAppViewMessage is the primitive that
+// closes that whole class: forward-up for nano-navigate, broadcast-across for
+// everything else, both behind a strict same-origin + known-App-View-source
+// trust boundary. These drive the primitive directly with fake frame windows.
+
+// A minimal Window stand-in that records its postMessage calls, used both as an
+// App-View iframe's contentWindow and as the host `window.parent`.
+function fakeWindow(): { posts: Array<{ data: unknown; origin: string }> } & {
+  postMessage(data: unknown, origin: string): void;
+} {
+  const posts: Array<{ data: unknown; origin: string }> = [];
+  return {
+    posts,
+    postMessage(data: unknown, origin: string): void {
+      posts.push({ data, origin });
+    },
+  };
+}
+
+// An App-View iframe stand-in exposing just the `.contentWindow` the relay reads.
+function fakeFrame(win: unknown): { contentWindow: unknown } {
+  return { contentWindow: win };
+}
+
+const ORIGIN = "https://app.test";
+
+test("#518: relayAppViewMessage forwards a child App-View's nano-navigate UP to the host", () => {
+  const parent = fakeWindow();
+  const composeWin = fakeWindow();
+  const compose = fakeFrame(composeWin);
+  const frames = [compose];
+  const data = { type: "nano-navigate", target: "definitionPreview", params: { xml: "<x/>" } };
+
+  relayAppViewMessage(
+    { origin: ORIGIN, source: composeWin, data },
+    frames,
+    { origin: ORIGIN, parent, embedded: true },
+  );
+
+  assert.equal(parent.posts.length, 1, "the host (window.parent) must receive the forwarded nano-navigate");
+  assert.deepEqual(parent.posts[0], { data, origin: ORIGIN });
+  // A forward-up is NOT also broadcast back into the page's App-Views.
+  assert.equal(composeWin.posts.length, 0, "nano-navigate is forwarded up, not relayed across");
+});
+
+test("#518: relayAppViewMessage relays a sibling-directed message ACROSS to the other App-Views only", () => {
+  const parent = fakeWindow();
+  const libraryWin = fakeWindow();
+  const composeWin = fakeWindow();
+  const stagedWin = fakeWindow();
+  const library = fakeFrame(libraryWin);
+  const compose = fakeFrame(composeWin);
+  const staged = fakeFrame(stagedWin);
+  const frames = [library, compose, staged];
+  const data = { type: "nano-delivery-graph-compose-fill", xml: "<definitions/>" };
+
+  relayAppViewMessage(
+    { origin: ORIGIN, source: libraryWin, data },
+    frames,
+    { origin: ORIGIN, parent, embedded: true },
+  );
+
+  // Delivered to BOTH siblings...
+  assert.deepEqual(composeWin.posts, [{ data, origin: ORIGIN }], "sibling Compose must receive the relayed message");
+  assert.deepEqual(stagedWin.posts, [{ data, origin: ORIGIN }], "sibling Staged must receive the relayed message");
+  // ...but never echoed back to the originator, nor forwarded up to the host.
+  assert.equal(libraryWin.posts.length, 0, "the originating App-View must not receive its own message back");
+  assert.equal(parent.posts.length, 0, "a sibling-directed (non-navigate) message must not be forwarded to the host");
+});
+
+test("#518: relayAppViewMessage does NOT forward up when the page is standalone (not embedded)", () => {
+  const parent = fakeWindow();
+  const composeWin = fakeWindow();
+  const compose = fakeFrame(composeWin);
+  const data = { type: "nano-navigate", target: "processExplorer", params: {} };
+
+  relayAppViewMessage(
+    { origin: ORIGIN, source: composeWin, data },
+    [compose],
+    { origin: ORIGIN, parent, embedded: false },
+  );
+
+  assert.equal(parent.posts.length, 0, "standalone: there is no same-origin console host to forward to");
+});
+
+test("#518: relayAppViewMessage rejects a message from a NON-App-View source (trust boundary)", () => {
+  const parent = fakeWindow();
+  const composeWin = fakeWindow();
+  const compose = fakeFrame(composeWin);
+  const strangerWin = fakeWindow(); // some other framed window, not one of our App-Views
+  const data = { type: "nano-navigate", target: "definitionPreview", params: {} };
+
+  relayAppViewMessage(
+    { origin: ORIGIN, source: strangerWin, data },
+    [compose],
+    { origin: ORIGIN, parent, embedded: true },
+  );
+
+  assert.equal(parent.posts.length, 0, "a message from an unknown source must not be forwarded up");
+  assert.equal(composeWin.posts.length, 0, "a message from an unknown source must not be relayed across");
+});
+
+test("#518: relayAppViewMessage rejects a CROSS-ORIGIN message even from a known App-View window", () => {
+  const parent = fakeWindow();
+  const composeWin = fakeWindow();
+  const stagedWin = fakeWindow();
+  const compose = fakeFrame(composeWin);
+  const staged = fakeFrame(stagedWin);
+  const data = { type: "nano-delivery-graph-compose-fill", xml: "<x/>" };
+
+  relayAppViewMessage(
+    { origin: "https://evil.test", source: composeWin, data },
+    [compose, staged],
+    { origin: ORIGIN, parent, embedded: true },
+  );
+
+  assert.equal(stagedWin.posts.length, 0, "a cross-origin message must not be relayed across");
+  assert.equal(parent.posts.length, 0, "a cross-origin message must not be forwarded up");
 });

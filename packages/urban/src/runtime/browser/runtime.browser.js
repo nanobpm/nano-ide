@@ -175,6 +175,74 @@ function installThemeBridge() {
   window.parent.postMessage({ type: "nano-app-ready" }, window.location.origin);
 }
 
+// ── App-View message relay (#518) ─────────────────────────────────────────
+// The App-View iframes this page currently mounts (renderAppView adds each one;
+// teardown removes it so a switched-away page's frames leave the relay set). The
+// bridge below uses this set as the trust membership: a message is only relayed
+// if ev.source is one of THESE frames' contentWindows (a nested App-View of this
+// page), never an arbitrary framed window.
+/** @type {Set<HTMLIFrameElement>} */
+const APP_VIEW_FRAMES = new Set();
+
+// The relay primitive. A nested App-View posts to `window.parent` (this page),
+// but this page installs no bridge, so the message is dropped: it never reaches
+// the console host (forward-UP) nor the page's other App-Views (relay-ACROSS).
+// This forwards a whitelisted `nano-navigate` UP to the host (chaining the same
+// hostNavigate boundary the page's own links use, so a nested App-View can drive
+// the console explorer — Preview DI, instance deep-links) and relays any other
+// App-View message ACROSS to the page's sibling App-Views (e.g. Library "Reuse"
+// → Compose fill). Deliberately generic (forward-up + broadcast-across), not a
+// per-message special case, so the whole cross-frame failure class is closed at
+// once rather than patched button-by-button.
+//
+// Trust boundary: the message must be same-origin AND from a known App-View
+// iframe of THIS page. `ev.source` alone is insufficient — the origin pin plus
+// the membership check are what actually gate the boundary, so a message from a
+// non-App-View source or a cross-origin frame is never relayed.
+/**
+ * @param {{ origin: string, source: any, data: any }} ev
+ * @param {Iterable<{ contentWindow: any }>} frames
+ * @param {{ origin: string, parent: any, embedded: boolean }} ctx
+ */
+function relayAppViewMessage(ev, frames, ctx) {
+  if (ev.origin !== ctx.origin) return;
+  const list = Array.isArray(frames) ? frames : [...frames];
+  let originFrame = null;
+  for (const f of list) {
+    if (f.contentWindow && f.contentWindow === ev.source) { originFrame = f; break; }
+  }
+  // Unknown source: not one of this page's App-Views — reject (trust boundary).
+  if (!originFrame) return;
+  const data = ev.data;
+  if (data && data.type === "nano-navigate") {
+    // Forward upward to the host/console, gated on the same same-origin embed
+    // boundary as hostNavigate: standalone (no same-origin console parent) there
+    // is nothing to forward to, so the message stays within the page.
+    if (ctx.embedded && ctx.parent) ctx.parent.postMessage(data, ctx.origin);
+    return;
+  }
+  // Relay across to the page's OTHER App-Views (never back to the originator).
+  for (const f of list) {
+    if (f === originFrame) continue;
+    const w = f.contentWindow;
+    if (w) w.postMessage(data, ctx.origin);
+  }
+}
+
+// Install the App-View relay as a single page-level `message` listener. Unlike
+// the theme bridge this is NOT gated on NANO_EMBEDDED: the sibling relay-across
+// works within a standalone page too; only the forward-up leg is embed-gated
+// (via ctx.embedded in relayAppViewMessage).
+function installAppViewBridge() {
+  window.addEventListener("message", (ev) => {
+    relayAppViewMessage(ev, APP_VIEW_FRAMES, {
+      origin: window.location.origin,
+      parent: window.parent,
+      embedded: NANO_EMBEDDED,
+    });
+  });
+}
+
 // Resolve every app endpoint against where THIS module was actually served from,
 // so absolute-looking "/app/…" paths work both at the origin root (direct run,
 // e.g. the CLI on :3000) and under a path-prefixed reverse proxy (the Nano
@@ -2769,6 +2837,13 @@ function renderAppView(node) {
   });
 
   const section = el("section", { class: "pc-appview" + (fill ? " pc-appview-fill" : "") });
+  // Register this frame in the App-View relay set (#518) so the page-level bridge
+  // can (a) recognise its outbound postMessages as coming from a known App-View of
+  // this page and (b) address it as a sibling target for another App-View's relay.
+  // A teardown disposer drops it again, so a switched-away page's frames don't
+  // linger as phantom relay endpoints.
+  APP_VIEW_FRAMES.add(frame);
+  disposers.push(() => APP_VIEW_FRAMES.delete(frame));
   // The title is an <h2> (the tag EVERY card renderer uses and makeCollapsible lifts into the
   // collapse header), not a <div>: a collapsible appView's title must be lifted out of the body,
   // otherwise it double-renders (header label + leftover in-body title). The .pc-appview-title CSS
@@ -2934,6 +3009,7 @@ function boot() {
   PARAM = parseRoute().param;
   NANO_EMBEDDED = computeEmbedded();
   installThemeBridge();
+  installAppViewBridge();
   window.addEventListener("hashchange", renderPage);
   // Re-render when the viewport crosses the mobile breakpoint so a Tier-2 'mobile'
   // variant swaps in/out on rotation or a window resize (the grid card flip, nav
@@ -2953,4 +3029,4 @@ function boot() {
 // renderer functions / RENDERERS registry can be imported directly.
 if (typeof document !== "undefined" && document.getElementById("page")) boot();
 
-export { RENDERERS, renderText, renderButton, renderProse, renderNav, renderAppView, navLink, sameOriginPath, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, buildEngineForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };
+export { RENDERERS, renderText, renderButton, renderProse, renderNav, renderAppView, relayAppViewMessage, navLink, sameOriginPath, wireNavBadge, applyNavBadge, teardown, fmtCellValue, gridCell, buildDetailForm, buildEngineForm, evalDetailCondition, normalizeDetailOptions, chevronToggle, setChevronOpen };

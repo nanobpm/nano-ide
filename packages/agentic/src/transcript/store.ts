@@ -280,16 +280,32 @@ function toStatus(value: string): TranscriptStatus {
  * aggregates computed over the chunk table. `byte_length` is the summed UTF-8 byte size
  * of the retained chunk payloads (`length(CAST(chunk AS BLOB))` is the UTF-8 byte count,
  * matching {@link utf8ByteLength}); `chunk_count` is the retained chunk count. Both are
- * scoped to the correlated `stream`, so they reflect exactly the chunks {@link TranscriptStore.read}
+ * scoped to the joined `stream`, so they reflect exactly the chunks {@link TranscriptStore.read}
  * would return and shrink as retention evicts the head — the app "past sessions" list can
  * render per-row size/count without reading every payload back (nano-workforce#233). Computed
  * on read (not stored columns) so the drift-guarded canonical schema stays untouched.
+ *
+ * Both aggregates come from a single grouped {@link STREAM_METADATA_FROM} LEFT JOIN rather
+ * than two correlated subqueries, so the chunk table is scanned once per query (not twice
+ * per stream). The `COALESCE(..., 0)` keeps streams with no retained chunks at zero, since
+ * the LEFT JOIN yields `NULL` aggregates for them.
  */
 const STREAM_METADATA_SELECT = `s.*,
-    (SELECT COALESCE(SUM(length(CAST(c.chunk AS BLOB))), 0)
-       FROM ${TRANSCRIPT_CHUNK_TABLE} c WHERE c.stream = s.stream) AS byte_length,
-    (SELECT COUNT(*)
-       FROM ${TRANSCRIPT_CHUNK_TABLE} c WHERE c.stream = s.stream) AS chunk_count`;
+    COALESCE(agg.byte_length, 0) AS byte_length,
+    COALESCE(agg.chunk_count, 0) AS chunk_count`;
+
+/**
+ * The `FROM` clause pairing the stream table with a single grouped aggregate of its chunks,
+ * feeding {@link STREAM_METADATA_SELECT}. One `GROUP BY` pass computes both the summed UTF-8
+ * byte size and the retained chunk count per stream, so `list()` no longer re-scans the chunk
+ * rows twice for every stream.
+ */
+const STREAM_METADATA_FROM = `${TRANSCRIPT_STREAM_TABLE} s
+    LEFT JOIN (SELECT c.stream AS stream,
+                      SUM(length(CAST(c.chunk AS BLOB))) AS byte_length,
+                      COUNT(*) AS chunk_count
+                 FROM ${TRANSCRIPT_CHUNK_TABLE} c
+                GROUP BY c.stream) agg ON agg.stream = s.stream`;
 
 function toStream(row: DbStreamRow): TranscriptStream {
   const out: {
@@ -908,7 +924,7 @@ export class TranscriptStore {
   /** Look up a single stream's transcript metadata. */
   get(stream: string): TranscriptStream | undefined {
     const rows = this.#db.all<DbStreamRow>(
-      `SELECT ${STREAM_METADATA_SELECT} FROM ${TRANSCRIPT_STREAM_TABLE} s WHERE s.stream = ?`,
+      `SELECT ${STREAM_METADATA_SELECT} FROM ${STREAM_METADATA_FROM} WHERE s.stream = ?`,
       [stream],
     );
     const row = rows[0];
@@ -919,7 +935,7 @@ export class TranscriptStore {
   list(): TranscriptStream[] {
     return this.#db
       .all<DbStreamRow>(
-        `SELECT ${STREAM_METADATA_SELECT} FROM ${TRANSCRIPT_STREAM_TABLE} s ORDER BY s.created_at, s.stream`,
+        `SELECT ${STREAM_METADATA_SELECT} FROM ${STREAM_METADATA_FROM} ORDER BY s.created_at, s.stream`,
       )
       .map(toStream);
   }

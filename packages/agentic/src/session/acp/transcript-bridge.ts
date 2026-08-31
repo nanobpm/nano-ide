@@ -51,7 +51,9 @@ const ACP_ROLE_TO_TRANSCRIPT: Readonly<Record<"assistant" | "reasoning" | "user"
  * Serialisation is total: `result` is opaque wire data, so a value `JSON.stringify` rejects (a
  * `BigInt`, a circular reference, a `toJSON` that throws) must NOT abort the producer/ingestion stream
  * for one bad tool result — the bridge is documented "pure and total". Such a value falls back to its
- * `String(result)` form so the tool card still shows an outcome instead of the update crashing.
+ * `String(result)` form so the tool card still shows an outcome instead of the update crashing. The
+ * fallback is itself guarded: `String(result)` invokes `Symbol.toPrimitive`/`toString`/`valueOf`, which
+ * a hostile object can also throw from, so it degrades to a fixed placeholder rather than propagating.
  */
 function toolResultContent(result: unknown): string | undefined {
   if (result === undefined || result === null) return undefined;
@@ -59,9 +61,22 @@ function toolResultContent(result: unknown): string | undefined {
   try {
     const serialised = JSON.stringify(result);
     // `JSON.stringify` returns `undefined` for a lone `undefined`/function/symbol; keep `content` total.
-    return serialised === undefined ? String(result) : serialised;
+    return serialised === undefined ? safeString(result) : serialised;
   } catch {
-    return String(result);
+    return safeString(result);
+  }
+}
+
+/**
+ * Coerce a value to a string without ever throwing. `String(value)` runs the value's
+ * `Symbol.toPrimitive`/`toString`/`valueOf`, any of which a hostile object can throw from, so a failure
+ * degrades to a fixed placeholder — keeping {@link toolResultContent} (and the bridge) total.
+ */
+function safeString(value: unknown): string {
+  try {
+    return String(value);
+  } catch {
+    return "[unserialisable tool result]";
   }
 }
 

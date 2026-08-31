@@ -88,8 +88,10 @@ for (const vector of ACP_TRANSCRIPT_VECTORS) {
 // `acpUpdateToTranscriptChunk` is documented "pure and total": every input yields a chunk or `null`,
 // never a throw. A tool-result's `result` is opaque wire data, so a value `JSON.stringify` rejects (a
 // `BigInt`, a circular reference, a `toJSON` that throws) must not crash a producer/ingestion stream
-// for one bad tool result. This pins that the bad value falls back to `String(result)` and still
-// derives a tool card, rather than propagating the `TypeError`.
+// for one bad tool result. The fallback is itself total: `String(result)` runs the value's
+// `toString`/`valueOf`/`Symbol.toPrimitive`, which a hostile object can also throw from — so a value
+// that defeats BOTH `JSON.stringify` and `String()` still degrades to a placeholder rather than
+// propagating a `TypeError`.
 
 test("TOTAL: a JSON.stringify-hostile tool result falls back to a string instead of throwing", () => {
   const circular: { self?: unknown } = {};
@@ -98,6 +100,8 @@ test("TOTAL: a JSON.stringify-hostile tool result falls back to a string instead
     9007199254740993n, // BigInt — JSON.stringify throws a TypeError
     circular, // circular reference — JSON.stringify throws a TypeError
     { toJSON() { throw new Error("boom"); } }, // a toJSON that throws
+    // Defeats BOTH paths: `JSON.stringify` throws on the BigInt, and the fallback `String()` throws too.
+    { value: 1n, toString() { throw new Error("hostile toString"); } },
   ];
 
   for (const rawOutput of hostileResults) {

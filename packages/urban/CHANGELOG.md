@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.89.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.88.1...@nanobpm/urban-0.89.0) (2026-08-31)
+
+
+### Features
+
+* add urban_debug engine-truth reads for variables, jobs, and process-definition XML ([#529](https://github.com/nanobpm/nano-ide/issues/529)) ([fb6b0e1](https://github.com/nanobpm/nano-ide/commit/fb6b0e1055c126044770873fc6125522d8eafa84))
+
 ## [0.88.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.88.0...@nanobpm/urban-0.88.1) (2026-08-31)
 
 

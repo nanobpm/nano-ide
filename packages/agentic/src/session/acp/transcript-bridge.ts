@@ -47,11 +47,22 @@ const ACP_ROLE_TO_TRANSCRIPT: Readonly<Record<"assistant" | "reasoning" | "user"
  * textual `content`: a string is carried verbatim, `null`/`undefined` omit `content` entirely, and any
  * other JSON value is serialised so the derived tool card always shows the outcome. Never `undefined`
  * inside the encoded object — an omitted `content` is simply left off the event.
+ *
+ * Serialisation is total: `result` is opaque wire data, so a value `JSON.stringify` rejects (a
+ * `BigInt`, a circular reference, a `toJSON` that throws) must NOT abort the producer/ingestion stream
+ * for one bad tool result — the bridge is documented "pure and total". Such a value falls back to its
+ * `String(result)` form so the tool card still shows an outcome instead of the update crashing.
  */
 function toolResultContent(result: unknown): string | undefined {
   if (result === undefined || result === null) return undefined;
   if (typeof result === "string") return result;
-  return JSON.stringify(result);
+  try {
+    const serialised = JSON.stringify(result);
+    // `JSON.stringify` returns `undefined` for a lone `undefined`/function/symbol; keep `content` total.
+    return serialised === undefined ? String(result) : serialised;
+  } catch {
+    return String(result);
+  }
 }
 
 /**

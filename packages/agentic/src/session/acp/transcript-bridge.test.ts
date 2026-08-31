@@ -83,6 +83,36 @@ for (const vector of ACP_TRANSCRIPT_VECTORS) {
   });
 }
 
+// --- Totality guard: a JSON.stringify-hostile tool result must NOT abort the stream. --------------
+//
+// `acpUpdateToTranscriptChunk` is documented "pure and total": every input yields a chunk or `null`,
+// never a throw. A tool-result's `result` is opaque wire data, so a value `JSON.stringify` rejects (a
+// `BigInt`, a circular reference, a `toJSON` that throws) must not crash a producer/ingestion stream
+// for one bad tool result. This pins that the bad value falls back to `String(result)` and still
+// derives a tool card, rather than propagating the `TypeError`.
+
+test("TOTAL: a JSON.stringify-hostile tool result falls back to a string instead of throwing", () => {
+  const circular: { self?: unknown } = {};
+  circular.self = circular;
+  const hostileResults: readonly unknown[] = [
+    9007199254740993n, // BigInt — JSON.stringify throws a TypeError
+    circular, // circular reference — JSON.stringify throws a TypeError
+    { toJSON() { throw new Error("boom"); } }, // a toJSON that throws
+  ];
+
+  for (const rawOutput of hostileResults) {
+    const update = { sessionUpdate: "tool_call_update", toolCallId: "call-hostile", status: "completed", rawOutput };
+    let chunk: string | null = null;
+    assert.doesNotThrow(() => { chunk = acpUpdateToTranscriptChunk(update); }, "the bridge must never throw on a bad tool result");
+    assert.ok(chunk !== null, "a terminal tool_call_update must still produce a chunk");
+
+    const event = parseTranscriptEvent({ offset: 0, chunk: chunk ?? "" });
+    assert.equal(event.kind, "tool-result", "the hostile result still derives a structured tool-result");
+    if (event.kind !== "tool-result") continue;
+    assert.equal(typeof event.content, "string", "content falls back to a string representation");
+  }
+});
+
 // --- Drift guard: the whole vector set derives to non-raw for every core ACP update kind. ---------
 
 test("DRIFT GUARD: every non-ignored ACP update kind round-trips to a non-raw typed event", () => {

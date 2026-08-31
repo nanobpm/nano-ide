@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.88.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.88.0...@nanobpm/urban-0.88.1) (2026-08-31)
+
+
+### Bug Fixes
+
+* **urban:** relay nested App-View postMessages (host-up + sibling-across bridge) ([#519](https://github.com/nanobpm/nano-ide/issues/519)) ([20b4665](https://github.com/nanobpm/nano-ide/commit/20b46653052a2fbdec086353ca4f6e70b4f71123))
+* **urban:** relay nested App-View postMessages (host-up + sibling-across) ([20b4665](https://github.com/nanobpm/nano-ide/commit/20b46653052a2fbdec086353ca4f6e70b4f71123)), closes [#518](https://github.com/nanobpm/nano-ide/issues/518)
+
 ## [0.88.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.87.1...@nanobpm/urban-0.88.0) (2026-08-29)
 
 

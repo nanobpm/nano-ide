@@ -1,6 +1,6 @@
 {
 	"name": "@nanobpm/urban",
-	"version": "0.88.0",
+	"version": "0.88.1",
 	"description": "Urban: build and run code-first apps on Nano — runtime, derivation toolkit, and CLI in one. Author durable processes with @nanobpm/workflow (defineFlow), a typed datasource, forms, triggers and surfaces from a nano.app.json manifest, on Node or Deno.",
 	"license": "Apache-2.0",
 	"type": "module",

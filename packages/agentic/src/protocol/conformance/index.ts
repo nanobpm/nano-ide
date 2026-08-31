@@ -33,3 +33,7 @@ export {
   type ValidControlFrame,
   type MalformedControlFrame,
 } from "./control.ts";
+export {
+  ACP_TRANSCRIPT_VECTORS,
+  type AcpTranscriptVector,
+} from "./transcript.ts";

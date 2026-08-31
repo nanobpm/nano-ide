@@ -38,6 +38,8 @@ export {
   classifyUpdate,
 } from "./normalize.ts";
 
+export { acpUpdateToTranscriptChunk } from "./transcript-bridge.ts";
+
 export {
   AcpConnection,
   type AcpNotificationHandler,

@@ -1230,6 +1230,20 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
     if (!session) {
       const messages = Array.isArray(parsedBody) ? parsedBody : [parsedBody];
       if (!messages.some((m) => isInitializeRequest(m))) {
+        // A session id was supplied but is not (or no longer) resident — e.g. the client is
+        // holding a session minted by a previous process that a restart wiped from the in-memory
+        // map. Per the MCP Streamable-HTTP spec a terminated/unknown session id MUST answer 404 so
+        // the client transparently re-initializes; only a genuinely missing id is a 400 bad client.
+        if (sessionId) {
+          return json(
+            {
+              jsonrpc: "2.0",
+              error: { code: -32001, message: `Session not found: unknown or expired ${SESSION_HEADER}.` },
+              id: null,
+            },
+            404,
+          );
+        }
         return json(
           {
             jsonrpc: "2.0",

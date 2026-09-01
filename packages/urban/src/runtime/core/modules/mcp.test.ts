@@ -251,6 +251,40 @@ test("a POST without a session and without an initialize request is a 400", asyn
   assert.equal(res.status, 400);
 });
 
+test("a tools/call carrying an unknown/stale mcp-session-id is a 404, not a 400 (restart recovery)", async () => {
+  // A restart wipes the in-memory sessions map; a client still holding a session id from the
+  // previous process hits this branch. Per the MCP Streamable-HTTP spec the correct signal is 404
+  // (session terminated/expired) so the client transparently re-initializes — a 400 leaves the
+  // client hanging until its own request timeout instead of auto-reconnecting.
+  const { router } = buildHarness();
+  const res = await router(
+    mcpPost(
+      { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "listInvoices", arguments: {} } },
+      { "mcp-session-id": "stale-session-from-a-previous-process" },
+    ),
+  );
+  assert.equal(res.status, 404, `an unknown session id must be 404, got ${res.status}: ${res.body}`);
+});
+
+test("a present-but-unknown mcp-session-id WITH an initialize body still mints a fresh session", async () => {
+  // The client is already reconnecting — carrying a stale id alongside an initialize must not be
+  // rejected; it establishes a brand-new session exactly as a bare initialize would.
+  const { router } = buildHarness();
+  const res = await router(
+    mcpPost(
+      {
+        jsonrpc: "2.0",
+        id: 0,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "test", version: "1.0" } },
+      },
+      { "mcp-session-id": "stale-session-from-a-previous-process" },
+    ),
+  );
+  assert.equal(res.status ?? 200, 200, `initialize with a stale id must be 200, got ${res.status}: ${res.body}`);
+  assert.ok(res.headers?.["mcp-session-id"], "a fresh session id must be assigned");
+});
+
 // ---- tool projection --------------------------------------------------------------------------
 
 test("every app operation projects to a tool; read tools are annotated read-only, mutating ones destructive", async () => {

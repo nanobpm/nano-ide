@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.90.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.90.0...@nanobpm/urban-0.90.1) (2026-09-01)
+
+
+### Bug Fixes
+
+* **urban/mcp:** return 404 (not 400) for an unknown/stale mcp-session-id so clients auto-reconnect after a restart ([#539](https://github.com/nanobpm/nano-ide/issues/539)) ([3d0a5b3](https://github.com/nanobpm/nano-ide/commit/3d0a5b31df7e832c0f852a86ccc9746461bc9bbd))
+
 ## [0.90.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.89.0...@nanobpm/urban-0.90.0) (2026-08-31)
 
 

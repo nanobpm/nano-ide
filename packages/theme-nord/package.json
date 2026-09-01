@@ -1,10 +1,22 @@
 {
   "name": "@nanobpm/nano-ide-theme-nord",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Nord theme pack for the Nano RAD console: arctic, north-bluish dark and light themes built on the Nord palette.",
   "license": "Apache-2.0",
-  "keywords": ["nano-ide-ext", "nano-ide-theme", "nanobpm"],
-  "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/theme-nord" },
-  "files": ["nano-ide.ext.json"]
+  "keywords": [
+    "nano-ide-ext",
+    "nano-ide-theme",
+    "nanobpm"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/theme-nord"
+  },
+  "files": [
+    "nano-ide.ext.json"
+  ]
 }

@@ -1,10 +1,28 @@
 {
   "name": "@nanobpm/nano-ide-example-java-throughput",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "Distributable example app for the Nano RAD IDE: a Java + Maven throughput demo that runs one code path against Camunda 8 (REST/gRPC) or Nano (Falcon) — pick the transport by swapping one dependency.",
   "license": "Apache-2.0",
-  "keywords": ["nano-ide-ext", "nano-ide-example", "nanobpm", "camunda", "java", "falcon", "throughput"],
-  "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/example-java-throughput" },
-  "files": ["nano-ide.ext.json", "app", "README.md"]
+  "keywords": [
+    "nano-ide-ext",
+    "nano-ide-example",
+    "nanobpm",
+    "camunda",
+    "java",
+    "falcon",
+    "throughput"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/example-java-throughput"
+  },
+  "files": [
+    "nano-ide.ext.json",
+    "app",
+    "README.md"
+  ]
 }

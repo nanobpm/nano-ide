@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/nano-ide-lang-java",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Java + Maven language pack for the Nano RAD IDE: .java grammar, mvn toolchain, and a Camunda client starter project (works against Camunda 8 out of the box; drops in a Falcon-aware client for Nano).",
   "license": "Apache-2.0",
   "keywords": [

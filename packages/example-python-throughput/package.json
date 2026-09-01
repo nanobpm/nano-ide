@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/nano-ide-example-python-throughput",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Distributable example app for the Nano RAD IDE: a Python throughput demo (async producer + JobWorker on the official camunda-orchestration-sdk) that runs one code path against Camunda 8 (REST) or Nano (Falcon).",
   "license": "Apache-2.0",
   "keywords": [

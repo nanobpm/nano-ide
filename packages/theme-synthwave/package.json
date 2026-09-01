@@ -1,10 +1,22 @@
 {
   "name": "@nanobpm/nano-ide-theme-synthwave",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Synthwave '84 theme pack for the Nano RAD console: neon pink and cyan on a retro-future midnight purple.",
   "license": "Apache-2.0",
-  "keywords": ["nano-ide-ext", "nano-ide-theme", "nanobpm"],
-  "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/theme-synthwave" },
-  "files": ["nano-ide.ext.json"]
+  "keywords": [
+    "nano-ide-ext",
+    "nano-ide-theme",
+    "nanobpm"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/theme-synthwave"
+  },
+  "files": [
+    "nano-ide.ext.json"
+  ]
 }

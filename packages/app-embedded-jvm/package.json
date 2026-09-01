@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/nano-ide-app-embedded-jvm",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "Embedded Nano JVM app pack for the Nano RAD IDE: run the Nano BPMN engine in-process inside the JVM via io.github.jwulf:nano-bernd, driven by an outer stock Camunda REST job worker (Camunda 8, Self-Managed, or Nano gateway).",
   "license": "Apache-2.0",
   "keywords": [

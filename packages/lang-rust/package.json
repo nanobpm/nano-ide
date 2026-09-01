@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/nano-ide-lang-rust",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Rust language pack for the Nano RAD IDE: .rs grammar, cargo toolchain, and a Rust starter project template.",
   "license": "Apache-2.0",
   "scripts": {

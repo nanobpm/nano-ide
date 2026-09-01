@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/nano-ide-ext-types",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "description": "TypeScript types for the nano-ide.ext.json extension manifest (ADR 0007).",
   "license": "Apache-2.0",
   "type": "module",

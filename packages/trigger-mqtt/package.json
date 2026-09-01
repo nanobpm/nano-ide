@@ -1,13 +1,30 @@
 {
   "name": "@nanobpm/nano-ide-trigger-mqtt",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "MQTT trigger source pack for the Nano/Urban RAD console: subscribe to broker topics and drive process instances from messages (ADR 0025).",
   "license": "Apache-2.0",
   "type": "module",
-  "keywords": ["nano-ide-ext", "nano-ide-trigger", "nanobpm", "mqtt", "iot", "home-automation"],
-  "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/trigger-mqtt" },
-  "files": ["nano-ide.ext.json", "driver.ts", "README.md"],
+  "keywords": [
+    "nano-ide-ext",
+    "nano-ide-trigger",
+    "nanobpm",
+    "mqtt",
+    "iot",
+    "home-automation"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/trigger-mqtt"
+  },
+  "files": [
+    "nano-ide.ext.json",
+    "driver.ts",
+    "README.md"
+  ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },

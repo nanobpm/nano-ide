@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/nano-ide-example-csharp-throughput",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Distributable example app for the Nano RAD IDE: a C# throughput demo (parallel producer + JobWorker on the official Camunda.Orchestration.Sdk) that runs one code path against Camunda 8 (REST) or Nano (Falcon).",
   "license": "Apache-2.0",
   "keywords": [

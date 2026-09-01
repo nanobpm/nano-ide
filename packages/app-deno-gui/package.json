@@ -1,10 +1,24 @@
 {
   "name": "@nanobpm/nano-ide-app-deno-gui",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Deno GUI app pack for the Nano RAD IDE: a served-UI binary template (Deno.serve) for process applications.",
   "license": "Apache-2.0",
-  "keywords": ["nano-ide-ext", "nano-ide-app", "nanobpm"],
-  "publishConfig": { "access": "public" },
-  "repository": { "type": "git", "url": "git+https://github.com/nanobpm/nano-ide.git", "directory": "packages/app-deno-gui" },
-  "files": ["nano-ide.ext.json", "templates", "README.md"]
+  "keywords": [
+    "nano-ide-ext",
+    "nano-ide-app",
+    "nanobpm"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nanobpm/nano-ide.git",
+    "directory": "packages/app-deno-gui"
+  },
+  "files": [
+    "nano-ide.ext.json",
+    "templates",
+    "README.md"
+  ]
 }

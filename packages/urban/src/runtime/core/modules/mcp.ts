@@ -1238,7 +1238,7 @@ export function mountMcp(ctx: RuntimeContext, app: AppApi, apiRoutes: Route[]): 
           return json(
             {
               jsonrpc: "2.0",
-              error: { code: -32001, message: "Session not found: unknown or expired mcp-session-id." },
+              error: { code: -32001, message: `Session not found: unknown or expired ${SESSION_HEADER}.` },
               id: null,
             },
             404,

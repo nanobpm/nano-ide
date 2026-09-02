@@ -95,7 +95,47 @@ test("a registering worker appears in the registry with presence + host/family v
   assert.equal(row?.identity, "peer-a");
   assert.deepEqual(row?.capability, { family: "anthropic", host: "mac-1" });
   // The enrolment is mirrored onto S1's in-memory connection registry too.
-  assert.deepEqual(hub.registry.get("c1")?.presence, { instance: "w-1", capability: { family: "anthropic", host: "mac-1" } });
+  assert.deepEqual(
+    hub.registry.get("c1")?.presence,
+    { instances: new Map([["w-1", { family: "anthropic", host: "mac-1" }]]) },
+  );
+
+  await hub.close();
+});
+
+test("one connection multiplexes N instances; per-instance deregister unbinds one; disconnect drops all", async () => {
+  const transport = new FakeTransport();
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, { sweepIntervalMs: 0 });
+
+  // A single per-host supervisor connection registers THREE distinct workers.
+  const conn = connect(transport, "c1", "supervisor-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 1));
+  conn.receive(frame("register", { instance: "w-2", capability: { host: "mac-1" } }, 2));
+  conn.receive(frame("register", { instance: "w-3", capability: { host: "mac-1" } }, 3));
+  await tick();
+
+  // All three attribute to the SAME connection, resolved by explicit instance.
+  assert.deepEqual([...hub.registry.instancesForConnection("c1")].sort(), ["w-1", "w-2", "w-3"]);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
+  assert.equal(store.get("w-2")?.connectionId, "c1");
+  assert.equal(store.get("w-3")?.connectionId, "c1");
+
+  // A per-instance deregister unbinds ONLY that instance; the others stay live.
+  conn.receive(frame("deregister", { instance: "w-2" }, 4));
+  await tick();
+  assert.deepEqual([...hub.registry.instancesForConnection("c1")].sort(), ["w-1", "w-3"]);
+  assert.equal(store.get("w-2"), undefined);
+  assert.ok(store.get("w-1") !== undefined);
+
+  // Disconnect drops ALL remaining instances on that connection.
+  const dropped = store.removeByConnection("c1").sort();
+  assert.deepEqual(dropped, ["w-1", "w-3"]);
+  hub.registry.remove("c1");
+  assert.deepEqual([...hub.registry.instancesForConnection("c1")], []);
+  assert.equal(store.count(), 0);
 
   await hub.close();
 });

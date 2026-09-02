@@ -38,7 +38,7 @@ export interface HubConnection {
   readonly identity: string;
   /** What the transport captured at connect time. */
   readonly handshake: HandshakeRequest;
-  /** The shared registry — handlers attach presence via `registry.setPresence(id, …)`. */
+  /** The shared registry — handlers attach presence via `registry.addInstance(id, …)`. */
   readonly registry: ConnectionRegistry;
   /** Encode and send one frame back on this connection. */
   send(frame: Frame): void;

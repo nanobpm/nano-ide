@@ -167,4 +167,44 @@ export const GOLDEN_FRAMES: readonly GoldenFrame[] = [
     },
     hex: "4e4101020700000009000000427b2273747265616d223a226a6f622d31323233222c226f6666736574223a342c226368756e6b223a22e29c9320636166c3a920e2809420e697a5e69cace8aa9e227d",
   },
+  {
+    // Second `register` on the SAME connection carrying a DISTINCT instance —
+    // the multi-instance-per-connection shape a supervisor multiplexes. Paired
+    // with `register-worker-to-hub` (instance w-abc123) it is a two-instance
+    // register sequence for one connection.
+    name: "register-multiplexed-second-instance",
+    direction: "worker->hub",
+    frame: {
+      lane: "control",
+      family: "register",
+      seq: 2,
+      payload: {
+        instance: "w-def456",
+        capability: { cognition: "sonnet", weight: 2, family: "anthropic", host: "mac-01" },
+      },
+    },
+    hex: "4e41010001000000020000006b7b22696e7374616e6365223a22772d646566343536222c226361706162696c697479223a7b22636f676e6974696f6e223a22736f6e6e6574222c22776569676874223a322c2266616d696c79223a22616e7468726f706963222c22686f7374223a226d61632d3031227d7d",
+  },
+  {
+    name: "claim-worker-to-hub",
+    direction: "worker->hub",
+    frame: {
+      lane: "control",
+      family: "claim",
+      seq: 11,
+      payload: { instance: "w-abc123", jobKey: "8519" },
+    },
+    hex: "4e410100080000000b000000277b22696e7374616e6365223a22772d616263313233222c226a6f624b6579223a2238353139227d",
+  },
+  {
+    name: "release-worker-to-hub",
+    direction: "worker->hub",
+    frame: {
+      lane: "control",
+      family: "release",
+      seq: 12,
+      payload: { instance: "w-abc123", jobKey: "8519" },
+    },
+    hex: "4e410100090000000c000000277b22696e7374616e6365223a22772d616263313233222c226a6f624b6579223a2238353139227d",
+  },
 ];

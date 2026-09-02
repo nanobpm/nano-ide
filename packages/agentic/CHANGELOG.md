@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.10.0...@nanobpm/agentic-0.11.0) (2026-09-02)
+
+
+### Features
+
+* **agentic:** add claim/release ownership frames + multi-instance-per-connection presence ([b382692](https://github.com/nanobpm/nano-ide/commit/b3826926abb5cbebada6fc30a4a094b5ba1c4e18)), closes [#542](https://github.com/nanobpm/nano-ide/issues/542)
+* **agentic:** claim/release ownership frames + multi-instance-per-connection presence ([#543](https://github.com/nanobpm/nano-ide/issues/543)) ([b382692](https://github.com/nanobpm/nano-ide/commit/b3826926abb5cbebada6fc30a4a094b5ba1c4e18))
+
 ## [0.10.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.9.0...@nanobpm/agentic-0.10.0) (2026-08-31)
 
 

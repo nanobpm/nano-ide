@@ -119,3 +119,25 @@ test("non-object payloads are rejected for every family", () => {
   assert.ok(!validatePayload("heartbeat", "w").ok);
   assert.ok(!validatePayload("relay", []).ok);
 });
+
+test("claim/release accept { instance, jobKey } and reject malformed variants", () => {
+  for (const family of ["claim", "release"] as const) {
+    assert.ok(validatePayload(family, { instance: "w-1", jobKey: "8519" }).ok, family);
+    // Extra properties are tolerated (structural, forward-compatible).
+    assert.ok(validatePayload(family, { instance: "w-1", jobKey: "8519", extra: true }).ok, family);
+
+    const missingJob = validatePayload(family, { instance: "w-1" });
+    assert.ok(!missingJob.ok, `${family} missing jobKey`);
+    if (!missingJob.ok) assert.ok(missingJob.errors.some((e) => e.code === "bad-job-key"));
+
+    const missingInstance = validatePayload(family, { jobKey: "8519" });
+    assert.ok(!missingInstance.ok, `${family} missing instance`);
+    if (!missingInstance.ok) assert.ok(missingInstance.errors.some((e) => e.code === "bad-instance"));
+
+    assert.ok(!validatePayload(family, { instance: "", jobKey: "8519" }).ok, `${family} empty instance`);
+    assert.ok(!validatePayload(family, { instance: "w-1", jobKey: "" }).ok, `${family} empty jobKey`);
+    assert.ok(!validatePayload(family, { instance: 1, jobKey: 2 }).ok, `${family} wrong types`);
+    assert.ok(!validatePayload(family, null).ok, `${family} null`);
+    assert.ok(!validatePayload(family, "nope").ok, `${family} non-object`);
+  }
+});

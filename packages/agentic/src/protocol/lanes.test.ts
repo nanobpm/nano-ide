@@ -19,8 +19,27 @@ import {
 test("MESSAGE_FAMILIES is the exact canonical set", () => {
   assert.deepEqual(
     [...MESSAGE_FAMILIES],
-    ["register", "heartbeat", "deregister", "serve", "demand", "blackboard", "relay"],
+    ["register", "heartbeat", "deregister", "serve", "demand", "blackboard", "relay", "claim", "release"],
   );
+});
+
+test("appended families keep the original codes stable and add claim=8/release=9", () => {
+  // Codes are an append-only wire contract: 1–7 MUST NOT move; 8/9 are the new
+  // ownership frames.
+  assert.deepEqual(
+    { register: 1, heartbeat: 2, deregister: 3, serve: 4, demand: 5, blackboard: 6, relay: 7 },
+    {
+      register: FAMILY_CODES.register,
+      heartbeat: FAMILY_CODES.heartbeat,
+      deregister: FAMILY_CODES.deregister,
+      serve: FAMILY_CODES.serve,
+      demand: FAMILY_CODES.demand,
+      blackboard: FAMILY_CODES.blackboard,
+      relay: FAMILY_CODES.relay,
+    },
+  );
+  assert.equal(FAMILY_CODES.claim, 8);
+  assert.equal(FAMILY_CODES.release, 9);
 });
 
 test("family codes are a bijection with the family set", () => {
@@ -74,6 +93,29 @@ test("compareFrameOrder: a bulk storm never head-of-line-blocks control/interact
   ];
   const drained = [...queue].sort(compareFrameOrder).map((f) => f.tag);
   assert.deepEqual(drained, ["heartbeat", "blackboard", "bulk-d", "bulk-a", "bulk-b", "bulk-c"]);
+});
+
+test("compareFrameOrder: an ownership claim/release on the control lane is never head-of-line-blocked by a relay-chunk storm", () => {
+  // The failure this guards: a burst of bulk relay chunks must not delay an
+  // ownership frame. `claim`/`release` ride the control lane, so even enqueued
+  // AFTER a storm of relay bulk chunks they drain first.
+  const queue: Array<{ lane: QosLane; seq: number; tag: string }> = [
+    { lane: "bulk", seq: 1, tag: "relay-chunk-1" },
+    { lane: "bulk", seq: 2, tag: "relay-chunk-2" },
+    { lane: "bulk", seq: 3, tag: "relay-chunk-3" },
+    { lane: "bulk", seq: 4, tag: "relay-chunk-4" },
+    { lane: "control", seq: 100, tag: "claim" },
+    { lane: "control", seq: 101, tag: "release" },
+  ];
+  const drained = [...queue].sort(compareFrameOrder).map((f) => f.tag);
+  assert.deepEqual(drained, [
+    "claim",
+    "release",
+    "relay-chunk-1",
+    "relay-chunk-2",
+    "relay-chunk-3",
+    "relay-chunk-4",
+  ]);
 });
 
 test("compareFrameOrder: within a lane, lower seq drains first", () => {

@@ -126,7 +126,7 @@ test("routes an inbound frame to the registered family handler", async () => {
   hub.registerFamilyHandler("register", (frame, ctx) => {
     const payload = frame.payload;
     const instance = typeof payload === "object" && payload !== null && "instance" in payload ? payload.instance : "?";
-    ctx.registry.setPresence(ctx.id, { instance: String(instance) });
+    ctx.registry.addInstance(ctx.id, String(instance));
     received.push(`register:${ctx.id}`);
   });
 
@@ -137,7 +137,7 @@ test("routes an inbound frame to the registered family handler", async () => {
   await tick();
 
   assert.deepEqual(received, ["register:c1"]);
-  assert.equal(hub.registry.get("c1")?.presence.instance, "w-1");
+  assert.deepEqual([...hub.registry.instancesForConnection("c1")], ["w-1"]);
   await hub.close();
 });
 

@@ -36,7 +36,7 @@ test("a client connects, authenticates, is tracked, and its frame routes to a fa
     resolveRouted = resolve;
   });
   hub.registerFamilyHandler("register", (_frame, ctx) => {
-    ctx.registry.setPresence(ctx.id, { instance: "w-1" });
+    ctx.registry.addInstance(ctx.id, "w-1");
     resolveRouted(ctx);
   });
 
@@ -53,7 +53,7 @@ test("a client connects, authenticates, is tracked, and its frame routes to a fa
   const ctx = await routed;
   assert.ok(ctx.identity.length > 0); // resolved from the peer's remote address
   assert.equal(hub.connectionCount, 1);
-  assert.equal(hub.registry.get(ctx.id)?.presence.instance, "w-1");
+  assert.deepEqual([...hub.registry.instancesForConnection(ctx.id)], ["w-1"]);
 });
 
 test("a client may present its capability credential via a mixed-case header", async (t) => {

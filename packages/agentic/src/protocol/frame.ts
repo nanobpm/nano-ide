@@ -29,7 +29,7 @@ export interface Frame {
  *   0       2     magic       0x4E41 ("NA")
  *   2       1     version     = 1
  *   3       1     lane code   0=control | 1=interactive | 2=bulk
- *   4       1     family code 1..7 (see FAMILY_CODES)
+ *   4       1     family code 1..9 (see FAMILY_CODES)
  *   5       4     seq         uint32
  *   9       4     payloadLen  uint32 (bytes of UTF-8 JSON that follow)
  *   13      N     payload     UTF-8 JSON

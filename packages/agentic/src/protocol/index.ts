@@ -74,6 +74,8 @@ export {
   type DeregisterPayload,
   type ServePayload,
   type DemandPayload,
+  type ClaimPayload,
+  type ReleasePayload,
   type BlackboardPayload,
   type BlackboardOp,
   type RelayPayload,
@@ -103,3 +105,14 @@ export {
 } from "./control.ts";
 
 export { bytesToHex, hexToBytes } from "./hex.ts";
+
+export {
+  PROTOCOL_VERSION,
+  PROTOCOL_FEATURES,
+  LOCAL_ADVERTISEMENT,
+  parseAdvertisement,
+  negotiate,
+  type ProtocolFeature,
+  type ProtocolAdvertisement,
+  type NegotiatedProtocol,
+} from "./negotiation.ts";

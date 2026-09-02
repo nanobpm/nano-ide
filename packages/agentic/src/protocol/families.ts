@@ -12,6 +12,7 @@
  *  - `demand`                                — hub → observers (demand×supply)
  *  - `blackboard`                            — both directions (coordination)
  *  - `relay`                                 — both directions (terminal bytes)
+ *  - `claim` / `release`                     — worker → hub (job ownership)
  */
 export const MESSAGE_FAMILIES = [
   "register",
@@ -21,6 +22,8 @@ export const MESSAGE_FAMILIES = [
   "demand",
   "blackboard",
   "relay",
+  "claim",
+  "release",
 ] as const;
 
 export type MessageFamily = (typeof MESSAGE_FAMILIES)[number];
@@ -43,6 +46,8 @@ export const FAMILY_CODES = {
   demand: 5,
   blackboard: 6,
   relay: 7,
+  claim: 8,
+  release: 9,
 } as const satisfies Record<MessageFamily, number>;
 
 const CODE_TO_FAMILY: ReadonlyMap<number, MessageFamily> = new Map(

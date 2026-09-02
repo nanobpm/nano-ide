@@ -17,7 +17,7 @@ test("tracks a connection with connectedAt/lastSeen and reports size", () => {
   assert.equal(entry.identity, "alice");
   assert.equal(entry.connectedAt, 1000);
   assert.equal(entry.lastSeen, 1000);
-  assert.deepEqual(entry.presence, {});
+  assert.deepEqual(entry.presence, { instances: new Map() });
   assert.ok(registry.has("c1"));
 });
 
@@ -31,16 +31,34 @@ test("touch advances liveness to now", () => {
   assert.equal(registry.get("c1")?.lastSeen, 1050);
 });
 
-test("setPresence merges S2's presence detail onto a live connection", () => {
+test("addInstance binds instances + capabilities; instancesForConnection resolves them", () => {
   const registry = new ConnectionRegistry({ ttlMs: 100, clock: fakeClock() });
   registry.add("c1", "alice");
 
-  registry.setPresence("c1", { instance: "w-1" });
-  registry.setPresence("c1", { capability: { cognition: "opus", family: "anthropic" } });
+  // One connection carries MANY instances (a supervisor multiplexing N workers).
+  registry.addInstance("c1", "w-1", { cognition: "opus", family: "anthropic" });
+  registry.addInstance("c1", "w-2", { cognition: "sonnet" });
 
-  const entry = registry.get("c1");
-  assert.equal(entry?.presence.instance, "w-1");
-  assert.equal(entry?.presence.capability?.cognition, "opus");
+  assert.deepEqual([...registry.instancesForConnection("c1")].sort(), ["w-1", "w-2"]);
+  assert.equal(registry.capabilityForInstance("c1", "w-1")?.cognition, "opus");
+  assert.equal(registry.capabilityForInstance("c1", "w-2")?.cognition, "sonnet");
+  assert.equal(registry.capabilityForInstance("c1", "w-unknown"), undefined);
+});
+
+test("removeInstance unbinds a single instance; remove drops all instances on the connection", () => {
+  const registry = new ConnectionRegistry({ ttlMs: 100, clock: fakeClock() });
+  registry.add("c1", "alice");
+  registry.addInstance("c1", "w-1");
+  registry.addInstance("c1", "w-2");
+  registry.addInstance("c1", "w-3");
+
+  assert.equal(registry.removeInstance("c1", "w-2"), true);
+  assert.equal(registry.removeInstance("c1", "w-2"), false); // idempotent
+  assert.deepEqual([...registry.instancesForConnection("c1")].sort(), ["w-1", "w-3"]);
+
+  // Dropping the connection drops ALL its remaining instances.
+  registry.remove("c1");
+  assert.deepEqual([...registry.instancesForConnection("c1")], []);
 });
 
 test("sweep ages out only connections past the TTL and returns them", () => {
@@ -64,10 +82,12 @@ test("sweep ages out only connections past the TTL and returns them", () => {
   assert.equal(registry.size, 1);
 });
 
-test("touch/setPresence/remove on an unknown id are safe no-ops", () => {
+test("touch/addInstance/removeInstance/remove on an unknown id are safe no-ops", () => {
   const registry = new ConnectionRegistry({ clock: fakeClock() });
   registry.touch("nope");
-  registry.setPresence("nope", { instance: "x" });
+  registry.addInstance("nope", "x");
+  assert.equal(registry.removeInstance("nope", "x"), false);
+  assert.deepEqual([...registry.instancesForConnection("nope")], []);
   assert.equal(registry.remove("nope"), undefined);
   assert.equal(registry.size, 0);
 });

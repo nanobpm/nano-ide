@@ -45,6 +45,30 @@ export interface DemandPayload {
   readonly missing: readonly string[];
 }
 
+/**
+ * A worker declares it now OWNS a job. `claim` opens the authoritative ownership
+ * window; its matching {@link ReleasePayload} closes it. `instance` is the
+ * OWNING worker — carried EXPLICITLY in the frame, never inferred from the
+ * connection id — which is what lets one supervisor connection multiplex the
+ * ownership frames of N distinct workers. Idempotent: a duplicate `claim` for
+ * the same `{ instance, jobKey }` is a no-op re-assertion.
+ */
+export interface ClaimPayload {
+  readonly instance: string;
+  readonly jobKey: string;
+}
+
+/**
+ * A worker declares it has RELEASED a job (the job finished, failed, or moved
+ * on). Idempotent: a duplicate or late `release` — including one with no
+ * preceding `claim` — is a no-op. `instance` is carried explicitly, exactly as
+ * for {@link ClaimPayload}.
+ */
+export interface ReleasePayload {
+  readonly instance: string;
+  readonly jobKey: string;
+}
+
 export type BlackboardOp = "append" | "read";
 
 export interface BlackboardPayload {
@@ -201,6 +225,15 @@ function validateBlackboard(p: Record<string, unknown>, errors: PayloadError[]):
   }
 }
 
+function validateOwnership(family: "claim" | "release", p: Record<string, unknown>, errors: PayloadError[]): void {
+  if (!nonEmptyString(p.instance)) {
+    errors.push({ code: "bad-instance", message: `${family}.instance must be a non-empty string` });
+  }
+  if (!nonEmptyString(p.jobKey)) {
+    errors.push({ code: "bad-job-key", message: `${family}.jobKey must be a non-empty string` });
+  }
+}
+
 function validateRelay(p: Record<string, unknown>, errors: PayloadError[]): void {
   const op = p.op;
   // No `op`: a DELIVERY data chunk (hub -> consumer) — `{ stream, offset, chunk }`.
@@ -297,6 +330,12 @@ export function validatePayload(family: MessageFamily, payload: unknown): Payloa
       break;
     case "relay":
       validateRelay(payload, errors);
+      break;
+    case "claim":
+      validateOwnership("claim", payload, errors);
+      break;
+    case "release":
+      validateOwnership("release", payload, errors);
       break;
   }
 

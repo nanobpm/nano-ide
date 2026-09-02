@@ -9,8 +9,8 @@
  *
  * On `register` it writes a durable presence row (via {@link PresenceStore}) and
  * mirrors instance+capability onto S1's in-memory connection registry
- * (`ctx.registry.setPresence`). `heartbeat` refreshes the row's liveness;
- * `deregister` removes it. Rows the fleet stops heartbeating age out on the
+ * (`ctx.registry.addInstance`). `heartbeat` refreshes the row's liveness;
+ * `deregister` removes it (and unbinds the instance from the registry). Rows the fleet stops heartbeating age out on the
  * presence TTL via the sweep this module schedules.
  */
 import { validatePayload } from "../protocol/index.ts";
@@ -134,8 +134,10 @@ export function attachPresenceFamily(
       throw err;
     }
     // Mirror the enrolment onto S1's in-memory connection registry so a live
-    // connection carries its instance+capability without a DB read.
-    ctx.registry.setPresence(ctx.id, { instance, capability });
+    // connection carries all its instances + their capabilities without a DB
+    // read. One connection may bind many instances (a supervisor multiplexes N
+    // workers), so this ADDs the instance rather than overwriting a singular one.
+    ctx.registry.addInstance(ctx.id, instance, capability);
   });
 
   hub.registerFamilyHandler("heartbeat", (frame: Frame, ctx: HubConnection) => {
@@ -174,6 +176,10 @@ export function attachPresenceFamily(
       return;
     }
     store.deregister(instance, ctx.identity);
+    // Drop the instance from the connection's in-memory presence set too, so a
+    // per-instance deregister on a multiplexed connection unbinds only that one
+    // instance (the others on the connection stay live).
+    ctx.registry.removeInstance(ctx.id, instance);
   });
 
   const sweepNow = (): PresenceRow[] => {

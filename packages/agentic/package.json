@@ -44,6 +44,11 @@
       "default": "./dist/channel/index.js"
     },
     "./source/channel": "./src/channel/index.ts",
+    "./emit": {
+      "types": "./dist/emit/index.d.ts",
+      "default": "./dist/emit/index.js"
+    },
+    "./source/emit": "./src/emit/index.ts",
     "./presence": {
       "types": "./dist/presence/index.d.ts",
       "default": "./dist/presence/index.js"

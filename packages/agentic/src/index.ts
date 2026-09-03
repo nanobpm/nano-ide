@@ -8,6 +8,7 @@
  */
 export * as protocol from "./protocol/index.ts";
 export * as channel from "./channel/index.ts";
+export * as emit from "./emit/index.ts";
 export * as presence from "./presence/index.ts";
 export * as vocab from "./vocab/index.ts";
 export * as demand from "./demand/index.ts";

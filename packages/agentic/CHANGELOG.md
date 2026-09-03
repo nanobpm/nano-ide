@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.11.0...@nanobpm/agentic-0.12.0) (2026-09-03)
+
+
+### Features
+
+* **agentic:** client-side ownership-frame emit client + multiplexed multi-instance host connection (Closes [#545](https://github.com/nanobpm/nano-ide/issues/545)) ([#546](https://github.com/nanobpm/nano-ide/issues/546)) ([254fe16](https://github.com/nanobpm/nano-ide/commit/254fe1638f5e03662ed78b33b214075177d0e8c4))
+
 ## [0.11.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.10.0...@nanobpm/agentic-0.11.0) (2026-09-02)
 
 

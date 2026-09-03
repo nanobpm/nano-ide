@@ -74,6 +74,16 @@ function byFamily(frames: Frame[], family: MessageFamily): Frame[] {
   return frames.filter((f) => f.family === family);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+/** Read a field off an (unknown) frame payload without an `as` cast. */
+function payloadField(payload: unknown, key: string): unknown {
+  assert.ok(isRecord(payload), "expected an object payload");
+  return payload[key];
+}
+
 test("N instances register + heartbeat over ONE connection, each tagged explicitly", () => {
   const { client, sockets, current } = harness();
   client.open();
@@ -93,15 +103,15 @@ test("N instances register + heartbeat over ONE connection, each tagged explicit
   const registers = byFamily(frames, "register");
   const heartbeats = byFamily(frames, "heartbeat");
   assert.deepEqual(
-    registers.map((f) => (f.payload as { instance: string }).instance),
+    registers.map((f) => payloadField(f.payload, "instance")),
     ["inst-a", "inst-b", "inst-c"],
   );
   assert.deepEqual(
-    heartbeats.map((f) => (f.payload as { instance: string }).instance),
+    heartbeats.map((f) => payloadField(f.payload, "instance")),
     ["inst-a", "inst-b", "inst-c"],
   );
   // Capability travels on the register frame.
-  assert.deepEqual((registers[0].payload as { capability: unknown }).capability, {
+  assert.deepEqual(payloadField(registers[0].payload, "capability"), {
     cognition: "opus",
     weight: 3,
   });
@@ -178,7 +188,7 @@ test("reconnect re-registers all instances and re-claims all in-flight jobs befo
   const resyncSlice = controlFamilies.slice(0, firstRelay);
   assert.deepEqual(resyncSlice, ["register", "register", "claim"]);
 
-  const reRegisters = byFamily(frames, "register").map((f) => (f.payload as { instance: string }).instance);
+  const reRegisters = byFamily(frames, "register").map((f) => payloadField(f.payload, "instance"));
   assert.deepEqual(reRegisters, ["inst-a", "inst-b"]);
   const reClaims = byFamily(frames, "claim").map((f) => f.payload);
   assert.deepEqual(reClaims, [{ instance: "inst-a", jobKey: "job-1" }]); // job-2 was released, not re-claimed
@@ -187,8 +197,33 @@ test("reconnect re-registers all instances and re-claims all in-flight jobs befo
   const relays = byFamily(frames, "relay");
   assert.equal(relays.length, 1);
   assert.equal(relays[0].lane, "bulk");
-  assert.equal((relays[0].payload as { incarnation: number }).incarnation, 1);
+  assert.equal(payloadField(relays[0].payload, "incarnation"), 1);
   assert.deepEqual(resumeOrder, ["onOpen", "onOpen"]); // fires on the first connect and the reconnect
+});
+
+test("a synchronous scheduler + repeatedly failing connect never recurses into stack overflow", () => {
+  // Regression guard for the reconnect failure mode: under a synchronous
+  // scheduler, a `connect()` that keeps throwing must be retried iteratively —
+  // never via nested `reconnect()->open()->reconnect()` frames that grow the
+  // stack until it blows. The re-entrancy guard flattens that into a loop.
+  const sockets: FakeSocket[] = [];
+  let attempts = 0;
+  const failFor = 5000; // far exceeds any engine call-stack budget if it recursed
+  const client = new AgenticEmitClient({
+    connect: () => {
+      attempts += 1;
+      if (attempts <= failFor) throw new Error("connect refused");
+      const s = new FakeSocket();
+      sockets.push(s);
+      return s;
+    },
+    schedule: (run) => run(),
+    onError: () => {},
+  });
+
+  assert.doesNotThrow(() => client.open());
+  assert.equal(attempts, failFor + 1, "retries iteratively until connect() finally succeeds");
+  assert.equal(sockets.length, 1, "exactly one socket once connect() succeeds");
 });
 
 test("deregister on departure drops the instance and its jobs from resync", () => {
@@ -222,7 +257,7 @@ test("per-instance transcript isolation: two instances' streams never cross", ()
   client.transcript({ instance: "inst-b", stream: "stdout" }, "b-out");
 
   const relays = byFamily(current().frames(), "relay");
-  const streams = relays.map((f) => (f.payload as { stream: string }).stream);
+  const streams = relays.map((f) => payloadField(f.payload, "stream"));
   assert.equal(new Set(streams).size, 2, "same stream name on two instances must not collide");
   assert.notEqual(streams[0], streams[1]);
   assert.equal(streams[0], composeStreamId("inst-a", "stdout"));
@@ -280,6 +315,6 @@ test("emits nothing before the socket is open; a send fault is routed to onError
   failing.register("inst-a", { cognition: "opus" });
   failing.open();
   failing.register("inst-a", { cognition: "opus" }); // send throws → routed to onError
-  assert.ok(errored instanceof Error);
-  assert.match((errored as Error).message, /boom/);
+  if (!(errored instanceof Error)) assert.fail(`expected an Error, got ${String(errored)}`);
+  assert.match(errored.message, /boom/);
 });

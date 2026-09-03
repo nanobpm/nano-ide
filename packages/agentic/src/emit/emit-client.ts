@@ -161,6 +161,8 @@ export class AgenticEmitClient {
   #generation = 0;
   #hasConnected = false;
   #closed = false;
+  #reconnectRunning = false;
+  #reconnectPending = false;
 
   constructor(options: AgenticEmitClientOptions) {
     this.#connect = options.connect;
@@ -212,7 +214,7 @@ export class AgenticEmitClient {
       socket = this.#connect();
     } catch (err) {
       this.#onError?.(err);
-      if (!this.#closed && this.#autoReconnect) this.#schedule(() => this.#reconnect());
+      if (!this.#closed && this.#autoReconnect) this.#scheduleReconnect();
       return;
     }
     this.#socket = socket;
@@ -336,7 +338,40 @@ export class AgenticEmitClient {
       this.#onError?.(err);
     }
     if (this.#closed || !this.#autoReconnect) return;
-    this.#schedule(() => this.#reconnect());
+    this.#scheduleReconnect();
+  }
+
+  /**
+   * Schedule a reconnect through the injected scheduler. A re-entrancy guard
+   * flattens recursion into iteration: while a reconnect is already running, a
+   * nested request (e.g. `connect()` throwing again under a *synchronous*
+   * scheduler) is coalesced into one more loop turn in {@link #runReconnect}
+   * instead of a nested call, so repeated close→reconnect cycles cannot grow the
+   * stack unboundedly regardless of the scheduler's timing.
+   */
+  #scheduleReconnect(): void {
+    if (this.#closed || !this.#autoReconnect) return;
+    if (this.#reconnectRunning) {
+      this.#reconnectPending = true;
+      return;
+    }
+    this.#schedule(() => this.#runReconnect());
+  }
+
+  #runReconnect(): void {
+    if (this.#reconnectRunning) {
+      this.#reconnectPending = true;
+      return;
+    }
+    this.#reconnectRunning = true;
+    try {
+      do {
+        this.#reconnectPending = false;
+        this.#reconnect();
+      } while (this.#reconnectPending && !this.#closed && this.#autoReconnect);
+    } finally {
+      this.#reconnectRunning = false;
+    }
   }
 
   #reconnect(): void {

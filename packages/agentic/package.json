@@ -44,6 +44,11 @@
       "default": "./dist/channel/index.js"
     },
     "./source/channel": "./src/channel/index.ts",
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./source/client": "./src/client/index.ts",
     "./presence": {
       "types": "./dist/presence/index.d.ts",
       "default": "./dist/presence/index.js"

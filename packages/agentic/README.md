@@ -9,6 +9,7 @@ The **Nano agentic protocol** (ADR 0056): one app-tier channel carrying agent pr
 | `@nanobpm/agentic/protocol` | Wire contract, frame codec, routing-token grammar, vocab schema (S0) |
 | `@nanobpm/agentic/protocol/conformance` | Shared conformance corpus |
 | `@nanobpm/agentic/channel` | App-tier channel & hub, connection registry, auth (S1) |
+| `@nanobpm/agentic/client` | Client-side **ownership-frame emit client** — one multiplexed host connection multiplexing N instances' `register`/`heartbeat`/`deregister`, `claim`/`release` and per-instance `transcript` frames (each tagging `instance` explicitly), with reconnect resync + version negotiation |
 | `@nanobpm/agentic/presence` | Presence & registry family (S2) |
 | `@nanobpm/agentic/vocab` | Vocab resolver + core vocabulary (S3) |
 | `@nanobpm/agentic/demand` | Demand×supply model (S4) |

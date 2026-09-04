@@ -1955,9 +1955,17 @@ function buildEngineForm(cfg, row, onSuccess) {
   const formKey = row[cfg.formKeyField || "form_key"];
   const box = el("div", { class: "pc-subform" });
   const msg = el("p", { class: "njf-msg", role: "status", "aria-live": "polite" });
+  // Optional page-author knob: route completion through the app's own canonical
+  // door instead of the runtime's generic seam. Defaults to /app/actions/complete
+  // when unset (existing pages unchanged). Same trust class as detail.form's
+  // action.path; rebased through apiUrl() by getJSON like every other page fetch.
+  const completePath =
+    typeof cfg.completePath === "string" && cfg.completePath !== ""
+      ? cfg.completePath
+      : "/app/actions/complete";
   /** @param {Record<string, any>} variables */
   const complete = (variables) =>
-    getJSON("/app/actions/complete", {
+    getJSON(completePath, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ userTaskKey, variables }),

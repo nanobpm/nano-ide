@@ -156,3 +156,79 @@ test("buildEngineForm degrades to bare completion when the formKey resolves to n
   const button = created.find((n) => n.tagName === "BUTTON" && n.textContent === "Complete");
   assert.ok(button, "a 204 (no form) falls back to the bare completion button");
 });
+
+test("buildEngineForm routes the rendered-form completion through a configured completePath", async (t) => {
+  const created: FakeElement[] = [];
+  const calls: FetchCall[] = [];
+  t.after(installFakeDom(created));
+  t.after(
+    installFakeFetch((url) => {
+      if (url.includes("/app/actions/form")) {
+        return { status: 200, json: { schema: { components: [{ type: "textfield", key: "note" }] } } };
+      }
+      return { status: 200, json: { ok: true } };
+    }, calls),
+  );
+  const box = buildEngineForm(
+    { ...CFG, completePath: "/app/api/actions/complete-user-task" },
+    { form_key: "form-c", user_task_key: "ut-c" },
+    () => {},
+  );
+  assert.ok(box);
+  await new Promise((r) => setTimeout(r, 0));
+  const input = created.find((n) => n.tagName === "INPUT");
+  input!.value = "done";
+  const form = created.find((n) => n.tagName === "FORM");
+  await form!.fire("submit");
+  await new Promise((r) => setTimeout(r, 0));
+  const completeReq = calls.find((c) => c.url.includes("/app/api/actions/complete-user-task"));
+  assert.ok(completeReq, "completion POSTs to the configured completePath, not the generic seam");
+  assert.equal(completeReq!.method, "POST");
+  assert.deepEqual(completeReq!.body, { userTaskKey: "ut-c", variables: { note: "done" } });
+  assert.equal(
+    calls.some((c) => c.url.includes("/app/actions/complete")),
+    false,
+    "the generic seam is not called when completePath is set",
+  );
+});
+
+test("buildEngineForm routes the bare completion through a configured completePath", async (t) => {
+  const created: FakeElement[] = [];
+  const calls: FetchCall[] = [];
+  t.after(installFakeDom(created));
+  t.after(installFakeFetch(() => ({ status: 200, json: { ok: true } }), calls));
+  const box = buildEngineForm(
+    { ...CFG, completePath: "/app/custom-complete" },
+    { user_task_key: "ut-b" },
+    () => {},
+  );
+  assert.ok(box);
+  const button = created.find((n) => n.tagName === "BUTTON");
+  await button!.fire("click");
+  await new Promise((r) => setTimeout(r, 0));
+  const completeReq = calls.find((c) => c.url.includes("/app/custom-complete"));
+  assert.ok(completeReq, "the bare button completes via the configured completePath");
+  assert.equal(completeReq!.body.userTaskKey, "ut-b");
+  assert.deepEqual(completeReq!.body.variables, {}, "bare completion sends empty variables");
+  assert.equal(
+    calls.some((c) => c.url.includes("/app/actions/complete")),
+    false,
+    "the generic seam is not called when completePath is set",
+  );
+});
+
+test("buildEngineForm falls back to the generic seam when completePath is empty/absent", async (t) => {
+  const created: FakeElement[] = [];
+  const calls: FetchCall[] = [];
+  t.after(installFakeDom(created));
+  t.after(installFakeFetch(() => ({ status: 200, json: { ok: true } }), calls));
+  // An empty-string completePath is treated as absent (default seam preserved).
+  const box = buildEngineForm({ ...CFG, completePath: "" }, { user_task_key: "ut-d" }, () => {});
+  assert.ok(box);
+  const button = created.find((n) => n.tagName === "BUTTON");
+  await button!.fire("click");
+  await new Promise((r) => setTimeout(r, 0));
+  const completeReq = calls.find((c) => c.url.includes("/app/actions/complete"));
+  assert.ok(completeReq, "an empty completePath still targets the default /app/actions/complete seam");
+  assert.equal(completeReq!.body.userTaskKey, "ut-d");
+});

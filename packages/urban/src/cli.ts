@@ -22,6 +22,7 @@ import {
   selectHost,
 } from "./runtime/index.ts";
 import { denoGlobal, processGlobal } from "./runtime/adapters/globals.ts";
+import type { WritableStdio } from "./runtime/adapters/globals.ts";
 import { errorMessage, isRecord } from "./runtime/core/guards.ts";
 import { scaffold, slugify } from "create-urban-app";
 import type { DataRequest } from "./runtime/index.ts";
@@ -446,6 +447,31 @@ export async function main(argv: string[]): Promise<number> {
   }
 }
 
+/**
+ * Flush a Node writable stdio stream, resolving once its buffered writes have drained to the OS.
+ * `process.stdout`/`stderr` connected to a *pipe* is asynchronous in Node: `console.log` buffers
+ * the write and an immediate `process.exit()` abandons anything not yet handed to the OS, so a
+ * large reply (> the 64 KB pipe buffer on Linux) is silently truncated. Writing an empty chunk and
+ * waiting for its completion callback drains the prior writes first. Deno's stdio has no such
+ * `write(chunk, cb)` shape (its `console.log` is synchronous), so its absence is a no-op flush.
+ */
+function flushStream(stream: WritableStdio | undefined): Promise<void> {
+  return new Promise((resolve) => {
+    if (!stream || typeof stream.write !== "function") {
+      resolve();
+      return;
+    }
+    stream.write("", () => resolve());
+  });
+}
+
+/** Drain both stdout and stderr before an explicit `process.exit` so no buffered output is lost. */
+async function flushStdio(): Promise<void> {
+  const p = processGlobal();
+  if (!p) return;
+  await Promise.all([flushStream(p.stdout), flushStream(p.stderr)]);
+}
+
 const proc = processGlobal();
 const deno = denoGlobal();
 const importMetaMain: unknown = Reflect.get(import.meta, "main");
@@ -462,11 +488,15 @@ if (importMetaMain === true || nodeMain) {
     else if (deno?.exit) deno.exit(code);
   };
   main(argv).then(
-    (code) => {
-      if (code >= 0) exit(code);
+    async (code) => {
+      if (code >= 0) {
+        await flushStdio();
+        exit(code);
+      }
     },
-    (err) => {
+    async (err) => {
       console.error(errorMessage(err));
+      await flushStdio();
       exit(1);
     },
   );

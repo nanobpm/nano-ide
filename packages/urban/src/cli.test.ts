@@ -91,13 +91,18 @@ test("urban data streams a > 64 KB reply without truncation through an explicit 
     const query = { op: "query", sql: "SELECT * FROM big ORDER BY id" } as const;
     const result = await runDataOp(host, ".", "nano.app.json", query);
     const expected = `${JSON.stringify({ ok: true, ...result })}\n`;
+    const expectedBytes = Buffer.byteLength(expected);
     assert.ok(
-      expected.length > 65536,
-      `fixture too small (${expected.length} bytes) to exercise the pipe-buffer boundary`,
+      expectedBytes > 65536,
+      `fixture too small (${expectedBytes} bytes) to exercise the pipe-buffer boundary`,
     );
 
     const cli = fileURLToPath(new URL("./cli.ts", import.meta.url));
-    const stdout = await new Promise<string>((resolve, reject) => {
+    const { stdout, code, signal } = await new Promise<{
+      stdout: Buffer;
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve, reject) => {
       const child = spawn(
         process.execPath,
         ["--experimental-strip-types", cli, "data", "--root", dir],
@@ -106,16 +111,18 @@ test("urban data streams a > 64 KB reply without truncation through an explicit 
       const chunks: Buffer[] = [];
       child.stdout.on("data", (c: Buffer) => chunks.push(c));
       child.on("error", reject);
-      child.on("close", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      child.on("close", (code, signal) => resolve({ stdout: Buffer.concat(chunks), code, signal }));
       child.stdin.end(JSON.stringify(query));
     });
 
+    assert.equal(signal, null, `CLI killed by signal ${signal}`);
+    assert.equal(code, 0, `CLI exited ${code}, expected 0`);
     assert.equal(
-      stdout.length,
-      expected.length,
-      `stdout truncated: got ${stdout.length} bytes, expected ${expected.length}`,
+      stdout.byteLength,
+      expectedBytes,
+      `stdout truncated: got ${stdout.byteLength} bytes, expected ${expectedBytes}`,
     );
-    const reply: unknown = JSON.parse(stdout);
+    const reply: unknown = JSON.parse(stdout.toString("utf8"));
     assert.ok(isRecord(reply));
     assert.equal(reply.ok, true);
     assert.deepEqual(reply, { ok: true, ...result });

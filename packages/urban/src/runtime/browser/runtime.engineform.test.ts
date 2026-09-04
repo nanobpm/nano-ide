@@ -84,6 +84,7 @@ test("buildEngineForm resolves the row's formKey and completes with the entered 
   assert.ok(input, "the deployed form-js schema was rendered by the shared renderer");
   input!.value = "done";
   const form = created.find((n) => n.tagName === "FORM");
+  assert.ok(form, "the deployed schema rendered a form element to submit");
   await form!.fire("submit");
   await new Promise((r) => setTimeout(r, 0));
   const completeReq = calls.find((c) => c.url.includes("/app/actions/complete"));
@@ -116,6 +117,7 @@ test("buildEngineForm surfaces a completion failure in the rendered-form path", 
   assert.ok(msg, "a failed completion is surfaced to the operator (not silent)");
   assert.notEqual(msg!.textContent, "", "the error message element has text");
   const submit = created.find((n) => n.tagName === "BUTTON" && n.type === "submit");
+  assert.ok(submit, "the completion path rendered a submit button");
   assert.equal(submit!.disabled, false, "the submit button is re-enabled so the operator can retry");
 });
 
@@ -177,8 +179,10 @@ test("buildEngineForm routes the rendered-form completion through a configured c
   assert.ok(box);
   await new Promise((r) => setTimeout(r, 0));
   const input = created.find((n) => n.tagName === "INPUT");
+  assert.ok(input, "the deployed form-js schema was rendered by the shared renderer");
   input!.value = "done";
   const form = created.find((n) => n.tagName === "FORM");
+  assert.ok(form, "the deployed schema rendered a form element to submit");
   await form!.fire("submit");
   await new Promise((r) => setTimeout(r, 0));
   const completeReq = calls.find((c) => c.url.includes("/app/api/actions/complete-user-task"));
@@ -204,6 +208,7 @@ test("buildEngineForm routes the bare completion through a configured completePa
   );
   assert.ok(box);
   const button = created.find((n) => n.tagName === "BUTTON");
+  assert.ok(button, "the bare completion path rendered a Complete button");
   await button!.fire("click");
   await new Promise((r) => setTimeout(r, 0));
   const completeReq = calls.find((c) => c.url.includes("/app/custom-complete"));
@@ -226,6 +231,7 @@ test("buildEngineForm falls back to the generic seam when completePath is empty/
   const box = buildEngineForm({ ...CFG, completePath: "" }, { user_task_key: "ut-d" }, () => {});
   assert.ok(box);
   const button = created.find((n) => n.tagName === "BUTTON");
+  assert.ok(button, "the bare completion path rendered a Complete button");
   await button!.fire("click");
   await new Promise((r) => setTimeout(r, 0));
   const completeReq = calls.find((c) => c.url.includes("/app/actions/complete"));
@@ -243,6 +249,7 @@ test("buildEngineForm treats a whitespace-only completePath as absent", async (t
   const box = buildEngineForm({ ...CFG, completePath: "   " }, { user_task_key: "ut-e" }, () => {});
   assert.ok(box);
   const button = created.find((n) => n.tagName === "BUTTON");
+  assert.ok(button, "the bare completion path rendered a Complete button");
   await button!.fire("click");
   await new Promise((r) => setTimeout(r, 0));
   const completeReq = calls.find((c) => c.url.includes("/app/actions/complete"));

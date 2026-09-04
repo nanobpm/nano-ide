@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.3.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.2.0...@nanobpm/urban-testkit-1.3.0) (2026-09-04)
+
+
+### Features
+
+* **urban:** re-extend wait-state emulation to USER_TASK now nbpm[#1042](https://github.com/nanobpm/nano-ide/issues/1042) shipped ([#555](https://github.com/nanobpm/nano-ide/issues/555)) ([7e9136b](https://github.com/nanobpm/nano-ide/commit/7e9136b87506af18573731762a47827e6a46e090))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.81.0 to >=0.92.0
+
 ## [1.2.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.1.0...@nanobpm/urban-testkit-1.2.0) (2026-08-31)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.92.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.91.0...@nanobpm/urban-0.92.0) (2026-09-04)
+
+
+### Features
+
+* **urban:** re-extend wait-state emulation to USER_TASK now nbpm[#1042](https://github.com/nanobpm/nano-ide/issues/1042) shipped ([#555](https://github.com/nanobpm/nano-ide/issues/555)) ([7e9136b](https://github.com/nanobpm/nano-ide/commit/7e9136b87506af18573731762a47827e6a46e090))
+
 ## [0.91.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.90.2...@nanobpm/urban-0.91.0) (2026-09-04)
 
 

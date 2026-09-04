@@ -232,3 +232,20 @@ test("buildEngineForm falls back to the generic seam when completePath is empty/
   assert.ok(completeReq, "an empty completePath still targets the default /app/actions/complete seam");
   assert.equal(completeReq!.body.userTaskKey, "ut-d");
 });
+
+test("buildEngineForm treats a whitespace-only completePath as absent", async (t) => {
+  const created: FakeElement[] = [];
+  const calls: FetchCall[] = [];
+  t.after(installFakeDom(created));
+  t.after(installFakeFetch(() => ({ status: 200, json: { ok: true } }), calls));
+  // A whitespace-only completePath is normalized away so it never becomes an
+  // unintended relative fetch target — the default seam is preserved.
+  const box = buildEngineForm({ ...CFG, completePath: "   " }, { user_task_key: "ut-e" }, () => {});
+  assert.ok(box);
+  const button = created.find((n) => n.tagName === "BUTTON");
+  await button!.fire("click");
+  await new Promise((r) => setTimeout(r, 0));
+  const completeReq = calls.find((c) => c.url.includes("/app/actions/complete"));
+  assert.ok(completeReq, "a whitespace-only completePath still targets the default /app/actions/complete seam");
+  assert.equal(completeReq!.body.userTaskKey, "ut-e");
+});

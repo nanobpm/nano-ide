@@ -1960,8 +1960,8 @@ function buildEngineForm(cfg, row, onSuccess) {
   // when unset (existing pages unchanged). Same trust class as detail.form's
   // action.path; rebased through apiUrl() by getJSON like every other page fetch.
   const completePath =
-    typeof cfg.completePath === "string" && cfg.completePath !== ""
-      ? cfg.completePath
+    typeof cfg.completePath === "string" && cfg.completePath.trim() !== ""
+      ? cfg.completePath.trim()
       : "/app/actions/complete";
   /** @param {Record<string, any>} variables */
   const complete = (variables) =>

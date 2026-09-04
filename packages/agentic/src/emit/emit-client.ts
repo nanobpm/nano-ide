@@ -139,6 +139,12 @@ function defaultSchedule(run: () => void): void {
  * cross), regardless of what delimiter characters an instance or stream name
  * contains. This is the isolation guarantee the transcript sink rests on.
  *
+ * The prefix `N` is `instance.length`, i.e. the count of JS **UTF-16 code
+ * units** — not Unicode code points and not UTF-8 bytes. A cross-language
+ * consumer/producer MUST measure and slice the instance in UTF-16 code units to
+ * stay in sync (e.g. an astral character like an emoji counts as 2), otherwise
+ * the length will mismatch.
+ *
  * For a job transcript, the stream name is the job key stringified — `stream =
  * String(jobKey)` — so the composed id encodes the `(instance, jobKey)` pair
  * (see {@link TranscriptRef}). {@link parseStreamId} is the exact inverse.
@@ -150,9 +156,11 @@ export function composeStreamId(instance: string, stream: string): string {
 /**
  * The exact inverse of {@link composeStreamId}: decode a `N:<instance>/<stream>`
  * length-prefixed relay stream id back into its {@link TranscriptRef}. Reads the
- * decimal length `N` up to the first `:`, takes the next `N` characters as the
- * `instance` (so a `:` or `/` inside the instance name is decoded losslessly),
- * requires the following `/`, and treats the remainder as the `stream`.
+ * decimal length `N` up to the first `:`, takes the next `N` UTF-16 code units
+ * (JS `String` indices, matching the `instance.length` the composer emits) as
+ * the `instance` (so a `:` or `/` inside the instance name is decoded
+ * losslessly), requires the following `/`, and treats the remainder as the
+ * `stream`.
  *
  * Returns `undefined` for any malformed id — a missing/non-decimal or
  * non-canonical length prefix (e.g. a leading zero the composer never emits), a

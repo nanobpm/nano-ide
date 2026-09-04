@@ -292,6 +292,19 @@ test("parseStreamId is the exact inverse of composeStreamId (round-trip property
   });
 });
 
+test("composeStreamId prefixes the instance length in UTF-16 code units (not code points/bytes)", () => {
+  // 😀 is one Unicode code point but two JS UTF-16 code units, and 4 UTF-8
+  // bytes. The prefix MUST be `instance.length` (code units) so a cross-language
+  // peer measuring code points or bytes would mismatch. This pins the documented
+  // codec contract for astral characters.
+  const instance = "a😀b"; // length 4 in UTF-16 code units, 3 code points
+  assert.equal([...instance].length, 3);
+  assert.equal(instance.length, 4);
+  const id = composeStreamId(instance, "x");
+  assert.equal(id, "4:a😀b/x");
+  assert.deepEqual(parseStreamId(id), { instance, stream: "x" });
+});
+
 test("parseStreamId rejects malformed ids with undefined", () => {
   for (const bad of [
     "", // no length prefix

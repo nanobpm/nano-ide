@@ -242,15 +242,27 @@ export class AgenticEmitClient {
    * Re-registering an already-known instance updates its capability (its
    * in-flight claims are preserved). The instance is tracked so a reconnect can
    * re-assert it.
+   *
+   * If the peer never negotiated `multi-instance`, registering a SECOND distinct
+   * instance degrades to a no-op (surfaced via {@link AgenticEmitClientOptions.onError}):
+   * the peer can only attribute one instance per connection, so emitting the
+   * second `register` would make it misattribute/overwrite the instance it
+   * already knows. This mirrors how every other emit outside the negotiated set
+   * degrades to a no-op; the caller must open a separate connection for the
+   * extra instance.
    */
   register(instance: string, capability: Capability): void {
     const existing = this.#instances.get(instance);
     if (existing === undefined && this.#instances.size >= 1 && !this.#negotiated.supportsFeature("multi-instance")) {
       // The peer negotiated away `multi-instance`, so it can't uphold
       // per-instance presence/ownership for more than one worker on this shared
-      // connection. Surface the contract violation (non-fatal) rather than
-      // silently multiplexing a second instance the peer will misattribute.
+      // connection. Emitting a second `register` would make the peer
+      // misattribute/overwrite the single instance it knows about, so degrade to
+      // a no-op — consistent with every other emit outside the negotiated set —
+      // and surface the contract violation (non-fatal) so the caller can open a
+      // separate connection for the extra instance.
       this.#onError?.(this.#multiInstanceUnsupportedError(`multiplexing a second instance ${JSON.stringify(instance)}`));
+      return;
     }
     if (existing) {
       this.#instances.set(instance, { capability, claims: existing.claims });

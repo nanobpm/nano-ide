@@ -419,9 +419,17 @@ test("registering a second instance without a negotiated multi-instance feature 
   assert.equal(errors.length, 1, "multiplexing a second instance is surfaced");
   assert.match(String(errors[0]), /multi-instance/, "the surfaced error names the missing feature");
 
+  // Degradation is a no-op, not warn-and-continue: the second instance is
+  // neither tracked nor emitted, so the legacy peer never sees a `register` it
+  // would misattribute to the single instance it knows about.
+  assert.deepEqual(client.instances(), ["w1"], "the second instance is not tracked");
+  const registered = socket.frames().filter((f) => f.family === "register").map(payloadInstance);
+  assert.deepEqual(registered, ["w1"], "the second register never hits the wire");
+
   // Re-registering an existing instance is not a new multiplex — no repeat signal.
   client.register("w1", { cognition: "opus" });
   assert.equal(errors.length, 1, "re-registering a known instance does not re-trip the guard");
+  assert.deepEqual(client.instances(), ["w1"], "re-registering a known instance keeps it tracked");
 });
 
 test("negotiating away multi-instance while several instances are registered surfaces an onError signal", () => {

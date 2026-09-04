@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.59](https://github.com/nanobpm/nano-ide/compare/@nanobpm/nano-ide-app-urban-1.1.58...@nanobpm/nano-ide-app-urban-1.1.59) (2026-09-04)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @nanobpm/urban bumped from ^0.92.0 to ^0.92.1
+
 ## [1.1.58](https://github.com/nanobpm/nano-ide/compare/@nanobpm/nano-ide-app-urban-1.1.57...@nanobpm/nano-ide-app-urban-1.1.58) (2026-09-04)
 
 

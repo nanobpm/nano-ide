@@ -70,11 +70,25 @@ export type EmitSocketFactory = () => EmitSocket;
 /** Schedules a reconnect attempt. Injected so tests can run it synchronously. */
 export type Scheduler = (run: () => void) => void;
 
-/** Identifies one transcript/relay stream: an `instance` and its named `stream`. */
+/**
+ * Identifies one transcript/relay stream: an `instance` and its named `stream`.
+ *
+ * **Transcript convention.** For a *job transcript* — the one relay stream that
+ * carries a running job's terminal output — the stream name is the job key as a
+ * string: `stream = String(jobKey)`. A job transcript stream id is therefore the
+ * pair `(instance, jobKey)`, composed with {@link composeStreamId} on the write
+ * side and decoded with {@link parseStreamId} on the read side. This is the one
+ * place that "a transcript stream id is `(instance, jobKey)`" fact is defined;
+ * both the producer (routing inbound steer back to `{instance, jobKey}`) and the
+ * consumer (attributing a stored stream to a job) derive it from here.
+ */
 export interface TranscriptRef {
   /** The owning instance the stream belongs to. */
   readonly instance: string;
-  /** The instance-local stream name (e.g. `stdout`, `stderr`, a session id). */
+  /**
+   * The instance-local stream name. For a job transcript this is the job key
+   * stringified — `stream = String(jobKey)` (see {@link TranscriptRef}).
+   */
   readonly stream: string;
 }
 
@@ -124,9 +138,54 @@ function defaultSchedule(run: () => void): void {
  * stream}` pairs can ever map to the same id (so two instances' streams never
  * cross), regardless of what delimiter characters an instance or stream name
  * contains. This is the isolation guarantee the transcript sink rests on.
+ *
+ * The prefix `N` is `instance.length`, i.e. the count of JS **UTF-16 code
+ * units** — not Unicode code points and not UTF-8 bytes. A cross-language
+ * consumer/producer MUST measure and slice the instance in UTF-16 code units to
+ * stay in sync (e.g. an astral character like an emoji counts as 2), otherwise
+ * the length will mismatch.
+ *
+ * For a job transcript, the stream name is the job key stringified — `stream =
+ * String(jobKey)` — so the composed id encodes the `(instance, jobKey)` pair
+ * (see {@link TranscriptRef}). {@link parseStreamId} is the exact inverse.
  */
 export function composeStreamId(instance: string, stream: string): string {
   return `${instance.length}:${instance}/${stream}`;
+}
+
+/**
+ * The exact inverse of {@link composeStreamId}: decode a `N:<instance>/<stream>`
+ * length-prefixed relay stream id back into its {@link TranscriptRef}. Reads the
+ * decimal length `N` up to the first `:`, takes the next `N` UTF-16 code units
+ * (JS `String` indices, matching the `instance.length` the composer emits) as
+ * the `instance` (so a `:` or `/` inside the instance name is decoded
+ * losslessly), requires the following `/`, and treats the remainder as the
+ * `stream`.
+ *
+ * Returns `undefined` for any malformed id — a missing/non-decimal or
+ * non-canonical length prefix (e.g. a leading zero the composer never emits), a
+ * length that overruns the string, or a missing `/` delimiter after the
+ * instance — so a bad id off the wire can never be mistaken for a valid ref. For
+ * a job transcript the decoded `stream` is `String(jobKey)` (see
+ * {@link TranscriptRef}).
+ */
+export function parseStreamId(id: string): TranscriptRef | undefined {
+  const colon = id.indexOf(":");
+  if (colon < 0) return undefined;
+  const lenPart = id.slice(0, colon);
+  if (!/^\d+$/.test(lenPart)) return undefined;
+  const length = Number(lenPart);
+  // Reject non-canonical prefixes (e.g. leading zeros) the composer never emits,
+  // so parse stays a strict inverse of compose.
+  if (String(length) !== lenPart) return undefined;
+  const instanceStart = colon + 1;
+  const instanceEnd = instanceStart + length;
+  // The character right after the N-char instance MUST be the `/` delimiter; if
+  // the length overruns the string this is `undefined` and rejects too.
+  if (id[instanceEnd] !== "/") return undefined;
+  const instance = id.slice(instanceStart, instanceEnd);
+  const stream = id.slice(instanceEnd + 1);
+  return { instance, stream };
 }
 
 /**

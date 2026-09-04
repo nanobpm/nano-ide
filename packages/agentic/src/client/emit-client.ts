@@ -18,8 +18,11 @@
  *    a `transcript` sink, each carrying `instance` explicitly, over one socket.
  *    Multiplexing more than one instance requires the peer to negotiate the
  *    `multi-instance` feature; against a peer that hasn't (including after a
- *    downgrade), every outbound instance-tagged frame for a non-primary instance
- *    degrades to a no-op + `onError` so a legacy peer never misattributes it.
+ *    downgrade), a caller-initiated instance-tagged frame for a non-primary
+ *    instance degrades to a no-op + `onError` so a legacy peer never
+ *    misattributes it. The reconnect resync re-assertion instead *silently*
+ *    skips those gated instances (no `onError`), since the caller was already
+ *    signalled once at register/downgrade time.
  *  - **Idempotent ownership** — `claim`/`release` are safe to re-assert; the
  *    reconnect resync re-asserts every in-flight claim.
  *  - **Reconnect resync** — on every (re)connect the client re-`register`s all
@@ -197,7 +200,13 @@ export class AgenticEmitClient {
     return this.#generation;
   }
 
-  /** The set of instances currently registered on this connection. */
+  /**
+   * The set of instances this connection tracks (registered and not yet
+   * deregistered) and re-asserts on resync. Note this is the tracked/resync
+   * set, not necessarily what is currently asserted to the peer: after a
+   * `multi-instance` downgrade, non-primary instances stay tracked here while
+   * being gated off-wire (and skipped by resync).
+   */
   instances(): readonly string[] {
     return [...this.#instances.keys()];
   }

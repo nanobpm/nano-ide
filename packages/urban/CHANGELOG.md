@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.92.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.92.0...@nanobpm/urban-0.92.1) (2026-09-04)
+
+
+### Bug Fixes
+
+* **urban:** read engine truth in urban_debug_instance_state ([#561](https://github.com/nanobpm/nano-ide/issues/561)) ([87b30c2](https://github.com/nanobpm/nano-ide/commit/87b30c2a4fb0105bbb454fca9d727f0a23f13faa)), closes [#560](https://github.com/nanobpm/nano-ide/issues/560)
+
 ## [0.92.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.91.0...@nanobpm/urban-0.92.0) (2026-09-04)
 
 

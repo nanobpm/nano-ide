@@ -336,6 +336,15 @@ once.
   individual `ctx.run(name, fn)` closures instead.
 - **The worker uses a single `baseUrl`.** For the single-user SDLC use case this
   is fine; it is a client SPOF (no worker-side failover), not an engine limit.
+- **A declarative flow derives one top-level start and one top-level end.**
+  `defineFlow`'s compiler emits a single `<startEvent id="Start">` and converges
+  every terminal dangler into a single `<endEvent id="End">`. Models with several
+  distinct top-level starts/ends, or arbitrary-graph joins that aren't the
+  structured `loop`/`switch`/`branch`/`parallel` shapes (e.g. a task that is
+  itself a multi-way merge target), are **not derivable whole-model today** —
+  structural parity for them needs an explicit terminal/multi-start construct and
+  a named-join builder that don't exist yet. Until then, assert such ports at the
+  relevant **node surface**, not the whole model.
 
 ## API
 

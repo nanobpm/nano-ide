@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.90.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.90.1...@nanobpm/urban-0.90.2) (2026-09-04)
+
+
+### Bug Fixes
+
+* **urban:** drain stdio before process.exit so large `urban data` replies aren't truncated ([#550](https://github.com/nanobpm/nano-ide/issues/550)) ([de3d07c](https://github.com/nanobpm/nano-ide/commit/de3d07c81e3d05bd137705945bc4cdd1b5ec0f90))
+
 ## [0.90.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.90.0...@nanobpm/urban-0.90.1) (2026-09-01)
 
 

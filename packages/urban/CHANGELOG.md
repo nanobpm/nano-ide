@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.91.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.90.2...@nanobpm/urban-0.91.0) (2026-09-04)
+
+
+### Features
+
+* **urban:** add optional completePath to detail.engineForm ([#553](https://github.com/nanobpm/nano-ide/issues/553)) ([3e47671](https://github.com/nanobpm/nano-ide/commit/3e476711fee747143d059e8cb4739102f9b991f5))
+
 ## [0.90.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.90.1...@nanobpm/urban-0.90.2) (2026-09-04)
 
 

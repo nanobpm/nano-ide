@@ -368,7 +368,7 @@ export type WaitStateType =
  * {@link WaitStateType} union. The gateway's read model started as a snapshot of the Zeebe
  * contract taken 2026-06-09 that recognized only `JOB | MESSAGE`; Magikcraft/nano-bpm#1042
  * has since shipped `USER_TASK` parks (added on user-task CREATED, removed on
- * COMPLETED/CANCELED, with `userTaskDetails.taskKey`), moving the floor up to
+ * COMPLETED/CANCELED, with the park identity under `details.taskKey`), moving the floor up to
  * `JOB | MESSAGE | USER_TASK`. `TIMER`/`SIGNAL`/`CONDITION` are still rejected with HTTP 422
  * (the 8.10 follow-on tracked in Magikcraft/nano-bpm#1042).
  *

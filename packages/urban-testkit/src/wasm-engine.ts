@@ -677,9 +677,10 @@ export class WasmEngineClient implements EngineClient {
   /**
    * Search element-instance *wait states* — the parks the deployed engine's read model
    * serves, derived from the snapshot's `jobs` (JOB), `messageSubscriptions` (MESSAGE) and
-   * `userTasks` (USER_TASK). A park row carries its `elementId` + owning process instance but
-   * not the element-instance key, so it is joined to the same instance's `activeElements` to
-   * resolve the key `searchElementInstances` reports — the two stay consistent.
+   * `userTasks` (USER_TASK). A JOB/MESSAGE park row carries its `elementId` + owning process
+   * instance but not the element-instance key, so it is joined to the same instance's
+   * `activeElements` to resolve the key `searchElementInstances` reports; a USER_TASK row
+   * instead carries its `elementInstanceKey` directly — either way the two stay consistent.
    *
    * **Deployed floor (`JOB | MESSAGE | USER_TASK`).** This synthesizes only the park kinds the
    * deployed nanobpmn gateway implements ({@link DEPLOYED_WAIT_STATE_TYPES}), and rejects a
@@ -1544,8 +1545,9 @@ export function deriveElementInstances(
  *  floor (`JOB | MESSAGE | USER_TASK`, {@link DEPLOYED_WAIT_STATE_TYPES}) — the park kinds the
  *  deployed gateway's read model serves — so the emulation cannot report a park a live engine
  *  would not. A `waitStateType` filter outside the floor is rejected with
- *  {@link UnsupportedWaitStateTypeError} (the gateway answers HTTP 422). Each park's
- *  element-instance key is resolved through {@link activeElementKeyIndex}; the
+ *  {@link UnsupportedWaitStateTypeError} (the gateway answers HTTP 422). A JOB/MESSAGE park's
+ *  element-instance key is resolved through {@link activeElementKeyIndex}, while a USER_TASK
+ *  park carries its `elementInstanceKey` directly on the task row; the
  *  `processInstanceKey`/`elementId`/`waitStateType` selectors are applied client-side. */
 export function deriveWaitStates(
   snapshot: Record<string, unknown>,

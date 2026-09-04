@@ -29,7 +29,6 @@ import { makeRouter } from "../router.ts";
 import { mountApi } from "./api.ts";
 import { makeGateway } from "./gateway.ts";
 import { DataLayer, type ProvisionedSource } from "./datasource.ts";
-import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
 import { evictExcessSessions, isLoopbackRequest, missingRequiredArgs, mountMcp, newSessionId, readHeader, readMcpConfig } from "./mcp.ts";
 import { collectMcpToolProjection, diffMcpToolProjection, parseSpec } from "../../../openapi/spec.ts";
@@ -769,13 +768,11 @@ test("the reserved-namespace drop warns once, not on every tools/list and tools/
   assert.equal(drops.length, 1, "the reserved-namespace drop must warn exactly once across many requests");
 });
 
-test("the projection debug tools read the ADR 0065 canonical stores", async () => {
+test("urban_debug_open_user_tasks reads the ADR 0065 canonical projection", async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-mcp-proj-"));
   const host = createNodeHost({ cwd: dir, log: () => {} });
   const db: SqliteDb = host.openSqlite(join(dir, "test.db"));
   try {
-    new InstanceStateStore(db, { clock: { now: () => 0 } }).ensureSchema();
-    new InstanceStateStore(db, { clock: { now: () => 0 } }).recordState("pi-7", "ACTIVE");
     const openStore = new OpenUserTasksStore(db, { clock: { now: () => 0 } });
     openStore.ensureSchema();
     openStore.recordOpenTask("pi-7", { userTaskKey: "ut-1", elementId: "Task_A" });
@@ -792,13 +789,6 @@ test("the projection debug tools read the ADR 0065 canonical stores", async () =
     const { router } = buildHarness({ data });
     const session = await connect(router);
 
-    const stateCall = await rpc(router, session, "tools/call", {
-      name: "urban_debug_instance_state",
-      arguments: { processInstanceKey: "pi-7" },
-    });
-    const state = JSON.parse(toolContentText(stateCall.result));
-    assert.equal(Reflect.get(state, "state"), "ACTIVE");
-
     const tasksCall = await rpc(router, session, "tools/call", {
       name: "urban_debug_open_user_tasks",
       arguments: { processInstanceKey: "pi-7" },
@@ -810,6 +800,66 @@ test("the projection debug tools read the ADR 0065 canonical stores", async () =
     db.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("urban_debug_instance_state returns engine truth for a live (ACTIVE) instance", async () => {
+  const snapshot: ProcessInstanceSnapshot = { processInstanceKey: "pi-7", state: "ACTIVE" };
+  const engine = fakeEngine({
+    searchProcessInstances: async (filter) => {
+      assert.deepEqual(filter?.processInstanceKeys, ["pi-7"]);
+      return [snapshot];
+    },
+    openUserTasks: async () => [],
+  });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+
+  const call = await rpc(router, session, "tools/call", {
+    name: "urban_debug_instance_state",
+    arguments: { processInstanceKey: "pi-7" },
+  });
+  const state = JSON.parse(toolContentText(call.result));
+  assert.deepEqual(state, { processInstanceKey: "pi-7", state: "ACTIVE", waitingOnHuman: false });
+});
+
+test("urban_debug_instance_state reports waitingOnHuman from open user tasks", async () => {
+  const snapshot: ProcessInstanceSnapshot = { processInstanceKey: "pi-7", state: "ACTIVE" };
+  const engine = fakeEngine({
+    searchProcessInstances: async () => [snapshot],
+    openUserTasks: async (filter) => {
+      assert.equal(filter?.processInstanceKey, "pi-7");
+      return [{ userTaskKey: "ut-1", processInstanceKey: "pi-7" }];
+    },
+  });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+
+  const call = await rpc(router, session, "tools/call", {
+    name: "urban_debug_instance_state",
+    arguments: { processInstanceKey: "pi-7" },
+  });
+  const state = JSON.parse(toolContentText(call.result));
+  assert.deepEqual(state, { processInstanceKey: "pi-7", state: "ACTIVE", waitingOnHuman: true });
+});
+
+test("urban_debug_instance_state returns null when the engine has no such instance", async () => {
+  let openUserTasksCalled = false;
+  const engine = fakeEngine({
+    searchProcessInstances: async () => [],
+    openUserTasks: async () => {
+      openUserTasksCalled = true;
+      return [];
+    },
+  });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+
+  const call = await rpc(router, session, "tools/call", {
+    name: "urban_debug_instance_state",
+    arguments: { processInstanceKey: "nope" },
+  });
+  assert.equal(toolContentText(call.result), "null");
+  assert.equal(openUserTasksCalled, false, "must not probe user tasks for an instance the engine doesn't know");
 });
 
 // ---- mutation guard (Slice 3) -----------------------------------------------------------------

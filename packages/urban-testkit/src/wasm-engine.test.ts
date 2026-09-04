@@ -1597,7 +1597,7 @@ test("deriveElementInstances: maps active elements, applies selectors, drops mal
   assert.deepEqual(deriveElementInstances(snapshot, { state: "COMPLETED" }), []);
 });
 
-test("deriveWaitStates: synthesizes only the deployed floor (JOB|MESSAGE), dropping out-of-floor parks", () => {
+test("deriveWaitStates: synthesizes the deployed floor (JOB|MESSAGE|USER_TASK), dropping out-of-floor parks", () => {
   const snapshot = JSON.parse(JSON.stringify({
     instances: [{
       key: "3",
@@ -1614,31 +1614,42 @@ test("deriveWaitStates: synthesizes only the deployed floor (JOB|MESSAGE), dropp
       { elementId: "gone", instanceKey: "3", jobType: "x", key: "51" }, // element not active → dropped
     ],
     messageSubscriptions: [{ elementId: "catch", instanceKey: "3", messageName: "Go", correlationKey: "K1", key: "60" }],
-    // TIMER/SIGNAL/USER_TASK parks are present in the snapshot but are outside the deployed
-    // gateway's read-model floor, so `deriveWaitStates` must NOT synthesize them — the
-    // emulation cannot report a park a live engine would omit (issue nanobpm/nano-ide#497).
+    // USER_TASK parks are on the floor since Magikcraft/nano-bpm#1042 shipped them, so an OPEN
+    // (`Created`) task IS synthesized; a retained COMPLETED task must NOT be (the park is removed
+    // on completion). TIMER/SIGNAL parks are present in the snapshot but remain outside the floor
+    // (the 8.10 follow-on), so `deriveWaitStates` must NOT synthesize them — the emulation cannot
+    // report a park a live engine would omit (issue nanobpm/nano-ide#498, #497).
     timers: [{ elementId: "tmr", instanceKey: "3", key: "70" }],
     signalSubscriptions: [{ elementId: "sig", instanceKey: "3", signalName: "Sig", key: "80" }],
-    userTasks: [{ elementId: "review", instanceKey: "3", elementInstanceKey: "7", key: "90" }],
+    userTasks: [
+      { elementId: "review", instanceKey: "3", elementInstanceKey: "7", key: "90", state: "Created" },
+      { elementId: "done", instanceKey: "3", elementInstanceKey: "99", key: "91", state: "Completed" }, // closed → no park
+    ],
   }));
 
   const all = deriveWaitStates(snapshot);
   assert.deepEqual(all, [
     { elementInstanceKey: "5", processInstanceKey: "3", elementId: "svc", waitStateType: "JOB", jobType: "work", jobKey: "50" },
     { elementInstanceKey: "6", processInstanceKey: "3", elementId: "catch", waitStateType: "MESSAGE", messageName: "Go", correlationKey: "K1" },
+    { elementInstanceKey: "7", processInstanceKey: "3", elementId: "review", waitStateType: "USER_TASK", userTaskKey: "90" },
   ]);
   // Selectors narrow by kind and by element (within the floor).
   assert.deepEqual(deriveWaitStates(snapshot, { waitStateType: "JOB" }).map((w) => w.elementId), ["svc"]);
   assert.deepEqual(deriveWaitStates(snapshot, { elementId: "catch" }).map((w) => w.waitStateType), ["MESSAGE"]);
-  // A `waitStateType` filter outside the floor is rejected exactly as the gateway 422s it,
-  // rather than silently emulated — so an app authoring it cannot ship green.
-  assert.throws(
-    () => deriveWaitStates(snapshot, { waitStateType: "USER_TASK" }),
-    /USER_TASK/,
+  // A USER_TASK filter is now served (on the floor), narrowing to the user-task park.
+  assert.deepEqual(
+    deriveWaitStates(snapshot, { waitStateType: "USER_TASK" }),
+    [{ elementInstanceKey: "7", processInstanceKey: "3", elementId: "review", waitStateType: "USER_TASK", userTaskKey: "90" }],
   );
+  // A `waitStateType` filter still outside the floor is rejected exactly as the gateway 422s
+  // it, rather than silently emulated — so an app authoring it cannot ship green.
   assert.throws(
     () => deriveWaitStates(snapshot, { waitStateType: "TIMER" }),
     /unsupported waitStateType/,
+  );
+  assert.throws(
+    () => deriveWaitStates(snapshot, { waitStateType: "SIGNAL" }),
+    /SIGNAL/,
   );
 });
 

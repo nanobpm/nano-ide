@@ -867,9 +867,10 @@ export class SdkEngineClient implements EngineClient {
     filter?: ElementInstanceWaitStateFilter,
   ): Promise<ElementInstanceWaitState[]> {
     // The wait-states search surfaces the parks the deployed engine's read model serves.
-    // A `waitStateType` selector outside the deployed floor (`JOB | MESSAGE`) is rejected by
-    // the gateway with HTTP 422; fail fast client-side with a clear error instead, so the
-    // divergence is caught offline and identically to the WASM adapter (No Drift Surfaces).
+    // A `waitStateType` selector outside the deployed floor (`JOB | MESSAGE | USER_TASK`) is
+    // rejected by the gateway with HTTP 422; fail fast client-side with a clear error instead,
+    // so the divergence is caught offline and identically to the WASM adapter (No Drift
+    // Surfaces).
     assertDeployedWaitStateType(filter?.waitStateType);
     // Same zero-wait read + per-row mapping-gate shape as `searchElementInstances`; the SDK
     // nests park-specific fields under `details`, which `mapElementInstanceWaitStateRow`

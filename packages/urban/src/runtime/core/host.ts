@@ -350,7 +350,9 @@ export interface ElementInstanceSummary {
  * {@link ElementInstanceWaitStateFilter} whose `waitStateType` falls outside that floor is
  * rejected (the gateway answers HTTP 422); {@link assertDeployedWaitStateType} enforces the
  * same floor client-side so the divergence surfaces as a clear error offline, in tests, and
- * against a live engine alike. Ref: Magikcraft/nano-bpm#1042.
+ * against a live engine alike. The floor now covers `JOB | MESSAGE | USER_TASK`
+ * (Magikcraft/nano-bpm#1042 shipped `USER_TASK` parks); `TIMER`/`SIGNAL`/`CONDITION` remain
+ * the follow-on. Ref: Magikcraft/nano-bpm#1042.
  */
 export type WaitStateType =
   | "JOB"
@@ -363,10 +365,12 @@ export type WaitStateType =
 /**
  * The `waitStateType` values the *currently deployed* nanobpmn gateway's wait-state read
  * model actually implements — the **deployed floor**, a strict subset of the canonical
- * {@link WaitStateType} union. The gateway's read model is a snapshot of the Zeebe contract
- * taken 2026-06-09 (the same day Zeebe extended it with `USER_TASK`, then `TIMER`/`SIGNAL`/
- * `CONDITION`), so it recognizes only `JOB | MESSAGE` and rejects any other filter value
- * with HTTP 422.
+ * {@link WaitStateType} union. The gateway's read model started as a snapshot of the Zeebe
+ * contract taken 2026-06-09 that recognized only `JOB | MESSAGE`; Magikcraft/nano-bpm#1042
+ * has since shipped `USER_TASK` parks (added on user-task CREATED, removed on
+ * COMPLETED/CANCELED, with `userTaskDetails.taskKey`), moving the floor up to
+ * `JOB | MESSAGE | USER_TASK`. `TIMER`/`SIGNAL`/`CONDITION` are still rejected with HTTP 422
+ * (the 8.10 follow-on tracked in Magikcraft/nano-bpm#1042).
  *
  * This constant is the **single source of truth** for that floor: the SDK-backed and
  * WASM-backed {@link EngineClient} adapters both gate through {@link assertDeployedWaitStateType},
@@ -375,7 +379,7 @@ export type WaitStateType =
  * backed by the real gateway) only once the engine actually serves the richer type — the
  * tracking gap is Magikcraft/nano-bpm#1042.
  */
-export const DEPLOYED_WAIT_STATE_TYPES: readonly WaitStateType[] = ["JOB", "MESSAGE"];
+export const DEPLOYED_WAIT_STATE_TYPES: readonly WaitStateType[] = ["JOB", "MESSAGE", "USER_TASK"];
 
 /**
  * Thrown when a wait-state search is asked to filter on a {@link WaitStateType} the deployed
@@ -701,14 +705,14 @@ export interface EngineClient {
    * (see {@link ElementInstanceWaitState}), so a consumer can read the job/message parks a
    * {@link searchUserTasks} cannot surface.
    *
-   * **Deployed floor.** The currently deployed nanobpmn gateway implements only
-   * `JOB | MESSAGE` ({@link DEPLOYED_WAIT_STATE_TYPES}) — a `USER_TASK` park is read via
-   * {@link searchUserTasks}, not here. A `waitStateType` filter outside the floor is rejected
-   * with {@link UnsupportedWaitStateTypeError} (the live gateway answers HTTP 422); an
-   * unfiltered search returns only in-floor parks. The `waitStateType` union is
-   * forward-looking (richer engines may serve more), but this adapter contract pins the
-   * floor so a query cannot pass in emulation while a real engine rejects it. Ref:
-   * Magikcraft/nano-bpm#1042.
+   * **Deployed floor.** The currently deployed nanobpmn gateway implements
+   * `JOB | MESSAGE | USER_TASK` ({@link DEPLOYED_WAIT_STATE_TYPES}); a `USER_TASK` park can be
+   * read here (or through {@link searchUserTasks}). A `waitStateType` filter outside the floor
+   * (`TIMER`/`SIGNAL`/`CONDITION`) is rejected with {@link UnsupportedWaitStateTypeError} (the
+   * live gateway answers HTTP 422); an unfiltered search returns only in-floor parks. The
+   * `waitStateType` union is forward-looking (richer engines may serve more), but this adapter
+   * contract pins the floor so a query cannot pass in emulation while a real engine rejects it.
+   * Ref: Magikcraft/nano-bpm#1042.
    */
   searchElementInstanceWaitStates(
     filter?: ElementInstanceWaitStateFilter,

@@ -302,10 +302,12 @@ export function runEngineClientContract(
     });
   });
 
-  test(`${label}: a USER_TASK wait-state filter is rejected (deployed floor is JOB|MESSAGE)`, async () => {
+  test(`${label}: a USER_TASK park is surfaced through the wait-state read model (floor now JOB|MESSAGE|USER_TASK)`, async () => {
     await withEngine(async (engine) => {
-      // A native user task parks for a human. It is discoverable — but through the user-task
-      // read channel (`searchUserTasks`/`openUserTasks`), NOT the wait-state read model.
+      // A native user task parks for a human. Since Magikcraft/nano-bpm#1042 shipped USER_TASK
+      // wait states in the engine's read model, that park is discoverable BOTH through the
+      // user-task read channel (`searchUserTasks`/`openUserTasks`) AND through the wait-state
+      // read model — the two must agree on its identity.
       await engine.deployResources(res(USER_TASK_BPMN));
       const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "human" });
 
@@ -316,28 +318,51 @@ export function runEngineClientContract(
       assert.equal(tasks.length, 1, "the user task is read via the user-task channel");
       assert.equal(tasks[0]?.elementId, "review");
 
-      // The deployed gateway's wait-state read model implements only JOB|MESSAGE, so a
-      // `waitStateType: "USER_TASK"` filter is rejected (HTTP 422 against a live gateway). This
-      // leg runs against the WASM adapter *and* the live SDK adapter, so an app authoring this
-      // filter cannot ship green in emulation while a real engine rejects it — the exact
-      // parity gap this contract exists to prevent (issue nanobpm/nano-ide#497).
-      await assert.rejects(
-        engine.searchElementInstanceWaitStates({ processInstanceKey, waitStateType: "USER_TASK" }),
-        (err: unknown) => {
-          assert.ok(err instanceof Error, "expected an Error");
-          assert.match(err.message, /USER_TASK/);
-          return true;
-        },
-        "a USER_TASK wait-state filter must be rejected, not silently emulated",
+      // The `waitStateType: "USER_TASK"` filter is now SERVED (200), not rejected — the exact
+      // filter nano-workforce's delivery-graph poller authors (nanobpm/nano-workforce#594/#596).
+      // This leg is adapter-agnostic: run against the WASM emulation here it exercises the
+      // re-extended synthesis; run against the live `SdkEngineClient` (the integration lane) it
+      // is the REAL-GATEWAY leg — the same canonical assertions must pass against both, so
+      // emulation-vs-gateway drift is caught in CI, not at runtime. This is what #497 lacked:
+      // the previous parity claim was only ever exercised against the mock snapshot.
+      const parked = await waitForValue(async () => {
+        const found = await engine.searchElementInstanceWaitStates({
+          processInstanceKey,
+          waitStateType: "USER_TASK",
+        });
+        return found.length > 0 ? found : undefined;
+      });
+      assert.equal(parked.length, 1, "the user task appears as a USER_TASK wait state");
+      const park = parked[0];
+      assert.equal(park.waitStateType, "USER_TASK");
+      assert.equal(park.elementId, "review");
+      assert.equal(park.processInstanceKey, processInstanceKey);
+
+      // The park carries the canonical USER_TASK details — the `userTaskKey` (engine `taskKey`),
+      // matching the identity the user-task channel reports for the same task.
+      if (park.waitStateType === "USER_TASK") {
+        assert.ok(park.userTaskKey, "a USER_TASK park carries its userTaskKey");
+        assert.equal(park.userTaskKey, tasks[0]?.userTaskKey, "the park's userTaskKey matches the user-task channel");
+      }
+
+      // Its element-instance key resolves to the same one `searchElementInstances` reports —
+      // the wait-state read model and the element-instance read model cannot drift.
+      const [byElement] = await engine.searchElementInstances({ processInstanceKey, elementId: "review" });
+      assert.equal(park.elementInstanceKey, byElement?.elementInstanceKey);
+
+      // An unfiltered wait-state search also surfaces it (no filter → every in-floor park).
+      const unfiltered = await engine.searchElementInstanceWaitStates({ processInstanceKey });
+      assert.ok(
+        unfiltered.some((w) => w.waitStateType === "USER_TASK" && w.elementId === "review"),
+        "an unfiltered wait-state search surfaces the USER_TASK park",
       );
 
-      // And an unfiltered wait-state search does not surface the user task as a park — the
-      // emulation reports only the floor kinds a live engine would (here: none).
-      const waits = await engine.searchElementInstanceWaitStates({ processInstanceKey });
-      assert.deepEqual(
-        waits.filter((w) => w.waitStateType === "USER_TASK"),
-        [],
-        "a user task must not appear as a USER_TASK wait state",
+      // Canonical lifecycle: the park is REMOVED when the user task completes (added on
+      // CREATED, removed on COMPLETED/CANCELED). Poll to tolerate an eventually consistent
+      // adapter — a live gateway projects the removal asynchronously.
+      await engine.completeUserTask(tasks[0].userTaskKey);
+      await waitFor(async () =>
+        (await engine.searchElementInstanceWaitStates({ processInstanceKey, waitStateType: "USER_TASK" })).length === 0
       );
     });
   });

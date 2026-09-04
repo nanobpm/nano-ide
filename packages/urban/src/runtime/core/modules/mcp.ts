@@ -82,7 +82,6 @@ import { resolveBindMode } from "../manifest.ts";
 import { json, makeRouter, type Route } from "../router.ts";
 import { API_BASE, readApiBinding } from "./api.ts";
 import { resolveAppPath } from "./datasource.ts";
-import { InstanceStateStore } from "./instance-state-store.ts";
 import { OpenUserTasksStore } from "./open-user-tasks-store.ts";
 
 /** The mount path of the MCP endpoint — a sibling of `/app/api` / `/app/agent`, mounted
@@ -785,17 +784,19 @@ function buildDebugTools(app: AppApi): DebugTool[] {
     },
     {
       name: `${DEBUG_PREFIX}instance_state`,
-      description: "Projection (urban_instance_state, ADR 0065): the canonical engine-lifecycle state for an instance.",
+      description:
+        "Engine truth: the live lifecycle state of a process instance (ACTIVE/COMPLETED/TERMINATED) via searchProcessInstances, plus `waitingOnHuman` from its open user tasks. `null` means the engine has no such instance (not merely 'not yet terminal').",
       inputSchema: {
         type: "object",
         properties: { processInstanceKey: OPTIONAL_STRING },
         required: ["processInstanceKey"],
       },
-      run: (args) => {
+      run: async (args) => {
         const key = requireString(args, "processInstanceKey");
-        const db = projectionDb();
-        if (!db) return Promise.resolve(null);
-        return Promise.resolve(new InstanceStateStore(db).getState(key) ?? null);
+        const [snapshot] = await app.engine.searchProcessInstances({ processInstanceKeys: [key] });
+        if (!snapshot) return null;
+        const openTasks = await app.engine.openUserTasks({ processInstanceKey: key });
+        return { processInstanceKey: key, state: snapshot.state, waitingOnHuman: openTasks.length > 0 };
       },
     },
     {

@@ -167,7 +167,14 @@ export class AgenticEmitClient {
     this.#onError = options.onError;
     this.#schedule = options.schedule ?? defaultSchedule;
     this.#autoReconnect = options.autoReconnect ?? true;
-    this.#negotiated = negotiate(this.#local, options.remote ?? this.#local);
+    // Only an ABSENT remote (`undefined`) means "peer unknown — negotiate
+    // optimistically against our own advertisement until the real one arrives".
+    // An explicit `remote` (including `null` or any malformed value) is passed
+    // straight through to the garbage-tolerant negotiate() — consistent with
+    // applyRemoteAdvertisement() — so a caller that hands us `null` safely
+    // degrades to the shared subset instead of assuming full peer support and
+    // emitting frames the peer can't decode.
+    this.#negotiated = negotiate(this.#local, options.remote === undefined ? this.#local : options.remote);
   }
 
   /** True once {@link close} has been called (no further reconnects). */
@@ -205,6 +212,11 @@ export class AgenticEmitClient {
    */
   applyRemoteAdvertisement(remote: ProtocolAdvertisement | unknown): NegotiatedProtocol {
     this.#negotiated = negotiate(this.#local, remote);
+    if (this.#instances.size > 1 && !this.#negotiated.supportsFeature("multi-instance")) {
+      this.#onError?.(
+        this.#multiInstanceUnsupportedError(`the ${this.#instances.size} instances already registered on this connection`),
+      );
+    }
     return this.#negotiated;
   }
 
@@ -233,12 +245,30 @@ export class AgenticEmitClient {
    */
   register(instance: string, capability: Capability): void {
     const existing = this.#instances.get(instance);
+    if (existing === undefined && this.#instances.size >= 1 && !this.#negotiated.supportsFeature("multi-instance")) {
+      // The peer negotiated away `multi-instance`, so it can't uphold
+      // per-instance presence/ownership for more than one worker on this shared
+      // connection. Surface the contract violation (non-fatal) rather than
+      // silently multiplexing a second instance the peer will misattribute.
+      this.#onError?.(this.#multiInstanceUnsupportedError(`multiplexing a second instance ${JSON.stringify(instance)}`));
+    }
     if (existing) {
       this.#instances.set(instance, { capability, claims: existing.claims });
     } else {
       this.#instances.set(instance, { capability, claims: new Set<string>() });
     }
     this.#emit("register", CONTROL_LANE, { instance, capability });
+  }
+
+  /** Build the (non-fatal, onError-surfaced) error raised when this connection
+   * is asked to carry multiple instances but the peer never negotiated the
+   * `multi-instance` feature — the peer can't uphold per-instance semantics, so
+   * continuing risks ambiguous presence/ownership attribution. Surfaced, not
+   * thrown, so a legacy path degrades with a signal instead of hard-crashing. */
+  #multiInstanceUnsupportedError(context: string): Error {
+    return new Error(
+      `peer has not negotiated the "multi-instance" feature; ${context} risks ambiguous per-instance presence/ownership attribution on this shared connection`,
+    );
   }
 
   /** Emit a liveness `heartbeat` for a registered instance. */

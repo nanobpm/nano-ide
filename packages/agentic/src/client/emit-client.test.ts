@@ -376,3 +376,68 @@ test("transcriptStreamKey is injective even when a component contains the separa
   const d = transcriptStreamKey("a", "\\b");
   assert.notEqual(c, d, "the escape char is itself escaped, so it cannot forge a separator");
 });
+
+test("an explicit remote: null degrades to the safe shared subset (not optimistic full support)", () => {
+  // A caller that hands an explicit `null`/unknown remote at construction is NOT
+  // "peer unknown" — it must negotiate down to the garbage-tolerant intersection
+  // (empty), so no undecodable frame is emitted. Only an ABSENT remote is
+  // optimistic. Guards against `remote ?? local` conflating null with undefined.
+  const nullSocket = new FakeSocket();
+  const nullRemote = new AgenticEmitClient({ connect: () => nullSocket, remote: null });
+  nullRemote.open();
+  nullSocket.fireOpen();
+  nullRemote.register("w1", {});
+  assert.deepEqual(nullSocket.frames(), [], "an explicit null remote emits nothing (safe subset)");
+
+  // Contrast: an absent remote stays optimistic and emits register.
+  const absentSocket = new FakeSocket();
+  const absentRemote = new AgenticEmitClient({ connect: () => absentSocket });
+  absentRemote.open();
+  absentSocket.fireOpen();
+  absentRemote.register("w1", {});
+  assert.deepEqual(
+    absentSocket.frames().map((f) => f.family),
+    ["register"],
+    "an absent remote negotiates optimistically against the local advertisement",
+  );
+});
+
+test("registering a second instance without a negotiated multi-instance feature surfaces an onError signal", () => {
+  const socket = new FakeSocket();
+  const errors: unknown[] = [];
+  // A legacy peer that never negotiated multi-instance can't uphold per-instance
+  // presence/ownership for N workers on one connection.
+  const legacy = { version: 1, families: MESSAGE_FAMILIES, features: [] };
+  const client = new AgenticEmitClient({ connect: () => socket, remote: legacy, onError: (e) => errors.push(e) });
+  client.open();
+  socket.fireOpen();
+
+  client.register("w1", {}); // first instance is fine
+  assert.equal(errors.length, 0, "a single instance never trips the multi-instance guard");
+
+  client.register("w2", {}); // second distinct instance violates the contract
+  assert.equal(errors.length, 1, "multiplexing a second instance is surfaced");
+  assert.match(String(errors[0]), /multi-instance/, "the surfaced error names the missing feature");
+
+  // Re-registering an existing instance is not a new multiplex — no repeat signal.
+  client.register("w1", { cognition: "opus" });
+  assert.equal(errors.length, 1, "re-registering a known instance does not re-trip the guard");
+});
+
+test("negotiating away multi-instance while several instances are registered surfaces an onError signal", () => {
+  const socket = new FakeSocket();
+  const errors: unknown[] = [];
+  // Optimistic construction (absent remote) lets multiple instances register.
+  const client = new AgenticEmitClient({ connect: () => socket, onError: (e) => errors.push(e) });
+  client.open();
+  socket.fireOpen();
+  client.register("w1", {});
+  client.register("w2", {});
+  assert.equal(errors.length, 0, "optimistic negotiation permits multiplexing");
+
+  // A later handshake with a peer lacking multi-instance must surface the fact
+  // that N already-registered instances can no longer be safely multiplexed.
+  client.applyRemoteAdvertisement({ version: 1, families: MESSAGE_FAMILIES, features: [] });
+  assert.equal(errors.length, 1, "downgrading multi-instance with >1 instance registered is surfaced");
+  assert.match(String(errors[0]), /multi-instance/, "the surfaced error names the missing feature");
+});

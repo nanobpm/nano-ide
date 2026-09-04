@@ -15,6 +15,7 @@
 export {
   AgenticEmitClient,
   composeStreamId,
+  parseStreamId,
 } from "./emit-client.ts";
 export type {
   AgenticEmitClientOptions,

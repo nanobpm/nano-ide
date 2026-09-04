@@ -9,7 +9,7 @@ import {
   type ProtocolAdvertisement,
 } from "../protocol/index.ts";
 
-import { AgenticEmitClient, composeStreamId } from "./emit-client.ts";
+import { AgenticEmitClient, composeStreamId, parseStreamId } from "./emit-client.ts";
 import type { EmitSocket } from "./emit-client.ts";
 
 /** An in-memory duplex socket that records every frame the client sends. */
@@ -266,6 +266,47 @@ test("per-instance transcript isolation: two instances' streams never cross", ()
   // The composition is injective even when names contain the delimiter chars.
   assert.notEqual(composeStreamId("a", "b/c"), composeStreamId("a/b", "c"));
   assert.notEqual(composeStreamId("1:x", "y"), composeStreamId("1", "x/y"));
+});
+
+test("parseStreamId is the exact inverse of composeStreamId (round-trip property)", () => {
+  // A spread of fields, deliberately including the delimiter chars `:` and `/`
+  // in either position, empty strings, and digit-only names that could be
+  // confused for the length prefix.
+  const samples = ["", "a", "inst-a", "a:b", "a/b", ":", "/", "://", "1", "10", "0", "12:34/56", "  spaces  ", "😀/x"];
+  for (const instance of samples) {
+    for (const stream of samples) {
+      const id = composeStreamId(instance, stream);
+      assert.deepEqual(
+        parseStreamId(id),
+        { instance, stream },
+        `round-trip failed for instance=${JSON.stringify(instance)} stream=${JSON.stringify(stream)}`,
+      );
+    }
+  }
+
+  // For a job transcript the stream is the job key stringified.
+  const jobKey = 987654321;
+  assert.deepEqual(parseStreamId(composeStreamId("inst-a", String(jobKey))), {
+    instance: "inst-a",
+    stream: String(jobKey),
+  });
+});
+
+test("parseStreamId rejects malformed ids with undefined", () => {
+  for (const bad of [
+    "", // no length prefix
+    "abc", // no `:`
+    ":a/b", // empty length
+    "-1:a/b", // negative length
+    "01:a/b", // non-canonical (leading zero) length prefix
+    "3:ab/c", // length overruns the instance before the `/`
+    "5:abc", // length overruns the whole string
+    "2:ab", // no `/` delimiter after the instance
+    "2:abc", // char after the N-char instance is not `/`
+    "x:a/b", // non-numeric length
+  ]) {
+    assert.equal(parseStreamId(bad), undefined, `expected undefined for ${JSON.stringify(bad)}`);
+  }
 });
 
 test("legacy peer (no claim/release families) degrades claim/release to no-ops", () => {

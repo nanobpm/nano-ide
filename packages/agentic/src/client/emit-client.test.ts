@@ -449,3 +449,79 @@ test("negotiating away multi-instance while several instances are registered sur
   assert.equal(errors.length, 1, "downgrading multi-instance with >1 instance registered is surfaced");
   assert.match(String(errors[0]), /multi-instance/, "the surfaced error names the missing feature");
 });
+
+test("after a multi-instance downgrade, only the primary instance's frames reach the wire", () => {
+  const scheduler = new ManualScheduler();
+  let socket = new FakeSocket();
+  const errors: unknown[] = [];
+  // Optimistic construction (absent remote) lets several instances multiplex.
+  const client = new AgenticEmitClient({
+    connect: () => {
+      socket = new FakeSocket();
+      return socket;
+    },
+    schedule: scheduler.schedule,
+    onError: (e) => errors.push(e),
+  });
+  client.open();
+  socket.fireOpen();
+  client.register("w1", {});
+  client.register("w2", {});
+  client.register("w3", {});
+  client.claim("w2", "job-early"); // tracked while multi-instance is still on
+
+  // The peer now downgrades multi-instance ONLY (claim-release stays, to isolate
+  // the multi-instance gate): it can attribute just one instance per connection.
+  client.applyRemoteAdvertisement({ version: 1, families: MESSAGE_FAMILIES, features: ["claim-release"] });
+  errors.length = 0; // ignore the one-shot downgrade signal; focus on emit gating.
+  socket.sent.length = 0; // only inspect frames emitted AFTER the downgrade.
+
+  // Every instance-tagged emit for a NON-primary instance degrades to a no-op and
+  // surfaces onError — the gap the register()-only gate left open. w2 stays
+  // tracked (it keeps job-early) so the reconnect resync below must skip it too.
+  client.heartbeat("w2");
+  client.register("w2", { cognition: "opus" }); // re-register of a downgraded instance
+  client.claim("w2", "job-B");
+  client.release("w2", "job-B");
+  client.transcript("w2", "out", "chunk");
+  client.deregister("w3"); // deregister of a non-primary instance is gated + untracks
+  assert.equal(
+    socket.frames().length,
+    0,
+    "no frame for a non-primary instance reaches a peer that can't attribute it",
+  );
+  assert.ok(errors.length >= 6, "each gated emit for a second instance surfaces onError");
+  assert.ok(
+    errors.every((e) => /multi-instance/.test(String(e))),
+    "every gated-emit signal names the missing feature",
+  );
+
+  // The PRIMARY instance is unaffected — its frames still flow.
+  errors.length = 0;
+  socket.sent.length = 0;
+  client.heartbeat("w1");
+  client.claim("w1", "job-A");
+  client.transcript("w1", "out", "chunk");
+  assert.deepEqual(
+    socket.frames().map((f) => f.family),
+    ["heartbeat", "claim", "relay"],
+    "the primary instance's frames are never gated",
+  );
+  assert.equal(errors.length, 0, "the primary instance never trips the gate");
+
+  // A reconnect resync re-asserts ONLY the primary — the still-tracked gated
+  // instance w2 (with its job-early claim) is skipped, never re-asserted.
+  socket.fireClose();
+  scheduler.drain();
+  socket.fireOpen();
+  const resynced = socket.frames();
+  assert.ok(resynced.length > 0, "resync emits at least the primary's frames");
+  assert.ok(
+    resynced.every((f) => payloadInstance(f) === "w1"),
+    "resync re-asserts only the primary instance, never a gated one",
+  );
+  assert.ok(
+    resynced.some((f) => f.family === "register") && resynced.some((f) => f.family === "claim"),
+    "resync still re-asserts the primary's register + claim",
+  );
+});

@@ -16,6 +16,10 @@
  * Guarantees:
  *  - **Multiplex** — `register`/`heartbeat`/`deregister`, `claim`/`release`, and
  *    a `transcript` sink, each carrying `instance` explicitly, over one socket.
+ *    Multiplexing more than one instance requires the peer to negotiate the
+ *    `multi-instance` feature; against a peer that hasn't (including after a
+ *    downgrade), every outbound instance-tagged frame for a non-primary instance
+ *    degrades to a no-op + `onError` so a legacy peer never misattributes it.
  *  - **Idempotent ownership** — `claim`/`release` are safe to re-assert; the
  *    reconnect resync re-asserts every in-flight claim.
  *  - **Reconnect resync** — on every (re)connect the client re-`register`s all
@@ -269,6 +273,7 @@ export class AgenticEmitClient {
     } else {
       this.#instances.set(instance, { capability, claims: new Set<string>() });
     }
+    if (this.#gateInstanceOffWire(instance)) return;
     this.#emit("register", CONTROL_LANE, { instance, capability });
   }
 
@@ -283,8 +288,38 @@ export class AgenticEmitClient {
     );
   }
 
+  /**
+   * Whether frames tagged for `instance` may go on the wire. When the peer has
+   * negotiated `multi-instance` every instance is allowed. Otherwise — including
+   * after {@link applyRemoteAdvertisement} downgrades a connection that already
+   * multiplexed several instances — only the PRIMARY (first-registered) instance
+   * may emit: a legacy peer attributes every instance-tagged frame to the single
+   * instance it can track, so a frame for any other instance would
+   * misattribute/overwrite its presence/ownership. This is the single source of
+   * truth for the outbound multi-instance gate — both the public emit methods and
+   * the reconnect resync derive their gating from it, so the two never drift.
+   */
+  #instanceAllowedOnWire(instance: string): boolean {
+    if (this.#negotiated.supportsFeature("multi-instance")) return true;
+    const primary = this.#instances.keys().next().value;
+    return primary === undefined || primary === instance;
+  }
+
+  /** Gate an instance-tagged emit off the wire when {@link #instanceAllowedOnWire}
+   * forbids it, surfacing the (non-fatal) contract violation via onError — the
+   * same degrade-to-no-op strategy as {@link register}. Returns `true` when the
+   * caller must skip the emit. */
+  #gateInstanceOffWire(instance: string): boolean {
+    if (this.#instanceAllowedOnWire(instance)) return false;
+    this.#onError?.(
+      this.#multiInstanceUnsupportedError(`emitting an instance-tagged frame for a second instance ${JSON.stringify(instance)}`),
+    );
+    return true;
+  }
+
   /** Emit a liveness `heartbeat` for a registered instance. */
   heartbeat(instance: string): void {
+    if (this.#gateInstanceOffWire(instance)) return;
     this.#emit("heartbeat", CONTROL_LANE, { instance });
   }
 
@@ -294,7 +329,11 @@ export class AgenticEmitClient {
    * re-asserts them.
    */
   deregister(instance: string, reason?: string): void {
+    // Compute the gate BEFORE untracking, so deregistering the primary itself is
+    // not misclassified as a second-instance emit once it leaves the map.
+    const gated = this.#gateInstanceOffWire(instance);
     this.#instances.delete(instance);
+    if (gated) return;
     const payload = reason === undefined ? { instance } : { instance, reason };
     this.#emit("deregister", CONTROL_LANE, payload);
   }
@@ -306,6 +345,7 @@ export class AgenticEmitClient {
    * but is not tracked for resync.
    */
   claim(instance: string, jobKey: string): void {
+    if (this.#gateInstanceOffWire(instance)) return;
     this.#instances.get(instance)?.claims.add(jobKey);
     this.#emit("claim", CONTROL_LANE, { instance, jobKey });
   }
@@ -315,6 +355,7 @@ export class AgenticEmitClient {
    * unheld job is a no-op re-assertion. Drops the claim from the resync set.
    */
   release(instance: string, jobKey: string): void {
+    if (this.#gateInstanceOffWire(instance)) return;
     this.#instances.get(instance)?.claims.delete(jobKey);
     this.#emit("release", CONTROL_LANE, { instance, jobKey });
   }
@@ -327,6 +368,7 @@ export class AgenticEmitClient {
    * stale predecessor.
    */
   transcript(instance: string, stream: string, chunk: string): void {
+    if (this.#gateInstanceOffWire(instance)) return;
     this.#emit("relay", BULK_LANE, {
       op: "produce",
       stream: transcriptStreamKey(instance, stream),
@@ -353,9 +395,15 @@ export class AgenticEmitClient {
   #resync(): void {
     this.#generation += 1;
     for (const [instance, state] of this.#instances) {
+      // Skip instances the peer can no longer attribute (post-downgrade): re-
+      // asserting a non-primary instance on the wire is the very misattribution
+      // the outbound gate exists to prevent. Silent here — the caller was already
+      // signalled at register/downgrade time; a resync is internal machinery.
+      if (!this.#instanceAllowedOnWire(instance)) continue;
       this.#emit("register", CONTROL_LANE, { instance, capability: state.capability });
     }
     for (const [instance, state] of this.#instances) {
+      if (!this.#instanceAllowedOnWire(instance)) continue;
       for (const jobKey of state.claims) {
         this.#emit("claim", CONTROL_LANE, { instance, jobKey });
       }

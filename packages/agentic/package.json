@@ -1,6 +1,6 @@
 {
   "name": "@nanobpm/agentic",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "description": "The Nano agentic protocol (ADR 0056): one app-tier channel carrying agent presence/registry, demand×supply, a shared blackboard and live terminal relay — with the wire contract, channel/hub, family modules and the operator cockpit, as subpath exports.",
   "license": "Apache-2.0",
   "type": "module",

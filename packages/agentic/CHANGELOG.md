@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.12.0...@nanobpm/agentic-0.13.0) (2026-09-04)
+
+
+### Features
+
+* **agentic:** add parseStreamId (inverse of composeStreamId) ([#558](https://github.com/nanobpm/nano-ide/issues/558)) ([9ad416c](https://github.com/nanobpm/nano-ide/commit/9ad416c08b3a2546f0e576a22f4224dea0ff19ed))
+
 ## [0.12.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.11.0...@nanobpm/agentic-0.12.0) (2026-09-03)
 
 

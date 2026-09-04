@@ -676,18 +676,20 @@ export class WasmEngineClient implements EngineClient {
 
   /**
    * Search element-instance *wait states* — the parks the deployed engine's read model
-   * serves, derived from the snapshot's `jobs` (JOB) and `messageSubscriptions` (MESSAGE). A
-   * park row carries its `elementId` + owning process instance but not the element-instance
-   * key, so it is joined to the same instance's `activeElements` to resolve the key
-   * `searchElementInstances` reports — the two stay consistent.
+   * serves, derived from the snapshot's `jobs` (JOB), `messageSubscriptions` (MESSAGE) and
+   * `userTasks` (USER_TASK). A JOB/MESSAGE park row carries its `elementId` + owning process
+   * instance but not the element-instance key, so it is joined to the same instance's
+   * `activeElements` to resolve the key `searchElementInstances` reports; a USER_TASK row
+   * instead carries its `elementInstanceKey` directly — either way the two stay consistent.
    *
-   * **Deployed floor (`JOB | MESSAGE`).** This synthesizes only the park kinds the deployed
-   * nanobpmn gateway implements ({@link DEPLOYED_WAIT_STATE_TYPES}), and rejects a
+   * **Deployed floor (`JOB | MESSAGE | USER_TASK`).** This synthesizes only the park kinds the
+   * deployed nanobpmn gateway implements ({@link DEPLOYED_WAIT_STATE_TYPES}), and rejects a
    * `waitStateType` filter outside it with {@link UnsupportedWaitStateTypeError} — exactly as
    * the gateway-backed `SdkEngineClient` does (the live gateway answers HTTP 422). A
-   * `USER_TASK` park is *not* synthesized here (it is read via `searchUserTasks`), nor are
-   * `TIMER`/`SIGNAL`/`CONDITION`, so the emulation cannot report a park a real engine would
-   * not — a query that passes here passes against a live engine too. Ref:
+   * `USER_TASK` park is synthesized here (Magikcraft/nano-bpm#1042 shipped it in the gateway's
+   * read model) and can also be read via `searchUserTasks`; `TIMER`/`SIGNAL`/`CONDITION` are
+   * still *not* synthesized (the 8.10 follow-on), so the emulation cannot report a park a real
+   * engine would not — a query that passes here passes against a live engine too. Ref:
    * Magikcraft/nano-bpm#1042.
    */
   async searchElementInstanceWaitStates(
@@ -1540,11 +1542,12 @@ export function deriveElementInstances(
 
 /** Derive element-instance wait states from the snapshot's park collections (see
  *  {@link WasmEngineClient.searchElementInstanceWaitStates}). Synthesizes only the deployed
- *  floor (`JOB | MESSAGE`, {@link DEPLOYED_WAIT_STATE_TYPES}) — the park kinds the deployed
- *  gateway's read model serves — so the emulation cannot report a park a live engine would
- *  not. A `waitStateType` filter outside the floor is rejected with
- *  {@link UnsupportedWaitStateTypeError} (the gateway answers HTTP 422). Each park's
- *  element-instance key is resolved through {@link activeElementKeyIndex}; the
+ *  floor (`JOB | MESSAGE | USER_TASK`, {@link DEPLOYED_WAIT_STATE_TYPES}) — the park kinds the
+ *  deployed gateway's read model serves — so the emulation cannot report a park a live engine
+ *  would not. A `waitStateType` filter outside the floor is rejected with
+ *  {@link UnsupportedWaitStateTypeError} (the gateway answers HTTP 422). A JOB/MESSAGE park's
+ *  element-instance key is resolved through {@link activeElementKeyIndex}, while a USER_TASK
+ *  park carries its `elementInstanceKey` directly on the task row; the
  *  `processInstanceKey`/`elementId`/`waitStateType` selectors are applied client-side. */
 export function deriveWaitStates(
   snapshot: Record<string, unknown>,
@@ -1589,11 +1592,50 @@ export function deriveWaitStates(
       ...(correlationKey ? { correlationKey } : {}),
     });
   }
-  // TIMER/SIGNAL/USER_TASK/CONDITION parks are deliberately *not* synthesized: the deployed
-  // gateway's read model does not serve them (`assertDeployedWaitStateType` rejects a filter
-  // for them, and an unfiltered search must not surface a park a live engine would omit). A
-  // user-task park is read through `searchUserTasks`, not here. Ref: Magikcraft/nano-bpm#1042.
+  // TIMER/SIGNAL/CONDITION parks are deliberately *not* synthesized: the deployed gateway's
+  // read model does not serve them yet (`assertDeployedWaitStateType` rejects a filter for
+  // them, and an unfiltered search must not surface a park a live engine would omit) — the
+  // 8.10 follow-on tracked in Magikcraft/nano-bpm#1042.
+  //
+  // USER_TASK parks — the snapshot carries the element-instance key directly on the task row.
+  // A park exists only while the user task is OPEN: added on the user-task CREATED record and
+  // removed when it completes/cancels (canonical lifecycle). The snapshot RETAINS completed/
+  // cancelled tasks (with `state: "Completed"`/`"Canceled"`), so gate on the open state rather
+  // than the row's mere presence — otherwise a park would linger past completion, a drift a
+  // live gateway would never show. The park's `userTaskKey` is the task row's own key.
+  // Magikcraft/nano-bpm#1042 shipped this park in the gateway's read model, so re-synthesizing
+  // it here keeps the emulation on the deployed floor rather than under-reporting it.
+  for (const task of records(snapshot.userTasks)) {
+    if (!isOpenUserTaskState(task.state)) continue;
+    const processInstanceKey = presentKey(task.instanceKey);
+    const elementId = presentString(task.elementId);
+    const elementInstanceKey = presentKey(task.elementInstanceKey);
+    const userTaskKey = presentKey(task.key);
+    if (
+      processInstanceKey === undefined || elementId === undefined ||
+      elementInstanceKey === undefined || userTaskKey === undefined
+    ) {
+      continue;
+    }
+    accept({
+      elementInstanceKey,
+      processInstanceKey,
+      elementId,
+      waitStateType: "USER_TASK",
+      userTaskKey,
+    });
+  }
   return out;
+}
+
+/** Whether a WASM-snapshot user-task `state` denotes an OPEN (answerable) task — the only
+ *  state a `USER_TASK` wait-state park exists in. The snapshot spells the state in PascalCase
+ *  (`"Created"`) and RETAINS completed/cancelled tasks (`"Completed"`/`"Canceled"`), so a park
+ *  must be gated on the open state rather than the row's presence; the check is
+ *  case-insensitive so a spelling drift does not silently re-open a closed task. Mirrors the
+ *  canonical lifecycle (added on user-task CREATED, removed on COMPLETED/CANCELED). */
+function isOpenUserTaskState(state: unknown): boolean {
+  return typeof state === "string" && state.trim().toUpperCase() === "CREATED";
 }
 
 /** Resolve the `{ elementInstanceKey, processInstanceKey, elementId }` identity of a park row

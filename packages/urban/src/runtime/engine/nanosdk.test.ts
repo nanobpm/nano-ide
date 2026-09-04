@@ -640,14 +640,16 @@ test("normalizeWaitStateType maps the wait-state kinds (case-insensitive) and re
 });
 
 test("assertDeployedWaitStateType: allows the floor and an absent selector, rejects the rest", () => {
-  // The deployed floor is exactly JOB|MESSAGE — the single source of truth both adapters gate on.
-  assert.deepEqual([...DEPLOYED_WAIT_STATE_TYPES], ["JOB", "MESSAGE"]);
+  // The deployed floor is exactly JOB|MESSAGE|USER_TASK — the single source of truth both
+  // adapters gate on (USER_TASK shipped in Magikcraft/nano-bpm#1042).
+  assert.deepEqual([...DEPLOYED_WAIT_STATE_TYPES], ["JOB", "MESSAGE", "USER_TASK"]);
   // In-floor and absent selectors are no-ops (no throw).
   assert.doesNotThrow(() => assertDeployedWaitStateType(undefined));
   assert.doesNotThrow(() => assertDeployedWaitStateType("JOB"));
   assert.doesNotThrow(() => assertDeployedWaitStateType("MESSAGE"));
-  // Every canonical type outside the floor is rejected with a typed, descriptive error.
-  for (const waitStateType of ["USER_TASK", "TIMER", "SIGNAL", "CONDITION"] as const) {
+  assert.doesNotThrow(() => assertDeployedWaitStateType("USER_TASK"));
+  // Every canonical type still outside the floor is rejected with a typed, descriptive error.
+  for (const waitStateType of ["TIMER", "SIGNAL", "CONDITION"] as const) {
     assert.throws(
       () => assertDeployedWaitStateType(waitStateType),
       (err: unknown) => {
@@ -843,11 +845,56 @@ test("searchElementInstanceWaitStates forwards a waitStateType selector and read
   ]);
 });
 
+test("searchElementInstanceWaitStates maps a USER_TASK park, unwrapping details.taskKey → userTaskKey (mock SDK client, not a live gateway)", async () => {
+  // MOCK-ONLY LEG: this exercises the SDK adapter's row mapping against a `fakeSdkClient`, not
+  // a live gateway — the canonical parity assertion against a real engine lives in the
+  // adapter-agnostic `runEngineClientContract` USER_TASK leg (contract.ts), run against the
+  // live `SdkEngineClient` in the integration lane. Here we only pin the shape the engine's
+  // wait-state read model returns for a USER_TASK park (Magikcraft/nano-bpm#1042): the park's
+  // `taskKey` under `details` unwraps to the seam's `userTaskKey`.
+  let seenInput: unknown;
+  const client = fakeSdkClient({
+    searchElementInstanceWaitStates: async (input) => {
+      seenInput = input;
+      return {
+        items: [
+          {
+            elementInstanceKey: 7,
+            processInstanceKey: 3,
+            elementId: "review",
+            type: "USER_TASK",
+            details: { waitStateType: "USER_TASK", taskKey: 90 },
+          },
+          {
+            elementInstanceKey: 8,
+            processInstanceKey: 3,
+            elementId: "review2",
+            details: { waitStateType: "USER_TASK" },
+          }, // USER_TASK with no taskKey → dropped (missing required identity)
+        ],
+      };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchElementInstanceWaitStates({ processInstanceKey: "3", waitStateType: "USER_TASK" });
+  assert.deepEqual(seenInput, { filter: { processInstanceKey: "3", waitStateType: "USER_TASK" } });
+  assert.deepEqual(out, [
+    {
+      elementInstanceKey: "7",
+      processInstanceKey: "3",
+      elementId: "review",
+      elementType: "USER_TASK",
+      waitStateType: "USER_TASK",
+      userTaskKey: "90",
+    },
+  ]);
+});
+
 test("searchElementInstanceWaitStates rejects a waitStateType outside the deployed floor without calling the gateway", async () => {
-  // The deployed gateway's read model implements only JOB|MESSAGE and 422s any other filter
-  // value. The SDK adapter must fail fast client-side (not issue the call), so an app authoring
-  // `waitStateType: "USER_TASK"` cannot ship green then blow up at runtime (issue
-  // nanobpm/nano-ide#497).
+  // The deployed gateway's read model implements JOB|MESSAGE|USER_TASK and 422s any other
+  // filter value. The SDK adapter must fail fast client-side (not issue the call), so an app
+  // authoring `waitStateType: "TIMER"` cannot ship green then blow up at runtime (issues
+  // nanobpm/nano-ide#497, #498).
   let called = false;
   const client = fakeSdkClient({
     searchElementInstanceWaitStates: async () => {
@@ -856,7 +903,7 @@ test("searchElementInstanceWaitStates rejects a waitStateType outside the deploy
     },
   });
   const engine = new SdkEngineClient(client);
-  for (const waitStateType of ["USER_TASK", "TIMER", "SIGNAL", "CONDITION"] as const) {
+  for (const waitStateType of ["TIMER", "SIGNAL", "CONDITION"] as const) {
     await assert.rejects(
       engine.searchElementInstanceWaitStates({ waitStateType }),
       (err: unknown) => {
@@ -868,8 +915,9 @@ test("searchElementInstanceWaitStates rejects a waitStateType outside the deploy
     );
   }
   assert.equal(called, false, "the gateway must not be called for an out-of-floor filter");
-  // An in-floor filter still reaches the gateway.
+  // Every in-floor filter still reaches the gateway.
   await engine.searchElementInstanceWaitStates({ waitStateType: "JOB" });
+  await engine.searchElementInstanceWaitStates({ waitStateType: "USER_TASK" });
   assert.equal(called, true);
 });
 

@@ -362,3 +362,17 @@ test("inbound frames are decoded and routed to onFrame; garbage goes to onError"
   socket.deliver(new Uint8Array([1, 2, 3]));
   assert.equal(errors.length, 1, "an undecodable inbound frame is surfaced, not thrown");
 });
+
+test("transcriptStreamKey is injective even when a component contains the separator", () => {
+  const sep = "\u001f";
+  // Without an injective join these two distinct (instance, stream) pairs would
+  // both compose to `a<sep>b<sep>c`, colliding and breaking per-instance isolation.
+  const a = transcriptStreamKey(`a${sep}b`, "c");
+  const b = transcriptStreamKey("a", `b${sep}c`);
+  assert.notEqual(a, b, "distinct (instance, stream) pairs must yield distinct keys");
+
+  // The escape char itself must not open a second collision channel.
+  const c = transcriptStreamKey("a\\", "b");
+  const d = transcriptStreamKey("a", "\\b");
+  assert.notEqual(c, d, "the escape char is itself escaped, so it cannot forge a separator");
+});

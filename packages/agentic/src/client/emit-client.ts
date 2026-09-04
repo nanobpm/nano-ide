@@ -67,15 +67,32 @@ export type HostSocketFactory = () => HostSocket;
 export type ResyncScheduler = (run: () => void) => void;
 
 /** The character separating an instance from its stream name on the wire. Using
- * the ASCII unit separator (never a legal instance/stream character) is what
- * guarantees two instances' identically-named streams occupy disjoint wire
- * streams and can never cross. */
+ * the ASCII unit separator (rare in payloads) keeps the composed key readable;
+ * the per-instance isolation guarantee itself comes from {@link encodeKeyPart}
+ * escaping the separator (and its own escape char) out of both components before
+ * the join, so the separator can never appear inside either part. */
 export const TRANSCRIPT_STREAM_SEPARATOR = "\u001f";
 
+/** The escape char {@link encodeKeyPart} uses to make the join injective. */
+const TRANSCRIPT_STREAM_ESCAPE = "\\";
+
+/** Escape a key component so it contains neither the separator nor the escape
+ * char verbatim, making {@link transcriptStreamKey} injective on `(instance,
+ * stream)` even when a component itself contains the separator. The escape char
+ * is doubled and the separator is rendered as `\u`, so distinct inputs always
+ * yield distinct encodings. */
+function encodeKeyPart(part: string): string {
+  return part
+    .replaceAll(TRANSCRIPT_STREAM_ESCAPE, `${TRANSCRIPT_STREAM_ESCAPE}${TRANSCRIPT_STREAM_ESCAPE}`)
+    .replaceAll(TRANSCRIPT_STREAM_SEPARATOR, `${TRANSCRIPT_STREAM_ESCAPE}u`);
+}
+
 /** Compose the on-wire relay stream for an instance's logical transcript stream.
- * Namespacing by `instance` is the per-instance isolation guarantee. */
+ * Both components are escaped ({@link encodeKeyPart}) before joining so the
+ * separator can never leak in from a payload — this injective join is the
+ * per-instance isolation guarantee. */
 export function transcriptStreamKey(instance: string, stream: string): string {
-  return `${instance}${TRANSCRIPT_STREAM_SEPARATOR}${stream}`;
+  return `${encodeKeyPart(instance)}${TRANSCRIPT_STREAM_SEPARATOR}${encodeKeyPart(stream)}`;
 }
 
 export interface AgenticEmitClientOptions {

@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.4.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.3.0...@nanobpm/urban-testkit-1.4.0) (2026-09-07)
+
+
+### Features
+
+* **urban:** add engine-native AgentInstance/AgentHistory reads to EngineClient ([#564](https://github.com/nanobpm/nano-ide/issues/564)) ([71e78b7](https://github.com/nanobpm/nano-ide/commit/71e78b74970a13bb17357dfee4ceab3c89c7908e))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.81.0 to >=0.93.0
+
 ## [1.3.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.2.0...@nanobpm/urban-testkit-1.3.0) (2026-09-04)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.93.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.92.1...@nanobpm/urban-0.93.0) (2026-09-07)
+
+
+### Features
+
+* **urban:** add engine-native AgentInstance/AgentHistory reads to EngineClient ([#564](https://github.com/nanobpm/nano-ide/issues/564)) ([71e78b7](https://github.com/nanobpm/nano-ide/commit/71e78b74970a13bb17357dfee4ceab3c89c7908e))
+
 ## [0.92.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.92.0...@nanobpm/urban-0.92.1) (2026-09-04)
 
 

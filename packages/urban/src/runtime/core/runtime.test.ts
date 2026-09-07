@@ -74,6 +74,15 @@ class FakeEngine implements EngineClient {
   async getProcessDefinitionXml() {
     return null;
   }
+  async searchAgentInstances() {
+    return [];
+  }
+  async searchAgentInstanceHistory() {
+    return [];
+  }
+  async getAgentInstance() {
+    return null;
+  }
   async resolveIncident() {}
   async updateJobRetries() {}
   async setVariables() {}

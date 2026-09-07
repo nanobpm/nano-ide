@@ -109,6 +109,18 @@ function fakeSdkClient(overrides: Partial<NanoSdkClient> = {}): NanoSdkClient & 
       calls.push("getProcessDefinitionXml");
       return "";
     },
+    async searchAgentInstances() {
+      calls.push("searchAgentInstances");
+      return { items: [] };
+    },
+    async searchAgentInstanceHistory() {
+      calls.push("searchAgentInstanceHistory");
+      return { items: [] };
+    },
+    async getAgentInstance() {
+      calls.push("getAgentInstance");
+      return {};
+    },
     async resolveIncident(input) {
       calls.push("resolveIncident");
       return { ...input };
@@ -1407,4 +1419,166 @@ test("publishMessage threads lineage so message-started instances inherit it", a
     __resetExecStoreForTests();
   }
   assert.deepEqual(readLineage(client.msgVars), { rootRequestKey: "root-9", causedByInstanceKey: "pi-9" });
+});
+
+// ── Engine-native AgentInstance / AgentHistory read seam (nanobpm/nano-ide#563) ──
+// The read path onto engine AgentInstance/AgentHistory that unblocks the historical-transcript
+// consumer (nanobpm/nano-workforce#747). These pin the request-mapping + response-mapping
+// contract of the three `EngineClient` methods against the fake nano-sdk client, mirroring the
+// other search-seam tests above (so the same scenarios would hold against a live engine).
+
+test("searchAgentInstances normalizes selectors, reads zero-wait, and maps rows", async () => {
+  let seenInput: { filter?: Record<string, unknown> } | undefined;
+  let seenConsistency: unknown;
+  const client = fakeSdkClient({
+    searchAgentInstances: async (input, consistency) => {
+      seenInput = input;
+      seenConsistency = consistency;
+      return {
+        items: [
+          {
+            agentInstanceKey: " ai-1 ", // padded → trimmed
+            status: "THINKING",
+            processInstanceKey: 10,
+            elementId: "agent",
+            rootProcessInstanceKey: 30,
+            processDefinitionKey: "pd-1",
+            processDefinitionId: "proc",
+            elementInstanceKeys: ["ei-1", "", 42],
+            metrics: { inputTokens: 5, outputTokens: 7, modelCalls: 2, toolCalls: 1 },
+            creationDate: "2024-01-01T00:00:00Z",
+            lastUpdatedDate: "2024-01-02T00:00:00Z",
+            completionDate: null,
+          },
+          { status: "IDLE", processInstanceKey: "11" }, // keyless → skipped
+          { agentInstanceKey: "ai-2" }, // no processInstanceKey → skipped
+        ],
+      };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchAgentInstances({
+    processInstanceKey: " 10 ", // padded → trimmed
+    rootProcessInstanceKey: "   ", // whitespace-only → dropped
+    status: "THINKING",
+    elementId: "agent",
+  });
+  assert.deepEqual(seenInput, {
+    filter: { processInstanceKey: "10", status: "THINKING", elementId: "agent" },
+  });
+  assert.deepEqual(seenConsistency, { consistency: { waitUpToMs: 0 } });
+  assert.deepEqual(out, [
+    {
+      agentInstanceKey: "ai-1",
+      status: "THINKING",
+      processInstanceKey: "10",
+      elementId: "agent",
+      elementInstanceKeys: ["ei-1", "42"],
+      rootProcessInstanceKey: "30",
+      processDefinitionKey: "pd-1",
+      processDefinitionId: "proc",
+      metrics: { inputTokens: 5, outputTokens: 7, modelCalls: 2, toolCalls: 1 },
+      creationDate: "2024-01-01T00:00:00Z",
+      lastUpdatedDate: "2024-01-02T00:00:00Z",
+    },
+  ]);
+});
+
+test("searchAgentInstanceHistory keys the path, maps the transcript grammar, and short-circuits a blank key", async () => {
+  let seenInput: { agentInstanceKey?: string; filter?: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    searchAgentInstanceHistory: async (input) => {
+      seenInput = input;
+      return {
+        items: [
+          {
+            historyItemKey: "h-1",
+            agentInstanceKey: "ai-1",
+            loopIteration: 3,
+            role: "ASSISTANT",
+            content: [
+              { contentType: "TEXT", text: "hi" },
+              { contentType: "OBJECT", object: { a: 1 } },
+              { contentType: "MYSTERY" }, // unknown → UNSPECIFIED
+            ],
+            toolCalls: [
+              { toolCallId: "t-1", toolName: "search", elementId: "tool", arguments: { q: "x" } },
+              { toolName: "no-id", arguments: null }, // no toolCallId → dropped
+            ],
+            metrics: { inputTokens: 11, outputTokens: null, durationMs: 42 },
+            commitStatus: "COMMITTED",
+            elementInstanceKey: "ei-9",
+            jobKey: "job-9",
+            producedAt: "2024-01-01T00:00:00Z",
+          },
+          { agentInstanceKey: "ai-1", role: "USER" }, // no historyItemKey → skipped
+        ],
+      };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchAgentInstanceHistory(" ai-1 ", {
+    role: "ASSISTANT",
+    loopIteration: 3,
+    elementInstanceKey: " ei-9 ",
+  });
+  assert.deepEqual(seenInput, {
+    agentInstanceKey: "ai-1",
+    filter: { role: "ASSISTANT", loopIteration: 3, elementInstanceKey: "ei-9" },
+  });
+  assert.deepEqual(out, [
+    {
+      historyItemKey: "h-1",
+      agentInstanceKey: "ai-1",
+      loopIteration: 3,
+      role: "ASSISTANT",
+      content: [
+        { contentType: "TEXT", text: "hi" },
+        { contentType: "OBJECT", object: { a: 1 } },
+        { contentType: "UNSPECIFIED" },
+      ],
+      toolCalls: [{ toolCallId: "t-1", toolName: "search", elementId: "tool", arguments: { q: "x" } }],
+      metrics: {
+        inputTokens: 11,
+        outputTokens: 0,
+        reasoningTokenCount: 0,
+        cacheCreationTokenCount: 0,
+        cacheReadTokenCount: 0,
+        durationMs: 42,
+      },
+      commitStatus: "COMMITTED",
+      elementInstanceKey: "ei-9",
+      jobKey: "job-9",
+      producedAt: "2024-01-01T00:00:00Z",
+    },
+  ]);
+
+  // A blank key addresses no instance → empty list, no request issued.
+  seenInput = undefined;
+  const blank = await engine.searchAgentInstanceHistory("   ");
+  assert.deepEqual(blank, []);
+  assert.equal(seenInput, undefined, "no history search is issued for a blank key");
+});
+
+test("getAgentInstance reads-as-absence on a blank key and on a fetch error", async () => {
+  let calls = 0;
+  const client = fakeSdkClient({
+    getAgentInstance: async (input) => {
+      calls++;
+      if (input.agentInstanceKey === "boom") throw new Error("404");
+      return { agentInstanceKey: input.agentInstanceKey, status: "COMPLETED", processInstanceKey: "10" };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+
+  assert.equal(await engine.getAgentInstance("   "), null, "blank key → null without a fetch");
+  assert.equal(calls, 0);
+
+  assert.equal(await engine.getAgentInstance("boom"), null, "a failed fetch is absence, not a throw");
+
+  assert.deepEqual(await engine.getAgentInstance(" ai-7 "), {
+    agentInstanceKey: "ai-7",
+    status: "COMPLETED",
+    processInstanceKey: "10",
+  });
 });

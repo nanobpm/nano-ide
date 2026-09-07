@@ -3,6 +3,19 @@
 // written against these interfaces and MUST NOT import `node:*` or reference `Deno`.
 // The adapters/ directory supplies concrete implementations.
 
+// The engine-native AgentHistory read shapes ({@link AgentHistoryRecord}) reuse the
+// Camunda `AgentHistoryRecordValue`-parity types the transcript store already models
+// (roles, content blocks, per-turn metrics, tool calls) rather than forking a second
+// projection of the same conversation grammar (No Drift Surfaces). This is a type-only
+// import — fully erased at runtime — so `core/` stays free of any concrete host/engine
+// module load, exactly as the rule above requires.
+import type {
+  TranscriptContentBlock,
+  TranscriptToolCall,
+  TranscriptTurnMetrics,
+  TranscriptTurnRole,
+} from "@nanobpm/agentic/transcript";
+
 /** A minimal HTTP request as seen by a mounted surface/trigger handler. */
 export interface HttpRequest {
   method: string;
@@ -604,6 +617,98 @@ export interface JobSummary {
 }
 
 /**
+ * Aggregated metrics for an agent instance across all of its model calls — the
+ * `AgentInstanceMetrics` the engine rolls up on the instance itself (distinct from the
+ * per-turn {@link TranscriptTurnMetrics} carried on an {@link AgentHistoryRecord}). Total
+ * `inputTokens`/`outputTokens` consumed, and the count of `modelCalls`/`toolCalls` made.
+ */
+export interface AgentInstanceMetrics {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly modelCalls: number;
+  readonly toolCalls: number;
+}
+
+/**
+ * A single engine-native agent instance as {@link EngineClient.searchAgentInstances} /
+ * {@link EngineClient.getAgentInstance} report it — the projection of the engine's
+ * `AgentInstanceResult`. Carries the `agentInstanceKey` a caller passes to
+ * {@link EngineClient.searchAgentInstanceHistory}, the lifecycle `status` (a bare string —
+ * the engine's `AgentInstanceStatusEnum` is broad: `INITIALIZING`/`THINKING`/`TOOL_CALLING`/
+ * `IDLE`/`COMPLETED`/…), the owning `processInstanceKey`, and best-effort diagnostics
+ * (`elementId`, the owning `elementInstanceKeys`, the process-definition linkage, aggregated
+ * `metrics`, and the creation/update/completion timestamps). Optional fields are omitted when
+ * the engine does not report them.
+ */
+export interface AgentInstanceSummary {
+  readonly agentInstanceKey: string;
+  readonly status: string;
+  readonly processInstanceKey: string;
+  readonly elementId?: string;
+  readonly elementInstanceKeys?: readonly string[];
+  readonly rootProcessInstanceKey?: string;
+  readonly processDefinitionKey?: string;
+  readonly processDefinitionId?: string;
+  readonly metrics?: AgentInstanceMetrics;
+  readonly creationDate?: string;
+  readonly lastUpdatedDate?: string;
+  readonly completionDate?: string;
+}
+
+/**
+ * A single agent-instance history item as {@link EngineClient.searchAgentInstanceHistory}
+ * reports it — the projection of the engine's `AgentInstanceHistoryItemResult`, i.e. one
+ * Camunda `AgentHistoryRecordValue`. Its conversation grammar (`role`, `content` blocks,
+ * `toolCalls`, per-turn `metrics`) reuses the `@nanobpm/agentic/transcript` parity types the
+ * transcript store already models, so the engine-read seam and the transcript store project
+ * the same shape (No Drift Surfaces). `historyItemKey` is the stable, creation-ordered
+ * identity; `loopIteration` is the agent-loop counter (one LLM call + its tool dispatches +
+ * their results share an iteration); `commitStatus` is the engine's `COMMITTED`/`PENDING`/
+ * `DISCARDED` flag (a bare string). `metrics` is present only when the engine recorded per-call
+ * metrics for the item; `elementInstanceKey`/`jobKey`/`producedAt` are best-effort diagnostics,
+ * omitted when unreported.
+ */
+export interface AgentHistoryRecord {
+  readonly historyItemKey: string;
+  readonly agentInstanceKey: string;
+  readonly loopIteration: number;
+  readonly role: TranscriptTurnRole;
+  readonly content: readonly TranscriptContentBlock[];
+  readonly toolCalls: readonly TranscriptToolCall[];
+  readonly metrics?: TranscriptTurnMetrics;
+  readonly commitStatus: string;
+  readonly elementInstanceKey?: string;
+  readonly jobKey?: string;
+  readonly producedAt?: string;
+}
+
+/** Selectors for {@link EngineClient.searchAgentInstances}. Every field is optional; an
+ *  omitted/blank selector is not applied (No Drift Surfaces — the same presence rule the key
+ *  selectors elsewhere in this seam use). */
+export interface AgentInstanceFilter {
+  /** Only agent instances owned by this process instance. */
+  readonly processInstanceKey?: string;
+  /** Only agent instances belonging to this *root* process-instance hierarchy. */
+  readonly rootProcessInstanceKey?: string;
+  /** Only agent instances in this lifecycle status (the engine's `AgentInstanceStatusEnum`). */
+  readonly status?: string;
+  /** Only agent instances owned by this BPMN element (the AI-agent task / ad-hoc sub-process). */
+  readonly elementId?: string;
+}
+
+/** Selectors for {@link EngineClient.searchAgentInstanceHistory} (the `agentInstanceKey` is a
+ *  required positional argument, not a filter field). Every field is optional. Note the engine
+ *  defaults an unfiltered history search to `COMMITTED` items only. */
+export interface AgentHistoryFilter {
+  /** Only history items with this conversation role. */
+  readonly role?: TranscriptTurnRole;
+  /** Only history items produced in this agent-loop iteration. */
+  readonly loopIteration?: number;
+  /** Only history items produced under this element instance. */
+  readonly elementInstanceKey?: string;
+}
+
+/**
  * EngineClient is the seam onto a Nano engine. The SDK/REST-backed adapter implements
  * it against a live engine; tests implement it in-memory. Core modules depend only on this.
  */
@@ -773,6 +878,42 @@ export interface EngineClient {
    */
   getProcessDefinitionXml(processDefinitionKey: string): Promise<string | null>;
   /**
+   * Search engine-native agent instances (`POST /agent-instances/search`), optionally narrowed
+   * by owning `processInstanceKey`/`rootProcessInstanceKey`, lifecycle `status`, or `elementId`.
+   * The read entry point onto the engine's AgentInstance/AgentHistory model: an
+   * {@link AgentInstanceSummary} carries the `agentInstanceKey` a caller passes to
+   * {@link searchAgentInstanceHistory} to read that instance's conversation. An eventually
+   * consistent (zero-wait) read; each malformed row (no `agentInstanceKey`/`processInstanceKey`)
+   * is dropped rather than surfaced.
+   */
+  searchAgentInstances(filter?: AgentInstanceFilter): Promise<AgentInstanceSummary[]>;
+  /**
+   * Search one agent instance's conversation history
+   * (`POST /agent-instances/{agentInstanceKey}/history/search`) — the ordered
+   * {@link AgentHistoryRecord}s (turns) the engine retains for `agentInstanceKey`, optionally
+   * narrowed by `role`/`loopIteration`/`elementInstanceKey`. This is the production read path
+   * onto engine AgentHistory the historical-transcript + metrics consumer builds on
+   * (nanobpm/nano-workforce#747). Each record's conversation grammar reuses the
+   * `@nanobpm/agentic/transcript` parity shapes (roles, content blocks, per-turn metrics, tool
+   * calls). Note the engine defaults an unfiltered search to `COMMITTED` items only. A blank
+   * `agentInstanceKey` addresses no instance, so it returns the empty list rather than issuing a
+   * request with an empty path segment. An eventually consistent (zero-wait) read; malformed rows
+   * are dropped.
+   */
+  searchAgentInstanceHistory(
+    agentInstanceKey: string,
+    filter?: AgentHistoryFilter,
+  ): Promise<AgentHistoryRecord[]>;
+  /**
+   * Fetch a single agent instance by its key (`GET /agent-instances/{agentInstanceKey}`), or
+   * `null` when it cannot be resolved — the key is blank, no such agent instance exists (a 404),
+   * or the fetch otherwise fails. A read is treated as absence rather than propagating (mirroring
+   * {@link getForm}/{@link getElementInstance}/{@link getProcessDefinitionXml}), so a caller
+   * distinguishes "have it" from "don't" without a try/catch. A zero-wait read returning the same
+   * {@link AgentInstanceSummary} shape as {@link searchAgentInstances}.
+   */
+  getAgentInstance(agentInstanceKey: string): Promise<AgentInstanceSummary | null>;
+  /**
    * Resolve an open incident by key (`POST /v2/incidents/{incidentKey}/resolution`), unblocking
    * the parked token: a job incident returns the job to the activatable pool (so it must have
    * retries left first — see {@link updateJobRetries}), a gateway incident re-evaluates, an
@@ -839,6 +980,9 @@ export const ENGINE_CLIENT_METHODS = [
   "searchVariables",
   "searchJobs",
   "getProcessDefinitionXml",
+  "searchAgentInstances",
+  "searchAgentInstanceHistory",
+  "getAgentInstance",
   "resolveIncident",
   "updateJobRetries",
   "setVariables",

@@ -13,6 +13,11 @@
 
 import type {
   EngineClient,
+  AgentHistoryFilter,
+  AgentHistoryRecord,
+  AgentInstanceFilter,
+  AgentInstanceMetrics,
+  AgentInstanceSummary,
   ElementInstanceState,
   ElementInstanceSummary,
   ElementInstanceFilter,
@@ -36,6 +41,13 @@ import type {
   VariableSummary,
   WorkerSubscription,
 } from "../core/host.ts";
+import type {
+  TranscriptContentBlock,
+  TranscriptContentType,
+  TranscriptToolCall,
+  TranscriptTurnMetrics,
+  TranscriptTurnRole,
+} from "@nanobpm/agentic/transcript";
 import { assertDeployedWaitStateType, isBpmnError } from "../core/host.ts";
 import {
   buildFormSchema,
@@ -457,6 +469,202 @@ export function mapJobRow(
   };
 }
 
+/** The agent-instance conversation roles the engine's `AgentInstanceHistoryRoleEnum` reports —
+ *  a strict subset of the transcript {@link TranscriptTurnRole} union it maps onto, so the two
+ *  cannot drift. A row whose role is anything else is normalized to `"UNSPECIFIED"`. */
+const AGENT_HISTORY_ROLES: readonly TranscriptTurnRole[] = ["USER", "ASSISTANT", "TOOL_RESULT"];
+
+/** Map an engine history-item role onto the transcript {@link TranscriptTurnRole} union, or
+ *  `"UNSPECIFIED"` when the engine reports an unknown/absent role — a lossy-but-safe fallback so a
+ *  record is surfaced rather than dropped for a role the engine grows later. */
+function normalizeAgentHistoryRole(value: unknown): TranscriptTurnRole {
+  const role = AGENT_HISTORY_ROLES.find((r) => r === value);
+  return role ?? "UNSPECIFIED";
+}
+
+/** The content-block type discriminators the engine's `AgentInstanceMessageContentTypeEnum`
+ *  reports, mapped onto the transcript {@link TranscriptContentType} union. */
+const AGENT_CONTENT_TYPES: readonly TranscriptContentType[] = ["TEXT", "DOCUMENT", "OBJECT"];
+
+/** Map one engine `AgentInstanceMessageContent` row onto a transcript {@link TranscriptContentBlock},
+ *  or `undefined` when malformed. TEXT carries `text`, DOCUMENT carries `documentReference`, OBJECT
+ *  carries `object` — exactly the per-`contentType` payload the transcript shape pins, so the
+ *  engine-read seam and the transcript store project content identically (No Drift Surfaces). An
+ *  unknown/absent discriminator maps to an `UNSPECIFIED` block carrying no payload. */
+function mapAgentContentBlock(value: unknown): TranscriptContentBlock | undefined {
+  if (!isRecord(value)) return undefined;
+  const contentType = AGENT_CONTENT_TYPES.find((t) => t === value.contentType) ?? "UNSPECIFIED";
+  if (contentType === "TEXT") {
+    return { contentType, text: typeof value.text === "string" ? value.text : "" };
+  }
+  if (contentType === "DOCUMENT") {
+    const documentReference = presentText(value.documentReference);
+    return { contentType, documentReference: documentReference ?? "" };
+  }
+  if (contentType === "OBJECT") {
+    return { contentType, object: value.object };
+  }
+  return { contentType };
+}
+
+/** Map one engine `AgentInstanceToolCall` row onto a transcript {@link TranscriptToolCall}, or
+ *  `undefined` when it carries no `toolCallId`/`toolName` (the identity a caller correlates on). A
+ *  TOOL_RESULT item reports `arguments: null`; normalize that to an empty object so the
+ *  transcript shape's non-null `arguments` invariant holds. */
+function mapAgentToolCall(value: unknown): TranscriptToolCall | undefined {
+  if (!isRecord(value)) return undefined;
+  const toolCallId = presentText(value.toolCallId);
+  const toolName = presentText(value.toolName);
+  if (toolCallId === undefined || toolName === undefined) return undefined;
+  const elementId = presentText(value.elementId);
+  const args = isRecord(value.arguments) ? value.arguments : {};
+  return {
+    toolCallId,
+    toolName,
+    ...(elementId ? { elementId } : {}),
+    arguments: args,
+  };
+}
+
+/** Map one engine `AgentInstanceHistoryItemMetrics` onto per-turn {@link TranscriptTurnMetrics},
+ *  or `undefined` when the engine recorded none (a `null` metrics object). The engine's per-item
+ *  metrics carry only `inputTokens`/`outputTokens`/`durationMs` (each nullable); the transcript
+ *  shape additionally models reasoning/cache token counts the engine does not report per item, so
+ *  those default to `0` (the "none reported" count) — a coercion, not a second projection. */
+function mapAgentHistoryMetrics(value: unknown): TranscriptTurnMetrics | undefined {
+  if (!isRecord(value)) return undefined;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    inputTokens: num(value.inputTokens),
+    outputTokens: num(value.outputTokens),
+    reasoningTokenCount: 0,
+    cacheCreationTokenCount: 0,
+    cacheReadTokenCount: 0,
+    durationMs: num(value.durationMs),
+  };
+}
+
+/** Map one engine `AgentInstanceMetrics` (the instance-level aggregate) onto
+ *  {@link AgentInstanceMetrics}, or `undefined` when the row carries none. */
+function mapAgentInstanceMetrics(value: unknown): AgentInstanceMetrics | undefined {
+  if (!isRecord(value)) return undefined;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    inputTokens: num(value.inputTokens),
+    outputTokens: num(value.outputTokens),
+    modelCalls: num(value.modelCalls),
+    toolCalls: num(value.toolCalls),
+  };
+}
+
+/** Map one engine `AgentInstanceResult` row onto an {@link AgentInstanceSummary}, or `undefined`
+ *  when the row is malformed (missing the `agentInstanceKey` or owning `processInstanceKey`). The
+ *  single source of truth `searchAgentInstances`/`getAgentInstance` extract through, so the two
+ *  cannot drift. Optional linkage/metrics/timestamp fields are emitted only when the engine
+ *  reports them. */
+export function mapAgentInstanceRow(
+  row: Record<string, unknown>,
+  log: Log,
+): AgentInstanceSummary | undefined {
+  const agentInstanceKey = presentEngineKey(row.agentInstanceKey);
+  if (agentInstanceKey === undefined) {
+    log("warn", "skipping agent instance with no agentInstanceKey in engine response");
+    return undefined;
+  }
+  const processInstanceKey = presentEngineKey(row.processInstanceKey);
+  if (processInstanceKey === undefined) {
+    log("warn", "skipping agent instance with no processInstanceKey in engine response", {
+      agentInstanceKey,
+    });
+    return undefined;
+  }
+  const status = presentText(row.status) ?? "UNKNOWN";
+  const elementId = presentText(row.elementId);
+  const rootProcessInstanceKey = presentEngineKey(row.rootProcessInstanceKey);
+  const processDefinitionKey = presentEngineKey(row.processDefinitionKey);
+  const processDefinitionId = presentText(row.processDefinitionId);
+  const elementInstanceKeys = Array.isArray(row.elementInstanceKeys)
+    ? row.elementInstanceKeys
+        .map((k) => presentEngineKey(k))
+        .filter((k): k is string => k !== undefined)
+    : undefined;
+  const metrics = mapAgentInstanceMetrics(row.metrics);
+  const creationDate = presentText(row.creationDate);
+  const lastUpdatedDate = presentText(row.lastUpdatedDate);
+  const completionDate = presentText(row.completionDate);
+  return {
+    agentInstanceKey,
+    status,
+    processInstanceKey,
+    ...(elementId ? { elementId } : {}),
+    ...(elementInstanceKeys && elementInstanceKeys.length > 0 ? { elementInstanceKeys } : {}),
+    ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
+    ...(processDefinitionKey ? { processDefinitionKey } : {}),
+    ...(processDefinitionId ? { processDefinitionId } : {}),
+    ...(metrics ? { metrics } : {}),
+    ...(creationDate ? { creationDate } : {}),
+    ...(lastUpdatedDate ? { lastUpdatedDate } : {}),
+    ...(completionDate ? { completionDate } : {}),
+  };
+}
+
+/** Map one engine `AgentInstanceHistoryItemResult` row onto an {@link AgentHistoryRecord}, or
+ *  `undefined` when the row is malformed (missing the `historyItemKey` or owning
+ *  `agentInstanceKey`). `content`/`toolCalls` drop any individually-malformed block; `loopIteration`
+ *  defaults to `0` when unreported; `commitStatus` passes through as a bare string. The single
+ *  source of truth `searchAgentInstanceHistory` extracts through. */
+export function mapAgentHistoryRow(
+  row: Record<string, unknown>,
+  log: Log,
+): AgentHistoryRecord | undefined {
+  const historyItemKey = presentEngineKey(row.historyItemKey);
+  if (historyItemKey === undefined) {
+    log("warn", "skipping agent history item with no historyItemKey in engine response");
+    return undefined;
+  }
+  const agentInstanceKey = presentEngineKey(row.agentInstanceKey);
+  if (agentInstanceKey === undefined) {
+    log("warn", "skipping agent history item with no agentInstanceKey in engine response", {
+      historyItemKey,
+    });
+    return undefined;
+  }
+  const loopIteration =
+    typeof row.loopIteration === "number" && Number.isFinite(row.loopIteration)
+      ? row.loopIteration
+      : 0;
+  const content = Array.isArray(row.content)
+    ? row.content.flatMap((c) => {
+        const block = mapAgentContentBlock(c);
+        return block ? [block] : [];
+      })
+    : [];
+  const toolCalls = Array.isArray(row.toolCalls)
+    ? row.toolCalls.flatMap((t) => {
+        const call = mapAgentToolCall(t);
+        return call ? [call] : [];
+      })
+    : [];
+  const metrics = mapAgentHistoryMetrics(row.metrics);
+  const commitStatus = presentText(row.commitStatus) ?? "COMMITTED";
+  const elementInstanceKey = presentEngineKey(row.elementInstanceKey);
+  const jobKey = presentEngineKey(row.jobKey);
+  const producedAt = presentText(row.producedAt);
+  return {
+    historyItemKey,
+    agentInstanceKey,
+    loopIteration,
+    role: normalizeAgentHistoryRole(row.role),
+    content,
+    toolCalls,
+    ...(metrics ? { metrics } : {}),
+    commitStatus,
+    ...(elementInstanceKey ? { elementInstanceKey } : {}),
+    ...(jobKey ? { jobKey } : {}),
+    ...(producedAt ? { producedAt } : {}),
+  };
+}
+
 /** A job as delivered to a nano-sdk job handler: the frame fields plus the
  *  acknowledgement actions the handler must call. */
 export interface NanoSdkActivatedJob {
@@ -575,6 +783,21 @@ export interface NanoSdkClient {
     consistency?: unknown,
     options?: unknown,
   ): Promise<unknown>;
+  searchAgentInstances(
+    input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
+  searchAgentInstanceHistory(
+    input: { agentInstanceKey: string; filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
+  getAgentInstance(
+    input: { agentInstanceKey: string },
+    consistency?: unknown,
+    options?: unknown,
+  ): Promise<Record<string, unknown>>;
   resolveIncident(
     input: { incidentKey: string },
     options?: unknown,
@@ -1016,6 +1239,84 @@ export class SdkEngineClient implements EngineClient {
     // The endpoint returns the raw BPMN XML as a string (204 → empty). Treat a blank/absent body
     // as "no XML" (null) so a caller distinguishes "have it" from "don't".
     return typeof xml === "string" && xml.trim() !== "" ? xml : null;
+  }
+
+  async searchAgentInstances(filter?: AgentInstanceFilter): Promise<AgentInstanceSummary[]> {
+    // Same shape as `searchIncidents`: build the engine filter from the transport-agnostic
+    // selectors, read at zero-wait consistency (an agent-instance search is eventually
+    // consistent), and map each row through the single `mapAgentInstanceRow` gate, dropping
+    // malformed rows. Normalize the request key selectors the same way the response mapper
+    // normalizes keys so a blank/padded selector cannot reach the engine as a garbage filter.
+    const f: Record<string, unknown> = {};
+    const processInstanceKey = presentEngineKey(filter?.processInstanceKey);
+    if (processInstanceKey) f.processInstanceKey = processInstanceKey;
+    const rootProcessInstanceKey = presentEngineKey(filter?.rootProcessInstanceKey);
+    if (rootProcessInstanceKey) f.rootProcessInstanceKey = rootProcessInstanceKey;
+    const status = filter?.status?.trim();
+    if (status) f.status = status;
+    const elementId = filter?.elementId?.trim();
+    if (elementId) f.elementId = elementId;
+    const body = await this.client.searchAgentInstances(
+      { filter: f },
+      { consistency: { waitUpToMs: 0 } },
+    );
+    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+    return items.flatMap((it) => {
+      const mapped = mapAgentInstanceRow(it, this.log);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  async searchAgentInstanceHistory(
+    agentInstanceKey: string,
+    filter?: AgentHistoryFilter,
+  ): Promise<AgentHistoryRecord[]> {
+    // A blank key can never address an agent instance — short-circuit to the empty list rather
+    // than issue a `POST /agent-instances//history/search` with an empty path segment. Normalize a
+    // padded-but-valid key so `" 5 "` addresses the same instance, mirroring `getElementInstance`.
+    const key = presentEngineKey(agentInstanceKey);
+    if (key === undefined) return [];
+    const f: Record<string, unknown> = {};
+    if (filter?.role) f.role = filter.role;
+    if (typeof filter?.loopIteration === "number" && Number.isFinite(filter.loopIteration)) {
+      f.loopIteration = filter.loopIteration;
+    }
+    const elementInstanceKey = presentEngineKey(filter?.elementInstanceKey);
+    if (elementInstanceKey) f.elementInstanceKey = elementInstanceKey;
+    const body = await this.client.searchAgentInstanceHistory(
+      { agentInstanceKey: key, filter: f },
+      { consistency: { waitUpToMs: 0 } },
+    );
+    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+    return items.flatMap((it) => {
+      const mapped = mapAgentHistoryRow(it, this.log);
+      return mapped ? [mapped] : [];
+    });
+  }
+
+  async getAgentInstance(agentInstanceKey: string): Promise<AgentInstanceSummary | null> {
+    // A blank key can never address an agent instance — short-circuit to null rather than issue a
+    // `GET /agent-instances/` with an empty segment. Normalize a padded-but-valid key, mirroring
+    // `getElementInstance`/`getProcessDefinitionXml`.
+    const key = presentEngineKey(agentInstanceKey);
+    if (key === undefined) return null;
+    let body: Record<string, unknown>;
+    try {
+      body = await this.client.getAgentInstance(
+        { agentInstanceKey: key },
+        { consistency: { waitUpToMs: 0 } },
+      );
+    } catch (err) {
+      // A 404 (no such agent instance) is an expected "not found", not a fault — mirror `getForm`/
+      // `getElementInstance`, which treat a failed fetch as absence (null) rather than propagating.
+      this.log("warn", "getAgentInstance: engine fetch failed", {
+        agentInstanceKey: key,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+    if (!isRecord(body)) return null;
+    return mapAgentInstanceRow(body, this.log) ?? null;
   }
 
   async resolveIncident(input: { incidentKey: string }): Promise<void> {

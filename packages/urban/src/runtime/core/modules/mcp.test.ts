@@ -93,6 +93,9 @@ function fakeEngine(overrides: Partial<EngineClient> = {}): EngineClient {
     searchVariables: async () => [],
     searchJobs: async () => [],
     getProcessDefinitionXml: async () => null,
+    searchAgentInstances: async () => [],
+    searchAgentInstanceHistory: async () => [],
+    getAgentInstance: async () => null,
     resolveIncident: async () => {},
     updateJobRetries: async () => {},
     setVariables: async () => {},
@@ -646,6 +649,9 @@ test("urban_debug_search_variables / search_jobs / get_process_definition_xml ar
       seenXmlKeys.push(key);
       return key === "pd-1" ? "<bpmn:definitions/>" : null;
     },
+    searchAgentInstances: async () => [],
+    searchAgentInstanceHistory: async () => [],
+    getAgentInstance: async () => null,
   });
   const { router } = buildHarness({ engine });
   const session = await connect(router);

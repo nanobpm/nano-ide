@@ -448,3 +448,37 @@ test("EngineClient seam: parent/root linkage correlates a native-child user task
     await engine.close();
   }
 });
+
+// Behavioural read-as-absence for the engine-native AgentInstance/AgentHistory read seam
+// (nanobpm/nano-ide#563). The surface guard above already fails if the WASM double lags a method;
+// this pins the *contract* the double emulates — the bundled μ-nano.wasm read model has no
+// `/agent-instances/*` channel, so an agent-history read returns the same "nothing here" shape
+// (empty list / null) the `SdkEngineClient` returns for an unknown instance. This lets the
+// historical-transcript consumer (nanobpm/nano-workforce#747) exercise its read path against the
+// testkit boot without a `TypeError`, while the behavioural agent-history parity is validated
+// against a live engine.
+test("EngineClient seam: agent-instance reads are read-as-absence on the WASM double", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    assert.deepEqual(await engine.searchAgentInstances(), [], "no agent instances are recorded");
+    assert.deepEqual(
+      await engine.searchAgentInstances({ processInstanceKey: "does-not-exist" }),
+      [],
+      "a filtered agent-instance search is likewise empty",
+    );
+    assert.deepEqual(
+      await engine.searchAgentInstanceHistory("any-key"),
+      [],
+      "an agent's history is empty",
+    );
+    assert.deepEqual(
+      await engine.searchAgentInstanceHistory("   "),
+      [],
+      "a blank agentInstanceKey yields the empty list",
+    );
+    assert.equal(await engine.getAgentInstance("any-key"), null, "no such agent instance → null");
+    assert.equal(await engine.getAgentInstance("   "), null, "a blank key → null");
+  } finally {
+    await engine.close();
+  }
+});

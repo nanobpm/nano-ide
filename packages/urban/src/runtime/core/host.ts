@@ -700,7 +700,9 @@ export interface AgentInstanceFilter {
  *  required positional argument, not a filter field). Every field is optional. Note the engine
  *  defaults an unfiltered history search to `COMMITTED` items only. */
 export interface AgentHistoryFilter {
-  /** Only history items with this conversation role. */
+  /** Only history items with this conversation role. Note that `TranscriptTurnRole` is the wider
+   *  transcript union: only the engine-side subset `"USER" | "ASSISTANT" | "TOOL_RESULT"` is
+   *  applied as a filter — `"CONFIGURATION"`/`"UNSPECIFIED"` are ignored (not forwarded). */
   readonly role?: TranscriptTurnRole;
   /** Only history items produced in this agent-loop iteration. */
   readonly loopIteration?: number;

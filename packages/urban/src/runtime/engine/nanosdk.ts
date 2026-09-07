@@ -1277,7 +1277,11 @@ export class SdkEngineClient implements EngineClient {
     const key = presentEngineKey(agentInstanceKey);
     if (key === undefined) return [];
     const f: Record<string, unknown> = {};
-    if (filter?.role) f.role = filter.role;
+    // `AgentHistoryFilter.role` is typed as the wider transcript `TranscriptTurnRole` union, which
+    // also carries `CONFIGURATION`/`UNSPECIFIED` — roles the engine's history filter does not
+    // accept and would 4xx on. Gate the selector through the same `AGENT_HISTORY_ROLES` subset the
+    // response mapper uses (No Drift Surfaces) so an unsupported role is dropped, not forwarded.
+    if (filter?.role && AGENT_HISTORY_ROLES.includes(filter.role)) f.role = filter.role;
     if (typeof filter?.loopIteration === "number" && Number.isFinite(filter.loopIteration)) {
       f.loopIteration = filter.loopIteration;
     }

@@ -1560,6 +1560,41 @@ test("searchAgentInstanceHistory keys the path, maps the transcript grammar, and
   assert.equal(seenInput, undefined, "no history search is issued for a blank key");
 });
 
+test("searchAgentInstanceHistory drops a transcript role the engine filter does not accept", async () => {
+  // `TranscriptTurnRole` is the wider transcript union; only `USER`/`ASSISTANT`/`TOOL_RESULT` are
+  // valid engine history filters. An unsupported role (e.g. `CONFIGURATION`/`UNSPECIFIED`) must not
+  // be forwarded, else the engine 4xxes on the request. Guards the fix against reintroduction.
+  let seenInput: { agentInstanceKey?: string; filter?: Record<string, unknown> } | undefined;
+  const client = fakeSdkClient({
+    searchAgentInstanceHistory: async (input) => {
+      seenInput = input;
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+
+  await engine.searchAgentInstanceHistory("ai-1", { role: "CONFIGURATION", loopIteration: 2 });
+  assert.deepEqual(
+    seenInput,
+    { agentInstanceKey: "ai-1", filter: { loopIteration: 2 } },
+    "an unsupported role is not forwarded as an engine filter",
+  );
+
+  await engine.searchAgentInstanceHistory("ai-1", { role: "UNSPECIFIED" });
+  assert.deepEqual(
+    seenInput,
+    { agentInstanceKey: "ai-1", filter: {} },
+    "UNSPECIFIED is dropped, leaving no role filter",
+  );
+
+  await engine.searchAgentInstanceHistory("ai-1", { role: "TOOL_RESULT" });
+  assert.deepEqual(
+    seenInput,
+    { agentInstanceKey: "ai-1", filter: { role: "TOOL_RESULT" } },
+    "a supported engine role is forwarded",
+  );
+});
+
 test("getAgentInstance reads-as-absence on a blank key and on a fetch error", async () => {
   let calls = 0;
   const client = fakeSdkClient({

@@ -27,6 +27,10 @@ import type {
 import {
   applyAmbientLineage,
   assertDeployedWaitStateType,
+  type AgentHistoryFilter,
+  type AgentHistoryRecord,
+  type AgentInstanceFilter,
+  type AgentInstanceSummary,
   type EngineClient,
   type ElementInstanceSummary,
   type ElementInstanceFilter,
@@ -881,6 +885,36 @@ export class WasmEngineClient implements EngineClient {
       const xml = presentString(process?.xml);
       if (xml !== undefined) return xml;
     }
+    return null;
+  }
+
+  /** Engine-native agent instances the WASM double records. The bundled μ-nano.wasm read model has
+   *  no AgentInstance/AgentHistory channel (it exposes none of the `/agent-instances/*` endpoints
+   *  the `SdkEngineClient` reads), so this emulates the floor a consumer needs to boot against the
+   *  testkit without a `TypeError`: no agent instance is ever recorded, so the search is empty.
+   *  This keeps the `EngineClient` surface complete (issue #341 conformance) and lets the historical
+   *  transcript consumer (nanobpm/nano-workforce#747) exercise its read path here; the *behavioural*
+   *  agent-history parity is validated against a live engine, which this in-process double omits.
+   *  The read-as-absence shape (empty list / `null`) matches `SdkEngineClient`, so the two adapters
+   *  agree on the "no such instance" answer. */
+  async searchAgentInstances(_filter?: AgentInstanceFilter): Promise<AgentInstanceSummary[]> {
+    return [];
+  }
+
+  /** One agent instance's conversation history — see {@link searchAgentInstances} for why the WASM
+   *  double records none. A blank key addresses nothing (parity with `SdkEngineClient`, which
+   *  short-circuits it); every key yields the empty list here. */
+  async searchAgentInstanceHistory(
+    _agentInstanceKey: string,
+    _filter?: AgentHistoryFilter,
+  ): Promise<AgentHistoryRecord[]> {
+    return [];
+  }
+
+  /** Fetch a single agent instance by key — always `null` here (the WASM double records none; see
+   *  {@link searchAgentInstances}), matching `SdkEngineClient`'s read-as-absence on a 404 and its
+   *  blank-key short-circuit. */
+  async getAgentInstance(_agentInstanceKey: string): Promise<AgentInstanceSummary | null> {
     return null;
   }
 

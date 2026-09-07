@@ -28,6 +28,9 @@ class MiniEngine implements EngineClient {
   async searchVariables(): Promise<never[]> { return []; }
   async searchJobs(): Promise<never[]> { return []; }
   async getProcessDefinitionXml(): Promise<null> { return null; }
+  async searchAgentInstances(): Promise<never[]> { return []; }
+  async searchAgentInstanceHistory(): Promise<never[]> { return []; }
+  async getAgentInstance(): Promise<null> { return null; }
   async resolveIncident(): Promise<void> {}
   async updateJobRetries(): Promise<void> {}
   async setVariables(): Promise<void> {}

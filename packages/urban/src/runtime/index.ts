@@ -83,6 +83,11 @@ export type { ValidationIssue } from "./core/validate.ts";
 // Host + engine contracts (for custom hosts / tests)
 export type {
   EngineClient,
+  AgentHistoryFilter,
+  AgentHistoryRecord,
+  AgentInstanceFilter,
+  AgentInstanceMetrics,
+  AgentInstanceSummary,
   ElementInstanceState,
   ElementInstanceSummary,
   ElementInstanceFilter,
@@ -114,6 +119,17 @@ export type {
   WatchHandle,
   WorkerSubscription,
 } from "./core/host.ts";
+// The Camunda `AgentHistoryRecordValue`-parity conversation grammar an {@link AgentHistoryRecord}
+// reuses, re-exported from `@nanobpm/agentic/transcript` so a consumer naming an
+// `AgentHistoryRecord`'s `role`/`content`/`toolCalls`/`metrics` reaches the SAME types the
+// transcript store models rather than a forked projection (No Drift Surfaces).
+export type {
+  TranscriptContentBlock,
+  TranscriptContentType,
+  TranscriptToolCall,
+  TranscriptTurnMetrics,
+  TranscriptTurnRole,
+} from "@nanobpm/agentic/transcript";
 // Shared form/user-task contract normalization (issue #252): the single source of truth
 // both engine adapters (SDK/REST + WASM test double) call, so their form-identifier,
 // form-schema, and user-task form-linkage handling cannot drift.

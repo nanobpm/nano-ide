@@ -243,6 +243,46 @@ test("freezeBlock freezes non-cloneable tool.args in place so a consumer cannot 
   assert.ok(nested !== undefined && Object.isFrozen(nested), "nested non-cloneable args objects should be frozen");
 });
 
+test("freezeBlock freezes cyclic tool.args without infinite recursion", () => {
+  const projection = createDisplayProjection();
+  // A cyclic structure would make a naive recursive deep-freeze recurse forever / stack overflow.
+  const cyclic: Record<string, unknown> = { path: "a" };
+  cyclic.self = cyclic;
+  const opened = projection.apply({
+    kind: "tool-call",
+    offset: 0,
+    name: "read_file",
+    callId: "c1",
+    args: cyclic,
+  });
+  const tool = asTool(opened.changed ?? assert.fail("expected tool block")).tool;
+  const args = tool.args;
+  if (typeof args !== "object" || args === null) assert.fail("expected object args");
+
+  // The snapshot must be frozen (and its cycle preserved) without the projection crashing.
+  assert.ok(Object.isFrozen(args), "cyclic tool.args should be frozen");
+  const self = Object.values(args).find((v) => typeof v === "object" && v !== null);
+  assert.ok(self !== undefined && Object.isFrozen(self), "cyclic nested reference should be frozen");
+});
+
+test("freezeBlock freezes non-cloneable cyclic tool.args in place without infinite recursion", () => {
+  const projection = createDisplayProjection();
+  // A function forces the non-cloneable fallback; the cycle would then hit deepFreeze directly.
+  const cyclic: Record<string, unknown> = { path: "a", cb: () => 1 };
+  cyclic.self = cyclic;
+  const opened = projection.apply({
+    kind: "tool-call",
+    offset: 0,
+    name: "read_file",
+    callId: "c1",
+    args: cyclic,
+  });
+  const tool = asTool(opened.changed ?? assert.fail("expected tool block")).tool;
+  const args = tool.args;
+  if (typeof args !== "object" || args === null) assert.fail("expected object args");
+  assert.ok(Object.isFrozen(args), "non-cloneable cyclic tool.args should be frozen in place");
+});
+
 test("freezeBlock exposes a deep-frozen permission snapshot decoupled from projection internals", () => {
   const projection = createDisplayProjection();
   const opened = projection.apply({

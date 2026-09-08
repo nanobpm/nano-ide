@@ -40,7 +40,10 @@
  * consumer that already rendered the gap patches it too. {@link deriveDisplay} is the pure batch
  * convenience over the same fold.
  *
- * BROWSER-SAFE + PURE, like {@link ./events.ts}: no Node-only API, no I/O, never touches the engine.
+ * BROWSER-SAFE, like {@link ./events.ts}: no Node-only API, no I/O, never touches the engine. NOT pure:
+ * {@link createDisplayProjection} is deliberately stateful (it keeps the ordered blocks as mutable state),
+ * and the non-cloneable `tool.args` fallback freezes the caller's args object in place ({@link freezeArgs}).
+ * {@link deriveDisplay} is the pure batch convenience layered over the stateful fold.
  */
 import type {
   DerivedPermission,
@@ -167,11 +170,14 @@ interface MutableGap {
 type MutableBlock = MutableText | MutableTool | MutablePermission | MutableGap;
 
 /** Recursively freeze a value already owned exclusively by the caller (a fresh clone), so no consumer
- *  can mutate it at any depth. Idempotent, and a no-op for primitives and already-frozen objects. */
-function deepFreeze(value: unknown): void {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return;
+ *  can mutate it at any depth. Idempotent, and a no-op for primitives and already-frozen objects. A
+ *  `seen` set guards against cyclic references so an arbitrarily-shaped `args` payload with a cycle
+ *  freezes without recursing forever. */
+function deepFreeze(value: unknown, seen: WeakSet<object> = new WeakSet()): void {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value) || seen.has(value)) return;
+  seen.add(value);
   Object.freeze(value);
-  for (const nested of Object.values(value)) deepFreeze(nested);
+  for (const nested of Object.values(value)) deepFreeze(nested, seen);
 }
 
 /** Decouple a producer-owned, arbitrarily-shaped `args` value from projection state: deep clone it (so

@@ -74,7 +74,9 @@ export interface DisplayTextBlock {
 }
 
 /** A tool card in the ordered display — the call, paired to its result once it arrives (without hiding
- *  that it is still pending until then). Wraps the canonical {@link DerivedTool}. */
+ *  that it is still pending until then). Wraps a deep-frozen snapshot clone of the canonical
+ *  {@link DerivedTool} (its nested `result` is cloned + frozen too), so mutating it cannot reach back
+ *  into the projection's internal state. */
 export interface DisplayToolBlock {
   readonly kind: "tool";
   /** Stable identity `tool:<startOffset>`. */
@@ -87,7 +89,8 @@ export interface DisplayToolBlock {
 }
 
 /** A permission prompt in the ordered display — the request, paired to its resolution once it arrives.
- *  Wraps the canonical {@link DerivedPermission}. */
+ *  Wraps a deep-frozen snapshot clone of the canonical {@link DerivedPermission} (its nested `options`
+ *  and `resolved` are cloned + frozen too), so mutating it cannot reach back into projection state. */
 export interface DisplayPermissionBlock {
   readonly kind: "permission";
   /** Stable identity `permission:<startOffset>`. */
@@ -163,6 +166,28 @@ interface MutableGap {
 
 type MutableBlock = MutableText | MutableTool | MutablePermission | MutableGap;
 
+/** Deep-freeze a {@link DerivedTool} into a snapshot decoupled from the projection's mutable internals:
+ *  a shallow clone whose nested `result` is itself cloned + frozen, so a consumer that mutates the
+ *  returned `tool` (or `tool.result`) cannot reach back into projection state. (`args` is `unknown` and
+ *  producer-owned, so it is carried by reference — the projection never mutates it either.) */
+function freezeTool(tool: DerivedTool): DerivedTool {
+  return Object.freeze({
+    ...tool,
+    ...(tool.result !== undefined ? { result: Object.freeze({ ...tool.result }) } : {}),
+  });
+}
+
+/** Deep-freeze a {@link DerivedPermission} into a snapshot decoupled from the projection's mutable
+ *  internals: a shallow clone whose nested `options` (and each option) and `resolved` are cloned +
+ *  frozen, so a consumer cannot mutate projection state through the returned `permission`. */
+function freezePermission(permission: DerivedPermission): DerivedPermission {
+  return Object.freeze({
+    ...permission,
+    options: Object.freeze(permission.options.map((option) => Object.freeze({ ...option }))),
+    ...(permission.resolved !== undefined ? { resolved: Object.freeze({ ...permission.resolved }) } : {}),
+  });
+}
+
 function freezeBlock(block: MutableBlock): DisplayBlock {
   switch (block.kind) {
     case "text":
@@ -180,7 +205,7 @@ function freezeBlock(block: MutableBlock): DisplayBlock {
       return Object.freeze({
         kind: "tool",
         id: `tool:${block.startOffset}`,
-        tool: block.tool,
+        tool: freezeTool(block.tool),
         startOffset: block.startOffset,
         endOffset: block.endOffset,
       });
@@ -188,7 +213,7 @@ function freezeBlock(block: MutableBlock): DisplayBlock {
       return Object.freeze({
         kind: "permission",
         id: `permission:${block.startOffset}`,
-        permission: block.permission,
+        permission: freezePermission(block.permission),
         startOffset: block.startOffset,
         endOffset: block.endOffset,
       });

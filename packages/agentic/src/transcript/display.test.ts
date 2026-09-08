@@ -179,6 +179,56 @@ test("permission request/resolution stay chronologically positioned and pair by 
   assert.equal(perm.endOffset, 2);
 });
 
+test("freezeBlock exposes a deep-frozen tool snapshot decoupled from projection internals", () => {
+  const projection = createDisplayProjection();
+  projection.apply({ kind: "tool-call", offset: 0, name: "read_file", callId: "c1", args: { path: "a" } });
+  const opened = projection.apply({ kind: "tool-result", offset: 1, callId: "c1", ok: true, content: "ok" });
+  const tool = asTool(opened.changed ?? assert.fail("expected tool block")).tool;
+
+  // The exposed tool and its nested result must be frozen (mutating them is a no-op in non-strict, a
+  // throw in strict — either way the value is unchanged), so a consumer cannot corrupt projection state.
+  assert.ok(Object.isFrozen(tool), "tool object should be frozen");
+  assert.ok(tool.result !== undefined && Object.isFrozen(tool.result), "tool.result should be frozen");
+
+  // And the snapshot is a distinct object from what a later blocks() read returns for the same block,
+  // proving the exposed value is not the projection's shared mutable internal reference.
+  const laterTool = asTool(projection.blocks()[0]).tool;
+  assert.notEqual(laterTool, tool);
+  assert.equal(laterTool.result?.content, "ok");
+});
+
+test("freezeBlock exposes a deep-frozen permission snapshot decoupled from projection internals", () => {
+  const projection = createDisplayProjection();
+  const opened = projection.apply({
+    kind: "permission",
+    phase: "request",
+    offset: 0,
+    callId: "p1",
+    policy: "escalate",
+    options: [{ optionId: "o1", name: "Allow", kind: "allow-once" }],
+  });
+  const permission = asPermission(opened.changed ?? assert.fail("expected permission block")).permission;
+
+  assert.ok(Object.isFrozen(permission), "permission object should be frozen");
+  assert.ok(Object.isFrozen(permission.options), "permission.options array should be frozen");
+  assert.ok(Object.isFrozen(permission.options[0]), "each permission option should be frozen");
+
+  const resolved = projection.apply({
+    kind: "permission",
+    phase: "resolution",
+    offset: 1,
+    callId: "p1",
+    optionId: "o1",
+    allowed: true,
+    by: "operator",
+  });
+  const resolvedPermission = asPermission(resolved.changed ?? assert.fail("expected permission block")).permission;
+  assert.ok(resolvedPermission.resolved !== undefined && Object.isFrozen(resolvedPermission.resolved), "resolved should be frozen");
+
+  // The earlier snapshot must be unaffected by the later resolution (it is a decoupled clone).
+  assert.equal(permission.resolved, undefined);
+});
+
 test("legacy events with NO metadata still display via the adjacent-same-speaker fallback", () => {
   const events = [msg(10, "foo"), msg(11, "bar")];
   const blocks = textBlocks(deriveDisplay(events));

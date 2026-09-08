@@ -166,13 +166,38 @@ interface MutableGap {
 
 type MutableBlock = MutableText | MutableTool | MutablePermission | MutableGap;
 
+/** Recursively freeze a value already owned exclusively by the caller (a fresh clone), so no consumer
+ *  can mutate it at any depth. Idempotent, and a no-op for primitives and already-frozen objects. */
+function deepFreeze(value: unknown): void {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) return;
+  Object.freeze(value);
+  for (const nested of Object.values(value)) deepFreeze(nested);
+}
+
+/** Best-effort decouple a producer-owned, arbitrarily-shaped `args` value from projection state: deep
+ *  clone it (so the returned snapshot shares no mutable reference) then deep-freeze the clone. Values
+ *  `structuredClone` cannot copy (e.g. functions) are carried by reference — they are not mutable-state
+ *  carriers that could corrupt the projection, so the decoupling guarantee still holds. */
+function freezeArgs(args: unknown): unknown {
+  if (args === null || typeof args !== "object") return args;
+  let cloned: unknown;
+  try {
+    cloned = structuredClone(args);
+  } catch {
+    return args;
+  }
+  deepFreeze(cloned);
+  return cloned;
+}
+
 /** Deep-freeze a {@link DerivedTool} into a snapshot decoupled from the projection's mutable internals:
- *  a shallow clone whose nested `result` is itself cloned + frozen, so a consumer that mutates the
- *  returned `tool` (or `tool.result`) cannot reach back into projection state. (`args` is `unknown` and
- *  producer-owned, so it is carried by reference — the projection never mutates it either.) */
+ *  a shallow clone whose nested `result` is itself cloned + frozen and whose producer-owned `args` is
+ *  deep cloned + frozen ({@link freezeArgs}), so a consumer that mutates the returned `tool` (or
+ *  `tool.result` / `tool.args`) cannot reach back into projection state. */
 function freezeTool(tool: DerivedTool): DerivedTool {
   return Object.freeze({
     ...tool,
+    ...(tool.args !== undefined ? { args: freezeArgs(tool.args) } : {}),
     ...(tool.result !== undefined ? { result: Object.freeze({ ...tool.result }) } : {}),
   });
 }
@@ -432,8 +457,11 @@ export function createDisplayProjection(): DisplayProjection {
   };
 
   const apply = (event: TranscriptEvent): DisplayApplyResult => {
-    // Idempotency gate: an offset at or below the high-water mark was already folded (replay / reconnect
-    // / pagination overlap / a duplicated chunk), so re-applying it must not change anything.
+    // Idempotency gate: this projection requires events in strictly increasing `offset` order, so any
+    // offset at or below the high-water mark is treated as already folded (replay / reconnect /
+    // pagination overlap / a duplicated chunk) and re-applying it must not change anything. A genuinely
+    // out-of-order event (offset <= lastOffset arriving late) is likewise dropped here, not merged — a
+    // caller seeing a "missing" block must re-feed the stream in order rather than read it as deduped.
     if (event.offset <= lastOffset) return NOOP;
     lastOffset = event.offset;
     switch (event.kind) {

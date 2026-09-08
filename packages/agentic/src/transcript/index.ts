@@ -67,6 +67,7 @@ export type {
   DerivedView,
   LifecycleEvent,
   MessageEvent,
+  MessageMode,
   PermissionOption,
   PermissionOptionKind,
   PermissionPolicy,
@@ -84,3 +85,21 @@ export type {
   TranscriptVocab,
   TurnEvent,
 } from "./events.ts";
+
+/**
+ * The ordered display derivation (#566) — the canonical projection that coalesces transport-fragmented
+ * message deltas back into logical blocks and interleaves them chronologically with tool cards and
+ * permission prompts. The cockpit and downstream consumers (nano-workforce) render THIS instead of the
+ * raw per-event groups, so a split word reconstructs into one block and ordering never scrambles. The
+ * raw log, its offsets and byte-faithful replay are untouched.
+ */
+export { createDisplayProjection, deriveDisplay } from "./display.ts";
+export type {
+  DisplayApplyResult,
+  DisplayBlock,
+  DisplayGapBlock,
+  DisplayPermissionBlock,
+  DisplayProjection,
+  DisplayTextBlock,
+  DisplayToolBlock,
+} from "./display.ts";

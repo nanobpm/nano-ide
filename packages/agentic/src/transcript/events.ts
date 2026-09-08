@@ -85,11 +85,54 @@ export interface StreamChunkEvent extends TranscriptEventBase {
   readonly chunk: string;
 }
 
-/** An assistant/user/system message — authoritative for the derived message history. */
+/**
+ * How a {@link MessageEvent}'s `text` relates to the display block it belongs to. This is the
+ * delta-versus-snapshot contract the ordered display derivation ({@link deriveDisplay}) honours:
+ *
+ *  - `"delta"` (the default when `mode` is omitted) — `text` is the NEXT fragment of a growing message;
+ *    the display fold CONCATENATES it exactly onto the block's accumulated text (no injected space,
+ *    trim or rewrite).
+ *  - `"snapshot"` — `text` is the FULL cumulative text of the message so far; the display fold REPLACES
+ *    the block's accumulated text with it (never appends). A producer MUST NOT tag a cumulative snapshot
+ *    as a `"delta"` — that would double the text. This is the "never append a snapshot as a delta" rule.
+ */
+export type MessageMode = "delta" | "snapshot";
+
+/**
+ * An assistant/user/system message — authoritative for the derived message history.
+ *
+ * The four optional fields below are the ADDITIVE producer metadata that lets the ordered display
+ * derivation ({@link deriveDisplay}) coalesce transport-fragmented deltas back into one display block
+ * WITHOUT guessing. Every field is optional: a legacy producer that emits none still derives a coherent
+ * view via the deterministic adjacent-same-speaker fallback (no timing/punctuation heuristics). The
+ * stored/raw event and its byte-faithful replay are unchanged by any of them — they only steer the
+ * display projection, never the raw log.
+ */
 export interface MessageEvent extends TranscriptEventBase {
   readonly kind: "message";
   readonly role: TranscriptRole;
   readonly text: string;
+  /**
+   * The producer's stable identity for the LOGICAL message this fragment belongs to. Two message events
+   * with the same `role` AND the same `messageId` are the same display block, even if a tool call or
+   * other event interleaves between them. When omitted, the display fold falls back to coalescing
+   * adjacent same-speaker deltas (an explicit id both enables non-adjacent grouping and, when it
+   * CHANGES, forces a new block — a distinct same-role message stays distinct).
+   */
+  readonly messageId?: string;
+  /** Delta (append) versus snapshot (replace) semantics for `text`; see {@link MessageMode}. Defaults to `"delta"`. */
+  readonly mode?: MessageMode;
+  /**
+   * An explicit START boundary: force a NEW display block for this event even if it would otherwise
+   * coalesce with the active same-speaker block. Lets a producer that reuses/omits a `messageId` still
+   * signal "this begins a new message".
+   */
+  readonly start?: boolean;
+  /**
+   * An explicit COMPLETION boundary: after folding this event, CLOSE the display block so any later
+   * same-speaker text opens a fresh block. Marks the logical message finished.
+   */
+  readonly final?: boolean;
 }
 
 /** A tool invocation the agent issued. */
@@ -242,6 +285,13 @@ function num(body: Record<string, unknown>, key: string): number | undefined {
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
 }
 
+/** Read a strictly-boolean field, or `undefined` when absent. A present-but-non-boolean value returns
+ *  `undefined` too, so the caller can reject a malformed envelope rather than silently coercing it. */
+function bool(body: Record<string, unknown>, key: string): boolean | undefined {
+  const v = body[key];
+  return typeof v === "boolean" ? v : undefined;
+}
+
 const ROLES: readonly TranscriptRole[] = ["assistant", "user", "system", "tool"];
 
 /** Narrow an arbitrary string to a known {@link TranscriptRole}, defaulting to `assistant`. */
@@ -291,7 +341,31 @@ export const CORE_TRANSCRIPT_VOCAB: TranscriptVocab = Object.freeze(Object.assig
     const text = str(body, "text");
     if (text === undefined) return undefined;
     const roleRaw = str(body, "role");
-    return { kind: "message", offset, role: toRole(roleRaw), text };
+    // The additive display metadata (all optional). Mirror the permission decoder's discipline: a
+    // present-but-malformed optional field REJECTS the whole envelope (→ raw stream-chunk) rather than
+    // being silently dropped, so a decoded event never diverges from the on-wire JSON.
+    const messageId = str(body, "messageId");
+    if (body.messageId !== undefined && messageId === undefined) return undefined;
+    let mode: MessageMode | undefined;
+    if (body.mode !== undefined) {
+      const modeRaw = str(body, "mode");
+      if (modeRaw !== "delta" && modeRaw !== "snapshot") return undefined;
+      mode = modeRaw;
+    }
+    const start = bool(body, "start");
+    if (body.start !== undefined && start === undefined) return undefined;
+    const final = bool(body, "final");
+    if (body.final !== undefined && final === undefined) return undefined;
+    return {
+      kind: "message",
+      offset,
+      role: toRole(roleRaw),
+      text,
+      ...(messageId !== undefined ? { messageId } : {}),
+      ...(mode !== undefined ? { mode } : {}),
+      ...(start !== undefined ? { start } : {}),
+      ...(final !== undefined ? { final } : {}),
+    };
   },
   "tool-call": (body, offset) => {
     const name = str(body, "name");

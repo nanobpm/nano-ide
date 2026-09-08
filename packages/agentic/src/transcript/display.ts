@@ -174,16 +174,19 @@ function deepFreeze(value: unknown): void {
   for (const nested of Object.values(value)) deepFreeze(nested);
 }
 
-/** Best-effort decouple a producer-owned, arbitrarily-shaped `args` value from projection state: deep
- *  clone it (so the returned snapshot shares no mutable reference) then deep-freeze the clone. Values
- *  `structuredClone` cannot copy (e.g. functions) are carried by reference — they are not mutable-state
- *  carriers that could corrupt the projection, so the decoupling guarantee still holds. */
+/** Decouple a producer-owned, arbitrarily-shaped `args` value from projection state: deep clone it (so
+ *  the returned snapshot shares no mutable reference) then deep-freeze the clone. When `structuredClone`
+ *  is unavailable or `args` is non-cloneable (e.g. it contains functions), fall back to deep-freezing
+ *  `args` *in place* rather than returning it unfrozen: a shared-by-reference fallback would let a
+ *  consumer mutate `tool.args` back into the projection's internals, so freezing the shared object is
+ *  what preserves the "cannot reach back" guarantee even when cloning fails. */
 function freezeArgs(args: unknown): unknown {
   if (args === null || typeof args !== "object") return args;
   let cloned: unknown;
   try {
     cloned = structuredClone(args);
   } catch {
+    deepFreeze(args);
     return args;
   }
   deepFreeze(cloned);

@@ -222,6 +222,27 @@ test("freezeBlock exposes tool.args as a frozen deep clone decoupled from projec
   assert.deepEqual(laterArgs, args);
 });
 
+test("freezeBlock freezes non-cloneable tool.args in place so a consumer cannot mutate internals", () => {
+  const projection = createDisplayProjection();
+  // A function makes structuredClone throw, forcing freezeArgs onto its fallback path.
+  const opened = projection.apply({
+    kind: "tool-call",
+    offset: 0,
+    name: "read_file",
+    callId: "c1",
+    args: { path: "a", cb: () => 1, nested: { deep: 1 } },
+  });
+  const tool = asTool(opened.changed ?? assert.fail("expected tool block")).tool;
+  const args = tool.args;
+  if (typeof args !== "object" || args === null) assert.fail("expected object args");
+
+  // Even when cloning fails, the exposed args (and its nested objects) must be frozen so a consumer
+  // cannot mutate them and reach back into the projection's internal state.
+  assert.ok(Object.isFrozen(args), "non-cloneable tool.args should be frozen in place");
+  const nested = Object.values(args).find((v) => typeof v === "object" && v !== null);
+  assert.ok(nested !== undefined && Object.isFrozen(nested), "nested non-cloneable args objects should be frozen");
+});
+
 test("freezeBlock exposes a deep-frozen permission snapshot decoupled from projection internals", () => {
   const projection = createDisplayProjection();
   const opened = projection.apply({

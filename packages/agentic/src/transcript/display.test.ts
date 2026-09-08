@@ -240,6 +240,35 @@ test("incremental apply reports the touched block and whether it was appended", 
   assert.equal(dup.changed, undefined); // duplicate offset is a no-op
 });
 
+test("anchoring a gap surfaces the mutated gap block via apply().anchored", () => {
+  // Copilot #567: noteGap() emits a gap whose beforeOffset is unknown; when the first post-gap block
+  // opens, that apply must surface the now-anchored gap so an incremental consumer patches it in place.
+  const projection = createDisplayProjection();
+  projection.apply(msg(0, "early"));
+  const gap = projection.noteGap();
+  assert.equal(gap.appended, true);
+  assert.equal(asGap(gap.changed ?? assert.fail("gap block")).beforeOffset, undefined); // unknown when emitted
+  assert.equal(gap.anchored, undefined); // nothing to anchor yet
+
+  const opened = projection.apply(msg(5, "later"));
+  assert.equal(opened.appended, true);
+  assert.equal(asText(opened.changed ?? assert.fail("text block")).text, "later");
+  const anchored = opened.anchored ?? assert.fail("expected the anchored gap to be surfaced");
+  assert.equal(asGap(anchored).beforeOffset, 5); // the same gap, now anchored to the post-gap block
+  assert.equal(asGap(anchored).id, asGap(gap.changed ?? assert.fail("gap block")).id); // stable identity
+
+  const nextOpen = projection.apply(msg(6, "more", { start: true }));
+  assert.equal(nextOpen.anchored, undefined); // gap already anchored — not surfaced again
+});
+
+test("anchoring a gap via a tool/permission block also surfaces it (not just text)", () => {
+  const projection = createDisplayProjection();
+  projection.noteGap(); // a LEADING gap (no block before it)
+  const opened = projection.apply({ kind: "tool-call", offset: 3, name: "run", callId: "c1" });
+  assert.equal(asTool(opened.changed ?? assert.fail("tool block")).tool.name, "run");
+  assert.equal(asGap(opened.anchored ?? assert.fail("expected anchored gap")).beforeOffset, 3);
+});
+
 test("block identity is stable across deltas (keyed by the first fragment offset)", () => {
   const events = [msg(4, "a"), msg(5, "b"), msg(6, "c")];
   const block = asText(deriveDisplay(events)[0]);

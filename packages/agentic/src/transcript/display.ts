@@ -35,7 +35,10 @@
  * INCREMENTAL-FRIENDLY. {@link createDisplayProjection} keeps the ordered blocks as mutable state and
  * returns, from each {@link DisplayProjection.apply}, exactly which block was touched — so a consumer can
  * update the one active block's DOM node in place instead of re-rendering the whole transcript on every
- * delta. {@link deriveDisplay} is the pure batch convenience over the same fold.
+ * delta. When opening the first block after a {@link DisplayProjection.noteGap} also anchors that gap's
+ * `beforeOffset`, the same result reports the now-anchored gap as its secondary `anchored` block, so a
+ * consumer that already rendered the gap patches it too. {@link deriveDisplay} is the pure batch
+ * convenience over the same fold.
  *
  * BROWSER-SAFE + PURE, like {@link ./events.ts}: no Node-only API, no I/O, never touches the engine.
  */
@@ -111,13 +114,18 @@ export interface DisplayGapBlock {
 export type DisplayBlock = DisplayTextBlock | DisplayToolBlock | DisplayPermissionBlock | DisplayGapBlock;
 
 /** What a single {@link DisplayProjection.apply} did — so an incremental consumer can update just the
- *  touched block instead of re-rendering everything. `changed` is the block that was created or mutated
+ *  touched block(s) instead of re-rendering everything. `changed` is the block that was created or mutated
  *  (undefined when the event was a no-op: an ignored kind, or a duplicate/stale offset). `appended` is
  *  `true` when `changed` is a brand-new block at the end (a consumer appends a node) versus an in-place
- *  update of an existing block (a consumer patches that node's content/attributes). */
+ *  update of an existing block (a consumer patches that node's content/attributes). `anchored` is a
+ *  SECOND, previously-emitted block this same apply also mutated in place, so a consumer patches it too:
+ *  currently only the pending retention gap from {@link DisplayProjection.noteGap}, whose `beforeOffset`
+ *  is unknown when emitted and becomes known when the first post-gap block opens — the apply that opens
+ *  that block reports the now-anchored gap here. `undefined` when nothing secondary changed. */
 export interface DisplayApplyResult {
   readonly changed?: DisplayBlock;
   readonly appended: boolean;
+  readonly anchored?: DisplayBlock;
 }
 
 const NOOP: DisplayApplyResult = Object.freeze({ appended: false });
@@ -266,7 +274,8 @@ export interface DisplayProjection {
    * Record a retention gap at the current tail: the consumer resumed from an offset older than the
    * oldest retained chunk (the S6 `gap` signal), so the events that follow are NOT continuous with what
    * precedes. Closes the active text block and appends a visible {@link DisplayGapBlock}. Call it BEFORE
-   * feeding the post-gap events; the gap's `beforeOffset` is filled in from the next block that opens.
+   * feeding the post-gap events; the gap's `beforeOffset` is filled in from the next block that opens and
+   * surfaced to a consumer as that {@link apply}'s {@link DisplayApplyResult.anchored}.
    */
   noteGap(): DisplayApplyResult;
   /** A frozen snapshot of the ordered display blocks as they stand now. */
@@ -298,12 +307,15 @@ export function createDisplayProjection(): DisplayProjection {
     if (active !== undefined) active.complete = true;
   };
 
-  /** Anchor a not-yet-anchored gap to the first block that opens after it. */
-  const anchorGap = (offset: number): void => {
-    if (pendingGapBlock !== undefined) {
-      pendingGapBlock.beforeOffset = offset;
-      pendingGapBlock = undefined;
-    }
+  /** Anchor a not-yet-anchored gap to the first block that opens after it, returning the now-anchored gap
+   *  (frozen) so the triggering {@link apply} can surface it as {@link DisplayApplyResult.anchored} — else
+   *  `undefined` when there is no pending gap. */
+  const anchorGap = (offset: number): DisplayBlock | undefined => {
+    if (pendingGapBlock === undefined) return undefined;
+    pendingGapBlock.beforeOffset = offset;
+    const anchored = freezeBlock(pendingGapBlock);
+    pendingGapBlock = undefined;
+    return anchored;
   };
 
   const applyMessage = (event: MessageEvent): DisplayApplyResult => {
@@ -329,7 +341,7 @@ export function createDisplayProjection(): DisplayProjection {
     // Open a fresh block. (A `start`/id-change/role-change also closes any still-open predecessor so the
     // next unrelated delta cannot re-open it.)
     closeActiveText();
-    anchorGap(event.offset);
+    const anchored = anchorGap(event.offset);
     const block: MutableText = {
       kind: "text",
       role: event.role,
@@ -340,14 +352,14 @@ export function createDisplayProjection(): DisplayProjection {
       ...(event.messageId !== undefined ? { messageId: event.messageId } : {}),
     };
     blocks.push(block);
-    return { changed: freezeBlock(block), appended: true };
+    return { changed: freezeBlock(block), appended: true, ...(anchored !== undefined ? { anchored } : {}) };
   };
 
   const applyToolCall = (event: ToolCallEvent): DisplayApplyResult => {
     // A tool call interrupts any running text: it becomes the trailing block, so a later delta opens a
     // new text block rather than coalescing across the tool.
     closeActiveText();
-    anchorGap(event.offset);
+    const anchored = anchorGap(event.offset);
     const block: MutableTool = {
       kind: "tool",
       tool: toolFromCall(event),
@@ -358,7 +370,7 @@ export function createDisplayProjection(): DisplayProjection {
     const pending: PendingTool = { block };
     if (event.callId !== undefined) openTools.set(event.callId, pending);
     else anonymousTool = pending;
-    return { changed: freezeBlock(block), appended: true };
+    return { changed: freezeBlock(block), appended: true, ...(anchored !== undefined ? { anchored } : {}) };
   };
 
   const applyToolResult = (event: ToolResultEvent): DisplayApplyResult => {
@@ -373,7 +385,7 @@ export function createDisplayProjection(): DisplayProjection {
 
   const applyPermissionRequest = (event: PermissionRequestEvent): DisplayApplyResult => {
     closeActiveText();
-    anchorGap(event.offset);
+    const anchored = anchorGap(event.offset);
     const block: MutablePermission = {
       kind: "permission",
       permission: permissionFromRequest(event),
@@ -382,7 +394,7 @@ export function createDisplayProjection(): DisplayProjection {
     };
     blocks.push(block);
     openPermissions.set(event.callId, { block });
-    return { changed: freezeBlock(block), appended: true };
+    return { changed: freezeBlock(block), appended: true, ...(anchored !== undefined ? { anchored } : {}) };
   };
 
   const applyPermissionResolution = (event: PermissionResolutionEvent): DisplayApplyResult => {

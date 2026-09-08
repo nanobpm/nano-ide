@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.13.0...@nanobpm/agentic-0.14.0) (2026-09-08)
+
+
+### Features
+
+* **agentic:** derive ordered display blocks from streaming message deltas ([#567](https://github.com/nanobpm/nano-ide/issues/567)) ([f64f1ba](https://github.com/nanobpm/nano-ide/commit/f64f1ba55dd9f541420474e523bc29aea209ba2e))
+
 ## [0.13.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.12.0...@nanobpm/agentic-0.13.0) (2026-09-04)
 
 

@@ -15,6 +15,7 @@ import {
   type DisplayTextBlock,
   type DisplayToolBlock,
   type DisplayPermissionBlock,
+  type DisplayGapBlock,
   deriveView,
   encodeTranscriptEvent,
   type MessageEvent,
@@ -52,6 +53,10 @@ function asTool(block: DisplayBlock): DisplayToolBlock {
 }
 function asPermission(block: DisplayBlock): DisplayPermissionBlock {
   if (block.kind !== "permission") throw new Error(`expected permission block, got ${block.kind}`);
+  return block;
+}
+function asGap(block: DisplayBlock): DisplayGapBlock {
+  if (block.kind !== "gap") throw new Error(`expected gap block, got ${block.kind}`);
   return block;
 }
 
@@ -214,7 +219,7 @@ test("a retention gap is a visible block and breaks continuity", () => {
   const blocks = projection.blocks();
   assert.deepEqual(blocks.map((b) => b.kind), ["text", "gap", "text"]);
   assert.equal(asText(blocks[0]).complete, true); // gap closed the earlier block
-  assert.equal(blocks[1].kind === "gap" && blocks[1].beforeOffset, 5);
+  assert.equal(asGap(blocks[1]).beforeOffset, 5);
   assert.deepEqual(textBlocks(blocks).map((b) => b.text), ["early", "later"]);
 });
 

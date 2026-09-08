@@ -114,10 +114,13 @@ export interface MessageEvent extends TranscriptEventBase {
   readonly text: string;
   /**
    * The producer's stable identity for the LOGICAL message this fragment belongs to. Two message events
-   * with the same `role` AND the same `messageId` are the same display block, even if a tool call or
-   * other event interleaves between them. When omitted, the display fold falls back to coalescing
-   * adjacent same-speaker deltas (an explicit id both enables non-adjacent grouping and, when it
-   * CHANGES, forces a new block — a distinct same-role message stays distinct).
+   * with the same `role` AND the same `messageId` are treated as the same display block and coalesce even
+   * when they are NOT adjacent same-speaker deltas — provided no coalescing-breaking boundary (a tool call,
+   * permission request, or turn boundary) closes the block between them. Those boundaries still end the
+   * block regardless of `messageId`; a later same-`messageId` fragment after such a boundary opens a fresh
+   * block. When omitted, the display fold falls back to coalescing adjacent same-speaker deltas (an explicit
+   * id both enables non-adjacent grouping and, when it CHANGES, forces a new block — a distinct same-role
+   * message stays distinct).
    */
   readonly messageId?: string;
   /** Delta (append) versus snapshot (replace) semantics for `text`; see {@link MessageMode}. Defaults to `"delta"`. */

@@ -22,7 +22,7 @@ jobs:
       - run: npm run lint
 
       # Guard against schema drift: the App-manifest shape is owned by
-      # `@nanobpm/nano-app-schema` (Magikcraft/nano-bpm spec-app). Augmenting its
+      # `@nanobpm/nano-app-schema` (nanobpm/nano-bpm spec-app). Augmenting its
       # types here (`declare module "@nanobpm/nano-app-schema"`) lets a field pass
       # editor/type checks while the published JSON Schema still rejects it — the
       # exact drift that hid `models.templates` from Nano Studio. Formalize new

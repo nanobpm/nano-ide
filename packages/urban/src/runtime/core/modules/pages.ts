@@ -700,7 +700,7 @@ function rendererShell(homePage: string, apiDocsPath?: string): string {
 }
 
 // The app's stylesheet resolves every colour through the Nano console's
-// semantic `--nano-*` token contract (see the Magikcraft/nano-bpm repo's
+// semantic `--nano-*` token contract (see the nanobpm/nano-bpm repo's
 // `console/src/theme/tokens.css` — MIRROR: keep the palettes below in sync). When the app is embedded in the
 // console it inherits nothing across the iframe boundary, so the console
 // postMessages its resolved tokens + appearance and the runtime lays them onto

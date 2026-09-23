@@ -3,12 +3,12 @@
 Status: Proposed
 Date: 2026-08-10
 Extends: ADR 0058 (OpenAPI endpoint surface — contract-first controllers, ejectable
-to imperative; Proposed, `Magikcraft/nano-bpm`), ADR 0053 (derivation is a shared
+to imperative; Proposed, `nanobpm/nano-bpm`), ADR 0053 (derivation is a shared
 library), ADR 0054 (one code-first stack), ADR 0055 (the runtime absorbs app
 surfaces).
 Relates to: nano-ide #150 (route-driven page actions — the *page-action* half of
 the route-driven story; this ADR is the *authoring* half).
-Repo: Magikcraft/nano-bpm (`spec-app/`), nanobpm/nano-ide (`packages/urban`,
+Repo: nanobpm/nano-bpm (`spec-app/`), nanobpm/nano-ide (`packages/urban`,
 `packages/create-urban-app`)
 
 ## Context

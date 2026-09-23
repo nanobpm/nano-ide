@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Fail the build if the authored TS source augments the App-manifest shape via
 // `declare module "@nanobpm/nano-app-schema"`. That shape is owned by the canonical
-// @nanobpm/nano-app-schema package (Magikcraft/nano-bpm spec-app, ADR 0027): a local
+// @nanobpm/nano-app-schema package (nanobpm/nano-bpm spec-app, ADR 0027): a local
 // `declare module` lets a field pass editor/type checks while the published JSON Schema
 // still rejects it — the exact drift that once hid `models.templates` from Nano Studio.
 // Formalize new fields in the schema package and bump the dep, or thread a pending field

@@ -8,7 +8,7 @@ surface — the one boundary that already validates), ADR 0059 (one HTTP surface
 "a validator you hand-write is a validator you can get wrong").
 Relates to: nano-ide #150 (the `gw-guard` `null >= null` incident is a boundary
 escape), #156 (0059 tracking).
-Repo: nanobpm/nano-ide (`packages/urban`), Magikcraft/nano-bpm (`spec-app/`).
+Repo: nanobpm/nano-ide (`packages/urban`), nanobpm/nano-bpm (`spec-app/`).
 
 ## Context
 

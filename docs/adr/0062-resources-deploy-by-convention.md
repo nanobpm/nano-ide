@@ -5,7 +5,7 @@ Date: 2026-08-16
 Relates to: ADR 0027 (nano-bpm; `nano.app.json` manifest spec — the `models` key),
 ADR 0052/0053/0054 (dry out the Nano host over `@nanobpm/urban`; derivation is a shared
 library), ADR 0059 (one HTTP surface).
-Repo: nanobpm/nano-ide (`packages/urban`), the schema source **Magikcraft/nano-bpm**
+Repo: nanobpm/nano-ide (`packages/urban`), the schema source **nanobpm/nano-bpm**
 (`spec-app/nano-app.schema.json`, published as `@nanobpm/nano-app-schema`), and consumer
 apps such as nanobpm/nano-workforce.
 
@@ -91,7 +91,7 @@ footgun is not rebuilt under a new name.
 
 ## Consequences
 
-- **Cross-repo, ordered rollout.** Schema (`@nanobpm/nano-app-schema`, Magikcraft/nano-bpm)
+- **Cross-repo, ordered rollout.** Schema (`@nanobpm/nano-app-schema`, nanobpm/nano-bpm)
   → urban (nano-ide, deploy/gen + removal + scaffolds) → consumer apps (nano-workforce
   migration). The nwf consumer change lands only after the urban release that carries the
   convention.

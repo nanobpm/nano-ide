@@ -721,3 +721,39 @@ test("threads an injected scheduler into the instance-tracking reconciler loop",
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// nano-ide#572 — the app-wide dataGrid card layout is opt-in via `surfaces.pages.gridLayout` in the
+// MANIFEST. These drive the full manifest→shell wiring (createUrbanApp → mountSurfaces → mountPages)
+// end-to-end, so a regression in that bridge — e.g. the reflective `"gridLayout" in decl` read or the
+// `parseGridLayout` fallback — is caught here even though the focused pages.test.ts tests inject the
+// option directly into createPagesRoutes (which bypasses the manifest read).
+async function shellGridLayout(pages: Record<string, unknown>): Promise<string> {
+  const dir = await makeFixture({ surfaces: { pages: { enabled: true, ...pages } } });
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const engine = new FakeEngine();
+  const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+  await app.start();
+  try {
+    const res = await fetch(`http://localhost:${app.httpPort!}/`);
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    const m = body.match(/<body data-grid-layout="([^"]*)">/);
+    assert.ok(m, `shell body carries a data-grid-layout attribute: ${body.slice(0, 200)}`);
+    return m[1];
+  } finally {
+    await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('#572: surfaces.pages.gridLayout "cards" reaches the shell body attribute through the manifest', async () => {
+  assert.equal(await shellGridLayout({ gridLayout: "cards" }), "cards");
+});
+
+test('#572: an omitted surfaces.pages.gridLayout falls back to the "auto" layout', async () => {
+  assert.equal(await shellGridLayout({}), "auto");
+});
+
+test('#572: an invalid surfaces.pages.gridLayout falls back to the "auto" layout', async () => {
+  assert.equal(await shellGridLayout({ gridLayout: "grid" }), "auto");
+});

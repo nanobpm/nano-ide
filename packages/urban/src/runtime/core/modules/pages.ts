@@ -37,6 +37,14 @@ import { quoteIdent } from "./gateway.ts";
 import { RENDERER_JS } from "./runtime.gen.ts";
 import { isSqlIdentifier } from "../read-model.ts";
 
+/** The app-wide dataGrid layout (`surfaces.pages.gridLayout`, nano-ide#572). */
+export type GridLayout = "auto" | "cards";
+
+/** Narrow an untyped manifest value to a declared {@link GridLayout}; anything else is undefined (→ `"auto"`). */
+export function parseGridLayout(value: unknown): GridLayout | undefined {
+  return value === "auto" || value === "cards" ? value : undefined;
+}
+
 /** The subset of the datasource gateway the page runtime needs. */
 export interface PagesDataSource {
   query(sql: string, params?: unknown[]): Promise<Record<string, unknown>[]>;
@@ -48,6 +56,12 @@ export interface PagesOptions {
   pagesDir?: string;
   /** The page served at `/`. Default `home`. */
   homePage?: string;
+  /**
+   * How every `dataGrid` lays out (nano-ide#572). `"auto"` (default): a table, flipping to the card
+   * list below the mobile breakpoint. `"cards"`: the card list at every width — for apps whose
+   * fixed-max-width shell would otherwise clip wide grids.
+   */
+  gridLayout?: GridLayout;
   /** Max rows a `dataGrid` fetch returns. Default 200. */
   rowLimit?: number;
   /** The injected default datasource name (the alias apps bind to). Default `app`. */
@@ -248,7 +262,7 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   };
 
   const routes: Route[] = [];
-  const shell = html(rendererShell(homePage, opts.apiDocsPath));
+  const shell = html(rendererShell(homePage, opts.apiDocsPath, opts.gridLayout ?? "auto"));
   // The shell must never be pinned by the browser: it carries the *current* fingerprinted
   // runtime URL, so a stale shell would keep pointing at an old module hash. `no-cache` forces
   // a revalidation on every load; the shell body is tiny, and the expensive module it references
@@ -630,6 +644,9 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
   const opts: PagesOptions = {
     pagesDir: typeof decl.pagesDir === "string" ? decl.pagesDir : undefined,
     homePage: typeof decl.homePage === "string" ? decl.homePage : undefined,
+    // `in`-narrowed so this reads the key whether or not the pinned @nanobpm/nano-app-schema already
+    // declares it (nanobpm/nano-bpm#1301); an undeclared/invalid value falls back to "auto".
+    gridLayout: parseGridLayout("gridLayout" in decl ? decl.gridLayout : undefined),
     rowLimit: typeof decl.rowLimit === "number" ? decl.rowLimit : undefined,
     sourceName: typeof decl.sourceName === "string" ? decl.sourceName : undefined,
     // Link the shell's "API docs" badge to the app's Swagger UI when it declares an `api`
@@ -664,7 +681,7 @@ function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function rendererShell(homePage: string, apiDocsPath?: string): string {
+function rendererShell(homePage: string, apiDocsPath: string | undefined, gridLayout: GridLayout): string {
   // A persistent "API docs" badge (spec-first apps get their Swagger UI linked from their own
   // UI for free). `target="_blank"` + hardened `rel` so the docs open without giving the docs
   // tab a handle back to this window (reverse-tabnabbing).
@@ -691,7 +708,7 @@ function rendererShell(homePage: string, apiDocsPath?: string): string {
   <title>Urban App</title>
   <style>${RENDERER_CSS}</style>
 </head>
-<body>${apiDocsBadge}
+<body data-grid-layout="${gridLayout}">${apiDocsBadge}
   <main id="page" data-home="${escapeAttr(homePage)}"><p class="pc-empty">Loading…</p></main>
   <script>${FORMJS_JS}</script>
   <script type="module" src=".${RUNTIME_JS_PATH}"></script>
@@ -714,6 +731,72 @@ function rendererShell(homePage: string, apiDocsPath?: string): string {
 // stacking) AND the runtime's `matchMedia` mode-switch (which only Tier-2's
 // optional page-level `mobile` layout variant needs), so the two can never
 // drift apart on where "narrow" begins.
+/**
+ * The dataGrid → card-list rules (#268), in ONE place. They are emitted twice from this single source:
+ * unscoped inside the mobile `@media` block (every app, narrow viewports) and scoped to
+ * `[data-grid-layout="cards"]` at top level (apps that opt into cards at every width, nano-ide#572).
+ * `scope` is prefixed onto every selector of every rule, so the two copies can never drift.
+ */
+function gridCardRules(scope: string): string {
+  const css = `
+  /* dataGrid → card list. Once cells are display:block the fixed colgroup width
+     is irrelevant, so a wide table stops overflowing the phone. table-layout is
+     reset to auto so the block cells size to content. */
+  table.pc-grid { table-layout:auto; }
+  table.pc-grid, table.pc-grid tbody, table.pc-grid tr, table.pc-grid td { display:block; width:auto; }
+  table.pc-grid colgroup, table.pc-grid thead { display:none; }
+  table.pc-grid tr { border:1px solid var(--nano-edge); border-radius:.6rem; padding:.55rem .75rem; margin:.6rem 0; background:var(--nano-panel); }
+  table.pc-grid td { border-bottom:0; padding:.15rem 0; display:flex; gap:.75rem; justify-content:space-between; align-items:baseline; }
+  /* label:value — the column header (data-label) prefixes the value as a muted
+     caption on the same line. Suppressed for the title, chip, actions and any
+     colspan (group/empty/error) cells below. */
+  table.pc-grid td[data-label]::before { content:attr(data-label); color:var(--nano-text-muted); font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.03em; flex:0 0 auto; }
+  /* The derived (or mobile:{priority:"primary"}-hinted) card title leads the
+     card: larger, full width, no label caption. */
+  table.pc-grid td.pc-mcell-primary { display:block; font-size:1rem; font-weight:650; padding-top:.15rem; }
+  table.pc-grid td.pc-mcell-primary::before { content:none; }
+  /* A badge column becomes a left-aligned status chip with no caption. */
+  table.pc-grid td.pc-mcell-chip { justify-content:flex-start; }
+  table.pc-grid td.pc-mcell-chip::before { content:none; }
+  /* An empty badge cell (row value blank) still carries the chip class but has no
+     child content; without this it renders as a blank flex row (padding/gap) that
+     leaves a stray empty line in the card. Collapse those empty chip cells (#268). */
+  table.pc-grid td.pc-mcell-chip:empty { display:none; }
+  /* Low-value (mobile:{priority:"hidden"}) columns drop off the card until the
+     row's "More" toggle opens them; on desktop they render as normal columns. */
+  table.pc-grid td.pc-mcell-hidden { display:none; }
+  table.pc-grid tr.pc-open td.pc-mcell-hidden { display:flex; }
+  .pc-mcard-toggle { display:block; padding:.3rem 0 0; }
+  .pc-mcard-toggle .pc-more { width:100%; margin-right:0; }
+  /* Row actions stack full-width under the card body. */
+  table.pc-grid td.pc-row-actions { display:flex; flex-wrap:wrap; gap:.4rem; text-align:left; padding-top:.45rem; white-space:normal; }
+  table.pc-grid td.pc-row-actions::before { content:none; }
+  table.pc-grid td.pc-row-actions .pc-btn { flex:1 1 auto; margin-right:0; }
+  /* Group-header + empty/error rows span the full card width with no caption. */
+  table.pc-grid td[colspan] { display:block; }
+  table.pc-grid td[colspan]::before { content:none; }
+  .pc-group-header td { padding:0; }
+`;
+  if (scope === "") return css.replace(/^\n/, "");
+  // The scoped copy drops the comments (they document the mobile copy) and scopes each rule line.
+  return css
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .map((line) => {
+      const brace = line.indexOf("{");
+      if (brace < 0) return line;
+      const selectors = line
+        .slice(0, brace)
+        .split(",")
+        .map((sel) => `${scope} ${sel.trim()}`)
+        .join(", ");
+      return `  ${selectors} ${line.slice(brace)}`;
+    })
+    .join("\n")
+    .concat("\n");
+}
+
 const MOBILE_MAX_WIDTH = "640px";
 
 const RENDERER_CSS = `
@@ -964,44 +1047,7 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
    matchMedia. */
 @media (max-width:${MOBILE_MAX_WIDTH}) {
   body { padding:1rem; }
-  /* dataGrid → card list. Once cells are display:block the fixed colgroup width
-     is irrelevant, so a wide table stops overflowing the phone. table-layout is
-     reset to auto so the block cells size to content. */
-  table.pc-grid { table-layout:auto; }
-  table.pc-grid, table.pc-grid tbody, table.pc-grid tr, table.pc-grid td { display:block; width:auto; }
-  table.pc-grid colgroup, table.pc-grid thead { display:none; }
-  table.pc-grid tr { border:1px solid var(--nano-edge); border-radius:.6rem; padding:.55rem .75rem; margin:.6rem 0; background:var(--nano-panel); }
-  table.pc-grid td { border-bottom:0; padding:.15rem 0; display:flex; gap:.75rem; justify-content:space-between; align-items:baseline; }
-  /* label:value — the column header (data-label) prefixes the value as a muted
-     caption on the same line. Suppressed for the title, chip, actions and any
-     colspan (group/empty/error) cells below. */
-  table.pc-grid td[data-label]::before { content:attr(data-label); color:var(--nano-text-muted); font-size:.72rem; font-weight:600; text-transform:uppercase; letter-spacing:.03em; flex:0 0 auto; }
-  /* The derived (or mobile:{priority:"primary"}-hinted) card title leads the
-     card: larger, full width, no label caption. */
-  table.pc-grid td.pc-mcell-primary { display:block; font-size:1rem; font-weight:650; padding-top:.15rem; }
-  table.pc-grid td.pc-mcell-primary::before { content:none; }
-  /* A badge column becomes a left-aligned status chip with no caption. */
-  table.pc-grid td.pc-mcell-chip { justify-content:flex-start; }
-  table.pc-grid td.pc-mcell-chip::before { content:none; }
-  /* An empty badge cell (row value blank) still carries the chip class but has no
-     child content; without this it renders as a blank flex row (padding/gap) that
-     leaves a stray empty line in the card. Collapse those empty chip cells (#268). */
-  table.pc-grid td.pc-mcell-chip:empty { display:none; }
-  /* Low-value (mobile:{priority:"hidden"}) columns drop off the card until the
-     row's "More" toggle opens them; on desktop they render as normal columns. */
-  table.pc-grid td.pc-mcell-hidden { display:none; }
-  table.pc-grid tr.pc-open td.pc-mcell-hidden { display:flex; }
-  .pc-mcard-toggle { display:block; padding:.3rem 0 0; }
-  .pc-mcard-toggle .pc-more { width:100%; margin-right:0; }
-  /* Row actions stack full-width under the card body. */
-  table.pc-grid td.pc-row-actions { display:flex; flex-wrap:wrap; gap:.4rem; text-align:left; padding-top:.45rem; white-space:normal; }
-  table.pc-grid td.pc-row-actions::before { content:none; }
-  table.pc-grid td.pc-row-actions .pc-btn { flex:1 1 auto; margin-right:0; }
-  /* Group-header + empty/error rows span the full card width with no caption. */
-  table.pc-grid td[colspan] { display:block; }
-  table.pc-grid td[colspan]::before { content:none; }
-  .pc-group-header td { padding:0; }
-  /* Nav → horizontally-scrollable bar (bar) / inline stack (rail). The bar keeps
+${gridCardRules("")}  /* Nav → horizontally-scrollable bar (bar) / inline stack (rail). The bar keeps
      its normal top-of-flow position and scrolls sideways when the pages overflow;
      an opt-in sticky bar stays pinned to the top via the desktop .pc-sticky rule
      (top:0). A rail drops its fixed side column and flows inline. */
@@ -1019,7 +1065,8 @@ table.pc-grid th { font-weight:600; color:var(--nano-text-muted); }
   .pc-modal-actions { flex-direction:column; }
   .pc-modal-actions .pc-btn { width:100%; }
 }
-`;
+/* App-wide card layout (nano-ide#572): the same card rules, at every width. */
+${gridCardRules('[data-grid-layout="cards"]')}`;
 
 // The schema-driven browser renderer (ADR 0042 §3). Plain ES module string served at
 // /app/runtime.js — it does NOT ship Craft.js (authoring is console-side only). It

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineClient, HttpRequest, HttpResponse } from "../host.ts";
 import { makeRouter } from "../router.ts";
-import { createPagesRoutes, type PagesDataSource, type PagesDeps } from "./pages.ts";
+import { createPagesRoutes, type GridLayout, type PagesDataSource, type PagesDeps, parseGridLayout } from "./pages.ts";
 
 function req(
   method: string,
@@ -2071,4 +2071,55 @@ test("the pages shell embeds the shared form-js renderer (NanoFormJs) for engine
   const res = await dispatch("GET", "/");
   assert.match(res.body ?? "", /NanoFormJs/, "the shell exposes the shared renderer as a global");
   assert.match(res.body ?? "", /function renderForm/, "the shared renderer is embedded, not forked");
+});
+
+// nano-ide#572 — an app-wide opt-in (`surfaces.pages.gridLayout: "cards"`) renders every dataGrid as
+// the card list at ANY viewport width, not just below the mobile breakpoint.
+async function shellFor(gridLayout?: GridLayout): Promise<HttpResponse> {
+  const routes = createPagesRoutes({ pagesDir: "pages", homePage: "home", sourceName: "app", gridLayout }, {
+    db: fakeDb(),
+    engine: fakeEngine().engine,
+    readPage: async () => "{}",
+  });
+  return await makeRouter(routes)(req("GET", "/"));
+}
+
+test("#572: gridLayout \"cards\" stamps the shell so dataGrids render as cards at every width", async () => {
+  const html = (await shellFor("cards")).body ?? "";
+  assert.match(html, /<body data-grid-layout="cards">/);
+});
+
+test("#572: the default (and \"auto\") keep today's table-on-desktop layout", async () => {
+  for (const layout of [undefined, "auto"] as const) {
+    const html = (await shellFor(layout)).body ?? "";
+    assert.match(html, /<body data-grid-layout="auto">/);
+  }
+});
+
+test("#572: the always-cards rules are DERIVED from the mobile card rules — identical, just scoped", async () => {
+  const html = (await shellFor("cards")).body ?? "";
+  const media = (html.match(/@media \(max-width:640px\) \{[\s\S]*?\n\}/) ?? [""])[0];
+  const gridRules = (css: string) =>
+    css
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /(pc-grid|pc-mcard-toggle|pc-group-header)[^{]*\{/.test(l) && !l.startsWith("/*"));
+  const mobile = gridRules(media);
+  assert.ok(mobile.length > 5, "the mobile block carries the card rules");
+  const scoped = gridRules(html).filter((l) => l.startsWith('[data-grid-layout="cards"]'));
+  const unscoped = scoped.map((l) => l.replace(/\[data-grid-layout="cards"\] /g, ""));
+  assert.deepEqual(unscoped, mobile, "every card rule appears once, scoped to the cards layout, byte-identical");
+  // Every selector in a comma list is scoped, so no rule leaks onto the "auto" layout.
+  for (const l of scoped) {
+    const selectors = l.slice(0, l.indexOf("{")).split(",");
+    for (const s of selectors) assert.match(s.trim(), /^\[data-grid-layout="cards"\] /, `unscoped selector in: ${l}`);
+  }
+});
+
+test("#572: parseGridLayout accepts only the declared layouts (anything else is the \"auto\" default)", () => {
+  assert.equal(parseGridLayout("cards"), "cards");
+  assert.equal(parseGridLayout("auto"), "auto");
+  assert.equal(parseGridLayout(undefined), undefined);
+  assert.equal(parseGridLayout("grid"), undefined);
+  assert.equal(parseGridLayout(1), undefined);
 });

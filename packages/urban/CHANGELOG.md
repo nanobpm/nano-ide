@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.94.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.93.1...@nanobpm/urban-0.94.0) (2026-09-30)
+
+
+### Features
+
+* **urban:** app-wide dataGrid card layout (surfaces.pages.gridLayout: "cards") ([#573](https://github.com/nanobpm/nano-ide/issues/573)) ([bacaba6](https://github.com/nanobpm/nano-ide/commit/bacaba6d5125d7794ccd3d227ef5394ab368b86f))
+
 ## [0.93.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.93.0...@nanobpm/urban-0.93.1) (2026-09-08)
 
 

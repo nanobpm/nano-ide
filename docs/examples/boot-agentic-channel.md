@@ -85,7 +85,11 @@ attachBlackboardFamily(hub, new BlackboardStore(/* … */)); // S7
 // instance + capability, so it never re-owns (or re-validates) the `register`
 // family:
 const resolver = new VocabResolver(CORE_VOCAB);
-const presence = attachPresenceFamily(hub, new PresenceStore(/* … */), {
+// Name the presence store: the protocol-only `claim`/`release` handlers below
+// authorise against its CURRENT row (its `connectionId` is the authoritative
+// owner of an instance), not the in-memory registry mirror.
+const presenceStore = new PresenceStore(/* … */);
+const presence = attachPresenceFamily(hub, presenceStore, {
   // Block body, not an expression: `serveCapability` returns a `Resolution`,
   // but `onRegistered` accepts only `void | Promise<void>` — discard it here.
   onRegistered: (ctx, instance, capability) => {
@@ -99,12 +103,18 @@ const presence = attachPresenceFamily(hub, new PresenceStore(/* … */), {
 // jobKey }` are non-empty strings) but a VALID frame is not yet an AUTHORISED
 // one: an authenticated peer must not claim/release ANOTHER connection's
 // instance. Prove OWNERSHIP before touching the store by resolving the frame's
-// EXPLICIT `instance` against the registry's `instancesForConnection(ctx.id)` —
-// §4.6 attribution's source of truth, never inferred 1:1 from the connection id
-// (one connection may multiplex many instances). Hand the store the validated,
-// still-`unknown` payload rather than destructuring an untrusted frame. Without
-// these handlers `FamilyRouter` silently drops the multiplexed emitter's
-// ownership frames and the §4.6 ownership window never opens.
+// EXPLICIT `instance` against the presence store's CURRENT row — §4.6
+// attribution's authoritative source of truth for which connection owns an
+// instance NOW, never inferred 1:1 from the connection id (one connection may
+// multiplex many instances). The in-memory `instancesForConnection` registry
+// mirror is NOT authoritative: a same-identity reconnect moves the store row's
+// `connectionId` to the new connection but leaves the superseded connection's
+// registry binding in place, so that stale socket would still pass an
+// `instancesForConnection(ctx.id)` check — comparing the store row's
+// `connectionId` closes that overlapping-reconnect window. Hand the store the
+// validated, still-`unknown` payload rather than destructuring an untrusted
+// frame. Without these handlers `FamilyRouter` silently drops the multiplexed
+// emitter's ownership frames and the §4.6 ownership window never opens.
 // The store interface is concrete so `ownership.claim`/`release` type-check;
 // the no-op default keeps the snippet bootable while it owns no jobs. Swap in a
 // real store (one that opens the §4.6 ownership window) for production.
@@ -116,23 +126,30 @@ const ownership: OwnershipStore = {
   claim: () => {},
   release: () => {},
 };
-// Narrow the `unknown` payload with a type GUARD (no `as` cast) and accept it
-// only if `owned` — the connection's registered instances — contains the named
-// instance. Returns `false` for a shape the validator already rejected, so it is
-// also safe as a standalone check.
+// Narrow the `unknown` payload with a type GUARD (no `as` cast): resolve the
+// frame's EXPLICIT `instance` name, or `undefined` for a shape the validator
+// already rejected.
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-const ownsNamedInstance = (payload: unknown, owned: ReadonlySet<string>): boolean =>
-  isRecord(payload) && typeof payload.instance === "string" && owned.has(payload.instance);
+const namedInstance = (payload: unknown): string | undefined =>
+  isRecord(payload) && typeof payload.instance === "string" ? payload.instance : undefined;
+// Authorise against the presence store's CURRENT row: accept only if the named
+// instance exists AND the store says this very connection owns it now. This
+// defeats a stale same-identity reconnect binding (see above), never inferring
+// ownership 1:1 from the connection id.
+const ownsNamedInstance = (payload: unknown, connectionId: string): boolean => {
+  const instance = namedInstance(payload);
+  return instance !== undefined && presenceStore.get(instance)?.connectionId === connectionId;
+};
 hub.registerFamilyHandler("claim", (frame, ctx) => {
   if (!validatePayload("claim", frame.payload).ok) return;
-  // Reject a claim for an instance this connection does not own (anti-spoofing).
-  if (!ownsNamedInstance(frame.payload, ctx.registry.instancesForConnection(ctx.id))) return;
+  // Reject a claim for an instance this connection does not currently own (anti-spoofing).
+  if (!ownsNamedInstance(frame.payload, ctx.id)) return;
   ownership.claim(ctx.identity, frame.payload);
 });
 hub.registerFamilyHandler("release", (frame, ctx) => {
   if (!validatePayload("release", frame.payload).ok) return;
-  if (!ownsNamedInstance(frame.payload, ctx.registry.instancesForConnection(ctx.id))) return;
+  if (!ownsNamedInstance(frame.payload, ctx.id)) return;
   ownership.release(ctx.identity, frame.payload);
 });
 

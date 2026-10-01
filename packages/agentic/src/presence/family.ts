@@ -30,9 +30,11 @@ export interface PresenceFamilyOptions {
   /**
    * Notified of a fault this module handles while keeping the connection: a
    * malformed presence payload ({@link PresencePayloadError}), a rejected
-   * ownership takeover ({@link PresenceOwnershipError}), or a presence-sweep
-   * error. Other handler exceptions are not routed here — they propagate to
-   * {@link AgenticHub} and surface via the hub's own error handling.
+   * ownership takeover ({@link PresenceOwnershipError}), a presence-sweep error,
+   * or a failed `onRegistered` hook — a synchronous throw, or a rejected promise
+   * from an `async` hook (see {@link onRegistered}). Other handler exceptions are
+   * not routed here — they propagate to {@link AgenticHub} and surface via the
+   * hub's own error handling.
    */
   onError?: (err: unknown, connectionId?: string) => void;
   /**

@@ -128,7 +128,7 @@ handler-registration seam and every family module key off. On-wire codes
 | `serve`                             | hub → worker     | resolved leaf tokens from the capability handshake           |
 | `demand`                            | hub → cockpit    | demand×supply per network, "missing agent type"              |
 | `blackboard`                        | both             | idempotent, capability-scoped coordination append/read       |
-| `relay`                             | both             | out: live terminal bytes / ACP transcript chunks `{stream, offset, chunk}`; in: steer (§4.5) |
+| `relay`                             | both             | out: live terminal bytes / ACP transcript chunks `{stream, offset, chunk}`; in: steer **vocabulary** (§4.5 — codec only; relay-hub/`emit`-client routing not yet wired) |
 | `claim` / `release`                 | worker → hub     | job ownership: `{instance, jobKey}`, idempotent (#542)         |
 
 ### 4.2 Frame codec & the three QoS lanes
@@ -171,6 +171,14 @@ blocked ACP `session/request_permission`). A structured frame is a JSON envelope
 tagged `nanoControlFrame: 1`. A tagged but malformed envelope is an **error**. Any
 untagged chunk decodes as a legacy `prompt` whose text is the raw bytes, so
 raw-keystroke PTY steering keeps working unchanged.
+
+> **Scope — codec, not yet a round-trip.** `protocol/control.ts` ships the
+> **codec** for this lane (the tagged-envelope encode/decode and fall-back rules
+> above). The end-to-end routing that would deliver a decoded control frame to a
+> running agent — an inbound dispatch in `RelayHub` (which today handles only
+> `produce`/`subscribe`/`credit`) and a receive path in the `emit` client — is
+> **not yet wired**. This section defines the inbound wire vocabulary; it is not
+> a shipped consumer→agent steer round-trip.
 
 ### 4.6 Transcript streams and ownership
 

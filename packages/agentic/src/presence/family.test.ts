@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { test } from "node:test";
+import vm from "node:vm";
 import { encodeFrame } from "../protocol/index.ts";
 import type { Frame, MessageFamily } from "../protocol/index.ts";
 import {
@@ -346,6 +347,36 @@ test("a rejected async onRegistered promise is routed to onError, not left unhan
   const hookErr = errors[0];
   assert(hookErr instanceof Error);
   assert.match(hookErr.message, /async serve blew up/);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
+
+  await hub.close();
+});
+
+test("a rejected cross-realm (thenable) onRegistered promise is routed to onError, not left unhandled", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    onError: (e) => errors.push(e),
+    // A promise from a VM/plugin realm is a valid `Promise<void>` but is NOT
+    // `instanceof Promise` here, so a realm-naive check would leave its
+    // rejection unhandled. `Promise.resolve` must still adopt it.
+    onRegistered: () => {
+      const realmErr = new Error("cross-realm serve blew up");
+      return vm.runInNewContext("Promise.reject(reason)", { reason: realmErr });
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 1));
+  await tick();
+  assert.equal(errors.length, 1);
+  const hookErr = errors[0];
+  assert(hookErr instanceof Error);
+  assert.match(hookErr.message, /cross-realm serve blew up/);
   assert.equal(store.get("w-1")?.connectionId, "c1");
 
   await hub.close();

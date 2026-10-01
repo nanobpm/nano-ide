@@ -162,9 +162,12 @@ export function attachPresenceFamily(
     if (options.onRegistered !== undefined) {
       try {
         const outcome = options.onRegistered(ctx, instance, capability);
-        if (outcome instanceof Promise) {
-          outcome.catch((err: unknown) => onError(err, ctx.id));
-        }
+        // Normalize with `Promise.resolve` rather than `instanceof Promise`:
+        // the latter only recognizes promises from this realm, so a rejecting
+        // `Promise<void>` from a VM/plugin realm would slip through and surface
+        // as an unhandled rejection. `Promise.resolve` adopts any thenable (and
+        // no-ops for a synchronous `void`); the `try` still catches sync throws.
+        Promise.resolve(outcome).catch((err: unknown) => onError(err, ctx.id));
       } catch (err) {
         onError(err, ctx.id);
       }

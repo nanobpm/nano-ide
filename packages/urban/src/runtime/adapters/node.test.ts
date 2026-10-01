@@ -4,12 +4,13 @@ import * as http from "node:http";
 import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFile } from "node:child_process";
+import { execFile, fork } from "node:child_process";
 import { promisify } from "node:util";
 import { createNodeHost } from "./node.ts";
 import type { HttpServer } from "../core/host.ts";
 
 const execFileAsync = promisify(execFile);
+const nodeImportsTs = Number(process.versions.node.split(".")[0]) >= 22;
 
 // Issue #235: the node adapter must bind the interface it is handed so the manifest's
 // `network.bind` setting actually controls off-box reachability. We assert the *listen host*
@@ -79,27 +80,69 @@ test("serveHttp rejects when the port is already in use (does not hang)", async 
 // at the asset path would hang every shell request. This guards that a special-file entry returns
 // a non-regular verdict promptly instead of blocking. (POSIX-only: `mkfifo` isn't on Windows.)
 const hasMkfifo = process.platform !== "win32";
-test("statFile classifies a FIFO as non-regular without blocking (does not hang)", { skip: !hasMkfifo }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), "urban-fifo-"));
-  try {
-    const fifo = join(dir, "app.css");
-    await execFileAsync("mkfifo", [fifo]);
-    const host = createNodeHost({ cwd: dir, log: () => {} });
-    // Race the probe against a timeout so a regression (blocking open) FAILS fast instead of
-    // hanging the whole suite until the runner's wall-clock kill.
-    const verdict = await Promise.race([
-      host.statFile!("app.css"),
-      new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 2000)),
-    ]);
-    assert.notEqual(verdict, "timeout", "statFile must not block on a FIFO");
-    assert.ok(
-      verdict === null || (verdict !== "timeout" && verdict.isFile === false),
-      `a FIFO must not be reported as a regular file (got ${JSON.stringify(verdict)})`,
+// A blocked read-only `open` of a FIFO sits in libuv and CANNOT be cancelled from within the
+// process: `Promise.race` against a timeout would leave the losing probe running, and unlinking
+// the FIFO does not release it — the suite process would never exit, so the regression would not
+// actually fail fast. Run the probe in a killable CHILD process instead: the parent races the
+// child's verdict message against a timeout and SIGKILLs the child on timeout, so a blocking-open
+// regression fails this test in ~2s instead of wedging the runner.
+type FifoProbeMsg = { verdict: { isFile: boolean } | null };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+function isFifoProbeMsg(value: unknown): value is FifoProbeMsg {
+  if (!isRecord(value)) return false;
+  const verdict = value.verdict;
+  if (verdict === null) return true;
+  return isRecord(verdict) && typeof verdict.isFile === "boolean";
+}
+function probeInChild(cwd: string, asset: string, timeoutMs: number): Promise<FifoProbeMsg | "timeout"> {
+  const source = `import { createNodeHost } from ${JSON.stringify(new URL("./node.ts", import.meta.url).href)};
+const host = createNodeHost({ cwd: process.argv[2], log: () => {} });
+const verdict = await host.statFile(process.argv[3]);
+process.send({ verdict });
+process.exit(0);`;
+  return new Promise((resolve, reject) => {
+    const child = fork(
+      "--input-type=module",
+      ["--experimental-strip-types", "--no-warnings", "--eval", source, cwd, asset],
+      { stdio: ["ignore", "ignore", "inherit", "ipc"] },
     );
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-});
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      resolve("timeout");
+    }, timeoutMs);
+    child.once("message", (msg: unknown) => {
+      clearTimeout(timer);
+      child.disconnect();
+      if (isFifoProbeMsg(msg)) resolve(msg);
+      else reject(new Error(`unexpected probe message: ${JSON.stringify(msg)}`));
+    });
+    child.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+  });
+}
+test(
+  "statFile classifies a FIFO as non-regular without blocking (does not hang)",
+  { skip: !hasMkfifo || !nodeImportsTs },
+  async () => {
+    const dir = await mkdtemp(join(tmpdir(), "urban-fifo-"));
+    try {
+      const fifo = join(dir, "app.css");
+      await execFileAsync("mkfifo", [fifo]);
+      const msg = await probeInChild(dir, "app.css", 2000);
+      assert.notEqual(msg, "timeout", "statFile must not block on a FIFO");
+      assert.ok(
+        msg !== "timeout" && (msg.verdict === null || msg.verdict.isFile === false),
+        `a FIFO must not be reported as a regular file (got ${JSON.stringify(msg)})`,
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
 
 // Companion to the FIFO guard: a real regular file still probes as `isFile: true`, and a directory
 // at the asset path probes as non-regular — the two verdicts `mountPages` relies on to link only

@@ -3,53 +3,180 @@
 > Part of slice **S10** (epic
 > [nanobpm/nano-ide#124](https://github.com/nanobpm/nano-ide/issues/124)). This is
 > the **example wiring** that boots the agentic channel for an agentic Urban app.
-> The channel/hub itself lands with **S1** ([#127](https://github.com/nanobpm/nano-ide/issues/127))
-> and the families with S2/S3/S5/S7; the snippet below is the intended, stable
-> host wiring and is promoted to a runnable example package as those slices land.
 > See [`../nano-agentic-protocol.md`](../nano-agentic-protocol.md) for the contract.
 
 ## The idea
 
-An agentic Urban app opts into the capability exactly the way it opts into pages
-and workers today: it declares it, and the `@nanobpm/urban` runtime serves the
-channel on the **app's own bound port** — a separate connection from the C8 job
-protocol, which is untouched. Each message family attaches itself to the hub via
-the `registerFamilyHandler(family, handler)` seam (S1), so the app never edits a
-central dispatch switch.
+An agentic Urban app serves the channel on the **app's own bound port** — a
+separate connection from the C8 job protocol, which is untouched. There is no
+`@nanobpm/urban/agentic` capability barrel and no `agenticChannel(...)` manifest
+key: the shipped surface is the channel hub from `@nanobpm/agentic/channel`,
+mounted as a WebSocket upgrade on the started app's `httpServer`. Presence,
+relay, and blackboard ship self-contained family modules that attach to the hub
+via the `registerFamilyHandler(family, handler)` seam (S1), so the app never
+edits a central dispatch switch. The hub binds **one handler per family**:
+presence's `attachPresenceFamily` owns the `register`/`heartbeat`/`deregister`
+families (and the TTL sweep), so the composition root supplies only the second
+half of `REGISTER→SERVE` — capability resolution — through that module's
+`onRegistered` hook, and owns the protocol-only `claim`/`release` families
+itself (all shown below).
 
 ## Host wiring
 
+> **Schematic, not copy-paste bootable.** The `/* … */` placeholders below —
+> `createUrbanApp({ … })` (which requires concrete `host` + `engine` wiring) and
+> each `new PresenceStore(/* … */)` / `new BlackboardStore(/* … */)` (which take a
+> `SqliteDb`) — stand in for your app's real host/engine/database construction;
+> see the [`@nanobpm/urban` README](../../packages/urban/README.md) for a concrete
+> host+engine+DB setup. This file illustrates the **agentic-channel** wiring that
+> composes on top of that app, not a runnable `main.ts`.
+
 ```ts
 // main.ts — an agentic Urban app
-import { createApp } from "@nanobpm/urban";
-// The agentic capability + its core families (each attaches via the S1 seam).
-// Package names are finalised by S0/S1; import the capability barrel it exports.
-import { agenticChannel, coreVocab } from "@nanobpm/urban/agentic";
+import { createUrbanApp } from "@nanobpm/urban/runtime";
+import {
+  AgenticHub,
+  WebSocketChannelTransport,
+  sharedSecretAuthenticator,
+} from "@nanobpm/agentic/channel";
+import { attachPresenceFamily, PresenceStore } from "@nanobpm/agentic/presence";
+import { CORE_VOCAB, serveCapability, VocabResolver } from "@nanobpm/agentic/vocab";
+import { validatePayload } from "@nanobpm/agentic/protocol";
+import { registerRelayFamily } from "@nanobpm/agentic/relay";
+import { attachBlackboardFamily, BlackboardStore } from "@nanobpm/agentic/blackboard";
 
-const app = createApp({
+const app = await createUrbanApp({
   // …the app's normal pages / workers / datasources…
+});
+await app.start(); // binds the app's own HTTP port
 
-  // Enable the agentic channel. Served on the app's own bound port, alongside
-  // (never on top of) the C8 job protocol. Invariant #1 & #2.
-  agentic: agenticChannel({
-    // The versioned vocab artifact: core vocabulary + this app's extensions,
-    // merged in the same schema (S3). Capability→token map lives HERE, never in
-    // a worker. Invariant #4 & #7.
-    vocab: coreVocab.extend({
-      // app-specific roles/seats go here, in the same schema
-    }),
+// Snapshot the runtime's native node:http Server and narrow it before use (the
+// runtime exposes it as `object | undefined`; no type assertion needed).
+const { Server } = await import("node:http");
+const server = app.httpServer;
+if (!(server instanceof Server)) {
+  throw new Error("agentic channel needs the app's node:http Server");
+}
 
-    // Auth for the channel: ADR 0028 identity + a capability credential — the
-    // same pattern nano-workforce's blackboard hook already uses (S1).
-    auth: { identity: "adr-0028", capabilityCredential: true },
+// Serve the channel as a WebSocket upgrade on the app's OWN port (default path
+// `/agentic`) — alongside, never on top of, the C8 job protocol. Invariant #1 & #2.
+const transport = new WebSocketChannelTransport({ server });
 
-    // Three QoS lanes are on by default: control/facts > interactive > bulk.
-    // A bulk-output storm never head-of-line-blocks a heartbeat. Invariant #5.
-  }),
+// Auth for the channel: a shared-secret identity token + a required capability
+// credential — the same pattern nano-workforce's blackboard hook uses (S1). Swap
+// in a real ADR 0028 verifier by passing your own `Authenticator` to the hub.
+// Fail CLOSED on a missing secret: an unset env var would otherwise reach the
+// authenticator as an empty secret that any `?token=` connection matches.
+// Validate it at runtime before constructing the hub.
+const secret = process.env.AGENTIC_CHANNEL_SECRET;
+if (!secret) {
+  throw new Error("AGENTIC_CHANNEL_SECRET must be set — refusing an empty channel secret");
+}
+const hub = new AgenticHub({
+  transport,
+  authenticator: sharedSecretAuthenticator({ secret }),
 });
 
-await app.listen(); // serves pages, workers, AND the agentic channel
+// Relay and blackboard ship self-contained family modules that attach through
+// the S1 seam — no central dispatch switch:
+registerRelayFamily(hub); //                               S5
+attachBlackboardFamily(hub, new BlackboardStore(/* … */)); // S7
+
+// REGISTER→SERVE. Presence ships `attachPresenceFamily`, which owns the whole
+// `register`/`heartbeat`/`deregister` lifecycle on the S1 seam: it VALIDATES and
+// narrows each untrusted frame payload (the decoded `Frame.payload` is `unknown`),
+// persists the row, mirrors the instance onto the live registry, calls
+// `removeInstance` on deregister, and schedules the presence-TTL sweep that ages
+// out rows a worker stops heartbeating. The composition root supplies only the
+// SECOND half of the handshake — capability resolution — through the module's
+// `onRegistered` hook, which fires after a validated register with the narrowed
+// instance + capability, so it never re-owns (or re-validates) the `register`
+// family:
+const resolver = new VocabResolver(CORE_VOCAB);
+// Name the presence store: the protocol-only `claim`/`release` handlers below
+// authorise against its CURRENT row (its `connectionId` is the authoritative
+// owner of an instance), not the in-memory registry mirror.
+const presenceStore = new PresenceStore(/* … */);
+const presence = attachPresenceFamily(hub, presenceStore, {
+  // Block body, not an expression: `serveCapability` returns a `Resolution`,
+  // but `onRegistered` accepts only `void | Promise<void>` — discard it here.
+  onRegistered: (ctx, instance, capability) => {
+    serveCapability(resolver, ctx, instance, capability); // SERVE reply → control lane
+  },
+}); //                                                         S2 + S3
+
+// `claim`/`release` are protocol-only families (no shipped module or ownership
+// store), so the composition root owns them too — attach via the SAME S1 seam,
+// backed by an app ownership store. `validatePayload` proves SHAPE (`{ instance,
+// jobKey }` are non-empty strings) but a VALID frame is not yet an AUTHORISED
+// one: an authenticated peer must not claim/release ANOTHER connection's
+// instance. Prove OWNERSHIP before touching the store by resolving the frame's
+// EXPLICIT `instance` against the presence store's CURRENT row — §4.6
+// attribution's authoritative source of truth for which connection owns an
+// instance NOW, never inferred 1:1 from the connection id (one connection may
+// multiplex many instances). The in-memory `instancesForConnection` registry
+// mirror is NOT authoritative: a same-identity reconnect moves the store row's
+// `connectionId` to the new connection but leaves the superseded connection's
+// registry binding in place, so that stale socket would still pass an
+// `instancesForConnection(ctx.id)` check — comparing the store row's
+// `connectionId` closes that overlapping-reconnect window. Hand the store the
+// validated, still-`unknown` payload rather than destructuring an untrusted
+// frame. Without these handlers `FamilyRouter` silently drops the multiplexed
+// emitter's ownership frames and the §4.6 ownership window never opens.
+// The store interface is concrete so `ownership.claim`/`release` type-check;
+// the no-op default keeps the snippet bootable while it owns no jobs. Swap in a
+// real store (one that opens the §4.6 ownership window) for production.
+interface OwnershipStore {
+  claim(identity: string, payload: unknown): void;
+  release(identity: string, payload: unknown): void;
+}
+const ownership: OwnershipStore = {
+  claim: () => {},
+  release: () => {},
+};
+// Narrow the `unknown` payload with a type GUARD (no `as` cast): resolve the
+// frame's EXPLICIT `instance` name, or `undefined` for a shape the validator
+// already rejected.
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const namedInstance = (payload: unknown): string | undefined =>
+  isRecord(payload) && typeof payload.instance === "string" ? payload.instance : undefined;
+// Authorise against the presence store's CURRENT row: accept only if the named
+// instance exists AND the store says this very connection owns it now. This
+// defeats a stale same-identity reconnect binding (see above), never inferring
+// ownership 1:1 from the connection id.
+const ownsNamedInstance = (payload: unknown, connectionId: string): boolean => {
+  const instance = namedInstance(payload);
+  return instance !== undefined && presenceStore.get(instance)?.connectionId === connectionId;
+};
+hub.registerFamilyHandler("claim", (frame, ctx) => {
+  if (!validatePayload("claim", frame.payload).ok) return;
+  // Reject a claim for an instance this connection does not currently own (anti-spoofing).
+  if (!ownsNamedInstance(frame.payload, ctx.id)) return;
+  ownership.claim(ctx.identity, frame.payload);
+});
+hub.registerFamilyHandler("release", (frame, ctx) => {
+  if (!validatePayload("release", frame.payload).ok) return;
+  if (!ownsNamedInstance(frame.payload, ctx.id)) return;
+  ownership.release(ctx.identity, frame.payload);
+});
+
+await transport.ready();
+
+// On shutdown, tear down the channel alongside the app: stop the presence sweep
+// timer, then close the hub — `AgenticHub.close()` clears the hub liveness timer,
+// closes tracked connections, and closes the WebSocket transport, so channel
+// resources do not leak across an app shutdown/restart:
+// presence.stop();
+// await hub.close();
 ```
+
+Three QoS lanes are encoded on every frame: control/facts > interactive > bulk.
+The scheduler that enforces them sits on **relay subscriber egress** (each
+subscriber gets a `QosScheduler`), so a bulk relay storm never head-of-line-blocks
+that subscriber's relay control acks. Inbound heartbeats and blackboard writes are
+handled directly by the hub, off that scheduler — the lanes label frames, they do
+not impose a global ordering across families. Invariant #5.
 
 ## What a worker does (client side — S9)
 
@@ -74,9 +201,15 @@ agent.relay("stdout", "hello\n");  // stream terminal bytes on the relay lane (S
 // The client buffers + drains across a hub outage — hub-down tolerance. Invariant #6.
 ```
 
+> **Single-instance vs multiplexed.** `@nanobpm/urban-agent-client` (above) is the
+> single-instance client — one connection, one agent, no `claim`/`release`. A
+> supervisor that hires many instances and runs the §4.6 ownership flow uses the
+> blessed multiplexed emitter `@nanobpm/agentic/emit` instead. See
+> [`../nano-agentic-protocol.md`](../nano-agentic-protocol.md) §6.
+
 ## Verifying it boots
 
-Once S1 has landed, booting the app and connecting a worker should show the worker
-in the registry with presence, and its terminal streaming to the cockpit page
-(S8). Until then, this file documents the stable wiring surface and the conformance
-corpus (`npm run test:conformance`) guards the wire contract both sides implement.
+Booting the app and connecting a worker should show the worker in the registry
+with presence, and its terminal streaming to the cockpit page (S8). The
+conformance corpus (`npm run test:conformance`) guards the wire contract both
+sides implement.

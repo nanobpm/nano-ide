@@ -30,11 +30,29 @@ export interface PresenceFamilyOptions {
   /**
    * Notified of a fault this module handles while keeping the connection: a
    * malformed presence payload ({@link PresencePayloadError}), a rejected
-   * ownership takeover ({@link PresenceOwnershipError}), or a presence-sweep
-   * error. Other handler exceptions are not routed here — they propagate to
-   * {@link AgenticHub} and surface via the hub's own error handling.
+   * ownership takeover ({@link PresenceOwnershipError}), a presence-sweep error,
+   * or a failed `onRegistered` hook — a synchronous throw, or a rejected promise
+   * from an `async` hook (see {@link onRegistered}). Other handler exceptions are
+   * not routed here — they propagate to {@link AgenticHub} and surface via the
+   * hub's own error handling.
    */
   onError?: (err: unknown, connectionId?: string) => void;
+  /**
+   * Invoked after a validated `register` has persisted presence and mirrored the
+   * instance onto the connection registry. This is the composition root's hook
+   * for the second half of the REGISTER→SERVE handshake — thread
+   * `serveCapability` here to resolve the declared capability and emit the
+   * `serve` reply — without re-owning (and re-validating) the `register` family.
+   * Receives the connection plus the validated instance + enrolment capability.
+   * A synchronous throw — or a rejected promise from an `async` hook — is routed
+   * to {@link onError}, so a failed SERVE cannot unwind presence that is already
+   * recorded nor escape as an unhandled rejection.
+   */
+  onRegistered?: (
+    ctx: HubConnection,
+    instance: string,
+    capability: Capability,
+  ) => void | Promise<void>;
 }
 
 /** Handle to the attached presence family — drives/stops the presence sweep. */
@@ -138,6 +156,31 @@ export function attachPresenceFamily(
     // read. One connection may bind many instances (a supervisor multiplexes N
     // workers), so this ADDs the instance rather than overwriting a singular one.
     ctx.registry.addInstance(ctx.id, instance, capability);
+    // The composition root's REGISTER→SERVE hook (e.g. `serveCapability`). It
+    // runs only after a validated register has persisted; a throw — or a rejected
+    // promise from an `async` hook — is isolated to `onError` so a failed SERVE
+    // can neither unwind presence already recorded nor escape as an unhandled
+    // rejection.
+    if (options.onRegistered !== undefined) {
+      try {
+        const outcome = options.onRegistered(ctx, instance, capability);
+        // Normalize with `Promise.resolve` rather than `instanceof Promise`:
+        // the latter only recognizes promises from this realm, so a rejecting
+        // `Promise<void>` from a VM/plugin realm would slip through and surface
+        // as an unhandled rejection. `Promise.resolve` adopts any thenable (and
+        // no-ops for a synchronous `void`); the `try` still catches sync throws.
+        //
+        // RETURN the rejection-handling chain to the router: if `onError` itself
+        // throws while handling the hook rejection, the `.catch` produces a
+        // second rejected promise. Returning it lets `FamilyRouter.route` ->
+        // `AgenticHub` (`route(...).catch(onError)`) observe and contain that
+        // failure instead of leaving the exact unhandled rejection this guard
+        // promises to prevent.
+        return Promise.resolve(outcome).catch((err: unknown) => onError(err, ctx.id));
+      } catch (err) {
+        onError(err, ctx.id);
+      }
+    }
   });
 
   hub.registerFamilyHandler("heartbeat", (frame: Frame, ctx: HubConnection) => {

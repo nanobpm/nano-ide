@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { setImmediate as tick } from "node:timers/promises";
 import { test } from "node:test";
+import vm from "node:vm";
 import { encodeFrame } from "../protocol/index.ts";
 import type { Frame, MessageFamily } from "../protocol/index.ts";
 import {
@@ -255,6 +256,172 @@ test("a non-object register payload is rejected with a payload error and never t
   const err = errors[0];
   assert(err instanceof PresencePayloadError);
   assert.match(err.message, /must be an object/);
+
+  await hub.close();
+});
+
+test("onRegistered fires after a validated register with the narrowed instance + capability", async () => {
+  const transport = new FakeTransport();
+  const seen: Array<{ id: string; instance: string; capability: unknown }> = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    // Fires only after presence is persisted + mirrored — the composition
+    // root's REGISTER→SERVE hook sees the validated, narrowed inputs.
+    onRegistered: (ctx, instance, capability) => {
+      // Presence is already recorded by the time the hook runs.
+      assert.equal(store.get(instance)?.connectionId, ctx.id);
+      seen.push({ id: ctx.id, instance, capability });
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { family: "anthropic", host: "mac-1" } }));
+  await tick();
+
+  assert.deepEqual(seen, [{ id: "c1", instance: "w-1", capability: { family: "anthropic", host: "mac-1" } }]);
+
+  await hub.close();
+});
+
+test("onRegistered does not fire for a rejected register; a hook throw is routed to onError", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  let registered = 0;
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    onError: (e) => errors.push(e),
+    onRegistered: () => {
+      registered += 1;
+      throw new Error("serve blew up");
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  // A malformed register never reaches the hook.
+  conn.receive(frame("register", { capability: { host: "h" } }, 1));
+  await tick();
+  assert.equal(registered, 0);
+  assert.equal(errors.length, 1);
+
+  // A valid register fires the hook; its throw is isolated to onError and
+  // leaves the already-recorded presence intact.
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 2));
+  await tick();
+  assert.equal(registered, 1);
+  assert.equal(errors.length, 2);
+  const hookErr = errors[1];
+  assert(hookErr instanceof Error);
+  assert.match(hookErr.message, /serve blew up/);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
+
+  await hub.close();
+});
+
+test("a rejected async onRegistered promise is routed to onError, not left unhandled", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    onError: (e) => errors.push(e),
+    onRegistered: async () => {
+      await Promise.resolve();
+      throw new Error("async serve blew up");
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 1));
+  await tick();
+  // The async rejection surfaces via onError rather than escaping as an
+  // unhandled rejection, and presence already recorded stays intact.
+  assert.equal(errors.length, 1);
+  const hookErr = errors[0];
+  assert(hookErr instanceof Error);
+  assert.match(hookErr.message, /async serve blew up/);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
+
+  await hub.close();
+});
+
+test("a rejected cross-realm (thenable) onRegistered promise is routed to onError, not left unhandled", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    onError: (e) => errors.push(e),
+    // A promise from a VM/plugin realm is a valid `Promise<void>` but is NOT
+    // `instanceof Promise` here, so a realm-naive check would leave its
+    // rejection unhandled. `Promise.resolve` must still adopt it.
+    onRegistered: () => {
+      const realmErr = new Error("cross-realm serve blew up");
+      return vm.runInNewContext("Promise.reject(reason)", { reason: realmErr });
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 1));
+  await tick();
+  assert.equal(errors.length, 1);
+  const hookErr = errors[0];
+  assert(hookErr instanceof Error);
+  assert.match(hookErr.message, /cross-realm serve blew up/);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
+
+  await hub.close();
+});
+
+test("a throwing onError handling an async hook rejection is contained by the hub, not left unhandled", async () => {
+  const transport = new FakeTransport();
+  const hubErrors: unknown[] = [];
+  // The hub-level error sink is the containment boundary: when the family's own
+  // `onError` throws while handling the hook rejection, the returned chain must
+  // route that second failure here rather than escaping as an unhandled
+  // rejection.
+  const hub = new AgenticHub({
+    transport,
+    authenticator: auth,
+    sweepIntervalMs: 0,
+    onError: (e) => hubErrors.push(e),
+  });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    // The family's error sink itself throws — the exact failure mode the guard
+    // promises to contain.
+    onError: () => {
+      throw new Error("sink blew up");
+    },
+    onRegistered: async () => {
+      await Promise.resolve();
+      throw new Error("async serve blew up");
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 1));
+  await tick();
+  await tick();
+  // The sink's own throw is observed and contained by the hub rather than
+  // surfacing as an unhandled rejection, and presence already recorded stays
+  // intact.
+  assert.equal(hubErrors.length, 1);
+  const sinkErr = hubErrors[0];
+  assert(sinkErr instanceof Error);
+  assert.match(sinkErr.message, /sink blew up/);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
 
   await hub.close();
 });

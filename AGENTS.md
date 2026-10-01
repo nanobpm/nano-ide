@@ -127,9 +127,9 @@ append-point** is not independent even when each PR is green on its own. The
 `EngineClient` runtime seam is the canonical example, and it has now collided
 twice (epics #488 and #525): adding a read method touches the *same five files
 at the same anchors* — the `EngineClient` interface and the
-`ENGINE_CLIENT_METHODS` exhaustiveness tuple (`runtime/core/host.ts`), both
-adapters (`engine/nanosdk.ts` and the testkit `WasmEngineClient`), the single
-`engine-client-conformance.test.ts`, and the `mcp.ts` tool registration.
+`ENGINE_CLIENT_METHODS` exhaustiveness tuple (`packages/urban/src/runtime/core/host.ts`), both
+adapters (`packages/urban/src/runtime/engine/nanosdk.ts` and the testkit `WasmEngineClient`), the single
+`packages/urban-testkit/src/engine-client-conformance.test.ts`, and the `packages/urban/src/runtime/core/modules/mcp.ts` tool registration.
 
 - **Same-anchor edits 3-way-conflict regardless of an "append-only" convention.**
   Two slices that each append a method/member/registration at the same anchor
@@ -149,5 +149,5 @@ adapters (`engine/nanosdk.ts` and the testkit `WasmEngineClient`), the single
   serialise otherwise-parallel work.
 
 See also the shared-runtime-seam fan-out checklist (the compiler-driven side of
-this: every test double, both adapters, and `runtime/index.ts` re-exports must
+this: every test double, both adapters, and `packages/urban/src/runtime/index.ts` re-exports must
 move together) proposed in #496.

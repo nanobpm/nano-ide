@@ -102,6 +102,32 @@ packages use — copy it rather than inventing a variant:
   with `Cannot find module @nanobpm/workflow` until root `npm run build` has emitted
   the dependency's `dist/`. Working order: **build → typecheck → test → lint**.
 
+## Extending a Shared Runtime Seam (e.g. `EngineClient`)
+
+Adding a method to a widely-implemented interface like `EngineClient`
+(`packages/urban/src/runtime/core/host.ts`) is a **fan-out change**, not a local
+one. Plan the whole surface in a single PR — the compiler is your checklist, so
+do not narrow the seam to dodge the work it forces:
+
+- **Update the exhaustiveness tuple.** `ENGINE_CLIENT_METHODS` (same file) is
+  guarded by the `MissingEngineClientMethods` type check — every
+  `keyof EngineClient` must be listed or typecheck fails. Add the new method name.
+- **Every test double must gain the method.** `tsconfig.json` has
+  `"include": ["src"]` and tests are `src/**/*.test.ts`, so all ~15 `EngineClient`
+  fakes across `runtime/core/**/*.test.ts` (literal-object, `notUsed(...)`, and
+  `class implements` styles) must add a stub or `npm run typecheck` fails. This is
+  by design; add trivial stubs to each.
+- **Re-export any new seam types from `runtime/index.ts`.** Types added alongside
+  the methods (e.g. the incident shapes) are consumed by `@nanobpm/urban-testkit`;
+  omit the re-export and the testkit build fails with `no exported member`. Build
+  `urban` **before** running testkit tests — they resolve `@nanobpm/urban/runtime`
+  against `dist/`.
+- **Keep both adapters and the conformance harness in parity.** Implement the
+  method in the production adapter (`engine/nanosdk.ts`) and the test adapter
+  (`urban-testkit`'s `WasmEngineClient`), and extend
+  `engine-client-conformance.test.ts` so the two stay pinned (Red/Green — make it
+  fail first).
+
 ## Database Migrations
 
 Migrations live in `db/migrations/NNN_description.sql`, are forward-only and

@@ -130,7 +130,7 @@ at the same anchors* — the `EngineClient` interface and the
 `ENGINE_CLIENT_METHODS` exhaustiveness tuple (`packages/urban/src/runtime/core/host.ts`), both
 adapters (`packages/urban/src/runtime/engine/nanosdk.ts` and the testkit `WasmEngineClient`), the single
 `packages/urban-testkit/src/engine-client-conformance.test.ts`, the `packages/urban/src/runtime/core/modules/mcp.ts` tool registration, and the
-`packages/urban/src/runtime/index.ts` re-export block (every read method also adds public filter/result types there — a shared append point in its own right).
+`packages/urban/src/runtime/index.ts` re-export block (every read method that introduces public filter/result types also re-exports them there — a shared append point in its own right).
 
 - **Same-anchor edits 3-way-conflict regardless of an "append-only" convention.**
   Two slices that each append a method/member/registration at the same anchor

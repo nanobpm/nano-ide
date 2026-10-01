@@ -47,6 +47,7 @@ function ctxWithFiles(files: Record<string, string>): RuntimeContext {
     },
     listDir: async () => [],
     exists: async (p: string) => p in files,
+    statFile: async (p: string) => (p in files ? { isFile: true } : null),
     openSqlite: () => {
       throw new Error("sqlite not used in this test");
     },

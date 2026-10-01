@@ -50,7 +50,7 @@ interface DenoGlobal {
   cwd(): string;
   readTextFile(path: string): Promise<string>;
   readDir(path: string): AsyncIterable<{ name: string; isFile: boolean; isDirectory: boolean }>;
-  stat(path: string): Promise<unknown>;
+  stat(path: string): Promise<{ isFile: boolean }>;
   watchFs(paths: string | string[], options?: { recursive?: boolean }): DenoFsWatcher;
   serve(
     opts: { port: number; hostname?: string; onListen?: (a: { port: number }) => void },
@@ -122,6 +122,14 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
         return true;
       } catch {
         return false;
+      }
+    },
+    async statFile(p) {
+      try {
+        const s = await Deno.stat(abs(p));
+        return { isFile: s.isFile };
+      } catch {
+        return null;
       }
     },
     openSqlite(path) {

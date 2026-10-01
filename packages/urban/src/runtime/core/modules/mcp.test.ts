@@ -144,6 +144,7 @@ function buildHarness(opts: {
     },
     listDir: async () => [],
     exists: async (p: string) => (p === BRIEF_PATH ? briefExists : false),
+    statFile: async (p: string) => (p === BRIEF_PATH && briefExists ? { isFile: true } : null),
     openSqlite: () => {
       throw new Error("sqlite not used in this harness");
     },

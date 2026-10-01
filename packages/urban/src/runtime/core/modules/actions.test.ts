@@ -82,6 +82,7 @@ function build(
     readTextFile: async () => "",
     listDir: async () => [],
     exists: async () => false,
+    statFile: async () => null,
     openSqlite: () => {
       throw new Error("sqlite not used in this test");
     },
@@ -262,6 +263,7 @@ test("a rejected import is evicted from the cache so a later load can succeed", 
     readTextFile: async () => "",
     listDir: async () => [],
     exists: async () => false,
+    statFile: async () => null,
     openSqlite: () => {
       throw new Error("sqlite not used in this test");
     },

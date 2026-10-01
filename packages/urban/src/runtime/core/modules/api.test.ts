@@ -115,6 +115,7 @@ function build(
     readTextFile: async () => specText,
     listDir: async () => [],
     exists: async (p: string) => existsSet.has(p),
+    statFile: async (p: string) => (existsSet.has(p) ? { isFile: true } : null),
     openSqlite: () => {
       throw new Error("sqlite not used in this test");
     },
@@ -645,6 +646,7 @@ test("a failed initial spec load is retried, not cached as a permanent 500", asy
     },
     listDir: async () => [],
     exists: async () => false,
+    statFile: async () => null,
     openSqlite: () => {
       throw new Error("sqlite not used in this test");
     },

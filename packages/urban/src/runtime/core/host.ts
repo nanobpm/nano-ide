@@ -101,6 +101,14 @@ export interface HostContext {
   listSubdirs?(dir: string): Promise<string[]>;
   /** True if the path exists (file or directory). */
   exists(path: string): Promise<boolean>;
+  /**
+   * File metadata without reading the file's bytes, or `null` when the path does not exist.
+   * The pages surface uses this to probe the app-owned `app.css`/`app.js` convention on the
+   * per-request shell hot path: `exists` is too broad (true for a DIRECTORY, which the shell
+   * would then link and the browser would 404 on), and probing via `readTextFile` reads and
+   * allocates a potentially large file just to answer "is it there?".
+   */
+  statFile(path: string): Promise<{ isFile: boolean } | null>;
   /** Open (creating if needed) a SQLite database at a filesystem path. */
   openSqlite(path: string): SqliteDb;
   /**

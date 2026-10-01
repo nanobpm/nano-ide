@@ -16,6 +16,12 @@ function fakeHost(files: Record<string, string[]>): HostContext {
       const name = slash >= 0 ? p.slice(slash + 1) : p;
       return (files[dir] ?? []).includes(name);
     },
+    statFile: async (p) => {
+      const slash = p.lastIndexOf("/");
+      const dir = slash >= 0 ? p.slice(0, slash) : "";
+      const name = slash >= 0 ? p.slice(slash + 1) : p;
+      return (files[dir] ?? []).includes(name) ? { isFile: true } : null;
+    },
     openSqlite: () => {
       throw new Error("n/a");
     },

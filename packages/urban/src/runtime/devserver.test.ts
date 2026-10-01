@@ -205,6 +205,7 @@ function fakeHost(): { host: HostContext; fire: (p: string) => void; closed: () 
     readTextFile: async () => "",
     listDir: async () => [],
     exists: async () => false,
+    statFile: async () => null,
     openSqlite: () => {
       throw new Error("sqlite not used in this test");
     },

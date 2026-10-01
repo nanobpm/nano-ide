@@ -154,6 +154,14 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
         return false;
       }
     },
+    async statFile(p) {
+      try {
+        const s = await stat(abs(p));
+        return { isFile: s.isFile() };
+      } catch {
+        return null;
+      }
+    },
     openSqlite(path) {
       const db = new DatabaseSync(abs(path));
       return wrapNodeSqlite(db);

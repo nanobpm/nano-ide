@@ -2215,3 +2215,30 @@ test("#578: the shell probes existence WITHOUT reading the assets when the host 
   assert.deepEqual(probes.sort(), ["pages/app.css", "pages/app.js"], "both assets are probed per shell request");
   assert.deepEqual(reads, [], "no asset bytes are read to build the shell");
 });
+
+test("#578: a DIRECTORY at an asset path is not linked (the probe is file-only, like serving)", async () => {
+  // `HostContext.exists` is true for files AND directories; the probe contract must answer
+  // "would serving this path succeed?" — a `pages/app.css/` directory 404s when read, so the
+  // shell must not link it. The injected probe here is exactly what `mountPages` builds from
+  // `HostContext.statFile` (`(await statFile(p))?.isFile === true`).
+  const files: Record<string, string> = { "pages/app.js": "export {};" };
+  const dirs = new Set(["pages/app.css"]);
+  const router = makeRouter(
+    createPagesRoutes(
+      { pagesDir: "pages", homePage: "home", sourceName: "app" },
+      {
+        db: fakeDb(),
+        engine: fakeEngine().engine,
+        readPage: async () => "{}",
+        readAsset: async (p) => {
+          if (dirs.has(p)) throw new Error(`EISDIR ${p}`);
+          throw new Error(`ENOENT ${p}`);
+        },
+        existsAsset: async (p) => !dirs.has(p) && p in files,
+      },
+    ),
+  );
+  const body = (await router(req("GET", "/"))).body ?? "";
+  assert.doesNotMatch(body, /href="\.\/app\.css"/, "a directory named app.css is not linked");
+  assert.match(body, /src="\.\/app\.js"/, "a real app.js file still is");
+});

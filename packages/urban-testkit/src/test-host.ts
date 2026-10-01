@@ -59,6 +59,7 @@ export function createTestHost(opts: CreateTestHostOptions): TestHost {
     // as it does in production; omit it otherwise to match the base host's own capability.
     ...(base.listSubdirs ? { listSubdirs: (dir: string) => base.listSubdirs!(dir) } : {}),
     exists: (path) => base.exists(path),
+    statFile: (path) => base.statFile(path),
     openSqlite: (path) => base.openSqlite(path),
     importModule: (path) => base.importModule(path),
     // A socket-free HTTP server: keep the mounted router, hand back a handle whose stop()

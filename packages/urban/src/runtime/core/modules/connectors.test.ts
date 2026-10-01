@@ -67,6 +67,7 @@ function makeCtx(
     env: (name) => opts.env?.[name],
     log: (level: string, msg: string) => logs.push({ level, msg }),
     exists: async (p: string) => p in files,
+    statFile: async (p: string) => (p in files ? { isFile: true } : null),
     readTextFile: async (p: string) => {
       if (!(p in files)) throw new Error(`ENOENT ${p}`);
       return files[p];

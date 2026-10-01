@@ -90,12 +90,17 @@ export interface PagesDeps {
    */
   readAsset?(path: string): Promise<string>;
   /**
-   * Probe whether a static asset exists at an app-root-relative path, WITHOUT reading its
-   * bytes. The per-request shell build uses this for the app-owned `app.css`/`app.js`
-   * convention (#578): those files can be large and the shell is revalidated on every load,
-   * so probing via a full `readAsset` would put an avoidable read + allocation on the HTML
-   * hot path (and read the file twice — once here, once when the browser fetches it).
-   * Optional; falls back to a read-based probe when absent. Injectable for tests.
+   * Probe whether a static asset exists as a READABLE REGULAR FILE at an app-root-relative
+   * path, WITHOUT reading its bytes. The per-request shell build uses this for the app-owned
+   * `app.css`/`app.js` convention (#578): those files can be large and the shell is revalidated
+   * on every load, so probing via a full `readAsset` would put an avoidable read + allocation
+   * on the HTML hot path (and read the file twice — once here, once when the browser fetches
+   * it). Must answer the same question the `readAsset` fallback answers — "would serving this
+   * path succeed?" — so a directory (or unreadable entry) at the path is a NO. `mountPages`
+   * wires this to `HostContext.statFile` (a metadata stat — never `HostContext.exists`, which
+   * is true for directories too, and a `pages/app.css/` DIRECTORY would link an asset the
+   * browser then 404s on). Optional; falls back to a read-based probe when absent.
+   * Injectable for tests.
    */
   existsAsset?(path: string): Promise<boolean>;
   /**
@@ -697,7 +702,11 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
     cancel: (key) => cancelInstanceReconciling(app, bindings, key),
     readPage: (p) => ctx.host.readTextFile(p),
     readAsset: (p) => ctx.host.readTextFile(p),
-    existsAsset: (p) => ctx.host.exists(p),
+    // Probe "would serving this path succeed?" — a READABLE REGULAR FILE, not the broader
+    // `HostContext.exists` (which is true for directories too, and a `pages/app.css/`
+    // DIRECTORY would link an asset the browser then 404s on). `statFile` answers it with a
+    // metadata stat — no file bytes cross the seam on the per-request shell hot path.
+    existsAsset: async (p) => (await ctx.host.statFile(p))?.isFile === true,
     listPages: async () => {
       const dir = opts.pagesDir ?? "pages";
       const names = await ctx.host.listDir(dir).catch(() => []);

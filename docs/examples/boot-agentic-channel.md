@@ -97,14 +97,24 @@ const presence = attachPresenceFamily(hub, new PresenceStore(/* … */), {
 // still-`unknown` payload rather than destructuring an untrusted frame. Without
 // these handlers `FamilyRouter` silently drops the multiplexed emitter's
 // ownership frames and the §4.6 ownership window never opens.
-const ownership = {/* app ownership store: claim(identity, payload) → bool, release(identity, payload) */};
+// The store interface is concrete so `ownership.claim`/`release` type-check;
+// the no-op default keeps the snippet bootable while it owns no jobs. Swap in a
+// real store (one that opens the §4.6 ownership window) for production.
+interface OwnershipStore {
+  claim(identity: string, payload: unknown): void;
+  release(identity: string, payload: unknown): void;
+}
+const ownership: OwnershipStore = {
+  claim: () => {},
+  release: () => {},
+};
 hub.registerFamilyHandler("claim", (frame, ctx) => {
   if (!validatePayload("claim", frame.payload).ok) return;
-  ownership.claim?.(ctx.identity, frame.payload);
+  ownership.claim(ctx.identity, frame.payload);
 });
 hub.registerFamilyHandler("release", (frame, ctx) => {
   if (!validatePayload("release", frame.payload).ok) return;
-  ownership.release?.(ctx.identity, frame.payload);
+  ownership.release(ctx.identity, frame.payload);
 });
 
 await transport.ready();
@@ -113,8 +123,12 @@ await transport.ready();
 // presence.stop();
 ```
 
-Three QoS lanes are on by default: control/facts > interactive > bulk. A
-bulk-output storm never head-of-line-blocks a heartbeat. Invariant #5.
+Three QoS lanes are encoded on every frame: control/facts > interactive > bulk.
+The scheduler that enforces them sits on **relay subscriber egress** (each
+subscriber gets a `QosScheduler`), so a bulk relay storm never head-of-line-blocks
+that subscriber's relay control acks. Inbound heartbeats and blackboard writes are
+handled directly by the hub, off that scheduler — the lanes label frames, they do
+not impose a global ordering across families. Invariant #5.
 
 ## What a worker does (client side — S9)
 

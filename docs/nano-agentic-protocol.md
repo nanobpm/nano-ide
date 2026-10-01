@@ -132,9 +132,13 @@ handler-registration seam and every family module key off. On-wire codes
 
 Every frame carries a **QoS lane**: `control/facts` (heartbeats, registry, vocab,
 blackboard) > `interactive` (live terminal keystrokes/echo) > `bulk` (large
-command output). The relay scheduler guarantees a bulk-output storm never
-head-of-line-blocks a heartbeat or a blackboard write. Round-trip encode/decode
-and every malformed-input rejection are pinned by the conformance corpus.
+command output). The scheduler is instantiated only on **relay subscriber egress**
+(`relay-family.ts`), so the guarantee is scoped to that path: a bulk-output storm
+never head-of-line-blocks a subscriber's relay control acknowledgements — buffered
+bulk sheds ahead of them. Heartbeat/blackboard handling and `HubConnection.send`
+(`channel/hub.ts`) bypass the scheduler, so it does not order those families around
+a relay storm. Round-trip encode/decode and every malformed-input rejection are
+pinned by the conformance corpus.
 
 ### 4.3 Routing token grammar
 

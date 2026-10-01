@@ -119,8 +119,12 @@ hub.registerFamilyHandler("release", (frame, ctx) => {
 
 await transport.ready();
 
-// On shutdown, stop the presence sweep timer alongside the app:
+// On shutdown, tear down the channel alongside the app: stop the presence sweep
+// timer, then close the hub — `AgenticHub.close()` clears the hub liveness timer,
+// closes tracked connections, and closes the WebSocket transport, so channel
+// resources do not leak across an app shutdown/restart:
 // presence.stop();
+// await hub.close();
 ```
 
 Three QoS lanes are encoded on every frame: control/facts > interactive > bulk.

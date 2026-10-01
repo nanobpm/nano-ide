@@ -70,9 +70,12 @@ ADR-level decision, not a slice-local one.
    token — it is an enrolment attribute + a registry gate.
 4. **The capability→token map lives in the versioned vocab artifact**, applied over
    the channel (`REGISTER` → `SERVE`). No map is baked into any worker.
-5. **Three QoS lanes on the one channel:** `control/facts` > `interactive` >
-   `bulk`. A bulk-output storm must never head-of-line-block a heartbeat or a
-   blackboard write.
+5. **Three QoS lanes on relay-subscriber egress:** `control/facts` >
+   `interactive` > `bulk`, enforced by the scheduler on each relay subscriber's
+   egress (§4.2). On that egress a bulk-output storm must never
+   head-of-line-block that subscriber's interactive or control-lane frames.
+   Heartbeat and blackboard traffic are handled by the hub off this scheduler,
+   so they are structurally not queued behind a relay storm.
 6. **Hub-down tolerance is the worker's job.** The hub does not assume always-on
    producers; the worker buffers and drains across a hub outage (the worker client, `@nanobpm/urban-agent-client`).
 7. **Core vocabulary is opinionated and works out of the box; authors extend it in

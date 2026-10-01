@@ -322,6 +322,35 @@ test("onRegistered does not fire for a rejected register; a hook throw is routed
   await hub.close();
 });
 
+test("a rejected async onRegistered promise is routed to onError, not left unhandled", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    onError: (e) => errors.push(e),
+    onRegistered: async () => {
+      await Promise.resolve();
+      throw new Error("async serve blew up");
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 1));
+  await tick();
+  // The async rejection surfaces via onError rather than escaping as an
+  // unhandled rejection, and presence already recorded stays intact.
+  assert.equal(errors.length, 1);
+  const hookErr = errors[0];
+  assert(hookErr instanceof Error);
+  assert.match(hookErr.message, /async serve blew up/);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
+
+  await hub.close();
+});
+
 test("presence ages out on the TTL via the family sweep", async () => {
   const transport = new FakeTransport();
   const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });

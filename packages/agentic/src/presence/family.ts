@@ -42,10 +42,15 @@ export interface PresenceFamilyOptions {
    * `serveCapability` here to resolve the declared capability and emit the
    * `serve` reply — without re-owning (and re-validating) the `register` family.
    * Receives the connection plus the validated instance + enrolment capability.
-   * A throw is routed to {@link onError}, so a failed SERVE cannot unwind
-   * presence that is already recorded.
+   * A synchronous throw — or a rejected promise from an `async` hook — is routed
+   * to {@link onError}, so a failed SERVE cannot unwind presence that is already
+   * recorded nor escape as an unhandled rejection.
    */
-  onRegistered?: (ctx: HubConnection, instance: string, capability: Capability) => void;
+  onRegistered?: (
+    ctx: HubConnection,
+    instance: string,
+    capability: Capability,
+  ) => void | Promise<void>;
 }
 
 /** Handle to the attached presence family — drives/stops the presence sweep. */
@@ -150,11 +155,16 @@ export function attachPresenceFamily(
     // workers), so this ADDs the instance rather than overwriting a singular one.
     ctx.registry.addInstance(ctx.id, instance, capability);
     // The composition root's REGISTER→SERVE hook (e.g. `serveCapability`). It
-    // runs only after a validated register has persisted; a throw is isolated to
-    // `onError` so a failed SERVE cannot unwind presence already recorded.
+    // runs only after a validated register has persisted; a throw — or a rejected
+    // promise from an `async` hook — is isolated to `onError` so a failed SERVE
+    // can neither unwind presence already recorded nor escape as an unhandled
+    // rejection.
     if (options.onRegistered !== undefined) {
       try {
-        options.onRegistered(ctx, instance, capability);
+        const outcome = options.onRegistered(ctx, instance, capability);
+        if (outcome instanceof Promise) {
+          outcome.catch((err: unknown) => onError(err, ctx.id));
+        }
       } catch (err) {
         onError(err, ctx.id);
       }

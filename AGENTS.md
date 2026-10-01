@@ -125,11 +125,12 @@ applied in lexical filename order.
 When you split an epic into parallel slices, a slice that edits a **shared
 append-point** is not independent even when each PR is green on its own. The
 `EngineClient` runtime seam is the canonical example, and it has now collided
-twice (epics #488 and #525): adding a read method touches the *same five files
+twice (epics #488 and #525): adding a read method touches the *same six files
 at the same anchors* — the `EngineClient` interface and the
 `ENGINE_CLIENT_METHODS` exhaustiveness tuple (`packages/urban/src/runtime/core/host.ts`), both
 adapters (`packages/urban/src/runtime/engine/nanosdk.ts` and the testkit `WasmEngineClient`), the single
-`packages/urban-testkit/src/engine-client-conformance.test.ts`, and the `packages/urban/src/runtime/core/modules/mcp.ts` tool registration.
+`packages/urban-testkit/src/engine-client-conformance.test.ts`, the `packages/urban/src/runtime/core/modules/mcp.ts` tool registration, and the
+`packages/urban/src/runtime/index.ts` re-export block (every read method also adds public filter/result types there — a shared append point in its own right).
 
 - **Same-anchor edits 3-way-conflict regardless of an "append-only" convention.**
   Two slices that each append a method/member/registration at the same anchor

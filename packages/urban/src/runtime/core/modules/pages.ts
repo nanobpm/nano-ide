@@ -27,7 +27,7 @@
 
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage, isRecord } from "../guards.ts";
-import type { EngineClient } from "../host.ts";
+import type { EngineClient, HttpResponse } from "../host.ts";
 import { html, json, type Route } from "../router.ts";
 import { cancelInstanceReconciling, type CancelInstanceResult } from "./cancel.ts";
 import { apiDocsPath } from "./api.ts";
@@ -118,6 +118,13 @@ function javascript(
   };
 }
 
+// App-owned shell customisation by convention (nano-ide#578): an app MAY ship `pagesDir/app.css`
+// (linked AFTER the built-in renderer CSS, so its rules win — themes, restyling) and/or
+// `pagesDir/app.js` (an ES module loaded after the runtime — e.g. a theme picker). Each is served
+// as a root sidecar and referenced from the shell ONLY when the file exists, so apps without them
+// see no change and no 404.
+export const APP_ASSETS = ["app.css", "app.js"] as const;
+
 // The `appView` sidecar documents an app ships alongside its `*.page.json` under
 // `pagesDir` (ADR 0057 / #416 / #420). The renderer (#419) mounts an <iframe> whose
 // src is the node's base-relative `embed` (`./embed.html`), which — resolved against
@@ -130,7 +137,7 @@ function javascript(
 // `./board/embed.html`, …) — those are served by the nested prefix route below (#442);
 // this flat set stays as the single-appView back-compat case (#420). The `dist/` tree the
 // import-map references is served separately under the `/dist/` prefix below.
-const SIDECAR_ASSETS = ["embed.html", "standalone.html", "mount.js", "cockpit.css"] as const;
+const SIDECAR_ASSETS = ["embed.html", "standalone.html", "mount.js", "cockpit.css", ...APP_ASSETS] as const;
 
 // The app `dist/` directory (app-root sibling of the pages dir) the sidecar import-maps
 // resolve `../dist/…` onto. Because the embed is served at the mount root, `../dist`
@@ -262,16 +269,27 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   };
 
   const routes: Route[] = [];
-  const shell = html(rendererShell(homePage, opts.apiDocsPath, opts.gridLayout ?? "auto"));
   // The shell must never be pinned by the browser: it carries the *current* fingerprinted
   // runtime URL, so a stale shell would keep pointing at an old module hash. `no-cache` forces
   // a revalidation on every load; the shell body is tiny, and the expensive module it references
   // is what gets the long-lived immutable caching (via its content-hashed URL).
-  shell.headers = { ...shell.headers, "cache-control": "no-cache" };
+  // Built per request: it probes for the app-owned `app.css`/`app.js` (#578) so adding or removing
+  // one takes effect without a restart.
+  const shell = async (): Promise<HttpResponse> => {
+    const present = async (name: string): Promise<boolean> =>
+      readAsset(`${pagesDir}/${name}`).then(
+        () => true,
+        () => false,
+      );
+    const [appCss, appJs] = await Promise.all([present("app.css"), present("app.js")]);
+    const res = html(rendererShell(homePage, opts.apiDocsPath, opts.gridLayout ?? "auto", { appCss, appJs }));
+    res.headers = { ...res.headers, "cache-control": "no-cache" };
+    return res;
+  };
 
   // ── the renderer shell + module ─────────────────────────────────────────
-  routes.push({ method: "GET", path: "/", source: "surface:pages", handler: () => shell });
-  routes.push({ method: "GET", path: "/index.html", source: "surface:pages", handler: () => shell });
+  routes.push({ method: "GET", path: "/", source: "surface:pages", handler: shell });
+  routes.push({ method: "GET", path: "/index.html", source: "surface:pages", handler: shell });
   // The fingerprinted module URL (referenced by the shell): unique per content, so cache it hard.
   routes.push({
     method: "GET",
@@ -679,7 +697,12 @@ function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function rendererShell(homePage: string, apiDocsPath: string | undefined, gridLayout: GridLayout): string {
+function rendererShell(
+  homePage: string,
+  apiDocsPath: string | undefined,
+  gridLayout: GridLayout,
+  app: { appCss: boolean; appJs: boolean } = { appCss: false, appJs: false },
+): string {
   // A persistent "API docs" badge (spec-first apps get their Swagger UI linked from their own
   // UI for free). `target="_blank"` + hardened `rel` so the docs open without giving the docs
   // tab a handle back to this window (reverse-tabnabbing).
@@ -704,12 +727,12 @@ function rendererShell(homePage: string, apiDocsPath: string | undefined, gridLa
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Urban App</title>
-  <style>${RENDERER_CSS}</style>
+  <style>${RENDERER_CSS}</style>${app.appCss ? '\n  <link rel="stylesheet" href="./app.css" />' : ""}
 </head>
 <body data-grid-layout="${gridLayout}">${apiDocsBadge}
   <main id="page" data-home="${escapeAttr(homePage)}"><p class="pc-empty">Loading…</p></main>
   <script>${FORMJS_JS}</script>
-  <script type="module" src=".${RUNTIME_JS_PATH}"></script>
+  <script type="module" src=".${RUNTIME_JS_PATH}"></script>${app.appJs ? '\n  <script type="module" src="./app.js"></script>' : ""}
 </body>
 </html>`;
 }

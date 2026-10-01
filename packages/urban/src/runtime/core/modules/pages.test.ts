@@ -2123,3 +2123,50 @@ test("#572: parseGridLayout accepts only the declared layouts (anything else is 
   assert.equal(parseGridLayout("grid"), undefined);
   assert.equal(parseGridLayout(1), undefined);
 });
+
+// nano-ide#578 — an app MAY ship `pages/app.css` / `pages/app.js`; the shell links them only when present.
+function appAssetRoutes(files: Record<string, string>) {
+  return makeRouter(
+    createPagesRoutes(
+      { pagesDir: "pages", homePage: "home", sourceName: "app" },
+      {
+        db: fakeDb(),
+        engine: fakeEngine().engine,
+        readPage: async () => "{}",
+        readAsset: async (p) => {
+          const body = files[p];
+          if (body === undefined) throw new Error(`ENOENT ${p}`);
+          return body;
+        },
+      },
+    ),
+  );
+}
+
+test("#578: no app.css/app.js → the shell references neither (no 404 noise)", async () => {
+  const body = (await appAssetRoutes({})(req("GET", "/"))).body ?? "";
+  assert.doesNotMatch(body, /app\.css/);
+  assert.doesNotMatch(body, /app\.js/);
+});
+
+test("#578: app.css is linked AFTER the built-in CSS, and app.js loads after the runtime", async () => {
+  const router = appAssetRoutes({ "pages/app.css": "body{color:red}", "pages/app.js": "export {};" });
+  const body = (await router(req("GET", "/"))).body ?? "";
+  const css = body.indexOf('<link rel="stylesheet" href="./app.css" />');
+  assert.ok(css > body.indexOf("</style>"), "app.css must follow the renderer <style> so its rules win");
+  const js = body.indexOf('<script type="module" src="./app.js"></script>');
+  assert.ok(js > body.indexOf("runtime"), "app.js must load after the runtime module");
+  const cssRes = await router(req("GET", "/app.css"));
+  assert.equal(cssRes.status, 200);
+  assert.equal(cssRes.body, "body{color:red}");
+  assert.match(String(cssRes.headers?.["content-type"]), /text\/css/);
+  const jsRes = await router(req("GET", "/app.js"));
+  assert.equal(jsRes.status, 200);
+  assert.match(String(jsRes.headers?.["content-type"]), /javascript/);
+});
+
+test("#578: only the present asset is referenced", async () => {
+  const body = (await appAssetRoutes({ "pages/app.css": "x" })(req("GET", "/"))).body ?? "";
+  assert.match(body, /href="\.\/app\.css"/);
+  assert.doesNotMatch(body, /src="\.\/app\.js"/);
+});

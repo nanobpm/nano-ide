@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.94.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.94.0...@nanobpm/urban-0.94.1) (2026-10-01)
+
+
+### Bug Fixes
+
+* **urban:** pin @nanobpm/nano-app-schema ^0.11.0 so surfaces.pages.gridLayout validates ([#575](https://github.com/nanobpm/nano-ide/issues/575)) ([e9488fb](https://github.com/nanobpm/nano-ide/commit/e9488fb971f08744238f2898d357320a73aea511)), closes [#572](https://github.com/nanobpm/nano-ide/issues/572)
+
 ## [0.94.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.93.1...@nanobpm/urban-0.94.0) (2026-09-30)
 
 

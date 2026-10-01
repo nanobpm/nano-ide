@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.14.0...@nanobpm/agentic-0.15.0) (2026-10-01)
+
+
+### Features
+
+* **agentic:** add attachPresenceFamily onRegistered hook; refresh protocol docs to current state ([#577](https://github.com/nanobpm/nano-ide/issues/577)) ([361d8a0](https://github.com/nanobpm/nano-ide/commit/361d8a02c0979c8a18a59e581da8d24b9363f574))
+
 ## [0.14.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.13.0...@nanobpm/agentic-0.14.0) (2026-09-08)
 
 

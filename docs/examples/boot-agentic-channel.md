@@ -23,6 +23,14 @@ itself (all shown below).
 
 ## Host wiring
 
+> **Schematic, not copy-paste bootable.** The `/* … */` placeholders below —
+> `createUrbanApp({ … })` (which requires concrete `host` + `engine` wiring) and
+> each `new PresenceStore(/* … */)` / `new BlackboardStore(/* … */)` (which take a
+> `SqliteDb`) — stand in for your app's real host/engine/database construction;
+> see the [`@nanobpm/urban` README](../../packages/urban/README.md) for a concrete
+> host+engine+DB setup. This file illustrates the **agentic-channel** wiring that
+> composes on top of that app, not a runnable `main.ts`.
+
 ```ts
 // main.ts — an agentic Urban app
 import { createUrbanApp } from "@nanobpm/urban/runtime";

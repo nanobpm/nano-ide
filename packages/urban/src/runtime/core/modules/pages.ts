@@ -90,6 +90,15 @@ export interface PagesDeps {
    */
   readAsset?(path: string): Promise<string>;
   /**
+   * Probe whether a static asset exists at an app-root-relative path, WITHOUT reading its
+   * bytes. The per-request shell build uses this for the app-owned `app.css`/`app.js`
+   * convention (#578): those files can be large and the shell is revalidated on every load,
+   * so probing via a full `readAsset` would put an avoidable read + allocation on the HTML
+   * hot path (and read the file twice — once here, once when the browser fetches it).
+   * Optional; falls back to a read-based probe when absent. Injectable for tests.
+   */
+  existsAsset?(path: string): Promise<boolean>;
+  /**
    * List the available page ids (the `*.page.json` basenames under `pagesDir`),
    * powering the `/app/pages` index endpoint and a `nav` node's `items: "auto"`.
    * Optional; when absent the index is empty. Injectable for tests.
@@ -233,6 +242,9 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   // Falls back to `readPage` when no dedicated reader is injected — both delegate to the same
   // `host.readTextFile`, so there is one source of file bytes, not two.
   const readAsset = deps.readAsset ?? readPage;
+  // Existence probe for the app-owned shell assets (#578): a dedicated `existsAsset` when the
+  // host offers one (a metadata stat — no file bytes cross the seam), else a read-based probe.
+  const existsAsset = deps.existsAsset ?? ((path: string) => readAsset(path).then(() => true, () => false));
 
   // The table-name whitelist is memoised: an Urban app runs its migrations at boot
   // (before serving), so the schema is stable for the process lifetime, and the renderer
@@ -276,12 +288,10 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   // Built per request: it probes for the app-owned `app.css`/`app.js` (#578) so adding or removing
   // one takes effect without a restart.
   const shell = async (): Promise<HttpResponse> => {
-    const present = async (name: string): Promise<boolean> =>
-      readAsset(`${pagesDir}/${name}`).then(
-        () => true,
-        () => false,
-      );
-    const [appCss, appJs] = await Promise.all([present("app.css"), present("app.js")]);
+    const [appCss, appJs] = await Promise.all([
+      existsAsset(`${pagesDir}/app.css`),
+      existsAsset(`${pagesDir}/app.js`),
+    ]);
     const res = html(rendererShell(homePage, opts.apiDocsPath, opts.gridLayout ?? "auto", { appCss, appJs }));
     res.headers = { ...res.headers, "cache-control": "no-cache" };
     return res;
@@ -317,11 +327,21 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   // onto `pagesDir/<name>` (exact routes — never a root catch-all, which would shadow the
   // `/healthz` liveness route the runtime appends after the pages surface).
   for (const name of SIDECAR_ASSETS) {
+    // The app-owned `app.css`/`app.js` are MUTABLE at stable URLs — the whole point of the
+    // convention is that an edit (or a remove/re-add) takes effect without a restart, and the
+    // shell re-probes on every load. Serve them `no-cache` (like `/app/runtime.js`) so a
+    // browser/intermediary must revalidate instead of replaying a heuristically-cached 200/404.
+    // The other sidecars are deploy-time fixtures, so they keep the generic response.
+    const mutable = APP_ASSETS.some((a) => a === name);
     routes.push({
       method: "GET",
       path: `/${name}`,
       source: "surface:pages",
-      handler: () => serveAsset(readAsset, `${pagesDir}/${name}`),
+      handler: async () => {
+        const res = await serveAsset(readAsset, `${pagesDir}/${name}`);
+        if (mutable) res.headers = { ...res.headers, "cache-control": "no-cache" };
+        return res;
+      },
     });
   }
   // The `dist/` tree the sidecars' import-maps reference (`../dist/cockpit/index.js` →
@@ -677,6 +697,7 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
     cancel: (key) => cancelInstanceReconciling(app, bindings, key),
     readPage: (p) => ctx.host.readTextFile(p),
     readAsset: (p) => ctx.host.readTextFile(p),
+    existsAsset: (p) => ctx.host.exists(p),
     listPages: async () => {
       const dir = opts.pagesDir ?? "pages";
       const names = await ctx.host.listDir(dir).catch(() => []);
@@ -1118,5 +1139,8 @@ function fnv1aHex(s: string): string {
 // other page action) do nothing after an upgrade until a hard refresh. Because the URL is unique
 // per content, the response itself is served `immutable` with a one-year max-age.
 const RUNTIME_JS_HASH = fnv1aHex(RENDERER_JS);
-const RUNTIME_JS_PATH = `/app/runtime.${RUNTIME_JS_HASH}.js`;
+// Exported so tests can locate the actual fingerprinted runtime <script> tag in the shell
+// (asserting against the bare word "runtime" is unsound — it also appears in the embedded
+// renderer CSS, so such a test passes even if the app script were moved before the runtime).
+export const RUNTIME_JS_PATH = `/app/runtime.${RUNTIME_JS_HASH}.js`;
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";

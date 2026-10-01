@@ -3,53 +3,69 @@
 > Part of slice **S10** (epic
 > [nanobpm/nano-ide#124](https://github.com/nanobpm/nano-ide/issues/124)). This is
 > the **example wiring** that boots the agentic channel for an agentic Urban app.
-> The channel/hub itself lands with **S1** ([#127](https://github.com/nanobpm/nano-ide/issues/127))
-> and the families with S2/S3/S5/S7; the snippet below is the intended, stable
-> host wiring and is promoted to a runnable example package as those slices land.
 > See [`../nano-agentic-protocol.md`](../nano-agentic-protocol.md) for the contract.
 
 ## The idea
 
-An agentic Urban app opts into the capability exactly the way it opts into pages
-and workers today: it declares it, and the `@nanobpm/urban` runtime serves the
-channel on the **app's own bound port** — a separate connection from the C8 job
-protocol, which is untouched. Each message family attaches itself to the hub via
-the `registerFamilyHandler(family, handler)` seam (S1), so the app never edits a
-central dispatch switch.
+An agentic Urban app serves the channel on the **app's own bound port** — a
+separate connection from the C8 job protocol, which is untouched. There is no
+`@nanobpm/urban/agentic` capability barrel and no `agenticChannel(...)` manifest
+key: the shipped surface is the channel hub from `@nanobpm/agentic/channel`,
+mounted as a WebSocket upgrade on the started app's `httpServer`. Each message
+family attaches itself to the hub via the `registerFamilyHandler(family, handler)`
+seam (S1), so the app never edits a central dispatch switch.
 
 ## Host wiring
 
 ```ts
 // main.ts — an agentic Urban app
-import { createApp } from "@nanobpm/urban";
-// The agentic capability + its core families (each attaches via the S1 seam).
-// Package names are finalised by S0/S1; import the capability barrel it exports.
-import { agenticChannel, coreVocab } from "@nanobpm/urban/agentic";
+import { createUrbanApp } from "@nanobpm/urban/runtime";
+import {
+  AgenticHub,
+  WebSocketChannelTransport,
+  sharedSecretAuthenticator,
+} from "@nanobpm/agentic/channel";
+import { attachPresenceFamily, PresenceStore } from "@nanobpm/agentic/presence";
+import { registerRelayFamily } from "@nanobpm/agentic/relay";
+import { attachBlackboardFamily, BlackboardStore } from "@nanobpm/agentic/blackboard";
 
-const app = createApp({
+const app = await createUrbanApp({
   // …the app's normal pages / workers / datasources…
+});
+await app.start(); // binds the app's own HTTP port
 
-  // Enable the agentic channel. Served on the app's own bound port, alongside
-  // (never on top of) the C8 job protocol. Invariant #1 & #2.
-  agentic: agenticChannel({
-    // The versioned vocab artifact: core vocabulary + this app's extensions,
-    // merged in the same schema (S3). Capability→token map lives HERE, never in
-    // a worker. Invariant #4 & #7.
-    vocab: coreVocab.extend({
-      // app-specific roles/seats go here, in the same schema
-    }),
+// Snapshot the runtime's native node:http Server and narrow it before use (the
+// runtime exposes it as `object | undefined`; no type assertion needed).
+const { Server } = await import("node:http");
+const server = app.httpServer;
+if (!(server instanceof Server)) {
+  throw new Error("agentic channel needs the app's node:http Server");
+}
 
-    // Auth for the channel: ADR 0028 identity + a capability credential — the
-    // same pattern nano-workforce's blackboard hook already uses (S1).
-    auth: { identity: "adr-0028", capabilityCredential: true },
+// Serve the channel as a WebSocket upgrade on the app's OWN port (default path
+// `/agentic`) — alongside, never on top of, the C8 job protocol. Invariant #1 & #2.
+const transport = new WebSocketChannelTransport({ server });
 
-    // Three QoS lanes are on by default: control/facts > interactive > bulk.
-    // A bulk-output storm never head-of-line-blocks a heartbeat. Invariant #5.
+// Auth for the channel: a shared-secret identity token + a required capability
+// credential — the same pattern nano-workforce's blackboard hook uses (S1). Swap
+// in a real ADR 0028 verifier by passing your own `Authenticator` to the hub.
+const hub = new AgenticHub({
+  transport,
+  authenticator: sharedSecretAuthenticator({
+    secret: process.env.AGENTIC_CHANNEL_SECRET!,
   }),
 });
 
-await app.listen(); // serves pages, workers, AND the agentic channel
+// Each family attaches through the S1 seam — no central dispatch switch.
+attachPresenceFamily(hub, new PresenceStore(/* … */)); // S2
+registerRelayFamily(hub); //                             S5
+attachBlackboardFamily(hub, new BlackboardStore(/* … */)); // S7
+
+await transport.ready();
 ```
+
+Three QoS lanes are on by default: control/facts > interactive > bulk. A
+bulk-output storm never head-of-line-blocks a heartbeat. Invariant #5.
 
 ## What a worker does (client side — S9)
 
@@ -74,9 +90,15 @@ agent.relay("stdout", "hello\n");  // stream terminal bytes on the relay lane (S
 // The client buffers + drains across a hub outage — hub-down tolerance. Invariant #6.
 ```
 
+> **Single-instance vs multiplexed.** `@nanobpm/urban-agent-client` (above) is the
+> single-instance client — one connection, one agent, no `claim`/`release`. A
+> supervisor that hires many instances and runs the §4.6 ownership flow uses the
+> blessed multiplexed emitter `@nanobpm/agentic/emit` instead. See
+> [`../nano-agentic-protocol.md`](../nano-agentic-protocol.md) §6.
+
 ## Verifying it boots
 
-Once S1 has landed, booting the app and connecting a worker should show the worker
-in the registry with presence, and its terminal streaming to the cockpit page
-(S8). Until then, this file documents the stable wiring surface and the conformance
-corpus (`npm run test:conformance`) guards the wire contract both sides implement.
+Booting the app and connecting a worker should show the worker in the registry
+with presence, and its terminal streaming to the cockpit page (S8). The
+conformance corpus (`npm run test:conformance`) guards the wire contract both
+sides implement.

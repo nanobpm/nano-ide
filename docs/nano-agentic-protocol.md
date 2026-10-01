@@ -43,7 +43,8 @@ the work this way:
 | Presence, demand×supply, blackboard | **Agentic channel** | Live, app-tier |
 
 The worker (the c8ctl-nano supervisor) writes AgentHistory through the C8 REST API,
-lease-gated by the job's `leaseToken`. It writes the relay/transcript stream over the
+lease-gated by the job's `jobLeaseToken` (the engine request field, required by both
+the create and update requests). It writes the relay/transcript stream over the
 agentic channel. A consumer that only needs **what the agent did** (for example the
 Process Explorer agent-history scrubber,
 [nano-bpm#1314](https://github.com/nanobpm/nano-bpm/issues/1314)) reads the engine and
@@ -240,7 +241,20 @@ subpath export, and each has a `./source/<subpath>` twin for strip-types consume
 | `/session` | session log, ACP backend, harness normalizers |
 | `/cockpit` | operator cockpit: terminal and structured views, relay client |
 
-The worker-side client is `@nanobpm/urban-agent-client` (`packages/urban-agent-client`).
+There are **two** worker-side clients, and they are not interchangeable:
+
+- **`@nanobpm/urban-agent-client`** (`packages/urban-agent-client`) is the
+  **single-instance** worker client: one connection carries one agent's
+  REGISTER→SERVE, heartbeat/deregister, and relay bytes. It has **no
+  `claim`/`release`** — it predates the multi-instance ownership protocol and
+  cannot drive the §4.6 ownership flow.
+- **`@nanobpm/agentic/emit`** (`packages/agentic/src/emit`) is the blessed
+  **multiplexed ownership/transcript emitter**: one host connection that N
+  instances share, emitting `register` / `heartbeat` / `deregister` /
+  `claim` / `release` and the relay transcript sink with an explicit `instance`
+  per frame, with reconnect resync. A supervisor that hires many instances and
+  must run the §4.6 claim/release ownership flow builds on **this** client, not
+  the single-instance one.
 
 ### 6.1 Slice history (epic #124, all closed)
 
@@ -312,8 +326,11 @@ keep the corpus **consumable** and to hold its own codec to it.
 
 See the worked example in
 [`examples/boot-agentic-channel.md`](./examples/boot-agentic-channel.md). In short,
-an agentic Urban app enables the capability alongside its pages and workers; the
-runtime serves the channel on the app's own bound port and each family attaches via
+there is no `@nanobpm/urban/agentic` capability barrel: an agentic Urban app mounts
+the channel itself. It snapshots the started app's `httpServer` (the runtime's
+native `node:http` `Server`), serves the channel as a WebSocket upgrade on that own
+port with `WebSocketChannelTransport` from `@nanobpm/agentic/channel`, constructs an
+`AgenticHub` over that transport with an authenticator, and attaches each family via
 `registerFamilyHandler` (§5.1).
 
 ## 9. Out of scope / open

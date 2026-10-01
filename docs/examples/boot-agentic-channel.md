@@ -92,8 +92,13 @@ const presence = attachPresenceFamily(hub, new PresenceStore(/* … */), {
 
 // `claim`/`release` are protocol-only families (no shipped module or ownership
 // store), so the composition root owns them too — attach via the SAME S1 seam,
-// backed by an app ownership store. `validatePayload` is the guard (it proves
-// `{ instance, jobKey }` are non-empty strings); hand the store the validated,
+// backed by an app ownership store. `validatePayload` proves SHAPE (`{ instance,
+// jobKey }` are non-empty strings) but a VALID frame is not yet an AUTHORISED
+// one: an authenticated peer must not claim/release ANOTHER connection's
+// instance. Prove OWNERSHIP before touching the store by resolving the frame's
+// EXPLICIT `instance` against the registry's `instancesForConnection(ctx.id)` —
+// §4.6 attribution's source of truth, never inferred 1:1 from the connection id
+// (one connection may multiplex many instances). Hand the store the validated,
 // still-`unknown` payload rather than destructuring an untrusted frame. Without
 // these handlers `FamilyRouter` silently drops the multiplexed emitter's
 // ownership frames and the §4.6 ownership window never opens.
@@ -108,12 +113,23 @@ const ownership: OwnershipStore = {
   claim: () => {},
   release: () => {},
 };
+// Narrow the `unknown` payload with a type GUARD (no `as` cast) and accept it
+// only if `owned` — the connection's registered instances — contains the named
+// instance. Returns `false` for a shape the validator already rejected, so it is
+// also safe as a standalone check.
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const ownsNamedInstance = (payload: unknown, owned: ReadonlySet<string>): boolean =>
+  isRecord(payload) && typeof payload.instance === "string" && owned.has(payload.instance);
 hub.registerFamilyHandler("claim", (frame, ctx) => {
   if (!validatePayload("claim", frame.payload).ok) return;
+  // Reject a claim for an instance this connection does not own (anti-spoofing).
+  if (!ownsNamedInstance(frame.payload, ctx.registry.instancesForConnection(ctx.id))) return;
   ownership.claim(ctx.identity, frame.payload);
 });
 hub.registerFamilyHandler("release", (frame, ctx) => {
   if (!validatePayload("release", frame.payload).ok) return;
+  if (!ownsNamedInstance(frame.payload, ctx.registry.instancesForConnection(ctx.id))) return;
   ownership.release(ctx.identity, frame.payload);
 });
 

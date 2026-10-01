@@ -97,9 +97,11 @@ function isFifoProbeMsg(value: unknown): value is FifoProbeMsg {
   return isRecord(verdict) && typeof verdict.isFile === "boolean";
 }
 function probeInChild(cwd: string, asset: string, timeoutMs: number): Promise<FifoProbeMsg | "timeout"> {
+  // `node --eval` places the first user argument at process.argv[1] (argv[0] is the node
+  // binary), so cwd is argv[1] and the asset path is argv[2] — NOT [2]/[3].
   const source = `import { createNodeHost } from ${JSON.stringify(new URL("./node.ts", import.meta.url).href)};
-const host = createNodeHost({ cwd: process.argv[2], log: () => {} });
-const verdict = await host.statFile(process.argv[3]);
+const host = createNodeHost({ cwd: process.argv[1], log: () => {} });
+const verdict = await host.statFile(process.argv[2]);
 process.send({ verdict });
 process.exit(0);`;
   return new Promise((resolve, reject) => {
@@ -134,9 +136,12 @@ test(
       await execFileAsync("mkfifo", [fifo]);
       const msg = await probeInChild(dir, "app.css", 2000);
       assert.notEqual(msg, "timeout", "statFile must not block on a FIFO");
+      // Require a POSITIVE non-regular verdict. Accepting `null` (the probe-error path) would
+      // let the test pass vacuously without ever probing the FIFO — e.g. if the child crashed
+      // or read the wrong argv index and statFile swallowed the resulting path error.
       assert.ok(
-        msg !== "timeout" && (msg.verdict === null || msg.verdict.isFile === false),
-        `a FIFO must not be reported as a regular file (got ${JSON.stringify(msg)})`,
+        msg !== "timeout" && msg.verdict !== null && msg.verdict.isFile === false,
+        `a FIFO must positively probe as a non-regular file (got ${JSON.stringify(msg)})`,
       );
     } finally {
       await rm(dir, { recursive: true, force: true });

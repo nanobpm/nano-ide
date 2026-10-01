@@ -130,11 +130,20 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
       }
     },
     async statFile(p) {
-      // Open for reading (no bytes consumed) and stat the handle, rather than a bare `stat`:
-      // this answers the same success condition as serving — a file a bare `stat` reports as a
-      // regular file can still be unreadable (ACLs / permissions), and the shell must not link
-      // an asset that then 404s. A missing OR unreadable path throws → `null`; a directory opens
-      // but stats as `isFile: false`.
+      // Classify with a bare `stat` FIRST, then only open a *regular file* to confirm it is
+      // readable. The order matters: a read-only open of a FIFO (named pipe) blocks indefinitely
+      // waiting for a writer, so opening before the type check would hang every shell request on
+      // a FIFO sitting at this conventional asset path. A plain `stat` never blocks, so it safely
+      // rejects non-regular entries (directory, FIFO, socket, device) up front. The subsequent
+      // open/stat still answers the real serving condition — a file `stat` reports as regular can
+      // be unreadable (ACLs / permissions), and the shell must not link an asset that then 404s.
+      // Missing path → `null`; non-regular → `isFile: false`; unreadable → `null`.
+      try {
+        const meta = await Deno.stat(abs(p));
+        if (!meta.isFile) return { isFile: false };
+      } catch {
+        return null;
+      }
       let file: DenoFsFile | undefined;
       try {
         file = await Deno.open(abs(p), { read: true });

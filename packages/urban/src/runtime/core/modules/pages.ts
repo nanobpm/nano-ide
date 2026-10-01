@@ -97,9 +97,10 @@ export interface PagesDeps {
    * on the HTML hot path (and read the file twice — once here, once when the browser fetches
    * it). Must answer the same question the `readAsset` fallback answers — "would serving this
    * path succeed?" — so a directory (or unreadable entry) at the path is a NO. `mountPages`
-   * wires this to `HostContext.statFile` (a metadata stat — never `HostContext.exists`, which
-   * is true for directories too, and a `pages/app.css/` DIRECTORY would link an asset the
-   * browser then 404s on). Optional; falls back to a read-based probe when absent.
+   * wires this to the optional `HostContext.statFile` (which opens the file for reading to
+   * confirm a readable regular file — never `HostContext.exists`, which is true for directories
+   * too, and a `pages/app.css/` DIRECTORY would link an asset the browser then 404s on).
+   * Optional; falls back to a read-based probe when absent.
    * Injectable for tests.
    */
   existsAsset?(path: string): Promise<boolean>;
@@ -696,17 +697,24 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
   };
   const sourceName = opts.sourceName ?? "app";
   const bindings = ctx.manifest.instanceTracking ?? [];
+  // Probe "would serving this app-owned asset succeed?" — a READABLE REGULAR FILE, not the
+  // broader `HostContext.exists` (which is true for directories too, and a `pages/app.css/`
+  // DIRECTORY would link an asset the browser then 404s on). `statFile` is an OPTIONAL public
+  // host capability (a custom host need not implement it), and it opens the file for reading so
+  // no bytes cross the seam on the per-request shell hot path. Only wire the optimized probe
+  // when the host provides it; otherwise `createPagesRoutes` falls back to a read-based probe
+  // that answers the identical question.
+  const statFile = ctx.host.statFile?.bind(ctx.host);
+  const existsAsset = statFile
+    ? async (p: string) => (await statFile(p))?.isFile === true
+    : undefined;
   const routes = createPagesRoutes(opts, {
     db: app.data.open(sourceName),
     engine: app.engine,
     cancel: (key) => cancelInstanceReconciling(app, bindings, key),
     readPage: (p) => ctx.host.readTextFile(p),
     readAsset: (p) => ctx.host.readTextFile(p),
-    // Probe "would serving this path succeed?" — a READABLE REGULAR FILE, not the broader
-    // `HostContext.exists` (which is true for directories too, and a `pages/app.css/`
-    // DIRECTORY would link an asset the browser then 404s on). `statFile` answers it with a
-    // metadata stat — no file bytes cross the seam on the per-request shell hot path.
-    existsAsset: async (p) => (await ctx.host.statFile(p))?.isFile === true,
+    existsAsset,
     listPages: async () => {
       const dir = opts.pagesDir ?? "pages";
       const names = await ctx.host.listDir(dir).catch(() => []);

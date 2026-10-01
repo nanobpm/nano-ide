@@ -102,13 +102,24 @@ export interface HostContext {
   /** True if the path exists (file or directory). */
   exists(path: string): Promise<boolean>;
   /**
-   * File metadata without reading the file's bytes, or `null` when the path does not exist.
-   * The pages surface uses this to probe the app-owned `app.css`/`app.js` convention on the
-   * per-request shell hot path: `exists` is too broad (true for a DIRECTORY, which the shell
-   * would then link and the browser would 404 on), and probing via `readTextFile` reads and
-   * allocates a potentially large file just to answer "is it there?".
+   * Probe a path as a READABLE REGULAR FILE without reading its bytes: `{ isFile }` when it
+   * can be opened for reading, or `null` when it is absent or unreadable. The pages surface
+   * uses this to probe the app-owned `app.css`/`app.js` convention on the per-request shell
+   * hot path: `exists` is too broad (true for a DIRECTORY, which the shell would then link and
+   * the browser would 404 on), and probing via `readTextFile` reads and allocates a
+   * potentially large file just to answer "is it there?". A bare metadata `stat` is not
+   * enough either — it can succeed for a regular file that `readTextFile` cannot open (ACLs /
+   * permissions), so the shell would link an asset that then 404s on serving. Implementations
+   * therefore OPEN the file for reading (consuming no bytes) and stat the open handle, so this
+   * answers the same success condition as serving.
+   *
+   * OPTIONAL: `HostContext` is a public, externally-implementable seam (re-exported from
+   * `runtime/index.ts`, documented in the README as a supported custom-host extension point),
+   * so a new required member would be source-breaking. The pages surface falls back to a
+   * read-based probe when a host does not provide it; the built-in adapters do, as an
+   * allocation-free optimization on the hot path.
    */
-  statFile(path: string): Promise<{ isFile: boolean } | null>;
+  statFile?(path: string): Promise<{ isFile: boolean } | null>;
   /** Open (creating if needed) a SQLite database at a filesystem path. */
   openSqlite(path: string): SqliteDb;
   /**

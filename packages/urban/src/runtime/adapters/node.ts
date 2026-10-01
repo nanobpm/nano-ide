@@ -1,7 +1,7 @@
 // Node adapter — implements HostContext against `node:*`. This is one of only two files
 // (with deno.ts) allowed to touch a concrete runtime.
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open, readFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { watch as fsWatch, type FSWatcher } from "node:fs";
 import { createServer } from "node:http";
@@ -155,11 +155,20 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
       }
     },
     async statFile(p) {
+      // Open for reading (no bytes consumed) and stat the handle, rather than a bare `stat`:
+      // this answers the same success condition as serving — a file a bare `stat` reports as a
+      // regular file can still be unreadable (ACLs / permissions), and the shell must not link
+      // an asset that then 404s. A missing OR unreadable path throws → `null`; a directory opens
+      // but stats as `isFile: false`.
+      let handle: Awaited<ReturnType<typeof open>> | undefined;
       try {
-        const s = await stat(abs(p));
+        handle = await open(abs(p), "r");
+        const s = await handle.stat();
         return { isFile: s.isFile() };
       } catch {
         return null;
+      } finally {
+        await handle?.close();
       }
     },
     openSqlite(path) {

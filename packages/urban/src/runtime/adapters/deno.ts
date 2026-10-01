@@ -45,12 +45,17 @@ interface DenoHttpServer {
 interface DenoFsWatcher extends AsyncIterable<{ kind: string; paths: string[] }> {
   close(): void;
 }
+interface DenoFsFile {
+  stat(): Promise<{ isFile: boolean }>;
+  close(): void;
+}
 interface DenoGlobal {
   env: { get(name: string): string | undefined };
   cwd(): string;
   readTextFile(path: string): Promise<string>;
   readDir(path: string): AsyncIterable<{ name: string; isFile: boolean; isDirectory: boolean }>;
   stat(path: string): Promise<{ isFile: boolean }>;
+  open(path: string, options?: { read?: boolean }): Promise<DenoFsFile>;
   watchFs(paths: string | string[], options?: { recursive?: boolean }): DenoFsWatcher;
   serve(
     opts: { port: number; hostname?: string; onListen?: (a: { port: number }) => void },
@@ -125,11 +130,20 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
       }
     },
     async statFile(p) {
+      // Open for reading (no bytes consumed) and stat the handle, rather than a bare `stat`:
+      // this answers the same success condition as serving — a file a bare `stat` reports as a
+      // regular file can still be unreadable (ACLs / permissions), and the shell must not link
+      // an asset that then 404s. A missing OR unreadable path throws → `null`; a directory opens
+      // but stats as `isFile: false`.
+      let file: DenoFsFile | undefined;
       try {
-        const s = await Deno.stat(abs(p));
+        file = await Deno.open(abs(p), { read: true });
+        const s = await file.stat();
         return { isFile: s.isFile };
       } catch {
         return null;
+      } finally {
+        file?.close();
       }
     },
     openSqlite(path) {

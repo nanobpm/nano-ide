@@ -59,7 +59,10 @@ export function createTestHost(opts: CreateTestHostOptions): TestHost {
     // as it does in production; omit it otherwise to match the base host's own capability.
     ...(base.listSubdirs ? { listSubdirs: (dir: string) => base.listSubdirs!(dir) } : {}),
     exists: (path) => base.exists(path),
-    statFile: (path) => base.statFile(path),
+    // Forward the optional `statFile` capability when the base host provides it, so the pages
+    // surface gets the same allocation-free app-asset probe it uses in production; omit it
+    // otherwise to match the base host's own capability (it then falls back to a read probe).
+    ...(base.statFile ? { statFile: (path: string) => base.statFile!(path) } : {}),
     openSqlite: (path) => base.openSqlite(path),
     importModule: (path) => base.importModule(path),
     // A socket-free HTTP server: keep the mounted router, hand back a handle whose stop()

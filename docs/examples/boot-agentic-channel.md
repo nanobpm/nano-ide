@@ -14,10 +14,12 @@ key: the shipped surface is the channel hub from `@nanobpm/agentic/channel`,
 mounted as a WebSocket upgrade on the started app's `httpServer`. Presence,
 relay, and blackboard ship self-contained family modules that attach to the hub
 via the `registerFamilyHandler(family, handler)` seam (S1), so the app never
-edits a central dispatch switch. The hub binds **one handler per family**: the
-`REGISTER→SERVE` handshake has no single turnkey module, so the composition root
-owns the `register` family and threads the two shipped halves — presence
-persistence and capability resolution — itself (shown below).
+edits a central dispatch switch. The hub binds **one handler per family**:
+presence's `attachPresenceFamily` owns the `register`/`heartbeat`/`deregister`
+families (and the TTL sweep), so the composition root supplies only the second
+half of `REGISTER→SERVE` — capability resolution — through that module's
+`onRegistered` hook, and owns the protocol-only `claim`/`release` families
+itself (all shown below).
 
 ## Host wiring
 
@@ -29,8 +31,9 @@ import {
   WebSocketChannelTransport,
   sharedSecretAuthenticator,
 } from "@nanobpm/agentic/channel";
-import { PresenceStore } from "@nanobpm/agentic/presence";
+import { attachPresenceFamily, PresenceStore } from "@nanobpm/agentic/presence";
 import { CORE_VOCAB, serveCapability, VocabResolver } from "@nanobpm/agentic/vocab";
+import { validatePayload } from "@nanobpm/agentic/protocol";
 import { registerRelayFamily } from "@nanobpm/agentic/relay";
 import { attachBlackboardFamily, BlackboardStore } from "@nanobpm/agentic/blackboard";
 
@@ -71,29 +74,43 @@ const hub = new AgenticHub({
 registerRelayFamily(hub); //                               S5
 attachBlackboardFamily(hub, new BlackboardStore(/* … */)); // S7
 
-// REGISTER→SERVE is an app-owned composition. The hub binds ONE handler per
-// family, and `@nanobpm/agentic` ships the two halves as composable pieces —
-// presence persistence (S2 `PresenceStore`) and capability resolution (S3
-// `serveCapability` over a `VocabResolver`) — rather than a single turnkey
-// `register` module. So the composition root owns the `register` family and
-// threads both: persist presence, mirror it onto the live registry, then
-// resolve the declared capability and emit SERVE on the control lane. (A
-// presence-ONLY deployment that never serves tokens can instead use the shipped
-// `attachPresenceFamily`, which also ages out stale rows.)
-const presence = new PresenceStore(/* … */);
+// REGISTER→SERVE. Presence ships `attachPresenceFamily`, which owns the whole
+// `register`/`heartbeat`/`deregister` lifecycle on the S1 seam: it VALIDATES and
+// narrows each untrusted frame payload (the decoded `Frame.payload` is `unknown`),
+// persists the row, mirrors the instance onto the live registry, calls
+// `removeInstance` on deregister, and schedules the presence-TTL sweep that ages
+// out rows a worker stops heartbeating. The composition root supplies only the
+// SECOND half of the handshake — capability resolution — through the module's
+// `onRegistered` hook, which fires after a validated register with the narrowed
+// instance + capability, so it never re-owns (or re-validates) the `register`
+// family:
 const resolver = new VocabResolver(CORE_VOCAB);
-presence.ensureSchema();
-hub.registerFamilyHandler("register", (frame, ctx) => {
-  const { instance, capability } = frame.payload; // validate against the S0 schema in real code
-  presence.register({ instance, connectionId: ctx.id, identity: ctx.identity, capability });
-  ctx.registry.addInstance(ctx.id, instance, capability);
-  serveCapability(resolver, ctx, instance, capability); // SERVE reply → control lane
+const presence = attachPresenceFamily(hub, new PresenceStore(/* … */), {
+  onRegistered: (ctx, instance, capability) =>
+    serveCapability(resolver, ctx, instance, capability), // SERVE reply → control lane
+}); //                                                         S2 + S3
+
+// `claim`/`release` are protocol-only families (no shipped module or ownership
+// store), so the composition root owns them too — attach via the SAME S1 seam,
+// backed by an app ownership store. `validatePayload` is the guard (it proves
+// `{ instance, jobKey }` are non-empty strings); hand the store the validated,
+// still-`unknown` payload rather than destructuring an untrusted frame. Without
+// these handlers `FamilyRouter` silently drops the multiplexed emitter's
+// ownership frames and the §4.6 ownership window never opens.
+const ownership = {/* app ownership store: claim(identity, payload) → bool, release(identity, payload) */};
+hub.registerFamilyHandler("claim", (frame, ctx) => {
+  if (!validatePayload("claim", frame.payload).ok) return;
+  ownership.claim?.(ctx.identity, frame.payload);
 });
-// Presence liveness/teardown delegate to the same store:
-hub.registerFamilyHandler("heartbeat", (frame, ctx) => presence.heartbeat(frame.payload.instance, ctx.identity));
-hub.registerFamilyHandler("deregister", (frame, ctx) => presence.deregister(frame.payload.instance, ctx.identity));
+hub.registerFamilyHandler("release", (frame, ctx) => {
+  if (!validatePayload("release", frame.payload).ok) return;
+  ownership.release?.(ctx.identity, frame.payload);
+});
 
 await transport.ready();
+
+// On shutdown, stop the presence sweep timer alongside the app:
+// presence.stop();
 ```
 
 Three QoS lanes are on by default: control/facts > interactive > bulk. A

@@ -193,11 +193,14 @@ registration table, never a hand-edited switch. Not every family ships a
 self-attaching module, though: **presence** (`register`/`heartbeat`/`deregister`),
 **relay**, and **blackboard** ship self-contained modules that attach themselves
 through this seam (`attachPresenceFamily`, `registerRelayFamily`,
-`attachBlackboardFamily`). `claim`/`release` and the `serve` reply are
-**protocol-only** surfaces — shipped as the emit client (`@nanobpm/agentic/emit`)
-and the `serveCapability` helper, *not* as a self-attaching hub module or an
-ownership store — so the composition root owns those `register`/`claim`/`release`
-handlers itself, composing the shipped stores and helpers (see
+`attachBlackboardFamily`). `attachPresenceFamily` owns the whole
+`register`/`heartbeat`/`deregister` lifecycle (validation, registry mirroring,
+and the TTL sweep); the `serve` reply and `claim`/`release` are **protocol-only**
+surfaces — shipped as the `serveCapability` helper and the emit client
+(`@nanobpm/agentic/emit`), *not* as self-attaching modules or an ownership store.
+So the composition root supplies the `serve` half of `REGISTER→SERVE` through
+presence's `onRegistered` hook, and owns the `claim`/`release` handlers itself,
+composing the shipped stores and helpers (see
 [`examples/boot-agentic-channel.md`](examples/boot-agentic-channel.md)).
 
 ### 5.2 Transcript store (`@nanobpm/agentic/transcript`)

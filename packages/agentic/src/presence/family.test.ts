@@ -259,6 +259,69 @@ test("a non-object register payload is rejected with a payload error and never t
   await hub.close();
 });
 
+test("onRegistered fires after a validated register with the narrowed instance + capability", async () => {
+  const transport = new FakeTransport();
+  const seen: Array<{ id: string; instance: string; capability: unknown }> = [];
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    // Fires only after presence is persisted + mirrored — the composition
+    // root's REGISTER→SERVE hook sees the validated, narrowed inputs.
+    onRegistered: (ctx, instance, capability) => {
+      // Presence is already recorded by the time the hook runs.
+      assert.equal(store.get(instance)?.connectionId, ctx.id);
+      seen.push({ id: ctx.id, instance, capability });
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { family: "anthropic", host: "mac-1" } }));
+  await tick();
+
+  assert.deepEqual(seen, [{ id: "c1", instance: "w-1", capability: { family: "anthropic", host: "mac-1" } }]);
+
+  await hub.close();
+});
+
+test("onRegistered does not fire for a rejected register; a hook throw is routed to onError", async () => {
+  const transport = new FakeTransport();
+  const errors: unknown[] = [];
+  let registered = 0;
+  const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    onError: (e) => errors.push(e),
+    onRegistered: () => {
+      registered += 1;
+      throw new Error("serve blew up");
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  // A malformed register never reaches the hook.
+  conn.receive(frame("register", { capability: { host: "h" } }, 1));
+  await tick();
+  assert.equal(registered, 0);
+  assert.equal(errors.length, 1);
+
+  // A valid register fires the hook; its throw is isolated to onError and
+  // leaves the already-recorded presence intact.
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 2));
+  await tick();
+  assert.equal(registered, 1);
+  assert.equal(errors.length, 2);
+  const hookErr = errors[1];
+  assert(hookErr instanceof Error);
+  assert.match(hookErr.message, /serve blew up/);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
+
+  await hub.close();
+});
+
 test("presence ages out on the TTL via the family sweep", async () => {
   const transport = new FakeTransport();
   const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });

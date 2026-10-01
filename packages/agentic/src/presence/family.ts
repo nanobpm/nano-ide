@@ -35,6 +35,17 @@ export interface PresenceFamilyOptions {
    * {@link AgenticHub} and surface via the hub's own error handling.
    */
   onError?: (err: unknown, connectionId?: string) => void;
+  /**
+   * Invoked after a validated `register` has persisted presence and mirrored the
+   * instance onto the connection registry. This is the composition root's hook
+   * for the second half of the REGISTER→SERVE handshake — thread
+   * `serveCapability` here to resolve the declared capability and emit the
+   * `serve` reply — without re-owning (and re-validating) the `register` family.
+   * Receives the connection plus the validated instance + enrolment capability.
+   * A throw is routed to {@link onError}, so a failed SERVE cannot unwind
+   * presence that is already recorded.
+   */
+  onRegistered?: (ctx: HubConnection, instance: string, capability: Capability) => void;
 }
 
 /** Handle to the attached presence family — drives/stops the presence sweep. */
@@ -138,6 +149,16 @@ export function attachPresenceFamily(
     // read. One connection may bind many instances (a supervisor multiplexes N
     // workers), so this ADDs the instance rather than overwriting a singular one.
     ctx.registry.addInstance(ctx.id, instance, capability);
+    // The composition root's REGISTER→SERVE hook (e.g. `serveCapability`). It
+    // runs only after a validated register has persisted; a throw is isolated to
+    // `onError` so a failed SERVE cannot unwind presence already recorded.
+    if (options.onRegistered !== undefined) {
+      try {
+        options.onRegistered(ctx, instance, capability);
+      } catch (err) {
+        onError(err, ctx.id);
+      }
+    }
   });
 
   hub.registerFamilyHandler("heartbeat", (frame: Frame, ctx: HubConnection) => {

@@ -180,18 +180,25 @@ conformance vector.
 
 ### 5.1 The handler-registration seam (`@nanobpm/agentic/channel`)
 
-Multiple families (presence, claim/release, relay, blackboard) attach a **new inbound
-message-family handler** to the single hub, in parallel. To stop them colliding on
-a central `frame → family` dispatch switch, the hub exposes an explicit, tested
-seam:
+Multiple families attach a **new inbound message-family handler** to the single hub,
+in parallel. To stop them colliding on a central `frame → family` dispatch switch,
+the hub exposes an explicit, tested seam:
 
 ```ts
 hub.registerFamilyHandler(family, handler);
 ```
 
-Each family is a self-contained module that attaches itself via this seam; the
-hub's routing is **derived** from the registration table, never a hand-edited
-switch. This is the canonical extension point every family module uses.
+The hub binds **one handler per family** and its routing is **derived** from the
+registration table, never a hand-edited switch. Not every family ships a
+self-attaching module, though: **presence** (`register`/`heartbeat`/`deregister`),
+**relay**, and **blackboard** ship self-contained modules that attach themselves
+through this seam (`attachPresenceFamily`, `registerRelayFamily`,
+`attachBlackboardFamily`). `claim`/`release` and the `serve` reply are
+**protocol-only** surfaces — shipped as the emit client (`@nanobpm/agentic/emit`)
+and the `serveCapability` helper, *not* as a self-attaching hub module or an
+ownership store — so the composition root owns those `register`/`claim`/`release`
+handlers itself, composing the shipped stores and helpers (see
+[`examples/boot-agentic-channel.md`](examples/boot-agentic-channel.md)).
 
 ### 5.2 Transcript store (`@nanobpm/agentic/transcript`)
 

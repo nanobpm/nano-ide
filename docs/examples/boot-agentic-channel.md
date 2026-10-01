@@ -86,8 +86,11 @@ attachBlackboardFamily(hub, new BlackboardStore(/* … */)); // S7
 // family:
 const resolver = new VocabResolver(CORE_VOCAB);
 const presence = attachPresenceFamily(hub, new PresenceStore(/* … */), {
-  onRegistered: (ctx, instance, capability) =>
-    serveCapability(resolver, ctx, instance, capability), // SERVE reply → control lane
+  // Block body, not an expression: `serveCapability` returns a `Resolution`,
+  // but `onRegistered` accepts only `void | Promise<void>` — discard it here.
+  onRegistered: (ctx, instance, capability) => {
+    serveCapability(resolver, ctx, instance, capability); // SERVE reply → control lane
+  },
 }); //                                                         S2 + S3
 
 // `claim`/`release` are protocol-only families (no shipped module or ownership

@@ -37,7 +37,7 @@ the work this way:
 
 | Concern | Owner | Granularity / durability |
 | --- | --- | --- |
-| Agent turns: role, content, tool calls, metrics, `loopIteration`, commit status | **Engine**: `AgentInstance` + AgentHistory turn log, keyed `agentInstanceKey` → `elementInstanceKey`; REST `POST /agent-instances/search`, `POST /agent-instances/{key}/history/search` | Committed **turns**. System of record. Replicated with the engine |
+| Agent turns: role, content, tool calls, metrics, `loopIteration`, commit status | **Engine**: `AgentInstance` + AgentHistory turn log, keyed `agentInstanceKey` → `elementInstanceKey`; REST `POST /v2/agent-instances/search`, `POST /v2/agent-instances/{key}/history/search` | Committed **turns**. System of record. Replicated with the engine |
 | Live bytes / token stream of an in-flight turn, terminal output | **Agentic channel**: `relay` family + transcript store, stream `(instance, jobKey)` | Sub-turn **chunks**. App-tier, retention-bounded |
 | Resume state of a harness session across workers | **Session log** (`@nanobpm/agentic/session`, ADR 0062), keyed `(processInstanceKey, elementId)` | Events + checkpoints. App-tier |
 | Presence, demand×supply, blackboard | **Agentic channel** | Live, app-tier |
@@ -198,9 +198,12 @@ Durable, retention-bounded chunk storage per stream, in the app DataLayer. Reade
 resume with `since(from)`, which returns `{entries, gap, nextOffset}`. `gap: true`
 means retention already dropped chunks the reader asked for, and consumers must
 show it rather than splice over it. The store also keeps an additive
-**turn-structured** view (`TranscriptTurn`: `loopIteration`, `role`, content
-blocks, `toolCalls`, `metrics`, #475) with the same shape as the engine's
-AgentHistory items. `deriveDisplay` / `createDisplayProjection` fold events into
+**turn-structured** view (`TranscriptTurn`: `sequence`, `loopIteration`, `role`,
+content blocks, `toolCalls`, `metrics`, `producedAt`, #475) that mirrors those
+turn-level fields of the engine's AgentHistory items. It is a parity *projection*,
+not a wire-compatible copy: it omits record identity/linkage, job attribution,
+commit status, and other engine-only AgentHistory fields, so consumers should not
+treat it as interchangeable with an AgentHistory item. `deriveDisplay` / `createDisplayProjection` fold events into
 ordered display blocks for UIs (#566). Stream metadata includes `byteLength` and
 `chunkCount` (#521).
 
@@ -277,10 +280,12 @@ npm run test:conformance
 ```
 
 It runs every workspace package's `test:conformance` script
-(`npm run test:conformance --workspaces --if-present`). Today that means
-`@nanobpm/agentic`'s `src/protocol/conformance/corpus.test.ts`. The `conformance` job in
+(`npm run test:conformance --workspaces --if-present`). Today that is three
+packages: `@nanobpm/agentic`'s `src/protocol/conformance/corpus.test.ts`,
+`@nanobpm/urban-agent-client`'s `src/conformance.test.ts`, and `@nanobpm/urban`'s
+`src/context/conformance/**/*.conformance.ts`. The `conformance` job in
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs it on every push /
-PR to `main`.
+PR to `main` or an `epic/**` branch.
 
 ### 7.2 In c8ctl (cross-repo)
 

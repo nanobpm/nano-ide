@@ -382,6 +382,50 @@ test("a rejected cross-realm (thenable) onRegistered promise is routed to onErro
   await hub.close();
 });
 
+test("a throwing onError handling an async hook rejection is contained by the hub, not left unhandled", async () => {
+  const transport = new FakeTransport();
+  const hubErrors: unknown[] = [];
+  // The hub-level error sink is the containment boundary: when the family's own
+  // `onError` throws while handling the hook rejection, the returned chain must
+  // route that second failure here rather than escaping as an unhandled
+  // rejection.
+  const hub = new AgenticHub({
+    transport,
+    authenticator: auth,
+    sweepIntervalMs: 0,
+    onError: (e) => hubErrors.push(e),
+  });
+  const store = new PresenceStore(openTestDb(), { clock: fakeClock(5000) });
+  attachPresenceFamily(hub, store, {
+    sweepIntervalMs: 0,
+    // The family's error sink itself throws — the exact failure mode the guard
+    // promises to contain.
+    onError: () => {
+      throw new Error("sink blew up");
+    },
+    onRegistered: async () => {
+      await Promise.resolve();
+      throw new Error("async serve blew up");
+    },
+  });
+
+  const conn = connect(transport, "c1", "peer-a");
+  await tick();
+  conn.receive(frame("register", { instance: "w-1", capability: { host: "mac-1" } }, 1));
+  await tick();
+  await tick();
+  // The sink's own throw is observed and contained by the hub rather than
+  // surfacing as an unhandled rejection, and presence already recorded stays
+  // intact.
+  assert.equal(hubErrors.length, 1);
+  const sinkErr = hubErrors[0];
+  assert(sinkErr instanceof Error);
+  assert.match(sinkErr.message, /sink blew up/);
+  assert.equal(store.get("w-1")?.connectionId, "c1");
+
+  await hub.close();
+});
+
 test("presence ages out on the TTL via the family sweep", async () => {
   const transport = new FakeTransport();
   const hub = new AgenticHub({ transport, authenticator: auth, sweepIntervalMs: 0 });

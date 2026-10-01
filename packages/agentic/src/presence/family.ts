@@ -169,7 +169,14 @@ export function attachPresenceFamily(
         // `Promise<void>` from a VM/plugin realm would slip through and surface
         // as an unhandled rejection. `Promise.resolve` adopts any thenable (and
         // no-ops for a synchronous `void`); the `try` still catches sync throws.
-        Promise.resolve(outcome).catch((err: unknown) => onError(err, ctx.id));
+        //
+        // RETURN the rejection-handling chain to the router: if `onError` itself
+        // throws while handling the hook rejection, the `.catch` produces a
+        // second rejected promise. Returning it lets `FamilyRouter.route` ->
+        // `AgenticHub` (`route(...).catch(onError)`) observe and contain that
+        // failure instead of leaving the exact unhandled rejection this guard
+        // promises to prevent.
+        return Promise.resolve(outcome).catch((err: unknown) => onError(err, ctx.id));
       } catch (err) {
         onError(err, ctx.id);
       }

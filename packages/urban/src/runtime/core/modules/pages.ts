@@ -644,9 +644,7 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
   const opts: PagesOptions = {
     pagesDir: typeof decl.pagesDir === "string" ? decl.pagesDir : undefined,
     homePage: typeof decl.homePage === "string" ? decl.homePage : undefined,
-    // `in`-narrowed so this reads the key whether or not the pinned @nanobpm/nano-app-schema already
-    // declares it (nanobpm/nano-bpm#1301); an undeclared/invalid value falls back to "auto".
-    gridLayout: parseGridLayout("gridLayout" in decl ? decl.gridLayout : undefined),
+    gridLayout: parseGridLayout(decl.gridLayout),
     rowLimit: typeof decl.rowLimit === "number" ? decl.rowLimit : undefined,
     sourceName: typeof decl.sourceName === "string" ? decl.sourceName : undefined,
     // Link the shell's "API docs" badge to the app's Swagger UI when it declares an `api`

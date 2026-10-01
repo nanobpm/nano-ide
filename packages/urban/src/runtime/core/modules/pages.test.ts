@@ -2212,8 +2212,24 @@ test("#578: the shell probes existence WITHOUT reading the assets when the host 
   const body = (await router(req("GET", "/"))).body ?? "";
   assert.match(body, /src="\.\/app\.js"/, "a present app.js is linked");
   assert.doesNotMatch(body, /href="\.\/app\.css"/, "an absent app.css is not");
-  assert.deepEqual(probes.sort(), ["pages/app.css", "pages/app.js"], "both assets are probed per shell request");
+  assert.deepEqual([...probes].sort(), ["pages/app.css", "pages/app.js"], "both assets are probed per shell request");
   assert.deepEqual(reads, [], "no asset bytes are read to build the shell");
+
+  // Per-request, NOT memoized (#578 no-restart): swap which asset exists and re-request. A shell
+  // that cached the first probe result would keep linking app.js (and omit app.css); a genuine
+  // per-request probe must reflect the removal/addition AND re-probe BOTH paths on the next load.
+  probes.length = 0;
+  delete files["pages/app.js"];
+  files["pages/app.css"] = "body{color:red}";
+  const body2 = (await router(req("GET", "/"))).body ?? "";
+  assert.match(body2, /href="\.\/app\.css"/, "a newly-added app.css is linked on the next request");
+  assert.doesNotMatch(body2, /src="\.\/app\.js"/, "a removed app.js is dropped on the next request");
+  assert.deepEqual(
+    [...probes].sort(),
+    ["pages/app.css", "pages/app.js"],
+    "both assets are re-probed on the second request (no memoization)",
+  );
+  assert.deepEqual(reads, [], "still no asset bytes are read to build the shell");
 });
 
 test("#578: a DIRECTORY at an asset path is not linked (the probe is file-only, like serving)", async () => {

@@ -85,22 +85,38 @@ const hasMkfifo = process.platform !== "win32";
 // the FIFO does not release it — the suite process would never exit, so the regression would not
 // actually fail fast. Run the probe in a killable CHILD process instead: the parent races the
 // child's verdict message against a timeout and SIGKILLs the child on timeout, so a blocking-open
-// regression fails this test in ~2s instead of wedging the runner.
-type FifoProbeMsg = { verdict: { isFile: boolean } | null };
+// regression fails this test fast (child startup + a ~2s probe budget) instead of wedging the runner.
+//
+// Two separate budgets, deliberately: the child first strip-types `node.ts` and its transitive
+// imports on a cold `--experimental-strip-types` start, which is HUNDREDS of ms and — crucially —
+// load-sensitive (observed >2s under the full parallel suite, #579). If a single timeout covered
+// both startup AND the `statFile` call, that cold-start cost would contaminate the probe budget and
+// the test would fail spuriously under load. So the child emits a `ready` message AFTER its imports
+// resolve; the parent only arms the (short) probe timeout once ready. Startup gets its own generous,
+// load-insensitive guard, and the probe budget then measures ONLY `statFile` — the blocking-open
+// regression (which manifests inside `statFile`, after `ready`) still fails fast.
+const PROBE_STARTUP_TIMEOUT_MS = 30_000;
+type FifoReadyMsg = { ready: true };
+type FifoVerdictMsg = { verdict: { isFile: boolean } | null };
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-function isFifoProbeMsg(value: unknown): value is FifoProbeMsg {
-  if (!isRecord(value)) return false;
+function isFifoReadyMsg(value: unknown): value is FifoReadyMsg {
+  return isRecord(value) && value.ready === true;
+}
+function isFifoVerdictMsg(value: unknown): value is FifoVerdictMsg {
+  if (!isRecord(value) || !("verdict" in value)) return false;
   const verdict = value.verdict;
   if (verdict === null) return true;
   return isRecord(verdict) && typeof verdict.isFile === "boolean";
 }
-function probeInChild(cwd: string, asset: string, timeoutMs: number): Promise<FifoProbeMsg | "timeout"> {
+function probeInChild(cwd: string, asset: string, probeTimeoutMs: number): Promise<FifoVerdictMsg | "timeout"> {
   // `node --eval` places the first user argument at process.argv[1] (argv[0] is the node
-  // binary), so cwd is argv[1] and the asset path is argv[2] — NOT [2]/[3].
+  // binary), so cwd is argv[1] and the asset path is argv[2] — NOT [2]/[3]. `ready` is sent once
+  // the host module is imported and built, BEFORE the (possibly blocking) `statFile` probe.
   const source = `import { createNodeHost } from ${JSON.stringify(new URL("./node.ts", import.meta.url).href)};
 const host = createNodeHost({ cwd: process.argv[1], log: () => {} });
+process.send({ ready: true });
 const verdict = await host.statFile(process.argv[2]);
 process.send({ verdict });
 process.exit(0);`;
@@ -110,18 +126,35 @@ process.exit(0);`;
       ["--experimental-strip-types", "--no-warnings", "--eval", source, cwd, asset],
       { stdio: ["ignore", "ignore", "inherit", "ipc"] },
     );
-    const timer = setTimeout(() => {
+    let probeTimer: ReturnType<typeof setTimeout> | undefined;
+    // Generous, load-insensitive guard: the child must finish importing and emit `ready` within
+    // this. A startup slower than 30s means a genuine hang in module load, not the FIFO probe.
+    const startupTimer = setTimeout(() => {
       child.kill("SIGKILL");
-      resolve("timeout");
-    }, timeoutMs);
-    child.once("message", (msg: unknown) => {
-      clearTimeout(timer);
+      reject(new Error("probe child did not become ready (startup) in time"));
+    }, PROBE_STARTUP_TIMEOUT_MS);
+    const clearTimers = () => {
+      clearTimeout(startupTimer);
+      if (probeTimer !== undefined) clearTimeout(probeTimer);
+    };
+    child.on("message", (msg: unknown) => {
+      if (isFifoReadyMsg(msg)) {
+        // Startup done — now time ONLY the statFile call. A blocking-open regression blocks here
+        // and this short budget SIGKILLs the child, failing the test fast.
+        clearTimeout(startupTimer);
+        probeTimer = setTimeout(() => {
+          child.kill("SIGKILL");
+          resolve("timeout");
+        }, probeTimeoutMs);
+        return;
+      }
+      clearTimers();
       child.disconnect();
-      if (isFifoProbeMsg(msg)) resolve(msg);
+      if (isFifoVerdictMsg(msg)) resolve(msg);
       else reject(new Error(`unexpected probe message: ${JSON.stringify(msg)}`));
     });
     child.once("error", (err) => {
-      clearTimeout(timer);
+      clearTimers();
       reject(err);
     });
   });

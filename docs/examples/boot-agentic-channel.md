@@ -57,9 +57,9 @@ const transport = new WebSocketChannelTransport({ server });
 // Auth for the channel: a shared-secret identity token + a required capability
 // credential — the same pattern nano-workforce's blackboard hook uses (S1). Swap
 // in a real ADR 0028 verifier by passing your own `Authenticator` to the hub.
-// Fail CLOSED on a missing secret: the `!` only silences TypeScript, so an unset
-// env var would otherwise reach the authenticator as an empty secret that any
-// `?token=` connection matches. Validate it before constructing the hub.
+// Fail CLOSED on a missing secret: an unset env var would otherwise reach the
+// authenticator as an empty secret that any `?token=` connection matches.
+// Validate it at runtime before constructing the hub.
 const secret = process.env.AGENTIC_CHANNEL_SECRET;
 if (!secret) {
   throw new Error("AGENTIC_CHANNEL_SECRET must be set — refusing an empty channel secret");

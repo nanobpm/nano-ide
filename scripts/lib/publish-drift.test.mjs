@@ -450,3 +450,56 @@ test("refetch receives a bounded budget: remaining time mid-window, a defined al
 		assert.ok(Number.isFinite(b.budgetMs), `budgetMs must always be finite, got ${b.budgetMs}`);
 	}
 });
+
+// A NON-final `setTimeout` may wake LATE (event-loop stall, a busy CI runner): the loop then
+// finds itself past the deadline with no final poll intended. It must BREAK there — not start
+// another refetch round. Otherwise the recomputed remaining budget is 0, which the production
+// caller hands to `execFile(..., { timeout: 0 })` — and a 0 timeout DISABLES the subprocess
+// bound, so the supposedly bounded guard can hang indefinitely after the settle deadline.
+test("an overslept non-final sleep breaks the loop instead of starting an unbounded refetch", async () => {
+	let t = 0;
+	const now = () => t;
+	const budgets = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 10_000,
+		now,
+		refetch: async (_name, opts) => {
+			budgets.push(opts?.budgetMs);
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			// The first (non-final) 5s sleep wakes 20s late — the deadline (10s) is crossed
+			// inside an ORDINARY sleep, with no final poll scheduled for it.
+			t += ms + 20_000;
+		},
+	});
+	assert.equal(r.ok, false);
+	assert.equal(budgets.length, 0, `no refetch may start after an overslept non-final sleep, got budgets ${JSON.stringify(budgets)}`);
+});
+
+// The oversleep guard must not swallow the INTENTIONAL final poll: when the clamped backoff
+// sleep is meant to run to the deadline (finalPoll), waking late still takes that one closing
+// poll — a version can have propagated during the final gap, and the poll is bounded by the
+// final-poll allowance, never by a 0/unbounded budget.
+test("an overslept FINAL sleep still takes the bounded deadline poll", async () => {
+	let t = 0;
+	const now = () => t;
+	const budgets = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 5_000,
+		now,
+		refetch: async (_name, opts) => {
+			budgets.push({ at: t, budgetMs: opts?.budgetMs });
+			return "0.95.0"; // propagated during the final gap
+		},
+		sleep: async (ms) => {
+			// The clamped final wait IS the whole 5s budget (finalPoll); it wakes 20s late.
+			t += ms + 20_000;
+		},
+	});
+	assert.equal(r.ok, true, "the final deadline poll still runs when its sleep oversleeps");
+	assert.equal(budgets.length, 1);
+	assert.ok(budgets[0].budgetMs > 0 && budgets[0].budgetMs <= 30_000, `final-poll allowance must stay bounded, got ${budgets[0].budgetMs}`);
+});

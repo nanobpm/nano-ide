@@ -157,6 +157,10 @@ export function findPublishDrift(packages, graceHours = 0) {
  * window cannot stretch well past five minutes just because the registry is slow, no matter
  * how many packages lag. (`budgetMs` only bounds the subprocess the caller spawns — the
  * deadline is still re-checked as soon as the poll's refetches settle, before the next poll.)
+ * The deadline is also re-checked right AFTER each non-final sleep: a `setTimeout` may wake
+ * late, and starting a refetch then would hand the caller a 0 budget — which a subprocess
+ * `timeout: 0` reads as UNBOUNDED. An ordinary sleep that crosses the deadline ends the
+ * settle rather than starting an unbounded refetch.
  *
  * The one exception is the FINAL poll: when the clamped backoff would consume the rest of the
  * budget, the sleep runs to the deadline and one last poll is taken AT the deadline. Without it a
@@ -199,6 +203,15 @@ export async function settlePublishDrift(packages, opts) {
 		const finalPoll = wait >= remaining;
 		await opts.sleep(wait);
 		delay *= 2;
+		// Re-check the deadline AFTER sleeping: a non-final `setTimeout` may wake LATE
+		// (event-loop stall, a busy CI runner), and then the remaining budget recomputed
+		// below is 0 — which the caller hands to `execFile(..., { timeout: 0 })`, and a 0
+		// timeout DISABLES the subprocess bound, so the supposedly bounded guard could hang
+		// indefinitely past the deadline. An ordinary sleep that crossed the deadline ends
+		// the settle instead of starting an unbounded refetch. The FINAL poll is exempt: it
+		// is SUPPOSED to run at the deadline (a version can propagate during the last
+		// partial-backoff gap), and it gets the bounded final allowance, never 0.
+		if (!finalPoll && now() >= deadline) break;
 		const lagging = new Set(result.drifted.map((d) => d.name));
 		// Refetch every lagging package CONCURRENTLY. Serial refetches would let one slow
 		// `npm view` consume the remaining budget and then either start the later requests

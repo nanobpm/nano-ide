@@ -341,3 +341,34 @@ test("a version propagating during the final partial-backoff gap is caught by th
 	// The deadline poll happens at t=300000 (the clamped final wait lands exactly on the deadline).
 	assert.equal(pollTimes[pollTimes.length - 1], 300_000);
 });
+
+// The FINAL poll's deadline exemption covers at most ONE in-flight refetch. With several lagging
+// packages, exempting the whole closing round would reintroduce the multi-timeout overrun: a 5s
+// budget with three lagging packages whose `npm view` each take 120s would run for 365s. Only the
+// first lagging package may be polled at the deadline; the re-check then short-circuits the rest.
+test("the final deadline poll exempts at most one refetch when several packages lag", async () => {
+	let t = 0;
+	const now = () => t;
+	const polled = [];
+	const pkgs = [
+		{ name: "@x/lag1", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag2", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag3", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+	];
+	const r = await settlePublishDrift(pkgs, {
+		graceHours: 0,
+		settleMs: 5_000,
+		now,
+		refetch: async (name) => {
+			polled.push(name);
+			t += 120_000; // the deadline refetch alone overruns the whole window
+			return null;
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	// The single exempt deadline refetch runs; the deadline re-check then stops lag2 and lag3.
+	assert.deepEqual(polled, ["@x/lag1"]);
+});

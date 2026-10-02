@@ -16,6 +16,7 @@
 // can never disagree about which versions are missing from npm (no drift
 // surface — AGENTS.md §"Derivation Over Duplication").
 
+import { performance } from "node:perf_hooks";
 import { relative } from "node:path";
 
 /**
@@ -147,18 +148,21 @@ export function findPublishDrift(packages, graceHours = 0) {
  * fails — just after the window. `settleMs` 0 is the original single-shot check.
  *
  * The budget is a wall-clock DEADLINE, not a sum of requested sleeps: it is measured on an
- * injectable monotonic clock (`now`, default `Date.now`), so time spent inside `sleep` and inside
- * the serial `refetch` calls (slow `npm view` responses) counts against `settleMs`. Once the
- * deadline has passed no further poll is scheduled, and within a poll no further lagging refetch is
- * started once the deadline passes — a configured 300s window cannot stretch well past five minutes
- * just because the registry is slow, even with many lagging packages. (A single `refetch` that
- * itself hangs is still bounded only by that call's own timeout — the deadline is re-checked as soon
- * as it returns, before the next refetch.)
+ * injectable monotonic clock (`now`, default `performance.now` — the system clock is NOT
+ * monotonic, so a host clock correction must not move the deadline), so time spent inside
+ * `sleep` and inside the serial `refetch` calls (slow `npm view` responses) counts against
+ * `settleMs`. Once the deadline has passed no further poll is scheduled, and within a poll no
+ * further lagging refetch is started once the deadline passes — a configured 300s window cannot
+ * stretch well past five minutes just because the registry is slow, even with many lagging
+ * packages. (A single `refetch` that itself hangs is still bounded only by that call's own
+ * timeout — the deadline is re-checked as soon as it returns, before the next refetch.)
  *
  * The one exception is the FINAL poll: when the clamped backoff would consume the rest of the
  * budget, the sleep runs to the deadline and one last poll is taken AT the deadline. Without it a
  * version that propagates during that last partial-backoff gap would be reported as drift even
- * though it landed inside the advertised settle window.
+ * though it landed inside the advertised settle window. The exemption covers at most ONE
+ * in-flight refetch: the first lagging package is polled at the deadline, then the deadline
+ * re-check applies again, so N lagging packages cannot overrun the window by N npm timeouts.
  *
  * @param {PackageState[]} packages
  * @param {{ graceHours?: number, settleMs: number, refetch: (name: string) => Promise<string | null>,
@@ -167,7 +171,10 @@ export function findPublishDrift(packages, graceHours = 0) {
  */
 export async function settlePublishDrift(packages, opts) {
 	const graceHours = opts.graceHours ?? 0;
-	const now = opts.now ?? Date.now;
+	// Default to the MONOTONIC clock: `Date.now` follows host clock corrections, which can move
+	// the deadline backward (stretching the settle) or forward (ending it early). Tests inject
+	// `opts.now` to drive the deadline deterministically.
+	const now = opts.now ?? performance.now.bind(performance);
 	const states = packages.map((p) => ({ ...p }));
 	let result = findPublishDrift(states, graceHours);
 	const deadline = now() + opts.settleMs;
@@ -185,14 +192,20 @@ export async function settlePublishDrift(packages, opts) {
 		await opts.sleep(wait);
 		delay *= 2;
 		const lagging = new Set(result.drifted.map((d) => d.name));
+		// The FINAL poll's deadline exemption covers at most ONE in-flight refetch: the first
+		// lagging package is polled at the deadline, then the per-refetch deadline re-check
+		// applies again. Exempting the whole round would let N lagging packages overrun the
+		// window by N slow `npm view` calls — the multi-timeout overrun the re-check prevents.
+		let finalRefetchesLeft = finalPoll ? 1 : 0;
 		for (const s of states) {
 			if (!lagging.has(s.name)) continue;
 			// Re-check the deadline before EACH serial refetch: one lagging package's slow
 			// `npm view` can consume the remaining budget, and we must not then start requests
 			// for every later lagging package. Only the in-flight call is allowed to overrun.
-			// The FINAL poll is exempt from that re-check: it is the deadline poll that closes
-			// the window, so it runs even though `now()` has just reached the deadline.
-			if (!finalPoll && now() - deadline >= 0) break;
+			// The FINAL poll's single exempt refetch runs even though `now()` has just reached
+			// the deadline — it is the deadline poll that closes the window.
+			if (finalRefetchesLeft > 0) finalRefetchesLeft--;
+			else if (now() - deadline >= 0) break;
 			s.npmVersion = await opts.refetch(s.name);
 		}
 		result = findPublishDrift(states, graceHours);

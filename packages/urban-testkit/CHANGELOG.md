@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.5.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.4.1...@nanobpm/urban-testkit-1.5.0) (2026-10-02)
+
+
+### Features
+
+* **urban:** app-owned stylesheet + script by convention (pages/app.css, pages/app.js) ([#579](https://github.com/nanobpm/nano-ide/issues/579)) ([a4702c8](https://github.com/nanobpm/nano-ide/commit/a4702c892b2052633ac972e4fe383ad0963739f1))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.93.0 to >=0.95.0
+
 ## [1.4.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.4.0...@nanobpm/urban-testkit-1.4.1) (2026-09-14)
 
 

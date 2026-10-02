@@ -289,7 +289,7 @@ test("a refetch that returns after the deadline stops the loop immediately", asy
 // `npm view` for one lagging package must not push the NEXT package's refetch past the
 // deadline. Starting the round's refetches together bounds it by the slowest single call,
 // so N lagging packages cannot overrun the window by N npm timeouts.
-test("a lagging refetch that crosses the deadline stops the rest of that round's refetches", async () => {
+test("a lagging refetch that crosses the deadline stops subsequent polling rounds", async () => {
 	let t = 0;
 	const now = () => t;
 	const polled = [];

@@ -315,3 +315,29 @@ test("a lagging refetch that crosses the deadline stops the rest of that round's
 	// Only the first lagging package is refetched; the deadline check short-circuits the rest.
 	assert.deepEqual(polled, ["@x/lag1"]);
 });
+
+// The FINAL partial-backoff interval must still end in a poll AT the deadline: a version that
+// propagates during that last gap (e.g. visible at 270s of a 300s window) is inside the advertised
+// settle window and must NOT be reported as drift. Without the deadline poll the loop sleeps the
+// whole final gap and gives up at the deadline having last polled at ~255s.
+test("a version propagating during the final partial-backoff gap is caught by the deadline poll", async () => {
+	let t = 0;
+	const now = () => t;
+	const pollTimes = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 300_000,
+		now,
+		refetch: async () => {
+			pollTimes.push(t);
+			// Propagates at 270s — after the last mid-window poll (~255s) but before the 300s deadline.
+			return t >= 270_000 ? "0.95.0" : "0.94.2";
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, true, "propagation at 270s is within the 300s window and must be detected");
+	// The deadline poll happens at t=300000 (the clamped final wait lands exactly on the deadline).
+	assert.equal(pollTimes[pollTimes.length - 1], 300_000);
+});

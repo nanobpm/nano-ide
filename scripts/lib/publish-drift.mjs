@@ -155,6 +155,11 @@ export function findPublishDrift(packages, graceHours = 0) {
  * itself hangs is still bounded only by that call's own timeout — the deadline is re-checked as soon
  * as it returns, before the next refetch.)
  *
+ * The one exception is the FINAL poll: when the clamped backoff would consume the rest of the
+ * budget, the sleep runs to the deadline and one last poll is taken AT the deadline. Without it a
+ * version that propagates during that last partial-backoff gap would be reported as drift even
+ * though it landed inside the advertised settle window.
+ *
  * @param {PackageState[]} packages
  * @param {{ graceHours?: number, settleMs: number, refetch: (name: string) => Promise<string | null>,
  *           sleep: (ms: number) => Promise<void>, now?: () => number }} opts
@@ -170,7 +175,13 @@ export async function settlePublishDrift(packages, opts) {
 	while (!result.ok) {
 		const remaining = deadline - now();
 		if (remaining <= 0) break;
+		// Clamp the sleep to the remaining budget. When the clamped wait consumes the WHOLE
+		// remaining budget (`wait === remaining`), this sleep runs to the deadline and the poll
+		// that follows is the FINAL one: a version can propagate during that last partial-backoff
+		// gap, so skipping the deadline poll would falsely report it as drift even though it
+		// landed inside the advertised settle window.
 		const wait = Math.min(delay, 60_000, remaining);
+		const finalPoll = wait >= remaining;
 		await opts.sleep(wait);
 		delay *= 2;
 		const lagging = new Set(result.drifted.map((d) => d.name));
@@ -179,7 +190,9 @@ export async function settlePublishDrift(packages, opts) {
 			// Re-check the deadline before EACH serial refetch: one lagging package's slow
 			// `npm view` can consume the remaining budget, and we must not then start requests
 			// for every later lagging package. Only the in-flight call is allowed to overrun.
-			if (now() - deadline >= 0) break;
+			// The FINAL poll is exempt from that re-check: it is the deadline poll that closes
+			// the window, so it runs even though `now()` has just reached the deadline.
+			if (!finalPoll && now() - deadline >= 0) break;
 			s.npmVersion = await opts.refetch(s.name);
 		}
 		result = findPublishDrift(states, graceHours);

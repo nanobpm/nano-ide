@@ -20,7 +20,7 @@
 // scripts/lib/publish-drift.mjs — one source of truth, no duplicated version diff.
 //
 // Usage:
-//   node scripts/check-publish-drift.mjs [--grace-hours N] [--open-issue]
+//   node scripts/check-publish-drift.mjs [--grace-hours N] [--settle-seconds N] [--open-issue]
 //
 //   --grace-hours N  Tolerate a version that landed on `main` < N hours ago (an
 //                    in-flight release). Default 6. Use 0 for the terminal

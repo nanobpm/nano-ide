@@ -181,17 +181,20 @@ test("#582: a version that becomes visible on npm within the settle window is NO
 });
 
 test("#582: a version that never reaches npm still fails once the window is spent", async () => {
+	let t = 0;
 	let elapsed = 0;
 	let polls = 0;
 	const r = await settlePublishDrift(fresh("0.94.2"), {
 		graceHours: 0,
 		settleMs: 60_000,
+		now: () => t,
 		refetch: async () => {
 			polls++;
 			return "0.94.2";
 		},
 		sleep: async (ms) => {
 			elapsed += ms;
+			t += ms;
 		},
 	});
 	assert.equal(r.ok, false);
@@ -230,4 +233,54 @@ test("#582: only drifted packages are re-polled", async () => {
 	});
 	assert.equal(r.ok, true);
 	assert.deepEqual(polled, ["@x/lag"]);
+});
+
+// The settle budget is a wall-clock DEADLINE on an injectable clock, not a sum of requested
+// sleeps: time spent inside slow `refetch` calls (and the sleeps themselves) counts against
+// `settleMs`, and no new poll is scheduled once the deadline has passed. Otherwise a 300s
+// window over slow `npm view` responses stretches well past five minutes.
+test("settle budget counts wall-clock refetch time, not just requested sleeps", async () => {
+	let t = 0;
+	const now = () => t;
+	let polls = 0;
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 60_000,
+		now,
+		refetch: async () => {
+			polls++;
+			t += 25_000; // a slow `npm view` burns 25s of the window per poll
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	// 5s sleep + 25s refetch + 10s sleep + 25s refetch = 60s: the deadline is then spent, so
+	// the loop must stop instead of scheduling the next (20s) poll the old sum-of-sleeps
+	// budget (which had only "spent" 15s) would have allowed.
+	assert.equal(polls, 2);
+	assert.ok(t >= 60_000);
+});
+
+test("a refetch that returns after the deadline stops the loop immediately", async () => {
+	let t = 0;
+	const now = () => t;
+	let polls = 0;
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 10_000,
+		now,
+		refetch: async () => {
+			polls++;
+			t += 120_000; // the very first refetch alone overruns the whole window
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	assert.equal(polls, 1);
 });

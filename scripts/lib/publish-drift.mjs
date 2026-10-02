@@ -146,21 +146,31 @@ export function findPublishDrift(packages, graceHours = 0) {
  * they catch up or the `settleMs` budget is spent. A version that genuinely never published still
  * fails — just after the window. `settleMs` 0 is the original single-shot check.
  *
+ * The budget is a wall-clock DEADLINE, not a sum of requested sleeps: it is measured on an
+ * injectable monotonic clock (`now`, default `Date.now`), so time spent inside `sleep` and inside
+ * the serial `refetch` calls (slow `npm view` responses) counts against `settleMs`. Once the
+ * deadline has passed no further poll is scheduled — a configured 300s window cannot stretch well
+ * past five minutes just because the registry is slow. (A single `refetch` that itself hangs is
+ * still bounded only by that call's own timeout — the deadline is re-checked as soon as it
+ * returns.)
+ *
  * @param {PackageState[]} packages
  * @param {{ graceHours?: number, settleMs: number, refetch: (name: string) => Promise<string | null>,
- *           sleep: (ms: number) => Promise<void> }} opts
+ *           sleep: (ms: number) => Promise<void>, now?: () => number }} opts
  * @returns {Promise<{ ok: boolean, drifted: DriftEntry[] }>}
  */
 export async function settlePublishDrift(packages, opts) {
 	const graceHours = opts.graceHours ?? 0;
+	const now = opts.now ?? Date.now;
 	const states = packages.map((p) => ({ ...p }));
 	let result = findPublishDrift(states, graceHours);
-	let spent = 0;
+	const deadline = now() + opts.settleMs;
 	let delay = 5_000;
-	while (!result.ok && spent < opts.settleMs) {
-		const wait = Math.min(delay, 60_000, opts.settleMs - spent);
+	while (!result.ok) {
+		const remaining = deadline - now();
+		if (remaining <= 0) break;
+		const wait = Math.min(delay, 60_000, remaining);
 		await opts.sleep(wait);
-		spent += wait;
 		delay *= 2;
 		const lagging = new Set(result.drifted.map((d) => d.name));
 		for (const s of states) {

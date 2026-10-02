@@ -284,3 +284,34 @@ test("a refetch that returns after the deadline stops the loop immediately", asy
 	assert.equal(r.ok, false);
 	assert.equal(polls, 1);
 });
+
+// The deadline is re-checked before EACH serial refetch within a poll, not just between polls:
+// if the first lagging package's slow `npm view` consumes the remaining budget, the later lagging
+// packages in the same round must NOT be refetched. Otherwise N lagging packages could overrun the
+// window by N npm timeouts despite the documented single-call exception.
+test("a lagging refetch that crosses the deadline stops the rest of that round's refetches", async () => {
+	let t = 0;
+	const now = () => t;
+	const polled = [];
+	const pkgs = [
+		{ name: "@x/lag1", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag2", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag3", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+	];
+	const r = await settlePublishDrift(pkgs, {
+		graceHours: 0,
+		settleMs: 30_000,
+		now,
+		refetch: async (name) => {
+			polled.push(name);
+			t += 120_000; // the first lagging refetch alone overruns the whole window
+			return null;
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	// Only the first lagging package is refetched; the deadline check short-circuits the rest.
+	assert.deepEqual(polled, ["@x/lag1"]);
+});

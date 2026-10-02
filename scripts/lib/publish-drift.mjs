@@ -149,10 +149,11 @@ export function findPublishDrift(packages, graceHours = 0) {
  * The budget is a wall-clock DEADLINE, not a sum of requested sleeps: it is measured on an
  * injectable monotonic clock (`now`, default `Date.now`), so time spent inside `sleep` and inside
  * the serial `refetch` calls (slow `npm view` responses) counts against `settleMs`. Once the
- * deadline has passed no further poll is scheduled — a configured 300s window cannot stretch well
- * past five minutes just because the registry is slow. (A single `refetch` that itself hangs is
- * still bounded only by that call's own timeout — the deadline is re-checked as soon as it
- * returns.)
+ * deadline has passed no further poll is scheduled, and within a poll no further lagging refetch is
+ * started once the deadline passes — a configured 300s window cannot stretch well past five minutes
+ * just because the registry is slow, even with many lagging packages. (A single `refetch` that
+ * itself hangs is still bounded only by that call's own timeout — the deadline is re-checked as soon
+ * as it returns, before the next refetch.)
  *
  * @param {PackageState[]} packages
  * @param {{ graceHours?: number, settleMs: number, refetch: (name: string) => Promise<string | null>,
@@ -174,7 +175,12 @@ export async function settlePublishDrift(packages, opts) {
 		delay *= 2;
 		const lagging = new Set(result.drifted.map((d) => d.name));
 		for (const s of states) {
-			if (lagging.has(s.name)) s.npmVersion = await opts.refetch(s.name);
+			if (!lagging.has(s.name)) continue;
+			// Re-check the deadline before EACH serial refetch: one lagging package's slow
+			// `npm view` can consume the remaining budget, and we must not then start requests
+			// for every later lagging package. Only the in-flight call is allowed to overrun.
+			if (now() - deadline >= 0) break;
+			s.npmVersion = await opts.refetch(s.name);
 		}
 		result = findPublishDrift(states, graceHours);
 	}

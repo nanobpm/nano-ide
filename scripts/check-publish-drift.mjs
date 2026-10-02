@@ -31,14 +31,20 @@
 //   --open-issue     On drift, open or update a tracking issue via `gh` (needs
 //                    GH_TOKEN). Always still prints ::error:: and exits non-zero.
 
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { promisify } from "node:util";
 import { isNpmNotPublishedError, settlePublishDrift, versionPathspec } from "./lib/publish-drift.mjs";
+
+const execFileAsync = promisify(execFile);
 
 // Upper bound for a single `npm view` subprocess. Without it a hung registry/process would
 // block the guard indefinitely — the settle loop's wall-clock deadline would then not actually
 // bound the release assertion. Generous enough for a cold npm on a slow runner; the settle
-// re-polls tighten it further to the remaining settle budget (see `refetch` below).
+// re-polls tighten it further to the remaining settle budget (see `refetch` below) — but NEVER
+// above this cap: the settle budget is the whole remaining window (~295s of a 300s window on the
+// first retry), and handing it to one subprocess raw would let a single hung query spend almost
+// the entire window instead of being killed promptly and retried.
 const NPM_VIEW_TIMEOUT_MS = 120_000;
 
 /** Parse the small flag set this script accepts. */
@@ -104,20 +110,29 @@ function workspaceDirs() {
  *  wall-clock deadline would not actually bound the release assertion. During
  *  settle re-polling the caller hands us the remaining settle budget
  *  (`budgetMs`, from the settle loop); a subprocess killed by that bound throws
- *  ETIMEDOUT, which is a transient failure (NOT an E404) and fails loudly. */
-function npmVersionOf(name, { timeoutMs } = {}) {
+ *  ETIMEDOUT, which is a transient failure (NOT an E404) and fails loudly.
+ *
+ *  Genuinely ASYNCHRONOUS (promise-based `execFile`, not `execFileSync`): the
+ *  settle loop refetches every lagging package with `Promise.all`, and a
+ *  synchronous spawn would block the event loop until each subprocess exits —
+ *  starting N "concurrent" queries strictly serially and stretching a round to
+ *  N × timeout. Spawning async starts every subprocess of the round up front,
+ *  so the round is bounded by the SLOWEST single query, not the SUM. */
+async function npmVersionOf(name, { timeoutMs } = {}) {
+	const bound = timeoutMs ?? NPM_VIEW_TIMEOUT_MS;
 	try {
-		return execFileSync("npm", ["view", name, "version"], {
+		const { stdout } = await execFileAsync("npm", ["view", name, "version"], {
 			encoding: "utf8",
-			stdio: ["ignore", "pipe", "pipe"],
-			timeout: timeoutMs ?? NPM_VIEW_TIMEOUT_MS,
-		}).trim();
+			timeout: bound,
+			killSignal: "SIGTERM",
+		});
+		return stdout.trim();
 	} catch (err) {
 		const stderr = String(err?.stderr ?? "");
 		if (isNpmNotPublishedError(stderr)) return null;
-		const timedOut = err?.code === "ETIMEDOUT" || err?.signal === "SIGTERM";
+		const timedOut = err?.code === "ETIMEDOUT" || err?.signal === "SIGTERM" || err?.killed === true;
 		console.error(
-			`::error::\`npm view ${name} version\` ${timedOut ? `did not answer within ${timeoutMs ?? NPM_VIEW_TIMEOUT_MS}ms` : "failed"} and it is NOT an npm E404 — ` +
+			`::error::\`npm view ${name} version\` ${timedOut ? `did not answer within ${bound}ms` : "failed"} and it is NOT an npm E404 — ` +
 				`refusing to treat this as "never published", which would raise a false ` +
 				`drift alarm. Fix the transient/auth failure and re-run. Underlying error:\n` +
 				`${stderr.trim() || err?.message || "unknown error"}`,
@@ -149,26 +164,31 @@ function versionAgeHours(dir, version) {
 	return (Date.now() - then) / 3_600_000;
 }
 
-/** Build the `PackageState[]` the pure guard consumes. */
-function collectPackageStates(dirs) {
-	const states = [];
-	for (const dir of dirs) {
-		let pkg;
-		try {
-			pkg = JSON.parse(readFileSync(`${dir}/package.json`, "utf8"));
-		} catch {
-			continue;
-		}
-		if (pkg.private) continue;
-		states.push({
-			name: pkg.name,
-			version: pkg.version,
-			private: false,
-			npmVersion: npmVersionOf(pkg.name),
-			ageHours: versionAgeHours(dir, pkg.version),
-		});
-	}
-	return states;
+/** Build the `PackageState[]` the pure guard consumes. The per-package npm
+ *  probes run CONCURRENTLY (npmVersionOf is genuinely async): with N public
+ *  workspaces a serial sweep would cost up to N × NPM_VIEW_TIMEOUT_MS before the
+ *  guard even starts, while a concurrent sweep is bounded by the slowest single
+ *  probe. */
+async function collectPackageStates(dirs) {
+	const probed = await Promise.all(
+		dirs.map(async (dir) => {
+			let pkg;
+			try {
+				pkg = JSON.parse(readFileSync(`${dir}/package.json`, "utf8"));
+			} catch {
+				return null;
+			}
+			if (pkg.private) return null;
+			return {
+				name: pkg.name,
+				version: pkg.version,
+				private: false,
+				npmVersion: await npmVersionOf(pkg.name),
+				ageHours: versionAgeHours(dir, pkg.version),
+			};
+		}),
+	);
+	return probed.filter((s) => s !== null);
 }
 
 /** Human-readable one-liner per drifted package. */
@@ -244,16 +264,20 @@ function openTrackingIssue(drifted) {
 }
 
 const opts = parseArgs(process.argv.slice(2));
-const states = collectPackageStates(workspaceDirs());
+const states = await collectPackageStates(workspaceDirs());
 const { ok, drifted } = await settlePublishDrift(states, {
 	graceHours: opts.graceHours,
 	settleMs: opts.settleSeconds * 1000,
 	// The settle loop hands each re-poll the remaining settle budget (`budgetMs`) — the time
 	// left to the deadline mid-window, or a small defined allowance for the final poll at the
 	// deadline — so a slow/hung `npm view` is killed instead of blocking the guard past the
-	// advertised window. A killed call fails loudly (exit 3), never a false "unpublished".
+	// advertised window. The budget is CAPPED at NPM_VIEW_TIMEOUT_MS: mid-window it is the
+	// whole remaining window (~295s of a 300s window on the first retry), and passing that raw
+	// would let one hung query spend almost the entire window instead of being killed promptly
+	// and retried. A killed call fails loudly (exit 3), never a false "unpublished".
 	refetch: async (name, { budgetMs } = {}) => {
-		const v = npmVersionOf(name, { timeoutMs: budgetMs ?? NPM_VIEW_TIMEOUT_MS });
+		const timeoutMs = Math.min(budgetMs ?? NPM_VIEW_TIMEOUT_MS, NPM_VIEW_TIMEOUT_MS);
+		const v = await npmVersionOf(name, { timeoutMs });
 		console.log(`check:publish-drift — re-polled ${name}: npm ${v ?? "(never published)"}`);
 		return v;
 	},

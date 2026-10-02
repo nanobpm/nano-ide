@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.95.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.94.2...@nanobpm/urban-0.95.0) (2026-10-02)
+
+
+### Features
+
+* **urban:** app-owned stylesheet + script by convention (pages/app.css, pages/app.js) ([#579](https://github.com/nanobpm/nano-ide/issues/579)) ([a4702c8](https://github.com/nanobpm/nano-ide/commit/a4702c892b2052633ac972e4fe383ad0963739f1))
+
 ## [0.94.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.94.1...@nanobpm/urban-0.94.2) (2026-10-01)
 
 

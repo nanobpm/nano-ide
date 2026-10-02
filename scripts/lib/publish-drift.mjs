@@ -16,6 +16,7 @@
 // can never disagree about which versions are missing from npm (no drift
 // surface — AGENTS.md §"Derivation Over Duplication").
 
+import { performance } from "node:perf_hooks";
 import { relative } from "node:path";
 
 /**
@@ -134,4 +135,104 @@ export function findPublishDrift(packages, graceHours = 0) {
 		});
 	}
 	return { ok: drifted.length === 0, drifted };
+}
+
+/**
+ * {@link findPublishDrift}, but tolerant of npm's read-path propagation lag (#582).
+ *
+ * A successful `npm publish` is not immediately visible to `npm view`: the registry's read path
+ * trails it by up to a couple of minutes. The terminal assertion in release.yml runs seconds after
+ * publish, so a single-shot check saw the OLD version and turned a good release red. On drift, this
+ * re-polls ONLY the drifted packages with exponential backoff (5s, 10s, 20s … capped at 60s) until
+ * they catch up or the `settleMs` budget is spent. A version that genuinely never published still
+ * fails — just after the window. `settleMs` 0 is the original single-shot check.
+ *
+ * The budget is a wall-clock DEADLINE, not a sum of requested sleeps: it is measured on an
+ * injectable monotonic clock (`now`, default `performance.now` — the system clock is NOT
+ * monotonic, so a host clock correction must not move the deadline), so time spent inside
+ * `sleep` and inside the `refetch` calls (slow `npm view` responses) counts against
+ * `settleMs`. Once the deadline has passed no further poll is scheduled. Each poll refetches
+ * every still-lagging package CONCURRENTLY, and each refetch is handed the remaining budget
+ * (`refetch(name, { budgetMs })`) so the caller can bound its subprocess: a configured 300s
+ * window cannot stretch well past five minutes just because the registry is slow, no matter
+ * how many packages lag. (`budgetMs` only bounds the subprocess the caller spawns — the
+ * deadline is still re-checked as soon as the poll's refetches settle, before the next poll.)
+ * The deadline is also re-checked right AFTER each non-final sleep: a `setTimeout` may wake
+ * late, and starting a refetch then would hand the caller a 0 budget — which a subprocess
+ * `timeout: 0` reads as UNBOUNDED. An ordinary sleep that crosses the deadline ends the
+ * settle rather than starting an unbounded refetch.
+ *
+ * The one exception is the FINAL poll: when the clamped backoff would consume the rest of the
+ * budget, the sleep runs to the deadline and one last poll is taken AT the deadline. Without it a
+ * version that propagates during that last partial-backoff gap would be reported as drift even
+ * though it landed inside the advertised settle window. The final poll refreshes EVERY lagging
+ * package — a release publishes several workspaces, so refreshing only the first would turn a
+ * successful multi-package release red — and hands each refetch a small, defined allowance
+ * (`FINAL_REFETCH_ALLOWANCE_MS`) instead of the exhausted remaining budget, so the deadline poll
+ * can run but a hung `npm view` still cannot block the guard indefinitely.
+ *
+ * @param {PackageState[]} packages
+ * @param {{ graceHours?: number, settleMs: number, refetch: (name: string, opts?: { budgetMs: number }) => Promise<string | null>,
+ *           sleep: (ms: number) => Promise<void>, now?: () => number }} opts
+ * @returns {Promise<{ ok: boolean, drifted: DriftEntry[] }>}
+ */
+// How long the FINAL poll's refetches may run past the deadline. The final poll starts AT the
+// deadline (remaining budget 0), so it needs a positive allowance to run at all — but bounded,
+// so a hung `npm view` during the closing poll cannot stall the release guard indefinitely.
+const FINAL_REFETCH_ALLOWANCE_MS = 30_000;
+
+export async function settlePublishDrift(packages, opts) {
+	const graceHours = opts.graceHours ?? 0;
+	// Default to the MONOTONIC clock: `Date.now` follows host clock corrections, which can move
+	// the deadline backward (stretching the settle) or forward (ending it early). Tests inject
+	// `opts.now` to drive the deadline deterministically.
+	const now = opts.now ?? performance.now.bind(performance);
+	const states = packages.map((p) => ({ ...p }));
+	let result = findPublishDrift(states, graceHours);
+	const deadline = now() + opts.settleMs;
+	let delay = 5_000;
+	while (!result.ok) {
+		const remaining = deadline - now();
+		if (remaining <= 0) break;
+		// Clamp the sleep to the remaining budget. When the clamped wait consumes the WHOLE
+		// remaining budget (`wait === remaining`), this sleep runs to the deadline and the poll
+		// that follows is the FINAL one: a version can propagate during that last partial-backoff
+		// gap, so skipping the deadline poll would falsely report it as drift even though it
+		// landed inside the advertised settle window.
+		const wait = Math.min(delay, 60_000, remaining);
+		const finalPoll = wait >= remaining;
+		await opts.sleep(wait);
+		delay *= 2;
+		// Re-check the deadline AFTER sleeping: a non-final `setTimeout` may wake LATE
+		// (event-loop stall, a busy CI runner), and then the remaining budget recomputed
+		// below is 0 — which the caller hands to `execFile(..., { timeout: 0 })`, and a 0
+		// timeout DISABLES the subprocess bound, so the supposedly bounded guard could hang
+		// indefinitely past the deadline. An ordinary sleep that crossed the deadline ends
+		// the settle instead of starting an unbounded refetch. The FINAL poll is exempt: it
+		// is SUPPOSED to run at the deadline (a version can propagate during the last
+		// partial-backoff gap), and it gets the bounded final allowance, never 0.
+		if (!finalPoll && now() >= deadline) break;
+		const lagging = new Set(result.drifted.map((d) => d.name));
+		// Refetch every lagging package CONCURRENTLY. Serial refetches would let one slow
+		// `npm view` consume the remaining budget and then either start the later requests
+		// past the deadline (overrunning the window by N npm timeouts) or skip them — and
+		// skipping is not an option for the FINAL poll, which must refresh every lagging
+		// package or it turns a successful multi-package release red. Starting them all at
+		// once bounds the round by the SLOWEST single call, not the SUM.
+		const budgetMs = finalPoll
+			? // The final poll starts AT the deadline: remaining is 0, so it gets a small,
+				// defined allowance — enough for the closing `npm view`, never unbounded.
+				FINAL_REFETCH_ALLOWANCE_MS
+			: // Mid-window, each refetch may use what is left to the deadline.
+				Math.max(0, deadline - now());
+		await Promise.all(
+			states
+				.filter((s) => lagging.has(s.name))
+				.map(async (s) => {
+					s.npmVersion = await opts.refetch(s.name, { budgetMs });
+				}),
+		);
+		result = findPublishDrift(states, graceHours);
+	}
+	return result;
 }

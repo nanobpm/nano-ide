@@ -81,7 +81,9 @@ jobs:
       # now actually be on npm. A partial-failure publish (some packages 404,
       # others succeed) otherwise lets the run "complete" with a buried error —
       # this turns it red loudly instead (issue #423). --grace-hours 0: publish
-      # just ran, so there is no in-flight release to tolerate. Shares the
+      # just ran, so there is no in-flight release to tolerate. --settle-seconds 300:
+      # npm's read path lags a fresh publish by minutes, so re-poll a drifted package
+      # for up to 5 min before failing (#582) — a real non-publish still goes red. Shares the
       # npm-vs-local comparison with publish.mjs via scripts/lib/publish-drift.mjs.
       - name: Assert every intended version reached npm
-        run: node scripts/check-publish-drift.mjs --grace-hours 0
+        run: node scripts/check-publish-drift.mjs --grace-hours 0 --settle-seconds 300

@@ -8,7 +8,7 @@
 // is equal or ahead (a normal lagging local checkout).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cmpVersion, findPublishDrift, isAheadOfNpm, isNpmNotPublishedError, versionPathspec } from "./publish-drift.mjs";
+import { cmpVersion, findPublishDrift, isAheadOfNpm, isNpmNotPublishedError, settlePublishDrift, versionPathspec } from "./publish-drift.mjs";
 
 test("cmpVersion orders dotted numeric versions", () => {
 	assert.ok(cmpVersion("0.4.0", "0.1.0") > 0);
@@ -160,4 +160,346 @@ test("versionPathspec normalizes an absolute workspace dir to a repo-relative pa
 
 test("versionPathspec targets the repo-root package.json when dir is the cwd", () => {
 	assert.equal(versionPathspec("/repo", "/repo"), "./package.json");
+});
+
+// #582 — npm's read path lags a successful publish by minutes, so the terminal assertion in
+// release.yml (run seconds after publish) saw the OLD version and turned a good release red.
+// settlePublishDrift re-polls ONLY the drifted packages, with bounded backoff, before giving up.
+const fresh = (npmVersion) => [{ name: "@x/a", version: "0.95.0", private: false, npmVersion, ageHours: 0 }];
+
+test("#582: a version that becomes visible on npm within the settle window is NOT drift", async () => {
+	const seen = ["0.94.2", "0.94.2", "0.95.0"]; // stale, stale, then propagated
+	const slept = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 300_000,
+		refetch: async () => seen.shift(),
+		sleep: async (ms) => slept.push(ms),
+	});
+	assert.equal(r.ok, true);
+	assert.equal(slept.length, 3);
+});
+
+test("#582: a version that never reaches npm still fails once the window is spent", async () => {
+	let t = 0;
+	let elapsed = 0;
+	let polls = 0;
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 60_000,
+		now: () => t,
+		refetch: async () => {
+			polls++;
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			elapsed += ms;
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	assert.equal(r.drifted[0].npmVersion, "0.94.2");
+	assert.ok(elapsed <= 60_000, `waited ${elapsed}ms, beyond the window`);
+	assert.ok(polls >= 2, "re-polled more than once");
+});
+
+test("#582: no drift → no waiting; settleMs 0 → today's single-shot behaviour", async () => {
+	let slept = 0;
+	const sleep = async () => {
+		slept++;
+	};
+	const refetch = async () => {
+		throw new Error("must not refetch");
+	};
+	assert.equal((await settlePublishDrift(fresh("0.95.0"), { graceHours: 0, settleMs: 300_000, refetch, sleep })).ok, true);
+	assert.equal((await settlePublishDrift(fresh("0.94.2"), { graceHours: 0, settleMs: 0, refetch, sleep })).ok, false);
+	assert.equal(slept, 0);
+});
+
+test("#582: only drifted packages are re-polled", async () => {
+	const polled = [];
+	const pkgs = [
+		{ name: "@x/ok", version: "1.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag", version: "2.0.0", private: false, npmVersion: "1.9.0", ageHours: 0 },
+	];
+	const r = await settlePublishDrift(pkgs, {
+		graceHours: 0,
+		settleMs: 30_000,
+		refetch: async (name) => {
+			polled.push(name);
+			return "2.0.0";
+		},
+		sleep: async () => {},
+	});
+	assert.equal(r.ok, true);
+	assert.deepEqual(polled, ["@x/lag"]);
+});
+
+// The settle budget is a wall-clock DEADLINE on an injectable clock, not a sum of requested
+// sleeps: time spent inside slow `refetch` calls (and the sleeps themselves) counts against
+// `settleMs`, and no new poll is scheduled once the deadline has passed. Otherwise a 300s
+// window over slow `npm view` responses stretches well past five minutes.
+test("settle budget counts wall-clock refetch time, not just requested sleeps", async () => {
+	let t = 0;
+	const now = () => t;
+	let polls = 0;
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 60_000,
+		now,
+		refetch: async () => {
+			polls++;
+			t += 25_000; // a slow `npm view` burns 25s of the window per poll
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	// 5s sleep + 25s refetch + 10s sleep + 25s refetch = 60s: the deadline is then spent, so
+	// the loop must stop instead of scheduling the next (20s) poll the old sum-of-sleeps
+	// budget (which had only "spent" 15s) would have allowed.
+	assert.equal(polls, 2);
+	assert.ok(t >= 60_000);
+});
+
+test("a refetch that returns after the deadline stops the loop immediately", async () => {
+	let t = 0;
+	const now = () => t;
+	let polls = 0;
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 10_000,
+		now,
+		refetch: async () => {
+			polls++;
+			t += 120_000; // the very first refetch alone overruns the whole window
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	assert.equal(polls, 1);
+});
+
+// The deadline is enforced on the whole CONCURRENT round, not per serial refetch: a slow
+// `npm view` for one lagging package must not push the NEXT package's refetch past the
+// deadline. Starting the round's refetches together bounds it by the slowest single call,
+// so N lagging packages cannot overrun the window by N npm timeouts.
+test("a lagging refetch that crosses the deadline stops subsequent polling rounds", async () => {
+	let t = 0;
+	const now = () => t;
+	const polled = [];
+	const pkgs = [
+		{ name: "@x/lag1", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag2", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag3", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+	];
+	const r = await settlePublishDrift(pkgs, {
+		graceHours: 0,
+		settleMs: 30_000,
+		now,
+		refetch: async (name) => {
+			polled.push(name);
+			t += 120_000; // each lagging refetch alone overruns the whole window
+			return null;
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	// All three refetches of the round start TOGETHER at t=5000 (right after the first 5s
+	// backoff) — none starts after the previous one's 120s pushed t past the deadline — and
+	// once the round settles past the deadline, no further poll is scheduled.
+	assert.deepEqual(polled.sort(), ["@x/lag1", "@x/lag2", "@x/lag3"]);
+	assert.equal(polled.length, 3, "the deadline stops the NEXT poll; the started round runs out");
+});
+
+// The FINAL partial-backoff interval must still end in a poll AT the deadline: a version that
+// propagates during that last gap (e.g. visible at 270s of a 300s window) is inside the advertised
+// settle window and must NOT be reported as drift. Without the deadline poll the loop sleeps the
+// whole final gap and gives up at the deadline having last polled at ~255s.
+test("a version propagating during the final partial-backoff gap is caught by the deadline poll", async () => {
+	let t = 0;
+	const now = () => t;
+	const pollTimes = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 300_000,
+		now,
+		refetch: async () => {
+			pollTimes.push(t);
+			// Propagates at 270s — after the last mid-window poll (~255s) but before the 300s deadline.
+			return t >= 270_000 ? "0.95.0" : "0.94.2";
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, true, "propagation at 270s is within the 300s window and must be detected");
+	// The deadline poll happens at t=300000 (the clamped final wait lands exactly on the deadline).
+	assert.equal(pollTimes[pollTimes.length - 1], 300_000);
+});
+
+// The FINAL poll must refresh EVERY still-lagging package, not just the first: a release publishes
+// several workspaces, and if two packages both propagate during the final gap, refreshing only one
+// leaves the other's stale `npmVersion` in place and turns a successful multi-package release red.
+// The refetches start CONCURRENTLY, so refreshing N packages does not serially accumulate N npm
+// timeouts past the deadline either.
+test("the final deadline poll refreshes every lagging package, so all final-gap propagations pass", async () => {
+	let t = 0;
+	const now = () => t;
+	const polled = [];
+	const pkgs = [
+		{ name: "@x/lag1", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag2", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag3", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+	];
+	const r = await settlePublishDrift(pkgs, {
+		graceHours: 0,
+		settleMs: 5_000,
+		now,
+		refetch: async (name) => {
+			polled.push(name);
+			return "2.0.0"; // all three propagated during the final gap
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, true, "all three propagated within the window — the release must go green");
+	assert.deepEqual(polled.sort(), ["@x/lag1", "@x/lag2", "@x/lag3"]);
+});
+
+// Each poll's refetches start CONCURRENTLY: a slow `npm view` for one lagging package must not
+// delay, or push past the deadline, the refetch of the next lagging package in the same round.
+// Serial refetches would let N lagging packages overrun the window by N npm timeouts. (The
+// injected clock only advances when a refetch RETURNS, so a serial implementation would show
+// lag2 starting at 125000 — after lag1's 120s — instead of together at 5000.)
+test("a poll's lagging refetches start concurrently, so one slow refetch does not delay the rest", async () => {
+	let t = 0;
+	const now = () => t;
+	const started = [];
+	const pkgs = [
+		{ name: "@x/lag1", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag2", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag3", version: "2.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+	];
+	const r = await settlePublishDrift(pkgs, {
+		graceHours: 0,
+		settleMs: 30_000,
+		now,
+		refetch: async (name) => {
+			started.push({ name, at: t });
+			// Yield so the other refetches of this round record their start BEFORE the clock
+			// advances — with a synchronous clock, only genuine concurrency starts them all at
+			// the same instant.
+			await Promise.resolve();
+			t += 120_000; // each refetch alone overruns the whole window
+			return null;
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	// All three refetches of the first poll start at the same instant (t=5000, right after the
+	// first 5s backoff sleep) — none waits for the previous one's 120s to elapse.
+	assert.deepEqual(started, [
+		{ name: "@x/lag1", at: 5_000 },
+		{ name: "@x/lag2", at: 5_000 },
+		{ name: "@x/lag3", at: 5_000 },
+	]);
+});
+
+// The refetch callback receives the remaining settle budget so the caller can bound its
+// subprocess: `npm view` must not hang unboundedly past the deadline. Mid-window the budget is
+// the time left to the deadline; the FINAL poll (which starts AT the deadline) gets a small,
+// defined allowance instead of 0 — it is the poll that closes the window and must be able to run.
+test("refetch receives a bounded budget: remaining time mid-window, a defined allowance at the deadline", async () => {
+	let t = 0;
+	const now = () => t;
+	const budgets = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 10_000,
+		now,
+		refetch: async (_name, opts) => {
+			budgets.push({ at: t, budgetMs: opts?.budgetMs });
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			t += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	// First poll at t=5000 of a 10s window: 5000ms remain.
+	assert.deepEqual(budgets[0], { at: 5_000, budgetMs: 5_000 });
+	// The final poll starts AT the deadline (t=10000): remaining is 0, so it gets the defined
+	// final-poll allowance instead — bounded, never 0 (a 0 budget would make the deadline poll
+	// impossible) and never unbounded.
+	const last = budgets[budgets.length - 1];
+	assert.equal(last.at, 10_000);
+	assert.ok(last.budgetMs > 0, "the deadline poll needs a positive allowance to run at all");
+	assert.ok(last.budgetMs <= 30_000, `final-poll allowance ${last.budgetMs}ms must stay small`);
+	for (const b of budgets) {
+		assert.ok(Number.isFinite(b.budgetMs), `budgetMs must always be finite, got ${b.budgetMs}`);
+	}
+});
+
+// A NON-final `setTimeout` may wake LATE (event-loop stall, a busy CI runner): the loop then
+// finds itself past the deadline with no final poll intended. It must BREAK there — not start
+// another refetch round. Otherwise the recomputed remaining budget is 0, which the production
+// caller hands to `execFile(..., { timeout: 0 })` — and a 0 timeout DISABLES the subprocess
+// bound, so the supposedly bounded guard can hang indefinitely after the settle deadline.
+test("an overslept non-final sleep breaks the loop instead of starting an unbounded refetch", async () => {
+	let t = 0;
+	const now = () => t;
+	const budgets = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 10_000,
+		now,
+		refetch: async (_name, opts) => {
+			budgets.push(opts?.budgetMs);
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			// The first (non-final) 5s sleep wakes 20s late — the deadline (10s) is crossed
+			// inside an ORDINARY sleep, with no final poll scheduled for it.
+			t += ms + 20_000;
+		},
+	});
+	assert.equal(r.ok, false);
+	assert.equal(budgets.length, 0, `no refetch may start after an overslept non-final sleep, got budgets ${JSON.stringify(budgets)}`);
+});
+
+// The oversleep guard must not swallow the INTENTIONAL final poll: when the clamped backoff
+// sleep is meant to run to the deadline (finalPoll), waking late still takes that one closing
+// poll — a version can have propagated during the final gap, and the poll is bounded by the
+// final-poll allowance, never by a 0/unbounded budget.
+test("an overslept FINAL sleep still takes the bounded deadline poll", async () => {
+	let t = 0;
+	const now = () => t;
+	const budgets = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 5_000,
+		now,
+		refetch: async (_name, opts) => {
+			budgets.push({ at: t, budgetMs: opts?.budgetMs });
+			return "0.95.0"; // propagated during the final gap
+		},
+		sleep: async (ms) => {
+			// The clamped final wait IS the whole 5s budget (finalPoll); it wakes 20s late.
+			t += ms + 20_000;
+		},
+	});
+	assert.equal(r.ok, true, "the final deadline poll still runs when its sleep oversleeps");
+	assert.equal(budgets.length, 1);
+	assert.ok(budgets[0].budgetMs > 0 && budgets[0].budgetMs <= 30_000, `final-poll allowance must stay bounded, got ${budgets[0].budgetMs}`);
 });

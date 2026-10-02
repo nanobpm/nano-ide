@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { execFile, fork } from "node:child_process";
 import { promisify } from "node:util";
 import { createNodeHost } from "./node.ts";
+import { isDeno } from "./detect.ts";
 import type { HttpServer } from "../core/host.ts";
 
 const execFileAsync = promisify(execFile);
@@ -95,6 +96,14 @@ const hasMkfifo = process.platform !== "win32";
 // resolve; the parent only arms the (short) probe timeout once ready. Startup gets its own generous,
 // load-insensitive guard, and the probe budget then measures ONLY `statFile` — the blocking-open
 // regression (which manifests inside `statFile`, after `ready`) still fails fast.
+//
+// Node-only: the child is forked from `process.execPath` with Node-only flags
+// (`--experimental-strip-types`, `--input-type=module`). Under Deno, `child_process.fork` spawns
+// the DENO binary, which wraps the `--eval` source in a CJS shim (`$deno$eval.mts` →
+// `runInThisContext`) — the ESM `import` in the probe source is then a SyntaxError and the child
+// dies before `ready`. The probe is a guard for the NODE host adapter's blocking-open regression,
+// and the node-based suite (`npm test`, run by the `build` CI job) exercises it on every PR; the
+// Deno job runs this same file, so it must skip there rather than fail on the runtime mismatch.
 const PROBE_STARTUP_TIMEOUT_MS = 30_000;
 type FifoReadyMsg = { ready: true };
 type FifoVerdictMsg = { verdict: { isFile: boolean } | null };
@@ -157,11 +166,22 @@ process.exit(0);`;
       clearTimers();
       reject(err);
     });
+    // Fail fast with the real cause when the child dies without messaging (e.g. a
+    // syntax/runtime crash during module load) instead of waiting out the startup
+    // timeout and reporting a misleading "did not become ready".
+    child.once("exit", (code, signal) => {
+      clearTimers();
+      reject(
+        new Error(
+          `probe child exited before reporting (code=${String(code)}, signal=${String(signal)})`,
+        ),
+      );
+    });
   });
 }
 test(
   "statFile classifies a FIFO as non-regular without blocking (does not hang)",
-  { skip: !hasMkfifo || !nodeImportsTs },
+  { skip: !hasMkfifo || !nodeImportsTs || isDeno() },
   async () => {
     const dir = await mkdtemp(join(tmpdir(), "urban-fifo-"));
     try {

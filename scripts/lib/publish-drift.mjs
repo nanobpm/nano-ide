@@ -150,25 +150,33 @@ export function findPublishDrift(packages, graceHours = 0) {
  * The budget is a wall-clock DEADLINE, not a sum of requested sleeps: it is measured on an
  * injectable monotonic clock (`now`, default `performance.now` — the system clock is NOT
  * monotonic, so a host clock correction must not move the deadline), so time spent inside
- * `sleep` and inside the serial `refetch` calls (slow `npm view` responses) counts against
- * `settleMs`. Once the deadline has passed no further poll is scheduled, and within a poll no
- * further lagging refetch is started once the deadline passes — a configured 300s window cannot
- * stretch well past five minutes just because the registry is slow, even with many lagging
- * packages. (A single `refetch` that itself hangs is still bounded only by that call's own
- * timeout — the deadline is re-checked as soon as it returns, before the next refetch.)
+ * `sleep` and inside the `refetch` calls (slow `npm view` responses) counts against
+ * `settleMs`. Once the deadline has passed no further poll is scheduled. Each poll refetches
+ * every still-lagging package CONCURRENTLY, and each refetch is handed the remaining budget
+ * (`refetch(name, { budgetMs })`) so the caller can bound its subprocess: a configured 300s
+ * window cannot stretch well past five minutes just because the registry is slow, no matter
+ * how many packages lag. (`budgetMs` only bounds the subprocess the caller spawns — the
+ * deadline is still re-checked as soon as the poll's refetches settle, before the next poll.)
  *
  * The one exception is the FINAL poll: when the clamped backoff would consume the rest of the
  * budget, the sleep runs to the deadline and one last poll is taken AT the deadline. Without it a
  * version that propagates during that last partial-backoff gap would be reported as drift even
- * though it landed inside the advertised settle window. The exemption covers at most ONE
- * in-flight refetch: the first lagging package is polled at the deadline, then the deadline
- * re-check applies again, so N lagging packages cannot overrun the window by N npm timeouts.
+ * though it landed inside the advertised settle window. The final poll refreshes EVERY lagging
+ * package — a release publishes several workspaces, so refreshing only the first would turn a
+ * successful multi-package release red — and hands each refetch a small, defined allowance
+ * (`FINAL_REFETCH_ALLOWANCE_MS`) instead of the exhausted remaining budget, so the deadline poll
+ * can run but a hung `npm view` still cannot block the guard indefinitely.
  *
  * @param {PackageState[]} packages
- * @param {{ graceHours?: number, settleMs: number, refetch: (name: string) => Promise<string | null>,
+ * @param {{ graceHours?: number, settleMs: number, refetch: (name: string, opts?: { budgetMs: number }) => Promise<string | null>,
  *           sleep: (ms: number) => Promise<void>, now?: () => number }} opts
  * @returns {Promise<{ ok: boolean, drifted: DriftEntry[] }>}
  */
+// How long the FINAL poll's refetches may run past the deadline. The final poll starts AT the
+// deadline (remaining budget 0), so it needs a positive allowance to run at all — but bounded,
+// so a hung `npm view` during the closing poll cannot stall the release guard indefinitely.
+const FINAL_REFETCH_ALLOWANCE_MS = 30_000;
+
 export async function settlePublishDrift(packages, opts) {
 	const graceHours = opts.graceHours ?? 0;
 	// Default to the MONOTONIC clock: `Date.now` follows host clock corrections, which can move
@@ -192,22 +200,25 @@ export async function settlePublishDrift(packages, opts) {
 		await opts.sleep(wait);
 		delay *= 2;
 		const lagging = new Set(result.drifted.map((d) => d.name));
-		// The FINAL poll's deadline exemption covers at most ONE in-flight refetch: the first
-		// lagging package is polled at the deadline, then the per-refetch deadline re-check
-		// applies again. Exempting the whole round would let N lagging packages overrun the
-		// window by N slow `npm view` calls — the multi-timeout overrun the re-check prevents.
-		let finalRefetchesLeft = finalPoll ? 1 : 0;
-		for (const s of states) {
-			if (!lagging.has(s.name)) continue;
-			// Re-check the deadline before EACH serial refetch: one lagging package's slow
-			// `npm view` can consume the remaining budget, and we must not then start requests
-			// for every later lagging package. Only the in-flight call is allowed to overrun.
-			// The FINAL poll's single exempt refetch runs even though `now()` has just reached
-			// the deadline — it is the deadline poll that closes the window.
-			if (finalRefetchesLeft > 0) finalRefetchesLeft--;
-			else if (now() - deadline >= 0) break;
-			s.npmVersion = await opts.refetch(s.name);
-		}
+		// Refetch every lagging package CONCURRENTLY. Serial refetches would let one slow
+		// `npm view` consume the remaining budget and then either start the later requests
+		// past the deadline (overrunning the window by N npm timeouts) or skip them — and
+		// skipping is not an option for the FINAL poll, which must refresh every lagging
+		// package or it turns a successful multi-package release red. Starting them all at
+		// once bounds the round by the SLOWEST single call, not the SUM.
+		const budgetMs = finalPoll
+			? // The final poll starts AT the deadline: remaining is 0, so it gets a small,
+				// defined allowance — enough for the closing `npm view`, never unbounded.
+				FINAL_REFETCH_ALLOWANCE_MS
+			: // Mid-window, each refetch may use what is left to the deadline.
+				Math.max(0, deadline - now());
+		await Promise.all(
+			states
+				.filter((s) => lagging.has(s.name))
+				.map(async (s) => {
+					s.npmVersion = await opts.refetch(s.name, { budgetMs });
+				}),
+		);
 		result = findPublishDrift(states, graceHours);
 	}
 	return result;

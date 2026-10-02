@@ -35,6 +35,12 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { isNpmNotPublishedError, settlePublishDrift, versionPathspec } from "./lib/publish-drift.mjs";
 
+// Upper bound for a single `npm view` subprocess. Without it a hung registry/process would
+// block the guard indefinitely — the settle loop's wall-clock deadline would then not actually
+// bound the release assertion. Generous enough for a cold npm on a slow runner; the settle
+// re-polls tighten it further to the remaining settle budget (see `refetch` below).
+const NPM_VIEW_TIMEOUT_MS = 120_000;
+
 /** Parse the small flag set this script accepts. */
 function parseArgs(argv) {
 	const opts = { graceHours: 6, settleSeconds: 0, openIssue: false };
@@ -91,18 +97,27 @@ function workspaceDirs() {
  *  evidence of "unpublished": collapsing it to `null` would misreport a
  *  published package as drifted and open a false tracking issue. So we fail the
  *  whole guard loudly (exit 3) on a non-E404 error instead of returning a
- *  misleading `null`. */
-function npmVersionOf(name) {
+ *  misleading `null`.
+ *
+ *  The subprocess is ALWAYS time-bounded: without an explicit `timeout` a hung
+ *  registry/process would block the guard indefinitely, and the settle loop's
+ *  wall-clock deadline would not actually bound the release assertion. During
+ *  settle re-polling the caller hands us the remaining settle budget
+ *  (`budgetMs`, from the settle loop); a subprocess killed by that bound throws
+ *  ETIMEDOUT, which is a transient failure (NOT an E404) and fails loudly. */
+function npmVersionOf(name, { timeoutMs } = {}) {
 	try {
 		return execFileSync("npm", ["view", name, "version"], {
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
+			timeout: timeoutMs ?? NPM_VIEW_TIMEOUT_MS,
 		}).trim();
 	} catch (err) {
 		const stderr = String(err?.stderr ?? "");
 		if (isNpmNotPublishedError(stderr)) return null;
+		const timedOut = err?.code === "ETIMEDOUT" || err?.signal === "SIGTERM";
 		console.error(
-			`::error::\`npm view ${name} version\` failed and it is NOT an npm E404 — ` +
+			`::error::\`npm view ${name} version\` ${timedOut ? `did not answer within ${timeoutMs ?? NPM_VIEW_TIMEOUT_MS}ms` : "failed"} and it is NOT an npm E404 — ` +
 				`refusing to treat this as "never published", which would raise a false ` +
 				`drift alarm. Fix the transient/auth failure and re-run. Underlying error:\n` +
 				`${stderr.trim() || err?.message || "unknown error"}`,
@@ -233,8 +248,12 @@ const states = collectPackageStates(workspaceDirs());
 const { ok, drifted } = await settlePublishDrift(states, {
 	graceHours: opts.graceHours,
 	settleMs: opts.settleSeconds * 1000,
-	refetch: async (name) => {
-		const v = npmVersionOf(name);
+	// The settle loop hands each re-poll the remaining settle budget (`budgetMs`) — the time
+	// left to the deadline mid-window, or a small defined allowance for the final poll at the
+	// deadline — so a slow/hung `npm view` is killed instead of blocking the guard past the
+	// advertised window. A killed call fails loudly (exit 3), never a false "unpublished".
+	refetch: async (name, { budgetMs } = {}) => {
+		const v = npmVersionOf(name, { timeoutMs: budgetMs ?? NPM_VIEW_TIMEOUT_MS });
 		console.log(`check:publish-drift — re-polled ${name}: npm ${v ?? "(never published)"}`);
 		return v;
 	},

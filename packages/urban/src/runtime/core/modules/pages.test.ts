@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EngineClient, HttpRequest, HttpResponse } from "../host.ts";
 import { makeRouter } from "../router.ts";
-import { createPagesRoutes, type GridLayout, type PagesDataSource, type PagesDeps, parseGridLayout } from "./pages.ts";
+import { createPagesRoutes, type GridLayout, type PagesDataSource, type PagesDeps, parseGridLayout, RUNTIME_JS_PATH } from "./pages.ts";
 
 function req(
   method: string,
@@ -2122,4 +2122,139 @@ test("#572: parseGridLayout accepts only the declared layouts (anything else is 
   assert.equal(parseGridLayout(undefined), undefined);
   assert.equal(parseGridLayout("grid"), undefined);
   assert.equal(parseGridLayout(1), undefined);
+});
+
+// nano-ide#578 — an app MAY ship `pages/app.css` / `pages/app.js`; the shell links them only when present.
+function appAssetRoutes(files: Record<string, string>) {
+  return makeRouter(
+    createPagesRoutes(
+      { pagesDir: "pages", homePage: "home", sourceName: "app" },
+      {
+        db: fakeDb(),
+        engine: fakeEngine().engine,
+        readPage: async () => "{}",
+        readAsset: async (p) => {
+          const body = files[p];
+          if (body === undefined) throw new Error(`ENOENT ${p}`);
+          return body;
+        },
+      },
+    ),
+  );
+}
+
+test("#578: no app.css/app.js → the shell references neither (no 404 noise)", async () => {
+  const body = (await appAssetRoutes({})(req("GET", "/"))).body ?? "";
+  assert.doesNotMatch(body, /app\.css/);
+  assert.doesNotMatch(body, /app\.js/);
+});
+
+test("#578: app.css is linked AFTER the built-in CSS, and app.js loads after the runtime", async () => {
+  const router = appAssetRoutes({ "pages/app.css": "body{color:red}", "pages/app.js": "export {};" });
+  const body = (await router(req("GET", "/"))).body ?? "";
+  const css = body.indexOf('<link rel="stylesheet" href="./app.css" />');
+  assert.ok(css > body.indexOf("</style>"), "app.css must follow the renderer <style> so its rules win");
+  // Compare against the actual fingerprinted runtime <script> tag — the bare word "runtime"
+  // also appears in the embedded renderer CSS, so a substring match would pass even if the
+  // app script were moved before the runtime module.
+  const runtimeTag = `<script type="module" src=".${RUNTIME_JS_PATH}"></script>`;
+  const runtimeAt = body.indexOf(runtimeTag);
+  assert.ok(runtimeAt >= 0, "the shell references the fingerprinted runtime module");
+  const js = body.indexOf('<script type="module" src="./app.js"></script>');
+  assert.ok(js > runtimeAt, "app.js must load after the runtime module");
+  const cssRes = await router(req("GET", "/app.css"));
+  assert.equal(cssRes.status, 200);
+  assert.equal(cssRes.body, "body{color:red}");
+  assert.match(String(cssRes.headers?.["content-type"]), /text\/css/);
+  // Mutable at a stable URL: the browser must revalidate on every load so an edit (or a
+  // remove/re-add) takes effect without a restart — same policy as `/app/runtime.js`.
+  assert.equal(cssRes.headers?.["cache-control"], "no-cache");
+  const jsRes = await router(req("GET", "/app.js"));
+  assert.equal(jsRes.status, 200);
+  assert.match(String(jsRes.headers?.["content-type"]), /javascript/);
+  assert.equal(jsRes.headers?.["cache-control"], "no-cache");
+  // A missing app asset 404s no-cache too, so a cached 404 can't mask a later re-add.
+  const missing = await appAssetRoutes({})(req("GET", "/app.css"));
+  assert.equal(missing.status, 404);
+  assert.equal(missing.headers?.["cache-control"], "no-cache");
+});
+
+test("#578: only the present asset is referenced", async () => {
+  const body = (await appAssetRoutes({ "pages/app.css": "x" })(req("GET", "/"))).body ?? "";
+  assert.match(body, /href="\.\/app\.css"/);
+  assert.doesNotMatch(body, /src="\.\/app\.js"/);
+});
+
+test("#578: the shell probes existence WITHOUT reading the assets when the host offers an exists seam", async () => {
+  const files: Record<string, string> = { "pages/app.js": "export {};" };
+  const reads: string[] = [];
+  const probes: string[] = [];
+  const router = makeRouter(
+    createPagesRoutes(
+      { pagesDir: "pages", homePage: "home", sourceName: "app" },
+      {
+        db: fakeDb(),
+        engine: fakeEngine().engine,
+        readPage: async () => "{}",
+        readAsset: async (p) => {
+          reads.push(p);
+          const body = files[p];
+          if (body === undefined) throw new Error(`ENOENT ${p}`);
+          return body;
+        },
+        existsAsset: async (p) => {
+          probes.push(p);
+          return p in files;
+        },
+      },
+    ),
+  );
+  const body = (await router(req("GET", "/"))).body ?? "";
+  assert.match(body, /src="\.\/app\.js"/, "a present app.js is linked");
+  assert.doesNotMatch(body, /href="\.\/app\.css"/, "an absent app.css is not");
+  assert.deepEqual([...probes].sort(), ["pages/app.css", "pages/app.js"], "both assets are probed per shell request");
+  assert.deepEqual(reads, [], "no asset bytes are read to build the shell");
+
+  // Per-request, NOT memoized (#578 no-restart): swap which asset exists and re-request. A shell
+  // that cached the first probe result would keep linking app.js (and omit app.css); a genuine
+  // per-request probe must reflect the removal/addition AND re-probe BOTH paths on the next load.
+  probes.length = 0;
+  delete files["pages/app.js"];
+  files["pages/app.css"] = "body{color:red}";
+  const body2 = (await router(req("GET", "/"))).body ?? "";
+  assert.match(body2, /href="\.\/app\.css"/, "a newly-added app.css is linked on the next request");
+  assert.doesNotMatch(body2, /src="\.\/app\.js"/, "a removed app.js is dropped on the next request");
+  assert.deepEqual(
+    [...probes].sort(),
+    ["pages/app.css", "pages/app.js"],
+    "both assets are re-probed on the second request (no memoization)",
+  );
+  assert.deepEqual(reads, [], "still no asset bytes are read to build the shell");
+});
+
+test("#578: a DIRECTORY at an asset path is not linked (the probe is file-only, like serving)", async () => {
+  // `HostContext.exists` is true for files AND directories; the probe contract must answer
+  // "would serving this path succeed?" — a `pages/app.css/` directory 404s when read, so the
+  // shell must not link it. The injected probe here is exactly what `mountPages` builds from
+  // `HostContext.statFile` (`(await statFile(p))?.isFile === true`).
+  const files: Record<string, string> = { "pages/app.js": "export {};" };
+  const dirs = new Set(["pages/app.css"]);
+  const router = makeRouter(
+    createPagesRoutes(
+      { pagesDir: "pages", homePage: "home", sourceName: "app" },
+      {
+        db: fakeDb(),
+        engine: fakeEngine().engine,
+        readPage: async () => "{}",
+        readAsset: async (p) => {
+          if (dirs.has(p)) throw new Error(`EISDIR ${p}`);
+          throw new Error(`ENOENT ${p}`);
+        },
+        existsAsset: async (p) => !dirs.has(p) && p in files,
+      },
+    ),
+  );
+  const body = (await router(req("GET", "/"))).body ?? "";
+  assert.doesNotMatch(body, /href="\.\/app\.css"/, "a directory named app.css is not linked");
+  assert.match(body, /src="\.\/app\.js"/, "a real app.js file still is");
 });

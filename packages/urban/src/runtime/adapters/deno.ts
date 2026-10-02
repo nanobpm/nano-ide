@@ -45,12 +45,17 @@ interface DenoHttpServer {
 interface DenoFsWatcher extends AsyncIterable<{ kind: string; paths: string[] }> {
   close(): void;
 }
+interface DenoFsFile {
+  stat(): Promise<{ isFile: boolean }>;
+  close(): void;
+}
 interface DenoGlobal {
   env: { get(name: string): string | undefined };
   cwd(): string;
   readTextFile(path: string): Promise<string>;
   readDir(path: string): AsyncIterable<{ name: string; isFile: boolean; isDirectory: boolean }>;
-  stat(path: string): Promise<unknown>;
+  stat(path: string): Promise<{ isFile: boolean }>;
+  open(path: string, options?: { read?: boolean }): Promise<DenoFsFile>;
   watchFs(paths: string | string[], options?: { recursive?: boolean }): DenoFsWatcher;
   serve(
     opts: { port: number; hostname?: string; onListen?: (a: { port: number }) => void },
@@ -122,6 +127,32 @@ export function createDenoHost(opts: DenoHostOptions = {}): HostContext {
         return true;
       } catch {
         return false;
+      }
+    },
+    async statFile(p) {
+      // Classify with a bare `stat` FIRST, then only open a *regular file* to confirm it is
+      // readable. The order matters: a read-only open of a FIFO (named pipe) blocks indefinitely
+      // waiting for a writer, so opening before the type check would hang every shell request on
+      // a FIFO sitting at this conventional asset path. A plain `stat` never blocks, so it safely
+      // rejects non-regular entries (directory, FIFO, socket, device) up front. The subsequent
+      // open/stat still answers the real serving condition — a file `stat` reports as regular can
+      // be unreadable (ACLs / permissions), and the shell must not link an asset that then 404s.
+      // Missing path → `null`; non-regular → `isFile: false`; unreadable → `null`.
+      try {
+        const meta = await Deno.stat(abs(p));
+        if (!meta.isFile) return { isFile: false };
+      } catch {
+        return null;
+      }
+      let file: DenoFsFile | undefined;
+      try {
+        file = await Deno.open(abs(p), { read: true });
+        const s = await file.stat();
+        return { isFile: s.isFile };
+      } catch {
+        return null;
+      } finally {
+        file?.close();
       }
     },
     openSqlite(path) {

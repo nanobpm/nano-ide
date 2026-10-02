@@ -1,7 +1,7 @@
 // Node adapter — implements HostContext against `node:*`. This is one of only two files
 // (with deno.ts) allowed to touch a concrete runtime.
 
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open, readFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { watch as fsWatch, type FSWatcher } from "node:fs";
 import { createServer } from "node:http";
@@ -152,6 +152,32 @@ export function createNodeHost(opts: NodeHostOptions = {}): HostContext {
         return true;
       } catch {
         return false;
+      }
+    },
+    async statFile(p) {
+      // Classify with a bare `stat` FIRST, then only open a *regular file* to confirm it is
+      // readable. The order matters: a read-only open of a FIFO (named pipe) blocks indefinitely
+      // waiting for a writer, so opening before the type check would hang every shell request on
+      // a FIFO sitting at this conventional asset path. A plain `stat` never blocks, so it safely
+      // rejects non-regular entries (directory, FIFO, socket, device) up front. The subsequent
+      // handle open/stat still answers the real serving condition — a file `stat` reports as
+      // regular can be unreadable (ACLs / permissions), and the shell must not link an asset that
+      // then 404s. Missing path → `null`; non-regular → `isFile: false`; unreadable → `null`.
+      try {
+        const meta = await stat(abs(p));
+        if (!meta.isFile()) return { isFile: false };
+      } catch {
+        return null;
+      }
+      let handle: Awaited<ReturnType<typeof open>> | undefined;
+      try {
+        handle = await open(abs(p), "r");
+        const s = await handle.stat();
+        return { isFile: s.isFile() };
+      } catch {
+        return null;
+      } finally {
+        await handle?.close();
       }
     },
     openSqlite(path) {

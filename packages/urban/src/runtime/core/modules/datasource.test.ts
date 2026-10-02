@@ -98,6 +98,7 @@ test("applyMigrations joins each migration file onto its dir without reintroduci
     env: () => undefined,
     now: () => 0,
     exists: async () => true,
+    statFile: async () => ({ isFile: true }),
     listDir: async () => ["002_b.sql", "001_a.sql"],
     readTextFile: async (path: string) => {
       readPaths.push(path);

@@ -80,6 +80,7 @@ function fakeCtx(triggers: Trigger[]): { ctx: RuntimeContext; hostLogs: Array<{ 
     readTextFile: async () => "",
     listDir: async () => [],
     exists: async () => false,
+    statFile: async () => null,
     openSqlite: () => {
       throw new Error("sqlite not used in this test");
     },

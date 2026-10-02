@@ -757,3 +757,30 @@ test('#572: an omitted surfaces.pages.gridLayout falls back to the "auto" layout
 test('#572: an invalid surfaces.pages.gridLayout falls back to the "auto" layout', async () => {
   assert.equal(await shellGridLayout({ gridLayout: "grid" }), "auto");
 });
+
+// #578: app-owned `pages/app.css`/`pages/app.js` by convention, driven end-to-end through the real
+// node host (createUrbanApp → mountPages → HostContext.statFile), not an injected `existsAsset`.
+// This guards the production wiring the focused pages.test.ts probe tests can't: that `mountPages`
+// forwards the host's file-only probe (so a DIRECTORY at an asset path is NOT linked — it would
+// 404 on serving) and that a real regular file IS linked.
+test("#578: the shell links a real pages/app.js file but not a pages/app.css DIRECTORY (real host)", async () => {
+  const dir = await makeFixture({ surfaces: { pages: { enabled: true } } });
+  // A regular file at pages/app.js (should be linked) and a DIRECTORY at pages/app.css (should not).
+  await mkdir(join(dir, "pages"), { recursive: true });
+  await writeFile(join(dir, "pages", "app.js"), "export {};");
+  await mkdir(join(dir, "pages", "app.css"), { recursive: true });
+  const host = createNodeHost({ cwd: dir, log: () => {} });
+  const engine = new FakeEngine();
+  const app = await createUrbanApp({ host, engine, root: ".", port: 0 });
+  await app.start();
+  try {
+    const res = await fetch(`http://localhost:${app.httpPort!}/`);
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    assert.match(body, /src="\.\/app\.js"/, "a real app.js file is linked");
+    assert.doesNotMatch(body, /href="\.\/app\.css"/, "a DIRECTORY named app.css is not linked");
+  } finally {
+    await app.stop();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

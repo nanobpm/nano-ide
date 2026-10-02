@@ -27,7 +27,7 @@
 
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { errorMessage, isRecord } from "../guards.ts";
-import type { EngineClient } from "../host.ts";
+import type { EngineClient, HttpResponse } from "../host.ts";
 import { html, json, type Route } from "../router.ts";
 import { cancelInstanceReconciling, type CancelInstanceResult } from "./cancel.ts";
 import { apiDocsPath } from "./api.ts";
@@ -90,6 +90,21 @@ export interface PagesDeps {
    */
   readAsset?(path: string): Promise<string>;
   /**
+   * Probe whether a static asset exists as a READABLE REGULAR FILE at an app-root-relative
+   * path, WITHOUT reading its bytes. The per-request shell build uses this for the app-owned
+   * `app.css`/`app.js` convention (#578): those files can be large and the shell is revalidated
+   * on every load, so probing via a full `readAsset` would put an avoidable read + allocation
+   * on the HTML hot path (and read the file twice — once here, once when the browser fetches
+   * it). Must answer the same question the `readAsset` fallback answers — "would serving this
+   * path succeed?" — so a directory (or unreadable entry) at the path is a NO. `mountPages`
+   * wires this to the optional `HostContext.statFile` (which opens the file for reading to
+   * confirm a readable regular file — never `HostContext.exists`, which is true for directories
+   * too, and a `pages/app.css/` DIRECTORY would link an asset the browser then 404s on).
+   * Optional; falls back to a read-based probe when absent.
+   * Injectable for tests.
+   */
+  existsAsset?(path: string): Promise<boolean>;
+  /**
    * List the available page ids (the `*.page.json` basenames under `pagesDir`),
    * powering the `/app/pages` index endpoint and a `nav` node's `items: "auto"`.
    * Optional; when absent the index is empty. Injectable for tests.
@@ -118,6 +133,13 @@ function javascript(
   };
 }
 
+// App-owned shell customisation by convention (nano-ide#578): an app MAY ship `pagesDir/app.css`
+// (linked AFTER the built-in renderer CSS, so its rules win — themes, restyling) and/or
+// `pagesDir/app.js` (an ES module loaded after the runtime — e.g. a theme picker). Each is served
+// as a root sidecar and referenced from the shell ONLY when the file exists, so apps without them
+// see no change and no 404.
+export const APP_ASSETS = ["app.css", "app.js"] as const;
+
 // The `appView` sidecar documents an app ships alongside its `*.page.json` under
 // `pagesDir` (ADR 0057 / #416 / #420). The renderer (#419) mounts an <iframe> whose
 // src is the node's base-relative `embed` (`./embed.html`), which — resolved against
@@ -130,7 +152,7 @@ function javascript(
 // `./board/embed.html`, …) — those are served by the nested prefix route below (#442);
 // this flat set stays as the single-appView back-compat case (#420). The `dist/` tree the
 // import-map references is served separately under the `/dist/` prefix below.
-const SIDECAR_ASSETS = ["embed.html", "standalone.html", "mount.js", "cockpit.css"] as const;
+const SIDECAR_ASSETS = ["embed.html", "standalone.html", "mount.js", "cockpit.css", ...APP_ASSETS] as const;
 
 // The app `dist/` directory (app-root sibling of the pages dir) the sidecar import-maps
 // resolve `../dist/…` onto. Because the embed is served at the mount root, `../dist`
@@ -226,6 +248,9 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   // Falls back to `readPage` when no dedicated reader is injected — both delegate to the same
   // `host.readTextFile`, so there is one source of file bytes, not two.
   const readAsset = deps.readAsset ?? readPage;
+  // Existence probe for the app-owned shell assets (#578): a dedicated `existsAsset` when the
+  // host offers one (a metadata stat — no file bytes cross the seam), else a read-based probe.
+  const existsAsset = deps.existsAsset ?? ((path: string) => readAsset(path).then(() => true, () => false));
 
   // The table-name whitelist is memoised: an Urban app runs its migrations at boot
   // (before serving), so the schema is stable for the process lifetime, and the renderer
@@ -262,16 +287,25 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   };
 
   const routes: Route[] = [];
-  const shell = html(rendererShell(homePage, opts.apiDocsPath, opts.gridLayout ?? "auto"));
   // The shell must never be pinned by the browser: it carries the *current* fingerprinted
   // runtime URL, so a stale shell would keep pointing at an old module hash. `no-cache` forces
   // a revalidation on every load; the shell body is tiny, and the expensive module it references
   // is what gets the long-lived immutable caching (via its content-hashed URL).
-  shell.headers = { ...shell.headers, "cache-control": "no-cache" };
+  // Built per request: it probes for the app-owned `app.css`/`app.js` (#578) so adding or removing
+  // one takes effect without a restart.
+  const shell = async (): Promise<HttpResponse> => {
+    const [appCss, appJs] = await Promise.all([
+      existsAsset(`${pagesDir}/app.css`),
+      existsAsset(`${pagesDir}/app.js`),
+    ]);
+    const res = html(rendererShell(homePage, opts.apiDocsPath, opts.gridLayout ?? "auto", { appCss, appJs }));
+    res.headers = { ...res.headers, "cache-control": "no-cache" };
+    return res;
+  };
 
   // ── the renderer shell + module ─────────────────────────────────────────
-  routes.push({ method: "GET", path: "/", source: "surface:pages", handler: () => shell });
-  routes.push({ method: "GET", path: "/index.html", source: "surface:pages", handler: () => shell });
+  routes.push({ method: "GET", path: "/", source: "surface:pages", handler: shell });
+  routes.push({ method: "GET", path: "/index.html", source: "surface:pages", handler: shell });
   // The fingerprinted module URL (referenced by the shell): unique per content, so cache it hard.
   routes.push({
     method: "GET",
@@ -299,11 +333,21 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
   // onto `pagesDir/<name>` (exact routes — never a root catch-all, which would shadow the
   // `/healthz` liveness route the runtime appends after the pages surface).
   for (const name of SIDECAR_ASSETS) {
+    // The app-owned `app.css`/`app.js` are MUTABLE at stable URLs — the whole point of the
+    // convention is that an edit (or a remove/re-add) takes effect without a restart, and the
+    // shell re-probes on every load. Serve them `no-cache` (like `/app/runtime.js`) so a
+    // browser/intermediary must revalidate instead of replaying a heuristically-cached 200/404.
+    // The other sidecars are deploy-time fixtures, so they keep the generic response.
+    const mutable = APP_ASSETS.some((a) => a === name);
     routes.push({
       method: "GET",
       path: `/${name}`,
       source: "surface:pages",
-      handler: () => serveAsset(readAsset, `${pagesDir}/${name}`),
+      handler: async () => {
+        const res = await serveAsset(readAsset, `${pagesDir}/${name}`);
+        if (mutable) res.headers = { ...res.headers, "cache-control": "no-cache" };
+        return res;
+      },
     });
   }
   // The `dist/` tree the sidecars' import-maps reference (`../dist/cockpit/index.js` →
@@ -653,12 +697,24 @@ export function mountPages(ctx: RuntimeContext, app: AppApi): PagesHandle {
   };
   const sourceName = opts.sourceName ?? "app";
   const bindings = ctx.manifest.instanceTracking ?? [];
+  // Probe "would serving this app-owned asset succeed?" — a READABLE REGULAR FILE, not the
+  // broader `HostContext.exists` (which is true for directories too, and a `pages/app.css/`
+  // DIRECTORY would link an asset the browser then 404s on). `statFile` is an OPTIONAL public
+  // host capability (a custom host need not implement it), and it opens the file for reading so
+  // no bytes cross the seam on the per-request shell hot path. Only wire the optimized probe
+  // when the host provides it; otherwise `createPagesRoutes` falls back to a read-based probe
+  // that answers the identical question.
+  const statFile = ctx.host.statFile?.bind(ctx.host);
+  const existsAsset = statFile
+    ? async (p: string) => (await statFile(p))?.isFile === true
+    : undefined;
   const routes = createPagesRoutes(opts, {
     db: app.data.open(sourceName),
     engine: app.engine,
     cancel: (key) => cancelInstanceReconciling(app, bindings, key),
     readPage: (p) => ctx.host.readTextFile(p),
     readAsset: (p) => ctx.host.readTextFile(p),
+    existsAsset,
     listPages: async () => {
       const dir = opts.pagesDir ?? "pages";
       const names = await ctx.host.listDir(dir).catch(() => []);
@@ -679,7 +735,12 @@ function escapeAttr(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function rendererShell(homePage: string, apiDocsPath: string | undefined, gridLayout: GridLayout): string {
+function rendererShell(
+  homePage: string,
+  apiDocsPath: string | undefined,
+  gridLayout: GridLayout,
+  app: { appCss: boolean; appJs: boolean } = { appCss: false, appJs: false },
+): string {
   // A persistent "API docs" badge (spec-first apps get their Swagger UI linked from their own
   // UI for free). `target="_blank"` + hardened `rel` so the docs open without giving the docs
   // tab a handle back to this window (reverse-tabnabbing).
@@ -704,12 +765,12 @@ function rendererShell(homePage: string, apiDocsPath: string | undefined, gridLa
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Urban App</title>
-  <style>${RENDERER_CSS}</style>
+  <style>${RENDERER_CSS}</style>${app.appCss ? '\n  <link rel="stylesheet" href="./app.css" />' : ""}
 </head>
 <body data-grid-layout="${gridLayout}">${apiDocsBadge}
   <main id="page" data-home="${escapeAttr(homePage)}"><p class="pc-empty">Loading…</p></main>
   <script>${FORMJS_JS}</script>
-  <script type="module" src=".${RUNTIME_JS_PATH}"></script>
+  <script type="module" src=".${RUNTIME_JS_PATH}"></script>${app.appJs ? '\n  <script type="module" src="./app.js"></script>' : ""}
 </body>
 </html>`;
 }
@@ -1095,5 +1156,8 @@ function fnv1aHex(s: string): string {
 // other page action) do nothing after an upgrade until a hard refresh. Because the URL is unique
 // per content, the response itself is served `immutable` with a one-year max-age.
 const RUNTIME_JS_HASH = fnv1aHex(RENDERER_JS);
-const RUNTIME_JS_PATH = `/app/runtime.${RUNTIME_JS_HASH}.js`;
+// Exported so tests can locate the actual fingerprinted runtime <script> tag in the shell
+// (asserting against the bare word "runtime" is unsound — it also appears in the embedded
+// renderer CSS, so such a test passes even if the app script were moved before the runtime).
+export const RUNTIME_JS_PATH = `/app/runtime.${RUNTIME_JS_HASH}.js`;
 const IMMUTABLE_CACHE = "public, max-age=31536000, immutable";

@@ -135,3 +135,38 @@ export function findPublishDrift(packages, graceHours = 0) {
 	}
 	return { ok: drifted.length === 0, drifted };
 }
+
+/**
+ * {@link findPublishDrift}, but tolerant of npm's read-path propagation lag (#582).
+ *
+ * A successful `npm publish` is not immediately visible to `npm view`: the registry's read path
+ * trails it by up to a couple of minutes. The terminal assertion in release.yml runs seconds after
+ * publish, so a single-shot check saw the OLD version and turned a good release red. On drift, this
+ * re-polls ONLY the drifted packages with exponential backoff (5s, 10s, 20s … capped at 60s) until
+ * they catch up or the `settleMs` budget is spent. A version that genuinely never published still
+ * fails — just after the window. `settleMs` 0 is the original single-shot check.
+ *
+ * @param {PackageState[]} packages
+ * @param {{ graceHours?: number, settleMs: number, refetch: (name: string) => Promise<string | null>,
+ *           sleep: (ms: number) => Promise<void> }} opts
+ * @returns {Promise<{ ok: boolean, drifted: DriftEntry[] }>}
+ */
+export async function settlePublishDrift(packages, opts) {
+	const graceHours = opts.graceHours ?? 0;
+	const states = packages.map((p) => ({ ...p }));
+	let result = findPublishDrift(states, graceHours);
+	let spent = 0;
+	let delay = 5_000;
+	while (!result.ok && spent < opts.settleMs) {
+		const wait = Math.min(delay, 60_000, opts.settleMs - spent);
+		await opts.sleep(wait);
+		spent += wait;
+		delay *= 2;
+		const lagging = new Set(result.drifted.map((d) => d.name));
+		for (const s of states) {
+			if (lagging.has(s.name)) s.npmVersion = await opts.refetch(s.name);
+		}
+		result = findPublishDrift(states, graceHours);
+	}
+	return result;
+}

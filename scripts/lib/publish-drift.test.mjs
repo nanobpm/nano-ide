@@ -8,7 +8,7 @@
 // is equal or ahead (a normal lagging local checkout).
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { cmpVersion, findPublishDrift, isAheadOfNpm, isNpmNotPublishedError, versionPathspec } from "./publish-drift.mjs";
+import { cmpVersion, findPublishDrift, isAheadOfNpm, isNpmNotPublishedError, settlePublishDrift, versionPathspec } from "./publish-drift.mjs";
 
 test("cmpVersion orders dotted numeric versions", () => {
 	assert.ok(cmpVersion("0.4.0", "0.1.0") > 0);
@@ -160,4 +160,74 @@ test("versionPathspec normalizes an absolute workspace dir to a repo-relative pa
 
 test("versionPathspec targets the repo-root package.json when dir is the cwd", () => {
 	assert.equal(versionPathspec("/repo", "/repo"), "./package.json");
+});
+
+// #582 — npm's read path lags a successful publish by minutes, so the terminal assertion in
+// release.yml (run seconds after publish) saw the OLD version and turned a good release red.
+// settlePublishDrift re-polls ONLY the drifted packages, with bounded backoff, before giving up.
+const fresh = (npmVersion) => [{ name: "@x/a", version: "0.95.0", private: false, npmVersion, ageHours: 0 }];
+
+test("#582: a version that becomes visible on npm within the settle window is NOT drift", async () => {
+	const seen = ["0.94.2", "0.94.2", "0.95.0"]; // stale, stale, then propagated
+	const slept = [];
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 300_000,
+		refetch: async () => seen.shift(),
+		sleep: async (ms) => slept.push(ms),
+	});
+	assert.equal(r.ok, true);
+	assert.equal(slept.length, 3);
+});
+
+test("#582: a version that never reaches npm still fails once the window is spent", async () => {
+	let elapsed = 0;
+	let polls = 0;
+	const r = await settlePublishDrift(fresh("0.94.2"), {
+		graceHours: 0,
+		settleMs: 60_000,
+		refetch: async () => {
+			polls++;
+			return "0.94.2";
+		},
+		sleep: async (ms) => {
+			elapsed += ms;
+		},
+	});
+	assert.equal(r.ok, false);
+	assert.equal(r.drifted[0].npmVersion, "0.94.2");
+	assert.ok(elapsed <= 60_000, `waited ${elapsed}ms, beyond the window`);
+	assert.ok(polls >= 2, "re-polled more than once");
+});
+
+test("#582: no drift → no waiting; settleMs 0 → today's single-shot behaviour", async () => {
+	let slept = 0;
+	const sleep = async () => {
+		slept++;
+	};
+	const refetch = async () => {
+		throw new Error("must not refetch");
+	};
+	assert.equal((await settlePublishDrift(fresh("0.95.0"), { graceHours: 0, settleMs: 300_000, refetch, sleep })).ok, true);
+	assert.equal((await settlePublishDrift(fresh("0.94.2"), { graceHours: 0, settleMs: 0, refetch, sleep })).ok, false);
+	assert.equal(slept, 0);
+});
+
+test("#582: only drifted packages are re-polled", async () => {
+	const polled = [];
+	const pkgs = [
+		{ name: "@x/ok", version: "1.0.0", private: false, npmVersion: "1.0.0", ageHours: 0 },
+		{ name: "@x/lag", version: "2.0.0", private: false, npmVersion: "1.9.0", ageHours: 0 },
+	];
+	const r = await settlePublishDrift(pkgs, {
+		graceHours: 0,
+		settleMs: 30_000,
+		refetch: async (name) => {
+			polled.push(name);
+			return "2.0.0";
+		},
+		sleep: async () => {},
+	});
+	assert.equal(r.ok, true);
+	assert.deepEqual(polled, ["@x/lag"]);
 });

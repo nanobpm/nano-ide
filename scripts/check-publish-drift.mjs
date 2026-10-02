@@ -25,16 +25,19 @@
 //   --grace-hours N  Tolerate a version that landed on `main` < N hours ago (an
 //                    in-flight release). Default 6. Use 0 for the terminal
 //                    assertion in release.yml (publish has just run — no grace).
+//   --settle-seconds N  On drift, keep re-polling the drifted packages for up to N seconds
+//                    before failing — npm's read path lags a fresh publish by minutes (#582).
+//                    Default 0 (single shot). release.yml's terminal assertion uses 300.
 //   --open-issue     On drift, open or update a tracking issue via `gh` (needs
 //                    GH_TOKEN). Always still prints ::error:: and exits non-zero.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { findPublishDrift, isNpmNotPublishedError, versionPathspec } from "./lib/publish-drift.mjs";
+import { isNpmNotPublishedError, settlePublishDrift, versionPathspec } from "./lib/publish-drift.mjs";
 
 /** Parse the small flag set this script accepts. */
 function parseArgs(argv) {
-	const opts = { graceHours: 6, openIssue: false };
+	const opts = { graceHours: 6, settleSeconds: 0, openIssue: false };
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "--grace-hours") {
@@ -44,6 +47,13 @@ function parseArgs(argv) {
 				process.exit(2);
 			}
 			opts.graceHours = n;
+		} else if (a === "--settle-seconds") {
+			const n = Number(argv[++i]);
+			if (!Number.isFinite(n) || n < 0) {
+				console.error(`::error::--settle-seconds needs a non-negative number, got "${argv[i]}"`);
+				process.exit(2);
+			}
+			opts.settleSeconds = n;
 		} else if (a === "--open-issue") {
 			opts.openIssue = true;
 		} else {
@@ -220,12 +230,21 @@ function openTrackingIssue(drifted) {
 
 const opts = parseArgs(process.argv.slice(2));
 const states = collectPackageStates(workspaceDirs());
-const { ok, drifted } = findPublishDrift(states, opts.graceHours);
+const { ok, drifted } = await settlePublishDrift(states, {
+	graceHours: opts.graceHours,
+	settleMs: opts.settleSeconds * 1000,
+	refetch: async (name) => {
+		const v = npmVersionOf(name);
+		console.log(`check:publish-drift — re-polled ${name}: npm ${v ?? "(never published)"}`);
+		return v;
+	},
+	sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+});
 
 if (ok) {
 	console.log(
 		`check:publish-drift — ${states.length} public package(s), all versions on npm ` +
-			`(grace ${opts.graceHours}h). ✅`,
+			`(grace ${opts.graceHours}h, settle ${opts.settleSeconds}s). ✅`,
 	);
 	process.exit(0);
 }

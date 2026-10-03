@@ -78,7 +78,18 @@ export class Gateway {
     mkdirSync(dataDir, { recursive: true });
     const port = await freePort();
     const gw = new Gateway(bin, port, dataDir, scratchDir);
-    await gw.start();
+    try {
+      await gw.start();
+    } catch (err) {
+      // `start()` spawns the child *before* `waitForTopology` can reject (e.g. a topology
+      // timeout), but `launch()` then rejects before the caller ever receives `gw` — so no
+      // caller `finally` can stop the process or remove the scratch dir. Tear down the
+      // partially-launched gateway here so a startup failure leaks neither a child process
+      // nor its data dir, then rethrow.
+      gw.kill();
+      rmSync(scratchDir, { recursive: true, force: true });
+      throw err;
+    }
     return gw;
   }
 

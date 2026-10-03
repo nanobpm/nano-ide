@@ -142,6 +142,14 @@ export {
   presentFormIdentifier,
   resolveFormIdentifier,
 } from "./core/form-contract.ts";
+// The adapter-agnostic process-definition-identity normalizer (the single mapping both
+// `createInstance` and `searchProcessInstances` use), shared so the live SDK adapter and the WASM
+// test adapter cannot drift. `ProcessDefinitionIdentity` itself is re-exported from `./core/host.ts`.
+export {
+  pickProcessDefinitionIdentity,
+  presentEngineKey,
+  presentString,
+} from "./core/process-identity.ts";
 export type { AppApi, Mounted, RuntimeContext } from "./core/context.ts";
 // Structured logging surface (see core/logger.ts): the shape of `AppApi.log`, plus `createLogger`
 // so consumers can build a Logger for a custom sink or a no-op test double (`createLogger(() => {})`).

@@ -33,7 +33,6 @@ import type {
   JobHandler,
   JobSummary,
   CreatedProcessInstance,
-  ProcessDefinitionIdentity,
   ProcessInstanceSnapshot,
   ProcessInstanceState,
   UserTaskState,
@@ -50,7 +49,12 @@ import type {
   TranscriptTurnMetrics,
   TranscriptTurnRole,
 } from "@nanobpm/agentic/transcript";
-import { assertDeployedWaitStateType, isBpmnError, presentFormIdentifier } from "../core/host.ts";
+import { assertDeployedWaitStateType, isBpmnError } from "../core/host.ts";
+import {
+  pickProcessDefinitionIdentity,
+  presentEngineKey,
+  presentString,
+} from "../core/process-identity.ts";
 import {
   buildFormSchema,
   parseFormSchema,
@@ -155,43 +159,9 @@ export function normalizeIncidentState(raw: unknown): IncidentState {
   }
 }
 
-/** A non-empty string form of an engine key/id, or `undefined` when absent/blank (including a
- *  whitespace-only string). Coerces a numeric key to a string (the engine may serialize a key
- *  either way) but never `String(...)`-coerces an arbitrary object into a garbage
- *  `"[object Object]"` id. The blank check trims, matching `getElementInstance`'s blank-key
- *  guard and the form-key presence helpers, so a `"   "` key can never leak into a result. */
-function presentEngineKey(value: unknown): string | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? String(value) : undefined;
-  }
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed === "" ? undefined : trimmed;
-}
-
-/** A present string-only identifier (e.g. a BPMN process id) under the shared trim rule
- *  ({@link presentFormIdentifier}); a non-string is absent and never `String(...)`-coerced. */
-function presentString(value: unknown): string | undefined {
-  return typeof value === "string" ? presentFormIdentifier(value) : undefined;
-}
-
-/** The {@link ProcessDefinitionIdentity} an engine row (a create response or a process-instance
- *  search row) reports — the single mapping both `createInstance` and `searchProcessInstances`
- *  use, so a created instance and its later snapshot describe the same definition identically.
- *  Each field passes the shared presence rule; a version that is not a positive integer number is
- *  omitted (never coerced). */
-function pickProcessDefinitionIdentity(row: Record<string, unknown>): ProcessDefinitionIdentity {
-  const processDefinitionKey = presentEngineKey(row.processDefinitionKey);
-  const processDefinitionId = presentString(row.processDefinitionId);
-  const version = row.processDefinitionVersion;
-  const processDefinitionVersion =
-    typeof version === "number" && Number.isInteger(version) && version > 0 ? version : undefined;
-  return {
-    ...(processDefinitionKey ? { processDefinitionKey } : {}),
-    ...(processDefinitionId ? { processDefinitionId } : {}),
-    ...(processDefinitionVersion !== undefined ? { processDefinitionVersion } : {}),
-  };
-}
+// Engine-key / process-definition-identity normalization now lives in the shared, adapter-agnostic
+// `../core/process-identity.ts` (imported above) so the live SDK adapter and the WASM test adapter
+// run the *same* mapping — see that module's header for the drift class this removes.
 
 /** The non-empty, trimmed string form of a *required* engine key, or throws when the value is
  *  absent/blank (including a whitespace-only string). A mutating seam operation addresses a

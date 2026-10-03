@@ -43,6 +43,8 @@ import {
   type JobFilter,
   type JobHandler,
   type JobSummary,
+  pickProcessDefinitionIdentity,
+  type ProcessDefinitionIdentity,
   type UserTaskState,
   type UserTaskFilter,
   type VariableFilter,
@@ -67,34 +69,12 @@ import {
 } from "@nanobpm/engine-testkit";
 export { type ProcessInstanceState, wasmStateToProcessInstanceState };
 
-/** Which deployed definition an instance runs — the identity both {@link
- *  EngineClient.createInstance} and {@link EngineClient.searchProcessInstances} report.
- *  Structurally identical to urban's `ProcessDefinitionIdentity`. */
-export interface ProcessDefinitionIdentity {
-  readonly processDefinitionKey?: string;
-  readonly processDefinitionId?: string;
-  readonly processDefinitionVersion?: number;
-}
-
-/** The {@link ProcessDefinitionIdentity} a read-model process-instance row reports — the single
- *  mapping both `createInstance` and `searchProcessInstances` use (mirrors `SdkEngineClient`'s:
- *  key/id under the shared presence rule, a version only when a positive integer number). */
-export function pickProcessDefinitionIdentity(row: {
-  processDefinitionKey?: unknown;
-  processDefinitionId?: unknown;
-  processDefinitionVersion?: unknown;
-}): ProcessDefinitionIdentity {
-  const processDefinitionKey = presentKey(row.processDefinitionKey);
-  const processDefinitionId = presentString(row.processDefinitionId);
-  const version = row.processDefinitionVersion;
-  const processDefinitionVersion =
-    typeof version === "number" && Number.isInteger(version) && version > 0 ? version : undefined;
-  return {
-    ...(processDefinitionKey ? { processDefinitionKey } : {}),
-    ...(processDefinitionId ? { processDefinitionId } : {}),
-    ...(processDefinitionVersion !== undefined ? { processDefinitionVersion } : {}),
-  };
-}
+/** Which deployed definition an instance runs, and the single mapping both {@link
+ *  EngineClient.createInstance} and {@link EngineClient.searchProcessInstances} use to report it.
+ *  Both are the *canonical* urban-runtime definitions (imported above and re-exported here for the
+ *  testkit's public surface) — this adapter no longer keeps its own copy, so the live SDK adapter
+ *  and this WASM test adapter cannot drift (No Drift Surfaces; see urban's `core/process-identity.ts`). */
+export { type ProcessDefinitionIdentity, pickProcessDefinitionIdentity };
 
 /** A single process instance's lifecycle snapshot, as returned by
  *  {@link EngineClient.searchProcessInstances}. Structurally identical to urban's. */

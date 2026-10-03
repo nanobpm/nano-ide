@@ -73,10 +73,15 @@ export class Gateway {
   static async launch(scratchDir: string): Promise<Gateway> {
     const bin = resolveServerBin();
     if (!bin) throw new Error("no gateway binary");
+    // Acquire the port *before* creating the scratch dir: `freePort()` can reject (its
+    // `createServer` 'error' event — EADDRINUSE/EMFILE under fd pressure), and that rejection
+    // escapes `launch()` before the try/catch below, so a dir created first would be leaked —
+    // the same partial-launch leak class the `start()` catch handles. Acquiring the port first
+    // leaves nothing to clean up on that path.
+    const port = await freePort();
     rmSync(scratchDir, { recursive: true, force: true });
     const dataDir = join(scratchDir, "data");
     mkdirSync(dataDir, { recursive: true });
-    const port = await freePort();
     const gw = new Gateway(bin, port, dataDir, scratchDir);
     try {
       await gw.start();

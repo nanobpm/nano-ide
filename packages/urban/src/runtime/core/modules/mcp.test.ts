@@ -616,6 +616,30 @@ test("the framework debug tools appear and return engine truth", async () => {
   assert.deepEqual(JSON.parse(text), [snapshot]);
 });
 
+test("urban_debug_search_process_instances forwards a processDefinitionId selector", async () => {
+  const seen: unknown[] = [];
+  const engine = fakeEngine({
+    searchProcessInstances: async (filter) => {
+      seen.push(filter);
+      return [];
+    },
+  });
+  const { router } = buildHarness({ engine });
+  const session = await connect(router);
+  const list = await rpc(router, session, "tools/list", {});
+  const tools = list.result?.tools;
+  assert.ok(Array.isArray(tools));
+  const tool = tools.find((t) => Reflect.get(t, "name") === "urban_debug_search_process_instances");
+  const props = Reflect.get(Reflect.get(tool ?? {}, "inputSchema") ?? {}, "properties");
+  assert.ok(props && typeof props === "object" && "processDefinitionId" in props);
+
+  await rpc(router, session, "tools/call", {
+    name: "urban_debug_search_process_instances",
+    arguments: { processDefinitionId: "order", state: "ACTIVE" },
+  });
+  assert.deepEqual(seen, [{ state: "ACTIVE", processDefinitionId: "order" }]);
+});
+
 test("urban_debug_search_variables / search_jobs / get_process_definition_xml are read tools returning engine truth", async () => {
   const variable = {
     variableKey: "v-1",

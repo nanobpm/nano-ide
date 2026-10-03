@@ -108,6 +108,8 @@ export type {
   JobFilter,
   JobHandler,
   JobSummary,
+  CreatedProcessInstance,
+  ProcessDefinitionIdentity,
   ProcessInstanceSnapshot,
   ProcessInstanceState,
   SqliteDb,

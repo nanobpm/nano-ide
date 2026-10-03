@@ -6,6 +6,7 @@ import {
   deriveElementInstances,
   deriveWaitStates,
   parseForm,
+  pickProcessDefinitionIdentity,
   presentKey,
   presentString,
   requireKey,
@@ -18,6 +19,28 @@ import { BpmnError, readLineage } from "@nanobpm/urban/runtime";
 runEngineClientContract("wasm", () => createWasmEngineClient());
 
 // Adapter-specific behaviour beyond the shared contract.
+
+test("pickProcessDefinitionIdentity normalizes present fields and omits blank/malformed ones", () => {
+  assert.deepEqual(
+    pickProcessDefinitionIdentity({
+      processDefinitionKey: 7,
+      processDefinitionId: " order ",
+      processDefinitionVersion: 2,
+    }),
+    { processDefinitionKey: "7", processDefinitionId: "order", processDefinitionVersion: 2 },
+  );
+  // A non-string id, a blank key, and a non-integer/stringly version are absent — never coerced.
+  assert.deepEqual(
+    pickProcessDefinitionIdentity({
+      processDefinitionKey: "  ",
+      processDefinitionId: 5,
+      processDefinitionVersion: "2",
+    }),
+    {},
+  );
+  assert.deepEqual(pickProcessDefinitionIdentity({ processDefinitionVersion: 1.5 }), {});
+  assert.deepEqual(pickProcessDefinitionIdentity({ processDefinitionVersion: 0 }), {});
+});
 
 test("wasm: Terminating projects as TERMINATED (REST parity)", () => {
   assert.equal(wasmStateToProcessInstanceState("Terminating"), "TERMINATED");

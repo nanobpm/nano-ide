@@ -200,6 +200,43 @@ test("createInstance routes through the SDK and coerces the key", async () => {
   assert.ok(client.calls.includes("createProcessInstance"));
 });
 
+test("createInstance returns the started definition's identity (key, id, version)", async () => {
+  // The create response names exactly which deployed definition version the instance runs; the
+  // seam must surface it (normalized through the same presence rule as the search snapshot) so a
+  // caller need not race an eventually consistent search to learn it.
+  const client = fakeSdkClient({
+    createProcessInstance: async () => ({
+      processInstanceKey: 99,
+      processDefinitionKey: 2251799813685249,
+      processDefinitionId: " order ",
+      processDefinitionVersion: 3,
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const res = await engine.createInstance({ processDefinitionId: "order" });
+  assert.deepEqual(res, {
+    processInstanceKey: "99",
+    processDefinitionKey: "2251799813685249",
+    processDefinitionId: "order",
+    processDefinitionVersion: 3,
+    variables: undefined,
+  });
+});
+
+test("createInstance omits definition identity fields the engine leaves blank or malformed", async () => {
+  const client = fakeSdkClient({
+    createProcessInstance: async () => ({
+      processInstanceKey: "99",
+      processDefinitionKey: "  ",
+      processDefinitionId: "",
+      processDefinitionVersion: "3", // not a number → omitted, never coerced
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  const res = await engine.createInstance({ processDefinitionId: "order" });
+  assert.deepEqual(res, { processInstanceKey: "99", variables: undefined });
+});
+
 test("createInstance throws when the SDK response omits the instance key", async () => {
   const client = fakeSdkClient({
     createProcessInstance: async () => ({ variables: { ok: true } }),
@@ -619,6 +656,51 @@ test("searchProcessInstances surfaces the parent/root linkage keys and drops bla
       rootProcessInstanceKey: "30",
     },
     { processInstanceKey: "11", state: "COMPLETED" },
+  ]);
+});
+
+test("searchProcessInstances forwards a processDefinitionId selector (trimmed, blank dropped)", async () => {
+  const seen: unknown[] = [];
+  const client = fakeSdkClient({
+    searchProcessInstances: async (input) => {
+      seen.push(input);
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  await engine.searchProcessInstances({ processDefinitionId: " order ", state: "ACTIVE" });
+  await engine.searchProcessInstances({ processDefinitionId: "   " });
+  assert.deepEqual(seen, [
+    { filter: { state: "ACTIVE", processDefinitionId: "order" } },
+    { filter: {} },
+  ]);
+});
+
+test("searchProcessInstances surfaces each instance's definition identity", async () => {
+  const client = fakeSdkClient({
+    searchProcessInstances: async () => ({
+      items: [
+        {
+          processInstanceKey: 10,
+          state: "ACTIVE",
+          processDefinitionKey: 5,
+          processDefinitionId: "order",
+          processDefinitionVersion: 2,
+        },
+        { processInstanceKey: 11, state: "ACTIVE", processDefinitionId: " ", processDefinitionVersion: null },
+      ],
+    }),
+  });
+  const engine = new SdkEngineClient(client);
+  assert.deepEqual(await engine.searchProcessInstances(), [
+    {
+      processInstanceKey: "10",
+      state: "ACTIVE",
+      processDefinitionKey: "5",
+      processDefinitionId: "order",
+      processDefinitionVersion: 2,
+    },
+    { processInstanceKey: "11", state: "ACTIVE" },
   ]);
 });
 

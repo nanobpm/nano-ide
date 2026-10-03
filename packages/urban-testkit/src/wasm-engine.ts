@@ -67,12 +67,40 @@ import {
 } from "@nanobpm/engine-testkit";
 export { type ProcessInstanceState, wasmStateToProcessInstanceState };
 
+/** Which deployed definition an instance runs — the identity both {@link
+ *  EngineClient.createInstance} and {@link EngineClient.searchProcessInstances} report.
+ *  Structurally identical to urban's `ProcessDefinitionIdentity`. */
+export interface ProcessDefinitionIdentity {
+  readonly processDefinitionKey?: string;
+  readonly processDefinitionId?: string;
+  readonly processDefinitionVersion?: number;
+}
+
+/** The {@link ProcessDefinitionIdentity} a read-model process-instance row reports — the single
+ *  mapping both `createInstance` and `searchProcessInstances` use (mirrors `SdkEngineClient`'s:
+ *  key/id under the shared presence rule, a version only when a positive integer number). */
+export function pickProcessDefinitionIdentity(row: {
+  processDefinitionKey?: unknown;
+  processDefinitionId?: unknown;
+  processDefinitionVersion?: unknown;
+}): ProcessDefinitionIdentity {
+  const processDefinitionKey = presentKey(row.processDefinitionKey);
+  const processDefinitionId = presentString(row.processDefinitionId);
+  const version = row.processDefinitionVersion;
+  const processDefinitionVersion =
+    typeof version === "number" && Number.isInteger(version) && version > 0 ? version : undefined;
+  return {
+    ...(processDefinitionKey ? { processDefinitionKey } : {}),
+    ...(processDefinitionId ? { processDefinitionId } : {}),
+    ...(processDefinitionVersion !== undefined ? { processDefinitionVersion } : {}),
+  };
+}
+
 /** A single process instance's lifecycle snapshot, as returned by
  *  {@link EngineClient.searchProcessInstances}. Structurally identical to urban's. */
-export interface ProcessInstanceSnapshot {
+export interface ProcessInstanceSnapshot extends ProcessDefinitionIdentity {
   readonly processInstanceKey: string;
   readonly state: ProcessInstanceState;
-  readonly processDefinitionKey?: string;
   readonly parentProcessInstanceKey?: string;
   readonly rootProcessInstanceKey?: string;
 }
@@ -379,7 +407,10 @@ export class WasmEngineClient implements EngineClient {
     processDefinitionId: string;
     variables?: Record<string, unknown>;
     awaitCompletion?: boolean;
-  }): Promise<{ processInstanceKey: string; variables?: Record<string, unknown> }> {
+  }): Promise<ProcessDefinitionIdentity & {
+    processInstanceKey: string;
+    variables?: Record<string, unknown>;
+  }> {
     const snap = this.#parseObj(
       this.#liveEngine.createInstance(
         input.processDefinitionId,
@@ -389,16 +420,24 @@ export class WasmEngineClient implements EngineClient {
       ),
     );
     const processInstanceKey = requireCreated(snap.created);
+    // The create snapshot does not name the definition version it resolved to; the read model's
+    // row for the new instance does, so derive the identity from it (the same row
+    // `searchProcessInstances` maps) rather than re-resolving "latest version" here. Read it
+    // *before* draining: the identity is fixed at creation, and a worker may `close()` the
+    // engine mid-drain, after which the read model is gone.
+    const [row] = await this.searchProcessInstances({ processInstanceKeys: [processInstanceKey] });
+    const identity: ProcessDefinitionIdentity = row ? pickProcessDefinitionIdentity(row) : {};
     // Registered workers run autonomously against a live engine; mirror that by
     // draining to quiescence so a job whose worker is registered is served now.
     await this.drain();
     if (input.awaitCompletion) {
       return {
         processInstanceKey,
+        ...identity,
         variables: this.#instanceVariables(processInstanceKey),
       };
     }
-    return { processInstanceKey };
+    return { processInstanceKey, ...identity };
   }
 
   async cancelInstance(input: { processInstanceKey: string }): Promise<void> {
@@ -590,6 +629,7 @@ export class WasmEngineClient implements EngineClient {
   async searchProcessInstances(filter?: {
     processInstanceKeys?: string[];
     state?: ProcessInstanceState;
+    processDefinitionId?: string;
     parentProcessInstanceKey?: string;
     rootProcessInstanceKey?: string;
   }): Promise<ProcessInstanceSnapshot[]> {
@@ -620,6 +660,8 @@ export class WasmEngineClient implements EngineClient {
     // selector via `presentEngineKey` before sending it server-side). No Drift Surfaces.
     const wantParentProcessInstanceKey = presentKey(filter?.parentProcessInstanceKey);
     const wantRootProcessInstanceKey = presentKey(filter?.rootProcessInstanceKey);
+    // Same presence rule for the BPMN process-id selector: blank → absent (matches everything).
+    const wantProcessDefinitionId = presentString(filter?.processDefinitionId);
     // Same untyped-JSON defence as `searchUserTasks`: `searchRows` guards the body and drops
     // non-object rows so a malformed/changed engine response can't throw while reading
     // `inst.processInstanceKey`.
@@ -649,11 +691,17 @@ export class WasmEngineClient implements EngineClient {
       ) {
         continue;
       }
-      const processDefinitionKey = presentKey(inst.processDefinitionKey);
+      const identity = pickProcessDefinitionIdentity(inst);
+      if (
+        wantProcessDefinitionId !== undefined &&
+        identity.processDefinitionId !== wantProcessDefinitionId
+      ) {
+        continue;
+      }
       out.push({
         processInstanceKey: key,
         state,
-        ...(processDefinitionKey ? { processDefinitionKey } : {}),
+        ...identity,
         ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),
         ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
       });

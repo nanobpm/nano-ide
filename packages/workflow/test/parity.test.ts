@@ -4,7 +4,7 @@
 // against the built `dist` artifacts.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -357,7 +357,7 @@ const skip = hasBin ? false : "no gateway binary built (set SERVER_BIN or `make 
 
 test("deploySmoke: deploys a derived model to a live engine and asserts acceptance", { skip }, async () => {
   const scratch = join(HERE, `.smoke-${process.pid}`);
-  const gw = await Gateway.create(scratch);
+  const gw = await Gateway.launch(scratch);
   try {
     const res = await deploySmoke(smokeFlow, { baseUrl: gw.baseUrl, transport: "rest" });
     assert.equal(res.skipped, false);
@@ -365,5 +365,6 @@ test("deploySmoke: deploys a derived model to a live engine and asserts acceptan
     assert.ok(res.result && typeof res.result === "object");
   } finally {
     await gw.stop();
+    rmSync(scratch, { recursive: true, force: true });
   }
 });

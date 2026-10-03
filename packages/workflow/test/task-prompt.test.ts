@@ -4,6 +4,7 @@
 // (`resourceType="GenericScript" linkName="prompt"`), alongside the existing
 // `zeebe:taskDefinition` capability token. The no-prompt path must be unchanged
 // (no `linkedResources`). Run against the built `dist` artifacts.
+import { rmSync } from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { dirname, join } from "node:path";
@@ -189,7 +190,7 @@ const skip = resolveServerBin() ? false : "no gateway binary built (set SERVER_B
 
 test("deploySmoke: the derived retro agent model deploys to a live engine", { skip }, async () => {
   const scratch = join(HERE, `.smoke-prompt-${process.pid}`);
-  const gw = await Gateway.create(scratch);
+  const gw = await Gateway.launch(scratch);
   try {
     const res = await deploySmoke(retro, { baseUrl: gw.baseUrl, transport: "rest" });
     assert.equal(res.skipped, false);
@@ -197,5 +198,6 @@ test("deploySmoke: the derived retro agent model deploys to a live engine", { sk
     assert.ok(res.result && typeof res.result === "object");
   } finally {
     await gw.stop();
+    rmSync(scratch, { recursive: true, force: true });
   }
 });

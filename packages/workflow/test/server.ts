@@ -65,16 +65,24 @@ export class Gateway {
     this.baseUrl = `http://localhost:${port}`;
   }
 
-  static async create(scratchDir: string): Promise<Gateway> {
+  /** Allocate a fresh scratch dir + port and **start** the gateway, resolving once it serves
+   *  `/v2/topology`. The only way to obtain a `Gateway`: there is deliberately no
+   *  "allocated but not started" handle, so a test cannot point a client at a `baseUrl` nothing
+   *  is listening on (the `fetch failed` defect the deploySmoke tests once had). Use
+   *  {@link start} only to *re*start after {@link kill}/{@link stop}. */
+  static async launch(scratchDir: string): Promise<Gateway> {
     const bin = resolveServerBin();
     if (!bin) throw new Error("no gateway binary");
     rmSync(scratchDir, { recursive: true, force: true });
     const dataDir = join(scratchDir, "data");
     mkdirSync(dataDir, { recursive: true });
     const port = await freePort();
-    return new Gateway(bin, port, dataDir, scratchDir);
+    const gw = new Gateway(bin, port, dataDir, scratchDir);
+    await gw.start();
+    return gw;
   }
 
+  /** (Re)start the process against the same data dir + port — for restart-after-crash tests. */
   async start(): Promise<void> {
     // The child dups the fd for its stdio, so close our copy after spawn to
     // avoid leaking a descriptor per restart (ENFILE/EMFILE on long runs).

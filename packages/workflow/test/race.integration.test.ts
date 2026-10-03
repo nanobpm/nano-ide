@@ -19,8 +19,7 @@ const skip = resolveServerBin() ? false : "no gateway binary built (set SERVER_B
 
 test("declarative race parks on both arms, the message wins, the timer loser is cancelled, and the instance completes", { skip }, async () => {
   const scratch = join(HERE, ".it", "race");
-  const gw = await Gateway.create(scratch);
-  await gw.start();
+  const gw = await Gateway.launch(scratch);
 
   const ran = new Set<string>();
   // A far-future timer so the message deterministically wins the race.

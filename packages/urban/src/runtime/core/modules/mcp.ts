@@ -70,6 +70,7 @@ import type {
   HttpResponse,
   IncidentFilter,
   JobFilter,
+  EngineClient,
   ProcessInstanceState,
   SqliteDb,
   UserTaskFilter,
@@ -544,20 +545,24 @@ function buildDebugTools(app: AppApi): DebugTool[] {
   return [
     {
       name: `${DEBUG_PREFIX}search_process_instances`,
-      description: "Engine truth: search process instances by key and/or lifecycle state.",
+      description:
+        "Engine truth: search process instances by key, BPMN process id (processDefinitionId, any version), and/or lifecycle state.",
       inputSchema: {
         type: "object",
         properties: {
           processInstanceKeys: { type: "array", items: OPTIONAL_STRING },
+          processDefinitionId: OPTIONAL_STRING,
           state: { type: "string", enum: ["ACTIVE", "COMPLETED", "TERMINATED"] },
         },
       },
       run: (args) => {
-        const filter: { processInstanceKeys?: string[]; state?: ProcessInstanceState } = {};
+        const filter: NonNullable<Parameters<EngineClient["searchProcessInstances"]>[0]> = {};
         const keys = readStringArray(args, "processInstanceKeys");
         if (keys) filter.processInstanceKeys = keys;
         const state = readProcessInstanceState(args, "state");
         if (state) filter.state = state;
+        const processDefinitionId = readPresentString(args, "processDefinitionId");
+        if (processDefinitionId) filter.processDefinitionId = processDefinitionId;
         return app.engine.searchProcessInstances(filter);
       },
     },

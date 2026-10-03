@@ -103,15 +103,33 @@ export class Gateway {
     // The child dups the fd for its stdio, so close our copy after spawn to
     // avoid leaking a descriptor per restart (ENFILE/EMFILE on long runs).
     const fd = openSync(join(this.logDir, `server-${++this.restarts}.log`), "a");
+    let proc: ChildProcess;
     try {
-      this.proc = spawn(this.bin, [], {
+      proc = spawn(this.bin, [], {
         env: { ...process.env, PORT: String(this.port), NANOBPMN_DATA_DIR: this.dataDir },
         stdio: ["ignore", fd, fd],
       });
+      this.proc = proc;
     } finally {
       closeSync(fd);
     }
-    await this.waitForTopology();
+    // Node reports a spawn/early-exec failure (a non-executable SERVER_BIN, spawn-time EMFILE,
+    // …) asynchronously as an 'error' event on the child, not via the spawn() call above. With no
+    // listener that event is *unhandled* and crashes the test process — and, worse for launch(),
+    // it never reaches the startup try/catch, so the process/dir cleanup is skipped. Race that
+    // rejection against topology readiness so a startup failure rejects start() (and runs the
+    // launch() cleanup) instead of killing the process. The listener is removed once either
+    // branch settles so a long-lived gateway does not accumulate one per restart.
+    let onError: ((err: Error) => void) | undefined;
+    const childError = new Promise<never>((_, reject) => {
+      onError = (err: Error) => reject(err);
+      proc.once("error", onError);
+    });
+    try {
+      await Promise.race([this.waitForTopology(), childError]);
+    } finally {
+      if (onError) proc.off("error", onError);
+    }
   }
 
   /** SIGKILL the process (a hard crash); the data dir is left intact. */

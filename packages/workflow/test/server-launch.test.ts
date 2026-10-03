@@ -44,3 +44,37 @@ test("launch acquires the free port before creating the scratch dir (no pre-star
       "before the start() try/catch, so a dir created first would leak on that path",
   );
 });
+
+// Slice out the `async start(...)` body for the child-error rejection invariant below.
+function startBody(): string {
+  const start = SERVER_SRC.indexOf("async start():");
+  assert.notEqual(start, -1, "Gateway.start must exist");
+  const end = SERVER_SRC.indexOf("/** SIGKILL", start);
+  assert.notEqual(end, -1, "start body must be followed by kill()");
+  return SERVER_SRC.slice(start, end);
+}
+
+// The other half of the partial-launch leak class: a spawn/early-exec failure (a non-executable
+// SERVER_BIN, spawn-time EMFILE) is reported by Node as an 'error' event on the child, NOT via
+// the spawn() call. If start() only awaits topology readiness, that event is unhandled — it kills
+// the test process and never reaches launch()'s try/catch, so the process/dir cleanup is skipped.
+// Pin that start() rejects on the child's 'error' event (raced against readiness) so the failure
+// becomes a rejected promise the launch() cleanup can handle.
+test("start rejects on the child process 'error' event (startup failure reaches launch cleanup)", () => {
+  const body = startBody();
+  assert.ok(
+    body.includes(`once("error"`) || body.includes("once('error'"),
+    "start() must subscribe to the child's 'error' event so a spawn/exec failure rejects instead " +
+      "of crashing the test process as an unhandled 'error' event",
+  );
+  assert.ok(
+    body.includes("Promise.race("),
+    "start() must race the child 'error' rejection against topology readiness so a startup " +
+      "failure rejects start() (running the launch() cleanup) rather than hanging until timeout",
+  );
+  assert.ok(
+    body.includes(`off("error"`) || body.includes("off('error'"),
+    "start() must remove the 'error' listener once settled so a long-lived gateway does not " +
+      "accumulate one listener per restart",
+  );
+});

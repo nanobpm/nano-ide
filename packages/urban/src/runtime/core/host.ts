@@ -257,14 +257,35 @@ export type ProcessInstanceState = "ACTIVE" | "COMPLETED" | "TERMINATED";
  */
 export type UserTaskState = "CREATED" | "COMPLETED" | "CANCELED" | "FAILED";
 
-/** A single process instance's lifecycle snapshot returned by {@link EngineClient.searchProcessInstances}. */
-export interface ProcessInstanceSnapshot {
-  readonly processInstanceKey: string;
-  readonly state: ProcessInstanceState;
+/**
+ * Which deployed process definition an instance runs — shared by the instance a
+ * {@link EngineClient.createInstance} starts and the {@link ProcessInstanceSnapshot} a
+ * {@link EngineClient.searchProcessInstances} reports, so the two describe the same instance
+ * identically. Each field is absent when the engine omits it (or reports it blank/malformed).
+ */
+export interface ProcessDefinitionIdentity {
   /** The key of the deployed process definition this instance runs — the handle a caller feeds to
    *  {@link EngineClient.getProcessDefinitionXml} to fetch the deployed BPMN (the instance →
-   *  `processDefinitionKey` → deployed XML path, no repo checkout). Absent when the engine omits it. */
+   *  `processDefinitionKey` → deployed XML path, no repo checkout). Unique per deployed version. */
   readonly processDefinitionKey?: string;
+  /** The BPMN process id (`<bpmn:process id>`) — stable across versions; the selector
+   *  {@link EngineClient.searchProcessInstances} accepts as `processDefinitionId`. */
+  readonly processDefinitionId?: string;
+  /** The deployed version of `processDefinitionId` this instance runs (1-based). */
+  readonly processDefinitionVersion?: number;
+}
+
+/** The instance {@link EngineClient.createInstance} started: its key, the exact deployed
+ *  definition version it runs, and — when `awaitCompletion` was requested — its final variables. */
+export interface CreatedProcessInstance extends ProcessDefinitionIdentity {
+  readonly processInstanceKey: string;
+  readonly variables?: Record<string, unknown>;
+}
+
+/** A single process instance's lifecycle snapshot returned by {@link EngineClient.searchProcessInstances}. */
+export interface ProcessInstanceSnapshot extends ProcessDefinitionIdentity {
+  readonly processInstanceKey: string;
+  readonly state: ProcessInstanceState;
   /** The key of this instance's *immediate* parent process instance — the caller that instantiated
    *  it as a native child (a `<bpmn:callActivity>`). `undefined` for a top-level (root) instance,
    *  and absent when the engine omits it (same optional/engine-provided convention as
@@ -741,12 +762,14 @@ export interface EngineClient {
   deployResources(
     resources: { name: string; content: string; contentType: string }[],
   ): Promise<{ deployed: number }>;
-  /** Start a process instance. */
+  /** Start a process instance of the latest deployed version of `processDefinitionId`. Returns
+   *  the new instance's key plus the {@link ProcessDefinitionIdentity} (key, id, version) of the
+   *  definition it actually runs. */
   createInstance(input: {
     processDefinitionId: string;
     variables?: Record<string, unknown>;
     awaitCompletion?: boolean;
-  }): Promise<{ processInstanceKey: string; variables?: Record<string, unknown> }>;
+  }): Promise<CreatedProcessInstance>;
   /** Cancel a running process instance (the pages surface's row-cancel action). */
   cancelInstance(input: { processInstanceKey: string }): Promise<void>;
   /** Publish a message for correlation. */
@@ -794,7 +817,8 @@ export interface EngineClient {
   /** Complete a user task. */
   completeUserTask(userTaskKey: string, variables?: Record<string, unknown>): Promise<void>;
   /**
-   * Search process instances by key and/or lifecycle state. The instance-tracking
+   * Search process instances by key, BPMN process id (`processDefinitionId`, any version),
+   * and/or lifecycle state. The instance-tracking
    * reconciler uses this to detect a tracked instance reaching a terminal state
    * (`TERMINATED`/`COMPLETED`) even though no completion worker ran for it — the
    * read-model row it backs would otherwise stay "active" forever. An eventually
@@ -804,6 +828,9 @@ export interface EngineClient {
   searchProcessInstances(filter?: {
     processInstanceKeys?: string[];
     state?: ProcessInstanceState;
+    /** Select only instances of this BPMN process id (every deployed version). A blank or
+     *  whitespace-only value is treated as absent (no filter). */
+    processDefinitionId?: string;
     /** Select only instances whose *immediate* parent is this process instance — the reduced-path
      *  query for "the native children spawned by this subject". */
     parentProcessInstanceKey?: string;

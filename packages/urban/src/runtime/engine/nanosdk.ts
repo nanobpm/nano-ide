@@ -32,6 +32,7 @@ import type {
   JobFilter,
   JobHandler,
   JobSummary,
+  CreatedProcessInstance,
   ProcessInstanceSnapshot,
   ProcessInstanceState,
   UserTaskState,
@@ -49,6 +50,11 @@ import type {
   TranscriptTurnRole,
 } from "@nanobpm/agentic/transcript";
 import { assertDeployedWaitStateType, isBpmnError } from "../core/host.ts";
+import {
+  pickProcessDefinitionIdentity,
+  presentEngineKey,
+  presentString,
+} from "../core/process-identity.ts";
 import {
   buildFormSchema,
   parseFormSchema,
@@ -153,19 +159,11 @@ export function normalizeIncidentState(raw: unknown): IncidentState {
   }
 }
 
-/** A non-empty string form of an engine key/id, or `undefined` when absent/blank (including a
- *  whitespace-only string). Coerces a numeric key to a string (the engine may serialize a key
- *  either way) but never `String(...)`-coerces an arbitrary object into a garbage
- *  `"[object Object]"` id. The blank check trims, matching `getElementInstance`'s blank-key
- *  guard and the form-key presence helpers, so a `"   "` key can never leak into a result. */
-function presentEngineKey(value: unknown): string | undefined {
-  if (typeof value === "number") {
-    return Number.isFinite(value) ? String(value) : undefined;
-  }
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed === "" ? undefined : trimmed;
-}
+// Engine-key / process-definition-identity normalization now lives in the shared, adapter-agnostic
+// `../core/process-identity.ts` (imported above), so this adapter's `createInstance` and
+// `searchProcessInstances` run the *same* mapping — see that module's header for the drift class
+// this removes. The WASM test adapter keeps a mirrored local copy until #585 (that module header's
+// "Ownership today" note), so the shared mapping is not yet a cross-adapter guarantee.
 
 /** The non-empty, trimmed string form of a *required* engine key, or throws when the value is
  *  absent/blank (including a whitespace-only string). A mutating seam operation addresses a
@@ -858,7 +856,7 @@ export class SdkEngineClient implements EngineClient {
     processDefinitionId: string;
     variables?: Record<string, unknown>;
     awaitCompletion?: boolean;
-  }): Promise<{ processInstanceKey: string; variables?: Record<string, unknown> }> {
+  }): Promise<CreatedProcessInstance> {
     // Auto-thread the `_urban.lineage` envelope (issue #254): a handler that spawns an
     // instance propagates its `rootRequestKey` and stamps `causedByInstanceKey`; a genuine
     // top-level request mints a fresh root. An explicit caller-supplied envelope wins.
@@ -873,6 +871,7 @@ export class SdkEngineClient implements EngineClient {
     const variables = isRecord(body.variables) ? body.variables : undefined;
     return {
       processInstanceKey: requireProcessInstanceKey(key),
+      ...pickProcessDefinitionIdentity(body),
       variables,
     };
   }
@@ -1003,11 +1002,15 @@ export class SdkEngineClient implements EngineClient {
   async searchProcessInstances(filter?: {
     processInstanceKeys?: string[];
     state?: ProcessInstanceState;
+    processDefinitionId?: string;
     parentProcessInstanceKey?: string;
     rootProcessInstanceKey?: string;
   }): Promise<ProcessInstanceSnapshot[]> {
     const f: Record<string, unknown> = {};
     if (filter?.state) f.state = filter.state;
+    // A blank BPMN process-id selector is absent, not an empty filter that matches nothing.
+    const processDefinitionId = presentString(filter?.processDefinitionId);
+    if (processDefinitionId) f.processDefinitionId = processDefinitionId;
     // Normalize each requested key through the shared presence rule (drop blank/whitespace-only
     // entries, trim padded ones like `" 123 "`) so the `$in` filter carries only present keys that
     // match the normalized keys we surface — mirroring `WasmEngineClient` and the selector
@@ -1051,13 +1054,12 @@ export class SdkEngineClient implements EngineClient {
         });
         return [];
       }
-      const processDefinitionKey = presentEngineKey(it.processDefinitionKey);
       const parentProcessInstanceKey = presentEngineKey(it.parentProcessInstanceKey);
       const rootProcessInstanceKey = presentEngineKey(it.rootProcessInstanceKey);
       return [{
         processInstanceKey,
         state,
-        ...(processDefinitionKey ? { processDefinitionKey } : {}),
+        ...pickProcessDefinitionIdentity(it),
         ...(parentProcessInstanceKey ? { parentProcessInstanceKey } : {}),
         ...(rootProcessInstanceKey ? { rootProcessInstanceKey } : {}),
       }];

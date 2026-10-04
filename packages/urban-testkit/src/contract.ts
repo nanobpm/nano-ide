@@ -45,6 +45,15 @@ const USER_TASK_BPMN = bpmn("human", `
   <sequenceFlow id="f2" sourceRef="review" targetRef="e"/>
   <endEvent id="e"/>`);
 
+/** A changed revision of {@link USER_TASK_BPMN} (same process id `human`, renamed task): deploying
+ *  it after the original creates definition version 2 under a new definition key. */
+const USER_TASK_V2_BPMN = bpmn("human", `
+  <startEvent id="s"/>
+  <sequenceFlow id="f1" sourceRef="s" targetRef="approve"/>
+  <userTask id="approve"><extensionElements><zeebe:userTask/></extensionElements></userTask>
+  <sequenceFlow id="f2" sourceRef="approve" targetRef="e"/>
+  <endEvent id="e"/>`);
+
 /**
  * Register the shared `EngineClient` contract as `node:test` cases, prefixed
  * with `label`. `makeEngine` must return a fresh, empty engine each call; the
@@ -174,6 +183,52 @@ export function runEngineClientContract(
         processInstanceKeys: [done.processInstanceKey],
       });
       assert.deepEqual(byKey.map((i) => i.processInstanceKey), [done.processInstanceKey]);
+    });
+  });
+
+  test(`${label}: createInstance returns the started definition's identity`, async () => {
+    await withEngine(async (engine) => {
+      await engine.deployResources(res(USER_TASK_BPMN));
+      const v1 = await engine.createInstance({ processDefinitionId: "human" });
+      assert.equal(v1.processDefinitionId, "human");
+      assert.equal(v1.processDefinitionVersion, 1);
+      assert.ok(v1.processDefinitionKey, "the deployed definition key is returned");
+
+      // A redeploy of changed BPMN is a new version with a new key; the next create reports it.
+      await engine.deployResources(res(USER_TASK_V2_BPMN));
+      const v2 = await engine.createInstance({ processDefinitionId: "human" });
+      assert.equal(v2.processDefinitionId, "human");
+      assert.equal(v2.processDefinitionVersion, 2);
+      assert.notEqual(v2.processDefinitionKey, v1.processDefinitionKey);
+
+      // The create-time identity agrees with what the read model later reports (one truth).
+      await waitFor(async () =>
+        (await engine.searchProcessInstances({ processInstanceKeys: [v2.processInstanceKey] })).length === 1
+      );
+      const [snap] = await engine.searchProcessInstances({ processInstanceKeys: [v2.processInstanceKey] });
+      assert.equal(snap?.processDefinitionKey, v2.processDefinitionKey);
+      assert.equal(snap?.processDefinitionId, v2.processDefinitionId);
+      assert.equal(snap?.processDefinitionVersion, v2.processDefinitionVersion);
+    });
+  });
+
+  test(`${label}: searchProcessInstances filters by processDefinitionId`, async () => {
+    await withEngine(async (engine) => {
+      await engine.deployResources(res(SERVICE_BPMN, USER_TASK_BPMN));
+      const svc = await engine.createInstance({ processDefinitionId: "svc" });
+      const human = await engine.createInstance({ processDefinitionId: "human" });
+      await waitFor(async () => (await engine.searchProcessInstances()).length >= 2);
+
+      const byId = await engine.searchProcessInstances({ processDefinitionId: "human" });
+      assert.deepEqual(byId.map((i) => i.processInstanceKey), [human.processInstanceKey]);
+      assert.ok(byId.every((i) => i.processDefinitionId === "human"));
+
+      // Composes with the other selectors, and a blank selector is absent (matches everything).
+      const svcActive = await engine.searchProcessInstances({ processDefinitionId: "svc", state: "ACTIVE" });
+      assert.deepEqual(svcActive.map((i) => i.processInstanceKey), [svc.processInstanceKey]);
+      assert.deepEqual(await engine.searchProcessInstances({ processDefinitionId: "nope" }), []);
+      const blank = await engine.searchProcessInstances({ processDefinitionId: "  " });
+      assert.equal(blank.length, 2);
     });
   });
 

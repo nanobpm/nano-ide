@@ -65,29 +65,77 @@ export class Gateway {
     this.baseUrl = `http://localhost:${port}`;
   }
 
-  static async create(scratchDir: string): Promise<Gateway> {
+  /** Allocate a fresh scratch dir + port and **start** the gateway, resolving once it serves
+   *  `/v2/topology`. The only way to obtain a `Gateway`: there is deliberately no
+   *  "allocated but not started" handle, so a test cannot point a client at a `baseUrl` nothing
+   *  is listening on (the `fetch failed` defect the deploySmoke tests once had). Use
+   *  {@link start} only to *re*start after {@link kill}/{@link stop}. */
+  static async launch(scratchDir: string): Promise<Gateway> {
     const bin = resolveServerBin();
     if (!bin) throw new Error("no gateway binary");
+    // Acquire the port *before* creating the scratch dir: `freePort()` can reject (its
+    // `createServer` 'error' event — EADDRINUSE/EMFILE under fd pressure), and that rejection
+    // escapes `launch()` before the try/catch below, so a dir created first would be leaked —
+    // the same partial-launch leak class the `start()` catch handles. Acquiring the port first
+    // leaves nothing to clean up on that path.
+    const port = await freePort();
     rmSync(scratchDir, { recursive: true, force: true });
     const dataDir = join(scratchDir, "data");
     mkdirSync(dataDir, { recursive: true });
-    const port = await freePort();
-    return new Gateway(bin, port, dataDir, scratchDir);
+    const gw = new Gateway(bin, port, dataDir, scratchDir);
+    try {
+      await gw.start();
+    } catch (err) {
+      // `start()` spawns the child *before* `waitForTopology` can reject (e.g. a topology
+      // timeout), but `launch()` then rejects before the caller ever receives `gw` — so no
+      // caller `finally` can stop the process or remove the scratch dir. Tear down the
+      // partially-launched gateway here so a startup failure leaks neither a child process
+      // nor its data dir, then rethrow.
+      gw.kill();
+      rmSync(scratchDir, { recursive: true, force: true });
+      throw err;
+    }
+    return gw;
   }
 
+  /** (Re)start the process against the same data dir + port — for restart-after-crash tests. */
   async start(): Promise<void> {
     // The child dups the fd for its stdio, so close our copy after spawn to
     // avoid leaking a descriptor per restart (ENFILE/EMFILE on long runs).
     const fd = openSync(join(this.logDir, `server-${++this.restarts}.log`), "a");
+    let proc: ChildProcess;
     try {
-      this.proc = spawn(this.bin, [], {
+      proc = spawn(this.bin, [], {
         env: { ...process.env, PORT: String(this.port), NANOBPMN_DATA_DIR: this.dataDir },
         stdio: ["ignore", fd, fd],
       });
+      this.proc = proc;
     } finally {
       closeSync(fd);
     }
-    await this.waitForTopology();
+    // Node reports a spawn/early-exec failure (a non-executable SERVER_BIN, spawn-time EMFILE,
+    // …) asynchronously as an 'error' event on the child, not via the spawn() call above. With no
+    // listener that event is *unhandled* and crashes the test process — and, worse for launch(),
+    // it never reaches the startup try/catch, so the process/dir cleanup is skipped. Race that
+    // rejection against topology readiness so a startup failure rejects start() (and runs the
+    // launch() cleanup) instead of killing the process. The listener is removed once either
+    // branch settles so a long-lived gateway does not accumulate one per restart.
+    let onError: ((err: Error) => void) | undefined;
+    const childError = new Promise<never>((_, reject) => {
+      onError = (err: Error) => reject(err);
+      proc.once("error", onError);
+    });
+    // When the child-error branch wins this race, waitForTopology() would otherwise keep polling
+    // (a fetch + 150ms sleep loop) until its 20s deadline — a background task that can keep the
+    // test process alive long after start() has already rejected. Abort the poll loop the moment
+    // the race settles so a lost topology race leaves no dangling polling task.
+    const topology = new AbortController();
+    try {
+      await Promise.race([this.waitForTopology(topology.signal), childError]);
+    } finally {
+      topology.abort();
+      if (onError) proc.off("error", onError);
+    }
   }
 
   /** SIGKILL the process (a hard crash); the data dir is left intact. */
@@ -107,16 +155,30 @@ export class Gateway {
     await sleep(200);
   }
 
-  private async waitForTopology(timeoutMs = 20000): Promise<void> {
+  private async waitForTopology(signal: AbortSignal, timeoutMs = 20000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (signal.aborted) return;
       try {
-        const res = await fetch(`${this.baseUrl}/v2/topology`);
+        const res = await fetch(`${this.baseUrl}/v2/topology`, { signal });
         if (res.status < 500) return;
       } catch {
+        if (signal.aborted) return; // the race settled and aborted this fetch — not "not up yet"
         /* not up yet */
       }
-      await sleep(150);
+      // Abortable 150ms backoff: resolve early the instant the race settles so a lost topology
+      // race schedules no further sleeps/fetches.
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, 150);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
     }
     throw new Error(`gateway did not come up within ${timeoutMs}ms`);
   }

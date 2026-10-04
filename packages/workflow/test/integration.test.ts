@@ -21,8 +21,7 @@ const skip = hasBin ? false : "no gateway binary built (set SERVER_BIN or `make 
 
 test("imperative workflow survives an engine crash and resumes without duplicate side effects", { skip }, async () => {
   const scratch = join(HERE, ".it", "imperative");
-  const gw = await Gateway.create(scratch);
-  await gw.start();
+  const gw = await Gateway.launch(scratch);
 
   const sideEffects: string[] = [];
   const committed = new Set<string>();
@@ -87,8 +86,7 @@ test("imperative workflow survives an engine crash and resumes without duplicate
 
 test("declarative flow parks at a signal and resumes via a correlated message", { skip }, async () => {
   const scratch = join(HERE, ".it", "declarative");
-  const gw = await Gateway.create(scratch);
-  await gw.start();
+  const gw = await Gateway.launch(scratch);
 
   const committed = new Set<string>();
   const flow = defineFlow("pr-review", (w) => {
@@ -136,8 +134,7 @@ test("declarative flow parks at a signal and resumes via a correlated message", 
 
 test("declarative forEach fans out one child per item and joins (parallel multi-instance)", { skip }, async () => {
   const scratch = join(HERE, ".it", "foreach");
-  const gw = await Gateway.create(scratch);
-  await gw.start();
+  const gw = await Gateway.launch(scratch);
 
   const doubled: number[] = [];
   const flow = defineFlow("fan-mi", (w) => {
@@ -182,8 +179,7 @@ test("declarative forEach fans out one child per item and joins (parallel multi-
 
 test("declarative parallel runs branches concurrently and joins (AND gateway)", { skip }, async () => {
   const scratch = join(HERE, ".it", "parallel");
-  const gw = await Gateway.create(scratch);
-  await gw.start();
+  const gw = await Gateway.launch(scratch);
 
   const ran = new Set<string>();
   let mergeBeforeJoin = false;

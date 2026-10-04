@@ -40,6 +40,13 @@ test("pickProcessDefinitionIdentity normalizes present fields and omits blank/ma
   );
   assert.deepEqual(pickProcessDefinitionIdentity({ processDefinitionVersion: 1.5 }), {});
   assert.deepEqual(pickProcessDefinitionIdentity({ processDefinitionVersion: 0 }), {});
+  // A non-finite number key is absent — never coerced to "NaN"/"Infinity" (fail-closed), matching
+  // the canonical urban normalizer so the two adapters cannot drift on this edge.
+  assert.deepEqual(pickProcessDefinitionIdentity({ processDefinitionKey: Number.NaN }), {});
+  assert.deepEqual(
+    pickProcessDefinitionIdentity({ processDefinitionKey: Number.POSITIVE_INFINITY }),
+    {},
+  );
 });
 
 test("wasm: Terminating projects as TERMINATED (REST parity)", () => {

@@ -43,8 +43,6 @@ import {
   type JobFilter,
   type JobHandler,
   type JobSummary,
-  pickProcessDefinitionIdentity,
-  type ProcessDefinitionIdentity,
   type UserTaskState,
   type UserTaskFilter,
   type VariableFilter,
@@ -71,10 +69,45 @@ export { type ProcessInstanceState, wasmStateToProcessInstanceState };
 
 /** Which deployed definition an instance runs, and the single mapping both {@link
  *  EngineClient.createInstance} and {@link EngineClient.searchProcessInstances} use to report it.
- *  Both are the *canonical* urban-runtime definitions (imported above and re-exported here for the
- *  testkit's public surface) — this adapter no longer keeps its own copy, so the live SDK adapter
- *  and this WASM test adapter cannot drift (No Drift Surfaces; see urban's `core/process-identity.ts`). */
-export { type ProcessDefinitionIdentity, pickProcessDefinitionIdentity };
+ *  Declared *locally* (a structural mirror of urban's `ProcessDefinitionIdentity`), **not** value-
+ *  imported from `@nanobpm/urban/runtime`: `pickProcessDefinitionIdentity` is introduced by this
+ *  change, so it exists in no published urban release — a value import would force this testkit's
+ *  peer floor up to an urban version that does not yet exist, breaking a scaffolded app that pins a
+ *  long-published release (AGENTS.md: depend on an unreleased sibling only after it is published).
+ *  The mirror is kept behaviourally identical to the canonical normalizer (`core/process-identity.ts`),
+ *  and the shared `runEngineClientContract` cases pin this copy and the live SDK adapter to identical
+ *  behaviour, so the two cannot drift. A follow-up replaces this mirror with the canonical import once
+ *  the urban release carrying it is published. */
+export interface ProcessDefinitionIdentity {
+  readonly processDefinitionKey?: string;
+  readonly processDefinitionId?: string;
+  readonly processDefinitionVersion?: number;
+}
+
+/** The {@link ProcessDefinitionIdentity} a read-model process-instance row reports — the single
+ *  mapping both `createInstance` and `searchProcessInstances` use. Behaviourally identical to the
+ *  canonical urban `pickProcessDefinitionIdentity`: a key is a present *finite* number (coerced to a
+ *  string) or a non-blank string, an id a non-blank string, a version only a positive-integer number.
+ *  A non-finite number key (`NaN`/`Infinity`) is absent — never coerced to `"NaN"`/`"Infinity"`
+ *  (fail-closed), mirroring the canonical normalizer so neither adapter leaks a garbage key. */
+export function pickProcessDefinitionIdentity(row: {
+  processDefinitionKey?: unknown;
+  processDefinitionId?: unknown;
+  processDefinitionVersion?: unknown;
+}): ProcessDefinitionIdentity {
+  const rawKey = row.processDefinitionKey;
+  const processDefinitionKey =
+    typeof rawKey === "number" && !Number.isFinite(rawKey) ? undefined : presentKey(rawKey);
+  const processDefinitionId = presentString(row.processDefinitionId);
+  const version = row.processDefinitionVersion;
+  const processDefinitionVersion =
+    typeof version === "number" && Number.isInteger(version) && version > 0 ? version : undefined;
+  return {
+    ...(processDefinitionKey ? { processDefinitionKey } : {}),
+    ...(processDefinitionId ? { processDefinitionId } : {}),
+    ...(processDefinitionVersion !== undefined ? { processDefinitionVersion } : {}),
+  };
+}
 
 /** A single process instance's lifecycle snapshot, as returned by
  *  {@link EngineClient.searchProcessInstances}. Structurally identical to urban's. */

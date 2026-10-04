@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.96.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.95.0...@nanobpm/urban-0.96.0) (2026-10-04)
+
+
+### Features
+
+* **urban:** engineClient searches process instances by processDefinitionId and createInstance returns definition key/id/version ([#584](https://github.com/nanobpm/nano-ide/issues/584)) ([92c8cef](https://github.com/nanobpm/nano-ide/commit/92c8cef248ff9fc859468bdd84e50b1b0e202347))
+
+
+### Bug Fixes
+
+* **workflow:** live deploySmoke tests never started the gateway ([92c8cef](https://github.com/nanobpm/nano-ide/commit/92c8cef248ff9fc859468bdd84e50b1b0e202347))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @nanobpm/workflow bumped from ^0.14.0 to ^0.15.0
+
 ## [0.95.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.94.2...@nanobpm/urban-0.95.0) (2026-10-02)
 
 

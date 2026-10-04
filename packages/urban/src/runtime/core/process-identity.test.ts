@@ -6,11 +6,13 @@ import {
   presentString,
 } from "./process-identity.ts";
 
-// The canonical, adapter-agnostic process-definition-identity normalizer. Both the live SDK adapter
-// (`engine/nanosdk.ts`) and the WASM test adapter (`@nanobpm/urban-testkit`) route through this ONE
-// mapping, so these cases pin the class the shared helper exists to keep consistent (No Drift
-// Surfaces): a padded/numeric key is normalized, a blank/whitespace/non-string/non-finite value is
-// *absent* and never coerced, and a version is kept only when a positive integer number.
+// The canonical, adapter-agnostic process-definition-identity normalizer. These cases pin the
+// class the shared helper exists to keep consistent (No Drift Surfaces): a padded/numeric key is
+// normalized, a blank/whitespace/non-string/non-finite value is *absent* and never coerced, and a
+// version is kept only when a positive integer number. Scope today: only the SDK adapter
+// (`engine/nanosdk.ts`) routes through this mapping; the WASM test adapter
+// (`@nanobpm/urban-testkit`) runs a deliberately mirrored local copy until #585, pinned to this
+// behaviour by its own identity cases (`wasm-engine.test.ts`).
 
 test("presentEngineKey coerces a finite numeric key, trims a string, and drops blank/non-finite/non-string", () => {
   assert.equal(presentEngineKey(7), "7");

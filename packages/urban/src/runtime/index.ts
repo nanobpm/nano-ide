@@ -143,8 +143,9 @@ export {
   resolveFormIdentifier,
 } from "./core/form-contract.ts";
 // The adapter-agnostic process-definition-identity normalizer (the single mapping both
-// `createInstance` and `searchProcessInstances` use), shared so the live SDK adapter and the WASM
-// test adapter cannot drift. `ProcessDefinitionIdentity` itself is re-exported from `./core/host.ts`.
+// `createInstance` and `searchProcessInstances` use), owned today by the live SDK adapter; the WASM
+// test adapter keeps a mirrored local copy until #585, so cross-adapter drift-freedom is not yet
+// claimed. `ProcessDefinitionIdentity` itself is re-exported from `./core/host.ts`.
 export {
   pickProcessDefinitionIdentity,
   presentEngineKey,

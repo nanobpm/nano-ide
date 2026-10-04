@@ -6,8 +6,8 @@
 // the two could silently diverge the moment identity validation changed — exactly the drift class
 // the shared form-contract normalizer exists to kill (`./form-contract.ts`, issue #252). Centralizing
 // the mapper (and reusing the canonical {@link ProcessDefinitionIdentity}) here removes that surface:
-// a created instance and its later snapshot describe the same definition identically, for every
-// adapter, because they run the *same* code.
+// a created instance and its later snapshot describe the same definition identically wherever this
+// normalizer runs, because they run the *same* code.
 //
 // Ownership today: only the SDK adapter runs this implementation. `WasmEngineClient` still defines
 // and calls its own behaviourally identical copy (`urban-testkit/src/wasm-engine.ts`) — a deliberate,

@@ -160,8 +160,10 @@ export function normalizeIncidentState(raw: unknown): IncidentState {
 }
 
 // Engine-key / process-definition-identity normalization now lives in the shared, adapter-agnostic
-// `../core/process-identity.ts` (imported above) so the live SDK adapter and the WASM test adapter
-// run the *same* mapping — see that module's header for the drift class this removes.
+// `../core/process-identity.ts` (imported above), so this adapter's `createInstance` and
+// `searchProcessInstances` run the *same* mapping — see that module's header for the drift class
+// this removes. The WASM test adapter keeps a mirrored local copy until #585 (that module header's
+// "Ownership today" note), so the shared mapping is not yet a cross-adapter guarantee.
 
 /** The non-empty, trimmed string form of a *required* engine key, or throws when the value is
  *  absent/blank (including a whitespace-only string). A mutating seam operation addresses a

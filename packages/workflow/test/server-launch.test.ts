@@ -78,3 +78,28 @@ test("start rejects on the child process 'error' event (startup failure reaches 
       "accumulate one listener per restart",
   );
 });
+
+// The third facet of the same leak class: when the child-'error' branch wins the start() race,
+// waitForTopology() must not keep polling (fetch + sleep) until its 20s deadline — that dangling
+// background task can keep the test process alive long after start() has already rejected. Pin
+// that start() drives topology polling through an AbortController it aborts once the race settles,
+// and that waitForTopology honours that signal (so the poll loop stops promptly on a lost race).
+test("start aborts topology polling when the race settles (no dangling poll after a lost race)", () => {
+  const body = startBody();
+  assert.ok(
+    body.includes("new AbortController("),
+    "start() must create an AbortController to drive topology polling so it can be cancelled",
+  );
+  assert.ok(
+    /\.abort\(\)/.test(body),
+    "start() must abort the topology poll once the race settles so a lost topology race leaves " +
+      "no background fetch/sleep loop running until the 20s deadline",
+  );
+  const src = SERVER_SRC.slice(SERVER_SRC.indexOf("private async waitForTopology("));
+  const waitBody = src.slice(0, src.indexOf("\n  }") + 4);
+  assert.ok(
+    waitBody.includes("signal.aborted") && waitBody.includes("signal }"),
+    "waitForTopology() must honour the abort signal (check signal.aborted and pass it to fetch) " +
+      "so aborting it actually stops the poll loop",
+  );
+});

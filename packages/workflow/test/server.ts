@@ -125,9 +125,15 @@ export class Gateway {
       onError = (err: Error) => reject(err);
       proc.once("error", onError);
     });
+    // When the child-error branch wins this race, waitForTopology() would otherwise keep polling
+    // (a fetch + 150ms sleep loop) until its 20s deadline — a background task that can keep the
+    // test process alive long after start() has already rejected. Abort the poll loop the moment
+    // the race settles so a lost topology race leaves no dangling polling task.
+    const topology = new AbortController();
     try {
-      await Promise.race([this.waitForTopology(), childError]);
+      await Promise.race([this.waitForTopology(topology.signal), childError]);
     } finally {
+      topology.abort();
       if (onError) proc.off("error", onError);
     }
   }
@@ -149,16 +155,30 @@ export class Gateway {
     await sleep(200);
   }
 
-  private async waitForTopology(timeoutMs = 20000): Promise<void> {
+  private async waitForTopology(signal: AbortSignal, timeoutMs = 20000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
+      if (signal.aborted) return;
       try {
-        const res = await fetch(`${this.baseUrl}/v2/topology`);
+        const res = await fetch(`${this.baseUrl}/v2/topology`, { signal });
         if (res.status < 500) return;
       } catch {
+        if (signal.aborted) return; // the race settled and aborted this fetch — not "not up yet"
         /* not up yet */
       }
-      await sleep(150);
+      // Abortable 150ms backoff: resolve early the instant the race settles so a lost topology
+      // race schedules no further sleeps/fetches.
+      await new Promise<void>((resolve) => {
+        const onAbort = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const timer = setTimeout(() => {
+          signal.removeEventListener("abort", onAbort);
+          resolve();
+        }, 150);
+        signal.addEventListener("abort", onAbort, { once: true });
+      });
     }
     throw new Error(`gateway did not come up within ${timeoutMs}ms`);
   }

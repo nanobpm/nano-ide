@@ -8,6 +8,14 @@
 // the mapper (and reusing the canonical {@link ProcessDefinitionIdentity}) here removes that surface:
 // a created instance and its later snapshot describe the same definition identically, for every
 // adapter, because they run the *same* code.
+//
+// Ownership today: only the SDK adapter runs this implementation. `WasmEngineClient` still defines
+// and calls its own behaviourally identical copy (`urban-testkit/src/wasm-engine.ts`) — a deliberate,
+// temporary fork: this module is introduced by the same change, so it exists in no published urban
+// release, and a value import would force the testkit's peer floor up to an urban version that does
+// not yet exist (AGENTS.md: depend on an unreleased sibling only after it is published). Follow-up
+// #585 switches the WASM adapter to this canonical import once the urban release carrying it is
+// published; until then the testkit's own identity cases pin its copy to this normalizer's behaviour.
 
 import type { ProcessDefinitionIdentity } from "./host.ts";
 

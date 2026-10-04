@@ -74,10 +74,13 @@ export { type ProcessInstanceState, wasmStateToProcessInstanceState };
  *  change, so it exists in no published urban release — a value import would force this testkit's
  *  peer floor up to an urban version that does not yet exist, breaking a scaffolded app that pins a
  *  long-published release (AGENTS.md: depend on an unreleased sibling only after it is published).
- *  The mirror is kept behaviourally identical to the canonical normalizer (`core/process-identity.ts`),
- *  and the shared `runEngineClientContract` cases pin this copy and the live SDK adapter to identical
- *  behaviour, so the two cannot drift. A follow-up replaces this mirror with the canonical import once
- *  the urban release carrying it is published. */
+ *  The mirror is kept behaviourally identical to the canonical normalizer (`core/process-identity.ts`).
+ *  The drift guard today is *not* the shared `runEngineClientContract` — that suite is registered only
+ *  for this WASM adapter (`wasm-engine.test.ts` and the scaffold templates), never against the live SDK
+ *  adapter. Instead, the SDK adapter's own fake-client cases in `engine/nanosdk.test.ts` pin the
+ *  canonical normalizer's behaviour while this adapter's identity cases pin this copy to the same
+ *  behaviour. Follow-up #585 replaces this mirror with the canonical import once the urban release
+ *  carrying it is published, at which point both adapters run the one implementation. */
 export interface ProcessDefinitionIdentity {
   readonly processDefinitionKey?: string;
   readonly processDefinitionId?: string;

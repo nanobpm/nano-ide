@@ -31,7 +31,13 @@ function runBin(
   });
 }
 
-test("bin.mjs runs the CLI in-process: one Node per command, reply + exit code intact", async (t) => {
+// `bin.mjs` is the npm bin, so it always runs under Node: skip under Deno (`test:deno`), whose
+// process.execPath is not Node (same as generated-lint.test.ts).
+const runtimeIsNode = !("Deno" in globalThis);
+
+test("bin.mjs runs the CLI in-process: one Node per command, reply + exit code intact", {
+  skip: runtimeIsNode ? false : "Node-only: spawns bin.mjs via process.execPath (Deno's execPath is not Node)",
+}, async (t) => {
   if (!existsSync(dist)) {
     t.skip("dist/cli.js not built (run `npm run build`); CI builds before testing");
     return;

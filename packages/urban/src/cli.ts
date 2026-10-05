@@ -472,22 +472,21 @@ async function flushStdio(): Promise<void> {
   await Promise.all([flushStream(p.stdout), flushStream(p.stderr)]);
 }
 
-const proc = processGlobal();
-const deno = denoGlobal();
-const importMetaMain: unknown = Reflect.get(import.meta, "main");
-const argv1 = proc?.argv?.[1];
-const nodeMain = argv1 ? import.meta.url === pathToFileURL(argv1).href : false;
-if (importMetaMain === true || nodeMain) {
-  // Node passes args via process.argv (slice off exec+script); Deno (run directly)
-  // exposes them on Deno.args. Prefer whichever actually carries args.
-  const fromNode = proc?.argv?.slice(2);
-  const fromDeno = deno?.args;
-  const argv = (fromNode && fromNode.length ? fromNode : fromDeno) ?? fromNode ?? [];
+/**
+ * Run the CLI as the process entrypoint: `main(argv)`, then drain stdio and exit with its code.
+ * A negative code means a long-running command (`run`, `dev`) owns the process, so it is left
+ * alive. Exported so the `urban` bin (`bin.mjs`) can run the CLI **in-process** via `import()`
+ * instead of spawning a second Node (nano-ide#589): every `urban` command, notably each
+ * gateway `urban data` op, used to pay two Node start-ups.
+ */
+export function runCli(argv: string[]): Promise<void> {
+  const proc = processGlobal();
+  const deno = denoGlobal();
   const exit = (code: number) => {
     if (proc?.exit) proc.exit(code);
     else if (deno?.exit) deno.exit(code);
   };
-  main(argv).then(
+  return main(argv).then(
     async (code) => {
       if (code >= 0) {
         await flushStdio();
@@ -500,4 +499,18 @@ if (importMetaMain === true || nodeMain) {
       exit(1);
     },
   );
+}
+
+const proc = processGlobal();
+const deno = denoGlobal();
+const importMetaMain: unknown = Reflect.get(import.meta, "main");
+const argv1 = proc?.argv?.[1];
+const nodeMain = argv1 ? import.meta.url === pathToFileURL(argv1).href : false;
+if (importMetaMain === true || nodeMain) {
+  // Node passes args via process.argv (slice off exec+script); Deno (run directly)
+  // exposes them on Deno.args. Prefer whichever actually carries args.
+  const fromNode = proc?.argv?.slice(2);
+  const fromDeno = deno?.args;
+  const argv = (fromNode && fromNode.length ? fromNode : fromDeno) ?? fromNode ?? [];
+  void runCli(argv);
 }

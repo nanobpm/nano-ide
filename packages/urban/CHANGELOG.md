@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.96.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.96.0...@nanobpm/urban-0.96.1) (2026-10-05)
+
+
+### Bug Fixes
+
+* **urban:** run the CLI in-process from bin.mjs instead of spawning a second Node ([#590](https://github.com/nanobpm/nano-ide/issues/590)) ([c4eec9c](https://github.com/nanobpm/nano-ide/commit/c4eec9c297bfb4f91eebbbd2934035253634e65b))
+
 ## [0.96.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.95.0...@nanobpm/urban-0.96.0) (2026-10-04)
 
 

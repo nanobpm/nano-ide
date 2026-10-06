@@ -328,7 +328,8 @@ export async function cmdData(f: Flags, readInput: () => Promise<string> = readS
     return 0;
   }
   // Lazily the only modules `urban data` loads (nano-ide#592): the host detector (both
-  // adapters, no toolkit) and the data-op runner (gateway + SQLite adapter). Imported
+  // adapters, no toolkit) and the data-op runner (gateway + SQLite adapter; the toolkit
+  // derivers behind the `domaintypes` op load only when that op is dispatched). Imported
   // directly rather than via the runtime barrel, which would pull in the whole runtime.
   const { selectHost } = await import("./runtime/adapters/detect.ts");
   const { runDataOp } = await import("./runtime/core/modules/dataops.ts");

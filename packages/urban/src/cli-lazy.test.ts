@@ -99,7 +99,11 @@ async function runCliRecordingModules(
 function heavyLoads(resolved: string[]): string[] {
   return resolved.filter(
     (u) =>
+      // Node resolves a workspace package's node_modules symlink to its real target, so in a
+      // monorepo checkout `create-urban-app` resolves under `packages/create-urban-app/` — match
+      // both the installed and the workspace-real shape or a scaffold regression slips through.
       u.includes("/node_modules/create-urban-app/") ||
+      u.includes("/packages/create-urban-app/") ||
       u.includes("/dist/toolkit/") ||
       u.includes("/src/toolkit/"),
   );
@@ -110,12 +114,15 @@ test("urban data does not load the toolkit, scaffold or gen modules", {
 }, async () => {
   const dir = await mkdtemp(join(tmpdir(), "urban-cli-lazy-data-"));
   try {
+    // A parseable request, so cmdData gets past JSON.parse and actually runs the command-specific
+    // dynamic imports (host detector + data-op runner) — malformed JSON would return from the
+    // parse-error branch first and prove nothing about the data path's module graph. The root has
+    // no manifest, so the op still fails; the CLI answers with its parseable envelope and exits 0.
     const { stdout, stderr, code, resolved } = await runCliRecordingModules(
       dir,
       ["data", "--root", dir],
-      "not json",
+      JSON.stringify({ op: "sources" }),
     );
-    // The command still answers with its parseable envelope and exits 0.
     assert.equal(code, 0, `CLI exited ${code}, expected 0. stderr:\n${stderr}`);
     const reply: unknown = JSON.parse(stdout);
     assert.ok(isRecord(reply));
@@ -148,6 +155,7 @@ test("urban --version loads neither the toolkit nor the runtime modules", {
     const heavy = resolved.filter(
       (u) =>
         u.includes("/node_modules/create-urban-app/") ||
+        u.includes("/packages/create-urban-app/") ||
         u.includes("/dist/toolkit/") ||
         u.includes("/src/toolkit/") ||
         ((u.includes("/dist/runtime/") || u.includes("/src/runtime/")) &&

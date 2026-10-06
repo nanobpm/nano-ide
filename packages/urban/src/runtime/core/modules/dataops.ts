@@ -27,43 +27,17 @@ import { validateManifest } from "../validate.ts";
 import { makeGateway, type DataSource as GatewayDataSource } from "./gateway.ts";
 import { applyMigrations, MIGRATIONS_TABLE, openSqliteSource, resolveAppPath } from "./datasource.ts";
 // The `domaintypes` op composes the domain reifier from the pure toolkit derivers (single source of
-// truth for the IDE's codegen, host dry-out nano-bpm#576). Imported directly from the deriver files
-// (not the `toolkit/` barrel, which pulls the Node fs IO) so core stays free of `node:*`/Deno; the
-// derivers' only core dependency is the gateway's `TableMeta`/`ColumnMeta` *types*, which erase.
-import { GENERATED_DIR } from "../../../toolkit/artifact.ts";
-import {
-  DOMAIN_BINDINGS,
-  type DomainTypeDef,
-  type DomainTypeRegistry,
-  emitDomainBindings,
-  emitDomainModel,
-  registryFromManifest,
-  type SourceSchema,
-} from "../../../toolkit/derivers/domain.ts";
-import {
-  DOMAIN_MODEL_JSON,
-  emitDomainModelJson,
-  type FusedMetaDecl,
-  resolveShapes,
-  type ShapeDecl,
-} from "../../../toolkit/derivers/shapes.ts";
-import {
-  DOMAIN_DTS,
-  emitWorkerBindings,
-  emitWorkerBindingsRuntime,
-  overlayDerivedWorkerIo,
-  WORKER_BINDINGS_DTS,
-  WORKER_BINDINGS_TS,
-  type WorkerBindingDecl,
-} from "../../../toolkit/derivers/worker-io.ts";
-import {
-  emitMessageBindings,
-  emitMessageBindingsRuntime,
-  MESSAGE_BINDINGS_DTS,
-  MESSAGE_BINDINGS_TS,
-  type MessageBindingDecl,
-} from "../../../toolkit/derivers/messages.ts";
-import { emitMeta, META_TS, type MetaDecl } from "../../../toolkit/derivers/meta.ts";
+// truth for the IDE's codegen, host dry-out nano-bpm#576). They are imported lazily inside the
+// `domaintypes` case — a static import would make EVERY `urban data` op (the latency-sensitive
+// gateway path, nano-ide#592) load the whole `src/toolkit/` tree before dispatching, when only
+// `domaintypes` ever runs a deriver. The derivers are pure (no host-specific IO); their only core
+// dependency is the gateway's `TableMeta`/`ColumnMeta` *types*, which erase. The deriver *types* the
+// request carries are type-only imports (erased), so they cost nothing at module load.
+import type { DomainTypeDef, DomainTypeRegistry, SourceSchema } from "../../../toolkit/derivers/domain.ts";
+import type { FusedMetaDecl, ShapeDecl } from "../../../toolkit/derivers/shapes.ts";
+import type { WorkerBindingDecl } from "../../../toolkit/derivers/worker-io.ts";
+import type { MessageBindingDecl } from "../../../toolkit/derivers/messages.ts";
+import type { MetaDecl } from "../../../toolkit/derivers/meta.ts";
 
 /** The DB-manager op protocol's known op set — every op (including `domaintypes`) is dispatched by
  * `runDataOp`. Typing `op` as this union (instead of `string`) gives SDK/console callers type-safety
@@ -349,6 +323,36 @@ export async function runDataOp(
       // debounced keystroke has no DB side-effect and pays only for `text` + `shapeDiagnostics`.
       const { default: def, sources } = listSources(manifest);
       const persist = req.write !== false;
+      // The derivers are the only toolkit modules `urban data` ever needs, and only this op runs
+      // them — load them here, not at module scope, so every other op (the hot path of the data
+      // gateway, nano-ide#592) never pays for the `src/toolkit/` tree. Imported directly from the
+      // deriver files (not the `toolkit/` barrel, which pulls the Node fs IO) so core stays free
+      // of host-specific IO.
+      const { GENERATED_DIR } = await import("../../../toolkit/artifact.ts");
+      const {
+        DOMAIN_BINDINGS,
+        emitDomainBindings,
+        emitDomainModel,
+        registryFromManifest,
+      } = await import("../../../toolkit/derivers/domain.ts");
+      const { DOMAIN_MODEL_JSON, emitDomainModelJson, resolveShapes } = await import(
+        "../../../toolkit/derivers/shapes.ts"
+      );
+      const {
+        DOMAIN_DTS,
+        emitWorkerBindings,
+        emitWorkerBindingsRuntime,
+        overlayDerivedWorkerIo,
+        WORKER_BINDINGS_DTS,
+        WORKER_BINDINGS_TS,
+      } = await import("../../../toolkit/derivers/worker-io.ts");
+      const {
+        emitMessageBindings,
+        emitMessageBindingsRuntime,
+        MESSAGE_BINDINGS_DTS,
+        MESSAGE_BINDINGS_TS,
+      } = await import("../../../toolkit/derivers/messages.ts");
+      const { emitMeta, META_TS } = await import("../../../toolkit/derivers/meta.ts");
       // Introspect each sqlite source's live schema. When persisting, migrate first (the domain
       // model is derived from `gw.schema()`, so a regen that raced ahead of `migrate` on a fresh DB
       // would emit an empty `Domain`); the migration runs on the shared `_urban_migrations` ledger.

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.96.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.96.1...@nanobpm/urban-0.96.2) (2026-10-07)
+
+
+### Performance Improvements
+
+* **urban:** lazy-load CLI command modules so `urban data` skips the toolkit ([#593](https://github.com/nanobpm/nano-ide/issues/593)) ([d6ef7cb](https://github.com/nanobpm/nano-ide/commit/d6ef7cb2ccae9bd56d2bd46a85de4c917bff5817))
+
 ## [0.96.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.96.0...@nanobpm/urban-0.96.1) (2026-10-05)
 
 

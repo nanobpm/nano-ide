@@ -48,9 +48,9 @@ export function sortArtifacts(a: DerivedArtifact[]): DerivedArtifact[] {
 }
 
 /** True when `p` is an absolute path — POSIX root (`/`), a drive-letter root (`C:\` or `C:/`), or a
- *  Windows UNC/drive-root backslash (`\`). The single source of truth for the absolute-path rule,
- *  shared by the toolkit's path join (gen.ts) and the runtime's resolveAppPath so both agree on
- *  whether a manifest path is app-root-relative or absolute (no gen/runtime drift). */
-export function isAbsolutePath(p: string): boolean {
-  return /^(\/|\\|[A-Za-z]:[/\\])/.test(p);
-}
+ *  Windows UNC/drive-root backslash (`\`). The single source of truth for the absolute-path rule is
+ *  the runtime's `resolveAppPath` side (`runtime/core/modules/datasource.ts`); it is re-exported
+ *  here so the toolkit's path join (gen.ts) and the runtime resolver agree on whether a manifest
+ *  path is app-root-relative or absolute (no gen/runtime drift) without the runtime's data gateway
+ *  statically importing the toolkit tree (nano-ide#592). */
+export { isAbsolutePath } from "../runtime/core/modules/datasource.ts";

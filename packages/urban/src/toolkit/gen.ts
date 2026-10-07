@@ -76,7 +76,8 @@ function join(root: string, rel: string): string {
   // pass either style without gen/runtime drift over where a file resolves.
   const norm = (s: string): string => s.replace(/\\/g, "/");
   // An absolute `rel` resolves to itself — never prefixed with `root` — mirroring the runtime's
-  // resolveAppPath (isAbsolutePath is the shared SoT in artifact.ts). Without this an absolute
+  // resolveAppPath (isAbsolutePath is the shared SoT, defined in runtime's datasource.ts and
+  // re-exported from artifact.ts). Without this an absolute
   // manifest path (e.g. "/abs/openapi.json") would be stripped to root-relative and gen would
   // read/derive a different file than the runtime resolves. Trailing edge separators are still
   // trimmed for stable, comparable artifact keys.

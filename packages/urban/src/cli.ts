@@ -11,22 +11,18 @@
 //
 // Global flags: --root <dir> (default "."), --manifest <file> (default nano.app.json),
 //               --port <n>, -h/--help, -v/--version.
+//
+// Module-load laziness (nano-ide#592): only argument parsing, the stdio/guard helpers and the
+// dispatcher load eagerly. Every command's modules are dynamically imported inside its handler —
+// a top-level import of the toolkit, the scaffold package or the runtime barrel made EVERY
+// command (including the per-data-op `urban data` gateway) pay the full ~2s load on small
+// hosts before dispatching. `urban data` loads only the host detector and the data-op runner.
+// Guarded by cli-lazy.test.ts, which records the URLs each command resolves.
 
-import {
-  collectManifestIssues,
-  installSignalHandlers,
-  loadManifest,
-  runDataOp,
-  runDev,
-  runFromEnv,
-  selectHost,
-} from "./runtime/index.ts";
 import { denoGlobal, processGlobal } from "./runtime/adapters/globals.ts";
 import type { WritableStdio } from "./runtime/adapters/globals.ts";
 import { errorMessage, isRecord } from "./runtime/core/guards.ts";
-import { scaffold, slugify } from "create-urban-app";
-import type { DataRequest } from "./runtime/index.ts";
-import { addConnector, createNodeGenIO, previewModels, generate, runGen } from "./toolkit/index.ts";
+import type { DataRequest } from "./runtime/core/modules/dataops.ts";
 import { pathToFileURL } from "node:url";
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -132,6 +128,9 @@ Engine address: $CAMUNDA_REST_ADDRESS (default http://localhost:8080/v2).
 `;
 
 async function cmdCheck(f: Flags): Promise<number> {
+  const { selectHost } = await import("./runtime/adapters/detect.ts");
+  const { loadManifest } = await import("./runtime/core/manifest.ts");
+  const { collectManifestIssues } = await import("./runtime/core/validate.ts");
   // The host is anchored at f.root, so manifest paths are already root-relative —
   // pass the bare manifest filename (prefixing root again would double it).
   const host = selectHost({ cwd: f.root });
@@ -147,6 +146,7 @@ async function cmdCheck(f: Flags): Promise<number> {
 }
 
 async function cmdGen(f: Flags): Promise<number> {
+  const { createNodeGenIO, generate } = await import("./toolkit/index.ts");
   const io = createNodeGenIO();
   const res = await generate({ root: f.root, io, manifestFile: f.manifest, check: f.check, emitModels: f.models });
   if (res.incomplete) {
@@ -209,6 +209,7 @@ async function cmdDerive(f: Flags): Promise<number> {
     );
     return 2;
   }
+  const { createNodeGenIO, previewModels, runGen } = await import("./toolkit/index.ts");
   const io = createNodeGenIO();
 
   // Non-writing preview: emit `{ models: [{ id, kind, xml }], incomplete }` to stdout for the
@@ -250,6 +251,7 @@ async function cmdDerive(f: Flags): Promise<number> {
 }
 
 async function cmdRun(f: Flags, mount?: Record<string, boolean>): Promise<number> {
+  const { runFromEnv } = await import("./runtime/run.ts");
   const app = await runFromEnv({
     root: f.root,
     manifestPath: f.manifest,
@@ -262,12 +264,15 @@ async function cmdRun(f: Flags, mount?: Record<string, boolean>): Promise<number
 }
 
 async function cmdDev(f: Flags): Promise<number> {
+  const { runDev } = await import("./runtime/devserver.ts");
+  const { installSignalHandlers } = await import("./runtime/run.ts");
   const dev = await runDev({ root: f.root, manifestPath: f.manifest, port: f.port });
   installSignalHandlers(() => dev.stop());
   return -1; // keep the process alive; signal handlers stop the dev server
 }
 
 async function cmdDeploy(f: Flags): Promise<number> {
+  const { runFromEnv } = await import("./runtime/run.ts");
   const app = await runFromEnv({
     root: f.root,
     manifestPath: f.manifest,
@@ -322,6 +327,12 @@ export async function cmdData(f: Flags, readInput: () => Promise<string> = readS
     );
     return 0;
   }
+  // Lazily the only modules `urban data` loads (nano-ide#592): the host detector (both
+  // adapters, no toolkit) and the data-op runner (gateway + SQLite adapter; the toolkit
+  // derivers behind the `domaintypes` op load only when that op is dispatched). Imported
+  // directly rather than via the runtime barrel, which would pull in the whole runtime.
+  const { selectHost } = await import("./runtime/adapters/detect.ts");
+  const { runDataOp } = await import("./runtime/core/modules/dataops.ts");
   const host = selectHost({ cwd: f.root });
   try {
     // Mirror runFromEnv: the host is anchored at f.root, so pass root "." to avoid
@@ -342,6 +353,7 @@ async function cmdNew(f: Flags): Promise<number> {
     console.error("usage: urban new <name> [--root <path>] [--deno] [--style model|code] (or --code-first)");
     return 1;
   }
+  const { scaffold, slugify } = await import("create-urban-app");
   const dir = f.root !== "." ? f.root : `./${slugify(name)}`;
   const res = await scaffold({ name, dir, deno: f.deno, style: f.style });
   console.log(`✔ scaffolded "${res.id}" in ${res.dir} (${res.files.length} files)`);
@@ -380,6 +392,7 @@ async function cmdAdd(f: Flags): Promise<number> {
   }
 
   try {
+    const { addConnector, createNodeGenIO } = await import("./toolkit/index.ts");
     const result = await addConnector({
       root: f.root,
       pkg,

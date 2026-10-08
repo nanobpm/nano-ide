@@ -32,6 +32,26 @@ All BPMN Models need DI for rendering for humans.
 
 Type assertions (`as T`) bypass the type system and are banned across the authored TypeScript source. This is enforced in CI by a Biome GritQL plugin (`plugins/no-unsafe-type-assertion.grit`, wired via `biome.json`; run `npm run lint`). Use a type guard, declaration-site annotation, narrowing, or `satisfies` instead. Exceptions: `as const` and `import`/`export` renames are allowed. If a cast is genuinely unavoidable (e.g. an untyped host/runtime boundary), add a `// biome-ignore lint/plugin: <reason>` comment with a concrete justification.
 
+## Extending `defineFlow`: add a node kind, never edit the shared dispatch
+
+The declarative workflow builder (`@nanobpm/workflow`, `defineFlow`) is extended
+through a **registry seam**, not by hand-editing a central union or `switch`. To
+add a flow-node kind (`race`, `boundary`, `human`, and any future kind): **drop
+exactly one `packages/workflow/src/nodes/<kind>.ts` file** that declaration-merges
+its variant into `FlowNodeRegistry` (`types.ts`) and its method into
+`FlowBuilder<C>` (`declarative.ts`), then registers its `build`/`walk`/`emit`
+handlers with a single `registerNodeKind(...)` call.
+
+**Never** edit the `FlowNode` union in `types.ts`, the `walkNodes`/`emitNode`
+dispatch in `declarative.ts`, or the generated barrel `src/nodes/index.ts` — it is
+regenerated alphabetically by `scripts/gen-node-registry.mjs` at build, so
+independent kind files merge without conflict and are wired automatically.
+Hand-editing those shared surfaces is what made parallel builder slices textually
+collide (and hid dispatch/exhaustiveness breaks until every slice landed) before
+the seam existed. The full pattern, the `BuildApi`/`EmitApi` primitives, and a
+worked example live in
+[`packages/workflow/src/nodes/README.md`](packages/workflow/src/nodes/README.md).
+
 ## Releasing (never bump versions by hand)
 
 Releases are **derived**, not declared. Do **not** edit a `package.json`

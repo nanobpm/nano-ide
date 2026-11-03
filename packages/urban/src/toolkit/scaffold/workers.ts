@@ -39,7 +39,7 @@ export interface WorkerStubPlan {
   manifestEntry: StubManifestEntry;
 }
 
-export type SkipReason = "already-wired" | "orchestrator" | "duplicate" | "external";
+export type SkipReason = "already-wired" | "orchestrator" | "duplicate" | "external" | "inline";
 
 export interface SkippedWorker {
   taskType: string;
@@ -118,16 +118,20 @@ export function renderWorkerStub(
 /**
  * Plan write-once handler stubs from the models. A stub is planned for each service-task
  * `taskType` that is NOT already wired in the manifest, NOT the imperative orchestrator, NOT
- * declared external (serviced by an out-of-process worker), and not a duplicate of one already
- * planned. `declaredTypeIds` are the manifest `types` ids — an envelope `in`/`out` is typed only
- * when it names one (matching the worker-io deriver). `externalTaskTypes` are the manifest's
- * declared external task types, which the app owns the model for but deliberately does not host.
+ * declared external (serviced by an out-of-process worker), NOT inline-handled (a code-first
+ * `w.run` step whose handler the app's in-process Worker already serves — nano-ide#595), and
+ * not a duplicate of one already planned. `declaredTypeIds` are the manifest `types` ids — an
+ * envelope `in`/`out` is typed only when it names one (matching the worker-io deriver).
+ * `externalTaskTypes` are the manifest's declared external task types, which the app owns the
+ * model for but deliberately does not host. `inlineTaskTypes` are the flow-derived inline
+ * (`w.run`) job types (`deriveModels().inlineTaskTypes`).
  */
 export function planWorkerScaffold(
   models: ModelSource[],
   workers: ScaffoldWorker[] = [],
   declaredTypeIds: Iterable<string> = [],
   externalTaskTypes: Iterable<string> = [],
+  inlineTaskTypes: Iterable<string> = [],
 ): WorkerScaffoldPlan {
   const wired = new Set(
     workers
@@ -136,6 +140,7 @@ export function planWorkerScaffold(
   );
   const declared = new Set(declaredTypeIds);
   const external = new Set(externalTaskTypes);
+  const inline = new Set(inlineTaskTypes);
 
   const plans: WorkerStubPlan[] = [];
   const skipped: SkippedWorker[] = [];
@@ -151,6 +156,10 @@ export function planWorkerScaffold(
       }
       if (external.has(taskType)) {
         skipped.push({ taskType, reason: "external" });
+        continue;
+      }
+      if (inline.has(taskType)) {
+        skipped.push({ taskType, reason: "inline" });
         continue;
       }
       if (wired.has(taskType)) {

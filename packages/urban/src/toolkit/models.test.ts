@@ -157,3 +157,24 @@ test("deriveModels treats a genuine same-module re-export as one model, no error
   assert.deepEqual(d.errors, []);
   assert.equal(d.ids.length, 1);
 });
+
+test("deriveModels reports the inline-handled (w.run) task types alongside the model (nano-ide#595)", async () => {
+  // The worker-stub scaffolder consumes `inlineTaskTypes` to skip steps whose handler is hosted
+  // in-process by the flow's Worker — only `w.task` (external) steps may be scaffolded.
+  const mixed = defineFlow("orders", (w) => {
+    w.run("charge", async () => ({}));
+    w.task("sign"); // external — must NOT be reported inline
+    w.run("ship", async () => ({}));
+  });
+  const io = memIO(
+    { "/app/workflows/orders.ts": "// source" },
+    { "workflows/orders.ts": { mixed } },
+  );
+  const d = await deriveModels("/app", io, CODE_FIRST_MANIFEST);
+  assert.equal(d.incomplete, false);
+  assert.deepEqual(d.inlineTaskTypes.sort(), ["orders:charge", "orders:ship"]);
+  // A no-op derivation (no loader / no workflow files) reports an empty set, not undefined.
+  const noLoader = memIO({ "/app/workflows/orders.ts": "// source" });
+  delete noLoader.importModule;
+  assert.deepEqual((await deriveModels("/app", noLoader, CODE_FIRST_MANIFEST)).inlineTaskTypes, []);
+});

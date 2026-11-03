@@ -12,6 +12,7 @@ import {
   declarativeToLayoutedBpmn,
   layoutBpmn,
   externalJobTypes,
+  inlineJobTypes,
   walkNodes,
   replayOnce,
   Worker,
@@ -467,6 +468,27 @@ test("declarative task: external step emits a service task + job type but is NOT
   const worker = new Worker({ baseUrl: "http://localhost:0", workflows: [flow] });
   assert.deepEqual(worker.servedTypes.sort(), ["pr-review:fetchDiff", "pr-review:merge"]);
   assert.equal(worker.servedTypes.includes("pr-review:signPdf"), false);
+});
+
+test("inlineJobTypes surfaces exactly the run-step job types the in-process Worker hosts (nano-ide#595)", () => {
+  // The codegen scaffolder must never plan a handler stub for a `w.run` step: its handler is
+  // inline in the flow and hosted by the in-process Worker. `inlineJobTypes` is the contract the
+  // scaffolder consumes, so it must agree EXACTLY with what the Worker serves — including `run`
+  // steps nested inside structural combinators (walkNodes recurses).
+  const flow = defineFlow("pr-review", (w) => {
+    w.run("fetchDiff", async () => ({}));
+    w.task("signPdf"); // external — NOT inline-handled
+    w.loop((b) => {
+      b.run("merge", async () => ({}));
+      b.break();
+    });
+  });
+  const inline = inlineJobTypes(flow);
+  assert.deepEqual(inline.sort(), ["pr-review:fetchDiff", "pr-review:merge"]);
+  assert.equal(inline.includes("pr-review:signPdf"), false, "an external task is never inline");
+  // Parity with the Worker's own routing table: same walk, same derived types.
+  const worker = new Worker({ baseUrl: "http://localhost:0", workflows: [flow] });
+  assert.deepEqual([...inline].sort(), worker.servedTypes.sort());
 });
 
 test("declarative task: an explicit jobType override replaces the derived type but keeps the element id", () => {

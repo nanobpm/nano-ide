@@ -52,7 +52,15 @@ export async function generate(opts: GenOptions & { check?: boolean }): Promise<
 
   const write = !opts.check;
   const scaffoldOpts = { root: opts.root, io: opts.io, manifestFile: opts.manifestFile, write };
-  const workers = await scaffoldWorkers(scaffoldOpts);
+  // Inline-handled (`w.run`) steps are already served by the app's in-process Worker — never
+  // scaffold a competing throwing stub for them (nano-ide#595). The derived models are also
+  // handed over: a code-first manifest's declared `models` block suppresses the resources/
+  // convention scan in readModels, so without them the scaffolder would plan from nothing.
+  const workers = await scaffoldWorkers({
+    ...scaffoldOpts,
+    inlineTaskTypes: res.inlineTaskTypes,
+    extraModels: res.derivedModels,
+  });
   const operations = await scaffoldOperations(scaffoldOpts);
 
   const missingStubs = [

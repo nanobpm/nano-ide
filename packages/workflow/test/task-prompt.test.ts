@@ -249,3 +249,33 @@ test("task agent option must be a boolean", () => {
     /agent must be a boolean/,
   );
 });
+
+test("forEach over a single IO-only task keeps its input AND output mappings", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.forEach("items", "item", (b) =>
+      b.task("cell", {
+        jobType: "senior:cell",
+        agent: false,
+        io: { input: [{ source: "=item", target: "x" }], output: [{ source: "=y", target: "z" }] },
+      }),
+    );
+  });
+  const el = serviceTask(toBpmn(flow), "cell");
+  assert.match(el, /<zeebe:input source="=item" target="x" \/>/);
+  assert.match(el, /<zeebe:output source="=y" target="z" \/>/);
+  assert.doesNotMatch(el, /agentDefinition/);
+});
+
+test("task with a prompt and explicit agent: false: NO marker, prompt binding and append preserved", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.task("opt-out", {
+      jobType: "senior:x",
+      agent: false,
+      prompt: { resourceId: "x.md", append: "=extra" },
+    });
+  });
+  const el = serviceTask(toBpmn(flow), "opt-out");
+  assert.doesNotMatch(el, /agentDefinition/);
+  assert.match(el, /<zeebe:linkedResource resourceId="x\.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" \/>/);
+  assert.match(el, /<zeebe:input source="=extra" target="appendPrompt" \/>/);
+});

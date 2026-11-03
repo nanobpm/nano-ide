@@ -95,6 +95,7 @@
     <bpmn:serviceTask id="review-round" name="Review round (agent)">
       <bpmn:extensionElements>
         <zeebe:taskDefinition type="senior:pr-review" />
+        <zeebe:agentDefinition agentType="external" />
         <zeebe:linkedResources>
           <zeebe:linkedResource resourceId="review-round.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" />
         </zeebe:linkedResources>

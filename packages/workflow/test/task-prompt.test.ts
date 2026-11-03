@@ -201,3 +201,81 @@ test("deploySmoke: the derived retro agent model deploys to a live engine", { sk
     rmSync(scratch, { recursive: true, force: true });
   }
 });
+
+// Issue #597: an agent task must carry the engine-native AgentTask marker
+// `<zeebe:agentDefinition agentType="external" />` — the nano-workforce
+// reference shape — directly after its taskDefinition and before the prompt
+// linkedResource. Without it the engine attaches no AgentInstance.
+test("task with a prompt: emits zeebe:agentDefinition agentType=external next to the linkedResource", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.task("agent", { jobType: "senior:review", prompt: { resourceId: "review.md" } });
+  });
+  const el = serviceTask(toBpmn(flow), "agent");
+  assert.match(
+    el,
+    /<zeebe:taskDefinition type="senior:review" \/>\s*<zeebe:agentDefinition agentType="external" \/>\s*<zeebe:linkedResources>/,
+  );
+});
+
+test("task with explicit agent: true and no prompt: emits the agentDefinition marker (prompt-less agent cell)", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.task("cell", { jobType: "senior:cell", agent: true });
+  });
+  const el = serviceTask(toBpmn(flow), "cell");
+  assert.match(el, /<zeebe:agentDefinition agentType="external" \/>/);
+  assert.doesNotMatch(el, /linkedResource/);
+});
+
+test("forEach over a single prompt-less agent task keeps the agentDefinition marker", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.forEach("items", "item", (b) => b.task("cell", { jobType: "senior:cell", agent: true }));
+  });
+  assert.match(serviceTask(toBpmn(flow), "cell"), /<zeebe:agentDefinition agentType="external" \/>/);
+});
+
+test("task without prompt or agent: NO agentDefinition marker", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.task("plain", { jobType: "senior:plain" });
+  });
+  assert.doesNotMatch(serviceTask(toBpmn(flow), "plain"), /agentDefinition/);
+});
+
+test("task agent option must be a boolean", () => {
+  assert.throws(
+    () =>
+      defineFlow("agent-demo", (w) => {
+        w.task("bad", JSON.parse('{"jobType":"senior:x","agent":"yes"}'));
+      }),
+    /agent must be a boolean/,
+  );
+});
+
+test("forEach over a single IO-only task keeps its input AND output mappings", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.forEach("items", "item", (b) =>
+      b.task("cell", {
+        jobType: "senior:cell",
+        agent: false,
+        io: { input: [{ source: "=item", target: "x" }], output: [{ source: "=y", target: "z" }] },
+      }),
+    );
+  });
+  const el = serviceTask(toBpmn(flow), "cell");
+  assert.match(el, /<zeebe:input source="=item" target="x" \/>/);
+  assert.match(el, /<zeebe:output source="=y" target="z" \/>/);
+  assert.doesNotMatch(el, /agentDefinition/);
+});
+
+test("task with a prompt and explicit agent: false: NO marker, prompt binding and append preserved", () => {
+  const flow = defineFlow("agent-demo", (w) => {
+    w.task("opt-out", {
+      jobType: "senior:x",
+      agent: false,
+      prompt: { resourceId: "x.md", append: "=extra" },
+    });
+  });
+  const el = serviceTask(toBpmn(flow), "opt-out");
+  assert.doesNotMatch(el, /agentDefinition/);
+  assert.match(el, /<zeebe:linkedResource resourceId="x\.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" \/>/);
+  assert.match(el, /<zeebe:input source="=extra" target="appendPrompt" \/>/);
+});

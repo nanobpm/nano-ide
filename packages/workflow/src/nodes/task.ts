@@ -46,6 +46,11 @@ declare module "../types.js" {
       jobType?: string;
       /** The agent prompt binding, when the task is an LLM-agent service task. */
       prompt?: PromptBinding;
+      /** Whether the task is an AGENT service task, emitting the engine-native
+       *  AgentTask marker `<zeebe:agentDefinition agentType="external" />`
+       *  (issue #597). Resolved at authoring time: an explicit `agent` option
+       *  wins, otherwise it is `true` exactly when a `prompt` is bound. */
+      agent?: boolean;
       /** An explicit `<zeebe:ioMapping>` on the service task — arbitrary input
        *  (and output) variable mappings, using the shared ioMapping shape. When a
        *  `prompt.append` is ALSO present it is folded into this single mapping as
@@ -68,7 +73,17 @@ declare module "../declarative.js" {
      */
     task<K extends string>(
       name: K,
-      opts: { jobType?: string; prompt: PromptBinding; io?: HumanIoMapping },
+      opts: { jobType?: string; prompt: PromptBinding; agent?: boolean; io?: HumanIoMapping },
+    ): FlowBuilder<C>;
+    /**
+     * A PROMPT-LESS agent external service task: as `task`, but `agent: true`
+     * emits the AgentTask marker `<zeebe:agentDefinition agentType="external" />`
+     * (the nano-workforce agent-task signal, issue #597) without binding a
+     * prompt resource — the worker is steered by its inputs alone.
+     */
+    task<K extends string>(
+      name: K,
+      opts: { jobType?: string; agent: boolean; io?: HumanIoMapping },
     ): FlowBuilder<C>;
   }
 }
@@ -118,7 +133,14 @@ function resolvePrompt(name: string, prompt: PromptBinding): PromptBinding {
  *  `<zeebe:ioMapping>` (never two). Element order matches the golden:
  *  `linkedResources` (when any) then `ioMapping` (when any), the latter after
  *  `taskDefinition`/`properties`. */
-function taskExtensions(prompt: PromptBinding | undefined, io: HumanIoMapping | undefined): string {
+function taskExtensions(
+  agent: boolean | undefined,
+  prompt: PromptBinding | undefined,
+  io: HumanIoMapping | undefined,
+): string {
+  // The AgentTask marker leads the delta so it sits directly after the
+  // taskDefinition, matching the nano-workforce reference shape.
+  const marker = agent === true ? `        <zeebe:agentDefinition agentType="external" />\n` : "";
   const linked =
     prompt !== undefined
       ? `        <zeebe:linkedResources>\n` +
@@ -134,22 +156,36 @@ function taskExtensions(prompt: PromptBinding | undefined, io: HumanIoMapping | 
   const inputs: HumanIoEntry[] = [...(io?.input ?? [])];
   if (prompt?.append !== undefined) inputs.push({ source: prompt.append, target: "appendPrompt" });
   const merged: HumanIoMapping = { input: inputs, output: io?.output ?? [] };
-  return linked + renderIoMapping(merged);
+  return marker + linked + renderIoMapping(merged);
+}
+
+/** Whether a `task` node carries an extension delta (agent marker, prompt
+ *  binding, or io mapping) that only this module's emitter renders. The SINGLE
+ *  predicate any other emitter (e.g. `forEach`'s single-task fast path) must
+ *  consult before rendering the task shell itself, so a new delta can never be
+ *  silently dropped by a bypass. */
+export function hasTaskExtensions(node: { agent?: boolean; prompt?: PromptBinding; io?: HumanIoMapping }): boolean {
+  return node.agent === true || node.prompt !== undefined || node.io !== undefined;
 }
 
 registerNodeKind("task", {
-  build: (api) => (name: string, opts?: { jobType?: string; prompt?: PromptBinding; io?: HumanIoMapping }) => {
+  build: (api) => (name: string, opts?: { jobType?: string; prompt?: PromptBinding; agent?: boolean; io?: HumanIoMapping }) => {
     api.claim(name);
     const override = opts?.jobType;
     if (override !== undefined) assertJobType("task jobType", override);
     const prompt = opts?.prompt !== undefined ? resolvePrompt(name, opts.prompt) : undefined;
     assertIoMapping(`task("${name}")`, opts?.io);
+    if (opts?.agent !== undefined && typeof opts.agent !== "boolean") {
+      throw new Error(`task("${name}") agent must be a boolean when provided`);
+    }
+    const agent = opts?.agent ?? prompt !== undefined;
     api.out.push({
       kind: "task",
       name,
       envelopes: api.contractEnvelopes(name),
       jobType: override,
       prompt,
+      agent,
       io: opts?.io,
     });
     return api.self();
@@ -158,7 +194,7 @@ registerNodeKind("task", {
     // Neither a prompt binding nor an explicit io mapping → the standard
     // service-task emission is preserved unchanged (no `linkedResources`, no
     // `ioMapping`).
-    if (node.prompt === undefined && node.io === undefined) {
+    if (!hasTaskExtensions(node)) {
       api.addServiceTask(node);
       api.connect(incoming, node.name);
       return [api.newEdge(node.name)];
@@ -168,7 +204,7 @@ registerNodeKind("task", {
     // properties, recording envelopes); we only supply the `linkedResource`
     // and/or `ioMapping` delta, so the envelope/taskDefinition serialization has
     // a single source.
-    api.addServiceTask(node, { extraExt: taskExtensions(node.prompt, node.io) });
+    api.addServiceTask(node, { extraExt: taskExtensions(node.agent, node.prompt, node.io) });
     api.connect(incoming, node.name);
     return [api.newEdge(node.name)];
   },

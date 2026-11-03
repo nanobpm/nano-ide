@@ -12,6 +12,11 @@ import { DataLayer } from "./datasource.ts";
 /** A tiny engine that records registrations and can deliver a job to a handler. */
 class MiniEngine implements EngineClient {
   workers = new Map<string, JobHandler>();
+  /** The options each `registerWorker` call carried, keyed by job type. */
+  workerOptions = new Map<
+    string,
+    { workerName?: string; maxParallelJobs?: number; timeoutMs?: number; fetchVariables?: string[] } | undefined
+  >();
   async deployResources(): Promise<{ deployed: number }> { return { deployed: 0 }; }
   async createInstance(): Promise<{ processInstanceKey: string }> { return { processInstanceKey: "pi" }; }
   async cancelInstance(): Promise<void> {}
@@ -34,8 +39,13 @@ class MiniEngine implements EngineClient {
   async resolveIncident(): Promise<void> {}
   async updateJobRetries(): Promise<void> {}
   async setVariables(): Promise<void> {}
-  async registerWorker(jobType: string, handler: JobHandler): Promise<WorkerSubscription> {
+  async registerWorker(
+    jobType: string,
+    handler: JobHandler,
+    options?: { workerName?: string; maxParallelJobs?: number; timeoutMs?: number; fetchVariables?: string[] },
+  ): Promise<WorkerSubscription> {
     this.workers.set(jobType, handler);
+    this.workerOptions.set(jobType, options);
     return { jobType, unsubscribe: async () => void this.workers.delete(jobType) };
   }
   deliver(jobType: string, job: EngineJob) {
@@ -163,6 +173,28 @@ test("mountConnectors imports the pack entry and registers the drained worker", 
     variables: { text: "hi" },
   });
   assert.deepEqual(out, { echoed: "hi" });
+});
+
+test("mountConnectors carries a pack worker's defineWorker timeoutMs to registerWorker (issue #596)", async () => {
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx(
+    { workers: [{ taskType: "slack:send-message", connector: PACK_ID }] },
+    engine,
+    {
+      files: slackFiles(),
+      onImport: () => {
+        defineWorker({
+          type: "slack:send-message",
+          timeoutMs: 900_000,
+          async handle(job) {
+            await job.complete({});
+          },
+        });
+      },
+    },
+  );
+  await mountConnectors(ctx, makeApp({ SLACK_BOT_TOKEN: "xoxb-1" }));
+  assert.equal(engine.workerOptions.get("slack:send-message")?.timeoutMs, 900_000);
 });
 
 test("mountConnectors skips a worker whose required env is unset", async () => {

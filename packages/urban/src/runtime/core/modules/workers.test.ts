@@ -23,6 +23,11 @@ import { join } from "node:path";
 /** A tiny engine that records registrations and can deliver a job to a handler. */
 class MiniEngine implements EngineClient {
   workers = new Map<string, JobHandler>();
+  /** The options each `registerWorker` call carried, keyed by job type. */
+  workerOptions = new Map<
+    string,
+    { workerName?: string; maxParallelJobs?: number; timeoutMs?: number; fetchVariables?: string[] } | undefined
+  >();
   async deployResources(): Promise<{ deployed: number }> { return { deployed: 0 }; }
   async createInstance(): Promise<{ processInstanceKey: string }> { return { processInstanceKey: "pi" }; }
   async cancelInstance(): Promise<void> {}
@@ -46,8 +51,13 @@ class MiniEngine implements EngineClient {
   async updateJobRetries(): Promise<void> {}
   async setVariables(): Promise<void> {}
   async close(): Promise<void> {}
-  async registerWorker(jobType: string, handler: JobHandler): Promise<WorkerSubscription> {
+  async registerWorker(
+    jobType: string,
+    handler: JobHandler,
+    options?: { workerName?: string; maxParallelJobs?: number; timeoutMs?: number; fetchVariables?: string[] },
+  ): Promise<WorkerSubscription> {
     this.workers.set(jobType, handler);
+    this.workerOptions.set(jobType, options);
     return { jobType, unsubscribe: async () => void this.workers.delete(jobType) };
   }
   deliver(jobType: string, job: EngineJob) {
@@ -224,6 +234,40 @@ test("mountWorkers silently skips a connector-backed worker (mountConnectors own
   assert.equal(engine.workers.size, 0);
   // No spurious "neither a handler nor an llm" warning for a connector worker.
   assert.ok(!logs.some((l) => l.msg.includes("neither a handler nor an llm")));
+});
+
+test("mountWorkers passes a worker's declared job lock timeout (timeoutMs) to registerWorker (issue #596)", async () => {
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx(
+    {
+      workers: [
+        { taskType: "transcribe", handler: "workers/transcribe.ts", timeoutMs: 600_000 },
+        { taskType: "quick", handler: "workers/quick.ts" },
+      ],
+      llm: { fast: { provider: "env", model: "${NANO_APP_LLM_MODEL}" } },
+    },
+    engine,
+  );
+  ctx.host.importModule = async () => ({ default: () => ({}) });
+  await mountWorkers(ctx, makeApp());
+  assert.equal(engine.workerOptions.get("transcribe")?.timeoutMs, 600_000);
+  // A worker with no declared timeout leaves the engine/SDK default lock in place.
+  assert.equal(engine.workerOptions.get("quick")?.timeoutMs, undefined);
+});
+
+test("mountWorkers passes an llm worker's declared timeoutMs to registerWorker (issue #596)", async () => {
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx(
+    {
+      workers: [{ taskType: "summarize", llm: "fast", timeoutMs: 300_000 }],
+      llm: { fast: { provider: "env", model: "${NANO_APP_LLM_MODEL}" } },
+    },
+    engine,
+  );
+  await withFetch("{}", async () => {
+    await mountWorkers(ctx, makeApp());
+  });
+  assert.equal(engine.workerOptions.get("summarize")?.timeoutMs, 300_000);
 });
 
 test("mountWorkers binds the job's correlation context onto the handler's app.log", async () => {

@@ -23,6 +23,8 @@ export const onboarding = defineFlow("onboarding", (w) => {
   w.signal("approved", { correlationKey: "userId" });
   w.run("provision", async () => ({ ok: true }));
   w.run("audit", async (job) => ({ seen: job.variables })); // untyped vars = JsonObject
+  // A step can declare a job lock timeout (issue #596) alongside or instead of io.
+  w.run("archive", async () => ({ archived: true }), { timeoutMs: 600_000 });
 });
 
 // (B) Typed-contracts flow — `job.variables` and the return value are typed from

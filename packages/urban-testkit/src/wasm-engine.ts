@@ -192,6 +192,10 @@ interface RegisteredWorker {
   readonly handler: JobHandler;
   readonly workerName: string;
   readonly maxParallelJobs: number;
+  /** The job lock horizon (ms) passed to `activateJobs` (issue #596). Jobs are completed
+   *  synchronously inside `drain`, so the lock never actually expires in a run — but the
+   *  declared value is honoured so a test asserting the activation parameters sees it. */
+  readonly timeoutMs?: number;
   /** When set, a job surfaces only this subset of variables (mirrors the live
    *  SDK adapter's `fetchVariables`, which the engine applies server-side). */
   readonly fetchVariables?: readonly string[];
@@ -1028,7 +1032,7 @@ export class WasmEngineClient implements EngineClient {
   async registerWorker(
     jobType: string,
     handler: JobHandler,
-    options?: { workerName?: string; maxParallelJobs?: number; fetchVariables?: string[] },
+    options?: { workerName?: string; maxParallelJobs?: number; timeoutMs?: number; fetchVariables?: string[] },
   ): Promise<WorkerSubscription> {
     // Gate registration on the same live-engine boundary every other public op uses (No Drift
     // Surfaces): after close()/free() a fresh worker would be inserted into `#workers` (already
@@ -1041,6 +1045,7 @@ export class WasmEngineClient implements EngineClient {
       handler,
       workerName: options?.workerName ?? `urban-testkit:${jobType}`,
       maxParallelJobs: options?.maxParallelJobs ?? DEFAULT_MAX_JOBS,
+      timeoutMs: options?.timeoutMs,
       fetchVariables: options?.fetchVariables,
     });
     // A freshly-registered worker picks up any jobs already waiting for its type.
@@ -1252,7 +1257,7 @@ export class WasmEngineClient implements EngineClient {
           this.#engine.activateJobs(
             jobType,
             worker.maxParallelJobs,
-            JOB_LOCK_MS,
+            worker.timeoutMs ?? JOB_LOCK_MS,
             worker.workerName,
           ),
         );

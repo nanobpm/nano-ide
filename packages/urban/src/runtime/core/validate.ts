@@ -144,6 +144,18 @@ export function collectManifestIssues(m: unknown): ValidationIssue[] {
           });
         }
       }
+      // The pending-schema job lock timeout (issue #596): when present it must be a
+      // positive integer of ms — a zero/negative lock would expire instantly (the job
+      // re-activated mid-handler), and a non-integer is a manifest typo to fail fast on.
+      if (worker !== undefined && "timeoutMs" in worker) {
+        const t = worker.timeoutMs;
+        if (typeof t !== "number" || !Number.isInteger(t) || t <= 0) {
+          issues.push({
+            path: `workers[${i}].timeoutMs`,
+            message: "timeoutMs must be a positive integer (ms)",
+          });
+        }
+      }
     });
   }
 

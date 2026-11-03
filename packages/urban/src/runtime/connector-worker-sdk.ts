@@ -49,6 +49,8 @@ export interface ConnectorWorkerOptions {
 export interface DefinedConnectorWorker {
   type: string;
   maxParallelJobs?: number;
+  /** Job lock timeout, ms (issue #596) — carried from `defineWorker({ timeoutMs })`. */
+  timeoutMs?: number;
   handle: ConnectorWorkerOptions["handle"];
 }
 
@@ -66,7 +68,12 @@ export function defineWorker(opts: ConnectorWorkerOptions): void {
   if (typeof opts.handle !== "function") {
     throw new Error(`defineWorker("${opts.type}"): handle must be a function`);
   }
-  registered.push({ type: opts.type, maxParallelJobs: opts.maxParallelJobs, handle: opts.handle });
+  registered.push({
+    type: opts.type,
+    maxParallelJobs: opts.maxParallelJobs,
+    timeoutMs: opts.timeoutMs,
+    handle: opts.handle,
+  });
 }
 
 /** Return every worker registered since the last drain, and clear the registry.

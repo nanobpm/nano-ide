@@ -240,6 +240,21 @@ export interface WorkerSubscription {
   unsubscribe(): Promise<void>;
 }
 
+/** Options for {@link EngineClient.registerWorker}. */
+export interface RegisterWorkerOptions {
+  /** Worker name reported to the engine. The adapter supplies a default. */
+  workerName?: string;
+  /** Max jobs the worker handles in parallel. The adapter supplies a default. */
+  maxParallelJobs?: number;
+  /** Job lock timeout, ms (issue #596): how long the engine leases an activated job to
+   *  this worker before re-activating it elsewhere. Set it above the handler's worst-case
+   *  runtime for long steps (transcription, an agent call, a multi-GB upload) so the lock
+   *  cannot expire mid-handler and the job run twice. Absent ⇒ the engine/SDK default. */
+  timeoutMs?: number;
+  /** Restrict the variables surfaced to the handler to this subset (engine-side projection). */
+  fetchVariables?: string[];
+}
+
 /**
  * A process instance's terminal-relevant lifecycle state, as the engine reports it.
  * `ACTIVE` (still running), `COMPLETED` (ended normally at an end event), or
@@ -991,7 +1006,7 @@ export interface EngineClient {
   registerWorker(
     jobType: string,
     handler: JobHandler,
-    options?: { workerName?: string; maxParallelJobs?: number; fetchVariables?: string[] },
+    options?: RegisterWorkerOptions,
   ): Promise<WorkerSubscription>;
   /** Tear down all connections. */
   close(): Promise<void>;

@@ -288,6 +288,11 @@ export interface WorkerSpec {
   displayName?: string;
   /** Max concurrent jobs (maps to `defineWorker`'s `maxParallelJobs`). */
   maxParallelJobs?: number;
+  /** Job lock timeout, ms (maps to `defineWorker`'s `timeoutMs`; issue #596): how long the
+   *  engine leases an activated job to this worker before re-activating it elsewhere. Set it
+   *  above the handler's worst-case runtime for long-running outbound calls. The pack's
+   *  `defineWorker({ timeoutMs })` overrides this design-time default when both are set. */
+  timeoutMs?: number;
   /**
    * Config fields surfaced **per-connector** in the project config surface when
    * the connector is enabled — e.g. the shared connection/API token. Defaults

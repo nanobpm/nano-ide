@@ -11,17 +11,27 @@ import { registerNodeKind } from "./registry.js";
 
 declare module "../types.js" {
   interface FlowNodeRegistry {
-    run: { kind: "run"; name: string; envelopes?: NodeEnvelopes; io?: HumanIoMapping };
+    run: { kind: "run"; name: string; envelopes?: NodeEnvelopes; io?: HumanIoMapping; timeoutMs?: number };
   }
 }
 
 registerNodeKind("run", {
-  build: (api) => (name: string, handler: StepHandler, opts?: { io?: HumanIoMapping }) => {
+  build: (api) => (name: string, handler: StepHandler, opts?: { io?: HumanIoMapping; timeoutMs?: number }) => {
     api.claim(name);
     if (typeof handler !== "function") throw new Error(`run("${name}") needs a handler function`);
     assertIoMapping(`run("${name}")`, opts?.io);
+    const timeoutMs = opts?.timeoutMs;
+    if (timeoutMs !== undefined && (!Number.isInteger(timeoutMs) || timeoutMs <= 0)) {
+      throw new Error(`run("${name}"): timeoutMs must be a positive integer (ms)`);
+    }
     api.handlers[name] = handler;
-    api.out.push({ kind: "run", name, envelopes: api.contractEnvelopes(name), io: opts?.io });
+    api.out.push({
+      kind: "run",
+      name,
+      envelopes: api.contractEnvelopes(name),
+      io: opts?.io,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    });
     return api.self();
   },
   emit: (node, incoming, _loop, api) => {

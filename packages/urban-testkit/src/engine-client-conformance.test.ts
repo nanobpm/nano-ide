@@ -78,6 +78,31 @@ const SERVICE_TASK_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
   </bpmndi:BPMNDiagram>
 </bpmn:definitions>`;
 
+test("EngineClient seam: registerWorker accepts a job lock timeout (timeoutMs) option (issue #596)", async () => {
+  // Both adapters accept `timeoutMs` on the registerWorker options bag and treat it as the
+  // job lock horizon. The WASM double completes jobs synchronously inside drain (its lock
+  // never actually expires), so the observable contract pinned here is: registration with
+  // the option succeeds and the worker still serves its jobs.
+  const engine = await createWasmEngineClient();
+  try {
+    await engine.deployResources([
+      { name: "incident_repair.bpmn", content: SERVICE_TASK_BPMN, contentType: "text/xml" },
+    ]);
+    const sub = await engine.registerWorker("work", () => ({ done: true }), { timeoutMs: 600_000 });
+    assert.equal(sub.jobType, "work");
+    const { processInstanceKey } = await engine.createInstance({
+      processDefinitionId: "incident_repair",
+    });
+    const [instance] = await engine.searchProcessInstances({
+      processInstanceKeys: [processInstanceKey],
+    });
+    assert.equal(instance?.state, "COMPLETED", "the timeout-carrying worker served the job");
+    await sub.unsubscribe();
+  } finally {
+    await engine.close();
+  }
+});
+
 test("EngineClient seam: searchIncidents / setVariables / updateJobRetries / resolveIncident drive an incident-repair loop", async () => {
   const engine = await createWasmEngineClient();
   try {

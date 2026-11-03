@@ -5,7 +5,7 @@
 import type { AppApi, Mounted, RuntimeContext } from "../context.ts";
 import { isRecord } from "../guards.ts";
 import type { EngineJob, JobHandler, WorkerSubscription } from "../host.ts";
-import { workerJobType, type Worker } from "../manifest.ts";
+import { workerJobType, workerTimeoutMs, type Worker } from "../manifest.ts";
 import { type DecisionEvaluator, type LlmRuntime, runLlmJob } from "./llm.ts";
 import { runInJobContext } from "../execContext.ts";
 import type { JobExecContext } from "../execContext.ts";
@@ -326,6 +326,8 @@ export async function mountWorkers(
       };
       const sub = await ctx.engine.registerWorker(jobType, wrapped, {
         workerName: `${ctx.manifest.id}:${jobType}`,
+        // The declared job lock timeout (issue #596) — absent ⇒ the engine/SDK default.
+        timeoutMs: workerTimeoutMs(decl),
       });
       subs.push(sub);
       jobTypes.push(jobType);
@@ -349,6 +351,8 @@ export async function mountWorkers(
     };
     const sub = await ctx.engine.registerWorker(jobType, wrapped, {
       workerName: `${ctx.manifest.id}:${jobType}`,
+      // The declared job lock timeout (issue #596) — absent ⇒ the engine/SDK default.
+      timeoutMs: workerTimeoutMs(decl),
     });
     subs.push(sub);
     jobTypes.push(jobType);

@@ -1211,6 +1211,23 @@ test("registerWorker creates a worker the SDK auto-starts, and dispatches + comp
   assert.equal(rec.stopped, 1);
 });
 
+test("registerWorker passes the job lock timeout through to createJobWorker (issue #596)", async () => {
+  const client = fakeSdkClient();
+  const engine = new SdkEngineClient(client);
+  await engine.registerWorker("svc", () => ({}), { timeoutMs: 600_000 });
+  const rec = client.workers[0];
+  assert.equal(rec.cfg.jobTimeoutMs, 600_000);
+});
+
+test("registerWorker leaves jobTimeoutMs unset (SDK default lock) when no timeoutMs is given", async () => {
+  const client = fakeSdkClient();
+  const engine = new SdkEngineClient(client);
+  await engine.registerWorker("svc", () => ({}));
+  const rec = client.workers[0];
+  assert.equal(rec.cfg.jobTimeoutMs, undefined);
+  assert.equal("jobTimeoutMs" in rec.cfg, false);
+});
+
 test("registerWorker fails the job when the handler throws", async () => {
   const client = fakeSdkClient();
   const engine = new SdkEngineClient(client);

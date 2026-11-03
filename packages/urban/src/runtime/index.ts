@@ -50,6 +50,7 @@ export {
   resolveBindHost,
   resolveBindMode,
   workerJobType,
+  workerTimeoutMs,
   ALL_INTERFACES_HOST,
   BIND_ENV_VAR,
   LOOPBACK_HOST,
@@ -70,6 +71,7 @@ export type {
   TaskInboxSurface,
   Trigger,
   Worker,
+  WorkerDecl,
 } from "./core/manifest.ts";
 
 // Validation
@@ -112,6 +114,7 @@ export type {
   ProcessDefinitionIdentity,
   ProcessInstanceSnapshot,
   ProcessInstanceState,
+  RegisterWorkerOptions,
   SqliteDb,
   UserTaskState,
   UserTaskSummary,

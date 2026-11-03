@@ -123,9 +123,37 @@ export function isConfiguredStatusSelector(v: unknown): v is readonly string[] {
   return Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === "string" && s.length > 0);
 }
 
+/**
+ * A worker declaration (`workers[]`) as the runtime consumes it: the schema-owned
+ * {@link Worker} plus the pending-schema `timeoutMs` field (issue #596) — the job lock
+ * timeout in ms, passed through `registerWorker` to `createJobWorker({ jobTimeoutMs })`.
+ * For a long-running step (transcription, an agent call, a multi-GB upload) the SDK's
+ * default lock expires mid-handler: the engine re-activates the job and a second worker
+ * runs it again, and the first worker's completion is rejected. Set `timeoutMs` above the
+ * handler's worst-case runtime to keep the lock for the whole step.
+ *
+ * Bridged locally — like {@link NetworkConfig} — until `@nanobpm/nano-app-schema` folds
+ * `timeoutMs` into the `worker` definition (the schema shape is owned by that package,
+ * ADR 0027, and CI bans `declare module` augmentation). Drop this augmentation and
+ * re-export `Worker` plainly once the dep bump lands (No Drift Surfaces).
+ */
+export type WorkerDecl = Worker & {
+  /** Job lock timeout, ms. Must be a positive integer (the manifest validator enforces it). */
+  readonly timeoutMs?: number;
+};
+
 /** The job type a worker subscribes to (schema key: `taskType`). */
 export function workerJobType(w: Worker): string | undefined {
   return w.taskType;
+}
+
+/** A worker declaration's job lock timeout, or `undefined` when absent/invalid — the
+ *  validator flags an invalid value, so a consumer treats it as unset rather than
+ *  propagating a malformed lock to the engine. Read reflectively (like `network.bind`)
+ *  because `timeoutMs` is pending-schema and not on the static {@link Worker} type. */
+export function workerTimeoutMs(w: Worker): number | undefined {
+  const v: unknown = Reflect.get(w, "timeoutMs");
+  return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : undefined;
 }
 
 /**

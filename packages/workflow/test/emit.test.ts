@@ -859,6 +859,72 @@ test("defineFlow: rejects a non-object contracts arg and a missing build callbac
   assert.throws(() => defineFlow("f", { a: {} }), /build callback .* is required/);
 });
 
+// --- Job lock timeouts (issue #596) ------------------------------------------
+
+test("worker: a run step's { timeoutMs } overrides the worker-wide jobTimeoutMs for its job type", () => {
+  const flow = defineFlow("uploads", (w) => {
+    w.run("transcode", async () => ({}), { timeoutMs: 3_600_000 });
+    w.run("notify", async () => ({}));
+  });
+  const configs: Record<string, { jobTimeoutMs?: number }> = {};
+  const client = new WorkflowClient({
+    client: {
+      async createDeployment() {
+        return {};
+      },
+      async createProcessInstance() {
+        return {};
+      },
+      async correlateMessage() {
+        return {};
+      },
+      async getProcessInstance() {
+        return {};
+      },
+      createJobWorker(cfg: { jobType: string; jobTimeoutMs?: number }) {
+        configs[cfg.jobType] = cfg;
+        return { start() {}, stop() {} };
+      },
+    },
+  });
+  const worker = new Worker({ client, workflows: [flow], jobTimeoutMs: 30_000 });
+  worker.start();
+  // The step with a declared lock timeout gets it; the undeclared step keeps the
+  // worker-wide default.
+  assert.equal(configs["uploads:transcode"]?.jobTimeoutMs, 3_600_000);
+  assert.equal(configs["uploads:notify"]?.jobTimeoutMs, 30_000);
+});
+
+test("worker: a run step's { timeoutMs } applies when no worker-wide jobTimeoutMs is set", () => {
+  const flow = defineFlow("uploads2", (w) => {
+    w.run("transcode", async () => ({}), { timeoutMs: 600_000 });
+  });
+  const configs: Record<string, { jobTimeoutMs?: number }> = {};
+  const client = new WorkflowClient({
+    client: {
+      async createDeployment() {
+        return {};
+      },
+      async createProcessInstance() {
+        return {};
+      },
+      async correlateMessage() {
+        return {};
+      },
+      async getProcessInstance() {
+        return {};
+      },
+      createJobWorker(cfg: { jobType: string; jobTimeoutMs?: number }) {
+        configs[cfg.jobType] = cfg;
+        return { start() {}, stop() {} };
+      },
+    },
+  });
+  const worker = new Worker({ client, workflows: [flow] });
+  worker.start();
+  assert.equal(configs["uploads2:transcode"]?.jobTimeoutMs, 600_000);
+});
+
 test("defineFlow: rejects step names that collide with generated BPMN ids", () => {
   for (const bad of ["Start", "End", "Gw_0", "Loop_0", "Sub_0", "Msg_x", "f_0"]) {
     assert.throws(

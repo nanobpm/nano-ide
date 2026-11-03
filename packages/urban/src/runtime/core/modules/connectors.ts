@@ -39,6 +39,9 @@ interface PackWorkerSpec {
   type: string;
   entry: string;
   maxParallelJobs?: number;
+  /** Job lock timeout, ms (issue #596) — a design-time default the pack's
+   *  `defineWorker({ timeoutMs })` overrides when both are set. */
+  timeoutMs?: number;
   configFields?: PackConfigField[];
 }
 
@@ -264,6 +267,8 @@ export async function mountConnectors(ctx: RuntimeContext, app: AppApi): Promise
       // The pack's `defineWorker({ maxParallelJobs })` is the authoritative runtime
       // value; the ext.json spec is a design-time default when the code omits it.
       maxParallelJobs: worker.maxParallelJobs ?? spec.maxParallelJobs,
+      // Same precedence for the job lock timeout (issue #596): code wins, spec is the default.
+      timeoutMs: worker.timeoutMs ?? spec.timeoutMs,
     });
     subs.push(sub);
     jobTypes.push(jobType);

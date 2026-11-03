@@ -210,6 +210,30 @@ wiring; `WorkflowClient` deploys and starts, `Worker` hosts your `run` steps.
 inspectable in a modeller/Operate — `@nanobpm/urban` bundles `bpmn-auto-layout`
 so this works out of the box.
 
+For a long-running step (transcription, an agent call, a multi-GB upload),
+declare a job lock timeout so the engine's lease cannot expire mid-handler and
+the job run twice — per step with `w.run(name, handler, { timeoutMs })`, or
+worker-wide with `new Worker({ jobTimeoutMs })`:
+
+```ts
+const flow = defineFlow("uploads", (w) => {
+  w.run("transcode", transcode, { timeoutMs: 3_600_000 }); // 1h lock for this step
+  w.run("notify", notify); // worker-wide default (30s) applies
+});
+```
+
+Manifest-declared workers get the same knob as `timeoutMs` on the `workers[]`
+entry (validated as a positive integer of ms):
+
+```jsonc
+// nano.app.json
+{
+  "workers": [
+    { "taskType": "media.transcode", "handler": "workers/transcode.ts", "timeoutMs": 3600000 }
+  ]
+}
+```
+
 ### Deploy by convention (`resources/`)
 
 Deployables are discovered by convention: with **no `models`** block in the

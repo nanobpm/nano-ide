@@ -100,6 +100,25 @@ test("an llm-backed worker (no handler) is accepted", () => {
   assert.ok(!issues.some((i) => i.path.startsWith("workers[0]")));
 });
 
+test("a worker job lock timeout (timeoutMs) must be a positive integer (issue #596)", () => {
+  const ok = collectManifestIssues({
+    ...valid,
+    workers: [{ taskType: "a.b", handler: "workers/x.ts", timeoutMs: 600_000 }],
+  });
+  assert.ok(!ok.some((i) => i.path.startsWith("workers[0]")));
+
+  for (const bad of [0, -5, 1.5, Number.NaN, "600000"]) {
+    const issues = collectManifestIssues({
+      ...valid,
+      workers: [{ taskType: "a.b", handler: "workers/x.ts", timeoutMs: bad }],
+    });
+    assert.ok(
+      issues.some((i) => i.path === "workers[0].timeoutMs"),
+      `timeoutMs=${String(bad)} must be rejected`,
+    );
+  }
+});
+
 test("data.default must reference an existing source", () => {
   const issues = collectManifestIssues({
     ...valid,

@@ -108,10 +108,12 @@ export async function scaffoldWorkers(opts: ScaffoldOptions): Promise<ScaffoldRu
   const declaredTypeIds = Object.keys(manifest.types ?? {});
 
   // Fuse on-disk models with any in-memory extras (code-first derived models — see
-  // `ScaffoldOptions.extraModels`), deduped by path so a derived model that also landed on
-  // disk is planned from exactly once.
-  const seenPaths = new Set(diskModels.map((m) => m.path));
-  const models = [...diskModels, ...(opts.extraModels ?? []).filter((m) => !seenPaths.has(m.path))];
+  // `ScaffoldOptions.extraModels`), deduped by path with the IN-MEMORY model winning: a derived
+  // model whose path also exists on disk may be stale there (`--check`/`--no-models` never write
+  // it), so planning from the disk copy would miss newly added tasks and keep removed ones. This
+  // mirrors the precedence `collectAll` (gen.ts) gives the type-contract derivers.
+  const extraPaths = new Set((opts.extraModels ?? []).map((m) => m.path));
+  const models = [...diskModels.filter((m) => !extraPaths.has(m.path)), ...(opts.extraModels ?? [])];
 
   const { plans, skipped } = planWorkerScaffold(
     models,

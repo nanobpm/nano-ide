@@ -295,6 +295,34 @@ test("scaffoldWorkers skips inline-handled (w.run) task types — no stub, no wi
   );
 });
 
+test("scaffoldWorkers prefers an in-memory derived model over a stale disk copy at the same path (nano-ide#595)", async () => {
+  // `--check`/`--no-models` runs never write the derived `.bpmn`, so a derived model's path can
+  // hold a STALE disk copy. Planning from disk would miss newly added external tasks and keep
+  // removed ones. The in-memory model must win — the same precedence `collectAll` (gen.ts) gives
+  // the type-contract derivers.
+  const files = {
+    "/app/nano.app.json": JSON.stringify({
+      id: "demo",
+      models: { processes: ["processes/*.bpmn"] },
+    }),
+    // Stale disk copy: still has the REMOVED task, lacks the ADDED one.
+    "/app/processes/p.bpmn": model("p.bpmn", "p", serviceTask("Old", "t.removed")).xml,
+  };
+  const io = memIO(files);
+  const derived = model("processes/p.bpmn", "p", serviceTask("New", "t.added"));
+  const run = await scaffoldWorkers({ root: "/app", io, write: true, extraModels: [derived] });
+  // The fresh model is planned from: the added task is scaffolded, the removed one is not.
+  assert.deepEqual(run.outcomes.map((o) => o.taskType), ["t.added"]);
+  assert.ok(io.files["/app/workers/t-added/worker.ts"], "added task gets a stub");
+  assert.equal(io.files["/app/workers/t-removed/worker.ts"], undefined, "removed task gets no stub");
+  const manifest = JSON.parse(io.files["/app/nano.app.json"]);
+  assert.deepEqual(
+    manifest.workers?.map((w: { taskType: string }) => w.taskType),
+    ["t.added"],
+    "only the fresh model's task is wired",
+  );
+});
+
 test("scaffoldWorkers reads manifest.externalTaskTypes and skips those (never scaffolds/wires)", async () => {
   const files = {
     "/app/nano.app.json": JSON.stringify({

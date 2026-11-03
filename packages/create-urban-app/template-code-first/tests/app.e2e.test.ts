@@ -148,7 +148,27 @@ describe("urban gen (code-first)", () => {
 	// `greet:hello` job type competing with the real handler, so instances randomly raised
 	// incidents. Only a `w.task` (external) step may ever produce a stub.
 	test("scaffolds no worker stubs — w.run steps are inline-handled", () => {
-		execFileSync("npx", ["urban", "gen"], { cwd: APP_ROOT, stdio: "pipe" });
+		// Run gen through the app's own host. A Deno scaffold (`--deno` emits deno.json) documents
+		// a Deno-only setup where npm need not be installed, so `npx` cannot be assumed — use the
+		// `deno task gen` the README documents. On Node, `npm run gen` spawns the `urban` bin in a
+		// fresh process WITHOUT this test runner's `--experimental-strip-types`; gen's code-first
+		// derivation imports `workflows/*.ts`, which fails on Node versions that require the flag
+		// (22.6–22.17) — pass it down via NODE_OPTIONS (a no-op on ≥22.18, where stripping is
+		// already on by default).
+		const deno = existsSync(join(APP_ROOT, "deno.json"));
+		if (deno) {
+			execFileSync("deno", ["task", "gen"], { cwd: APP_ROOT, stdio: "pipe" });
+		} else {
+			execFileSync("npm", ["run", "gen"], {
+				cwd: APP_ROOT,
+				stdio: "pipe",
+				env: {
+					...process.env,
+					NODE_OPTIONS:
+						`${process.env.NODE_OPTIONS ?? ""} --experimental-strip-types`.trim(),
+				},
+			});
+		}
 
 		const workersDir = join(APP_ROOT, "workers");
 		assert.ok(

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.3](https://github.com/nanobpm/nano-ide/compare/create-urban-app-0.15.2...create-urban-app-0.15.3) (2026-11-03)
+
+
+### Bug Fixes
+
+* **urban:** never scaffold worker stubs for inline-handled w.run steps ([#599](https://github.com/nanobpm/nano-ide/issues/599)) ([b946a1a](https://github.com/nanobpm/nano-ide/commit/b946a1a774382e072dabec00bd7b7d8b6f0183d2))
+
 ## [0.15.2](https://github.com/nanobpm/nano-ide/compare/create-urban-app-0.15.1...create-urban-app-0.15.2) (2026-08-22)
 
 

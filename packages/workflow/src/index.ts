@@ -41,7 +41,7 @@
 // discipline). Retained for advanced durable-orchestration use only.
 export { defineWorkflow, imperativeToBpmn, replayOnce } from "./imperative.js";
 export type { Journal, ReplayStep } from "./imperative.js";
-export { defineFlow, declarativeToBpmn, externalJobTypes, walkNodes } from "./declarative.js";
+export { defineFlow, declarativeToBpmn, externalJobTypes, inlineJobTypes, walkNodes } from "./declarative.js";
 export type { FlowBuilder } from "./declarative.js";
 // The `.boundary(...)` option type (its builder method augments FlowBuilder from
 // the boundary kind module — S2/#317).

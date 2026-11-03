@@ -31,6 +31,7 @@ export {
   declarativeToBpmn,
   declarativeToLayoutedBpmn,
   externalJobTypes,
+  inlineJobTypes,
   envelope,
   layoutBpmn,
   toBpmn,

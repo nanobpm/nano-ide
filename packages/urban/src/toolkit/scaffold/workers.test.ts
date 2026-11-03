@@ -146,6 +146,19 @@ test("planWorkerScaffold: skips a task type declared external (out-of-process wo
   assert.equal(reasons["senior:review"], "external");
 });
 
+test("planWorkerScaffold: skips an inline-handled (w.run) task type — never stubs a hosted handler (nano-ide#595)", () => {
+  // A code-first `w.run` step's handler lives inline in the flow and is hosted by the in-process
+  // Worker; scaffolding a throwing stub for its job type would put a second, always-failing worker
+  // on the same job type. The derivation reports those types, and the planner must skip them.
+  const models = [
+    model("a.bpmn", "greet", serviceTask("hello", "greet:hello"), serviceTask("B", "greet:ship")),
+  ];
+  const { plans, skipped } = planWorkerScaffold(models, [], [], [], ["greet:hello"]);
+  assert.deepEqual(plans.map((p) => p.taskType), ["greet:ship"]);
+  const reasons = Object.fromEntries(skipped.map((s) => [s.taskType, s.reason]));
+  assert.equal(reasons["greet:hello"], "inline");
+});
+
 test("planWorkerScaffold: colliding slugs get a numeric suffix", () => {
   const m = model("a.bpmn", "p", serviceTask("A", "orders.charge"), serviceTask("B", "orders-charge"));
   const { plans } = planWorkerScaffold([m], [], []);
@@ -256,6 +269,30 @@ test("scaffoldWorkers is idempotent: a second --write run is a no-op", async () 
   assert.ok(run2.skipped.some((s) => s.taskType === "t.new" && s.reason === "already-wired"));
   assert.equal(run2.manifestPatched, false, "no new wiring on the second run");
   assert.equal(JSON.stringify(io.files), snapshot, "files unchanged on re-run");
+});
+
+test("scaffoldWorkers skips inline-handled (w.run) task types — no stub, no wiring (nano-ide#595)", async () => {
+  const files = {
+    "/app/nano.app.json": JSON.stringify({
+      id: "demo",
+      models: { processes: ["processes/*.bpmn"] },
+    }),
+    "/app/processes/p.bpmn": model("p.bpmn", "greet",
+      serviceTask("hello", "greet:hello"),
+      serviceTask("B", "greet:notify"),
+    ).xml,
+  };
+  const io = memIO(files);
+  const run = await scaffoldWorkers({ root: "/app", io, write: true, inlineTaskTypes: ["greet:hello"] });
+  // Only the external (un-hosted) task is scaffolded; the inline one is skipped entirely.
+  assert.deepEqual(run.outcomes.map((o) => o.taskType), ["greet:notify"]);
+  assert.ok(run.skipped.some((s) => s.taskType === "greet:hello" && s.reason === "inline"));
+  assert.equal(io.files["/app/workers/greet-hello/worker.ts"], undefined, "inline task gets no stub");
+  const manifest = JSON.parse(io.files["/app/nano.app.json"]);
+  assert.ok(
+    !manifest.workers?.some((w: { taskType: string }) => w.taskType === "greet:hello"),
+    "inline task is never wired into workers[]",
+  );
 });
 
 test("scaffoldWorkers reads manifest.externalTaskTypes and skips those (never scaffolds/wires)", async () => {

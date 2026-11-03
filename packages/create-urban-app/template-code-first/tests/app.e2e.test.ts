@@ -28,7 +28,14 @@
 // Run it with `npm test` (Node) or `deno task test` (Deno).
 
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+	existsSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -130,5 +137,31 @@ describe("app e2e (urban-testkit)", () => {
 			"coverage gate is enabled (bootTestApp was called with { coverage: true })",
 		);
 		app.coverage.assertFullCoverage();
+	});
+});
+
+describe("urban gen (code-first)", () => {
+	// Regression guard (nano-ide#595): every `w.run` step's handler is inline in the flow and
+	// hosted in-process by main.ts's Worker, so `urban gen` must scaffold NO worker stubs for a
+	// stock code-first app. It used to emit a throwing `workers/greet-hello/worker.ts` stub and
+	// wire it into the manifest's `workers[]` — a second, always-failing worker on the
+	// `greet:hello` job type competing with the real handler, so instances randomly raised
+	// incidents. Only a `w.task` (external) step may ever produce a stub.
+	test("scaffolds no worker stubs — w.run steps are inline-handled", () => {
+		execFileSync("npx", ["urban", "gen"], { cwd: APP_ROOT, stdio: "pipe" });
+
+		const workersDir = join(APP_ROOT, "workers");
+		assert.ok(
+			!existsSync(workersDir) || readdirSync(workersDir).length === 0,
+			"urban gen must not scaffold worker stubs for inline-handled w.run steps",
+		);
+		const manifest: { workers?: unknown[] } = JSON.parse(
+			readFileSync(join(APP_ROOT, "nano.app.json"), "utf8"),
+		);
+		assert.deepEqual(
+			manifest.workers ?? [],
+			[],
+			"urban gen must not wire any worker into nano.app.json",
+		);
 	});
 });

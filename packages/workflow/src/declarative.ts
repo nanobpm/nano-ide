@@ -562,6 +562,25 @@ export function externalJobTypes(flow: DeclarativeFlow): string[] {
   return types;
 }
 
+/** The job types of a flow's inline-handled `run` steps (anywhere in the tree) —
+ *  exactly the set the in-process `Worker` hosts (same walk, same derived
+ *  `<flowId>:<stepName>`; a `run` step has no `jobType` override). Codegen
+ *  consumes this to treat those steps as already-served: a worker-stub
+ *  scaffolder must never plan a stub for them (nano-ide#595). Deduplicated,
+ *  preserving first-seen order. */
+export function inlineJobTypes(flow: DeclarativeFlow): string[] {
+  const seen = new Set<string>();
+  const types: string[] = [];
+  walkNodes(flow.steps, (n) => {
+    if (n.kind !== "run") return;
+    const type = jobType(flow.id, n.name);
+    if (seen.has(type)) return;
+    seen.add(type);
+    types.push(type);
+  });
+  return types;
+}
+
 function requireTimerAt(node: { at?: string }): string {
   if (node.at === undefined) throw new Error(`timer event is missing its { at } value`);
   return node.at;

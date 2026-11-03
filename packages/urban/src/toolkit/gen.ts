@@ -65,6 +65,16 @@ export interface GenResult {
   incomplete: boolean;
   /** Per-file model-derivation errors (empty on success). */
   modelErrors: ModelError[];
+  /** Job types of inline-handled (`w.run`) code-first steps — the set the app's in-process
+   *  Worker already serves (nano-ide#595). The worker-stub scaffolder skips these; empty for a
+   *  model-first app. */
+  inlineTaskTypes: string[];
+  /** The code-first models derived in-memory this run (`deriveModels().models`) — the
+   *  worker-stub scaffolder plans against these in addition to the on-disk models, since a
+   *  declared `models` block (e.g. `models.workflows`) suppresses the `resources/` convention
+   *  scan that would otherwise pick the written `.bpmn` up (nano-ide#595). Empty for a
+   *  model-first app. */
+  derivedModels: ModelSource[];
   /** Non-fatal spec-hygiene warnings (e.g. a requestBody schema shared by >1 operation). Empty on
    *  a clean spec. Surfaced by the CLI but never fail gen/check — advisory only. */
   warnings: string[];
@@ -333,7 +343,7 @@ export async function runGen(opts: GenOptions & { check?: boolean }): Promise<Ge
     }
   }
 
-  return { artifacts, drift, swept: swept.sort(), incomplete: derived.incomplete, modelErrors: derived.errors, warnings };
+  return { artifacts, drift, swept: swept.sort(), incomplete: derived.incomplete, modelErrors: derived.errors, inlineTaskTypes: derived.inlineTaskTypes, derivedModels: derived.models, warnings };
 }
 
 export { dirOf, join as joinPath };

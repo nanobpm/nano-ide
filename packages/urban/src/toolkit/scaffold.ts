@@ -5,6 +5,7 @@
 
 import type { GenIO } from "./gen.ts";
 import { joinPath, readModels } from "./gen.ts";
+import type { ModelSource } from "./derivers/worker-io.ts";
 import {
   planWorkerScaffold,
   type ScaffoldWorker,
@@ -50,6 +51,22 @@ export interface ScaffoldOptions {
   manifestFile?: string;
   /** Apply changes (create files + patch manifest). Default false = dry-run. */
   write?: boolean;
+  /**
+   * Job types of inline-handled (`w.run`) code-first steps — the set the app's in-process
+   * Worker already serves (nano-ide#595). The planner skips these with reason `"inline"` so
+   * `urban gen` never scaffolds a throwing stub that competes with the real handler. Pass
+   * `deriveModels().inlineTaskTypes` (the `generate` composition does).
+   */
+  inlineTaskTypes?: Iterable<string>;
+  /**
+   * Extra in-memory models to plan against in addition to the on-disk ones `readModels`
+   * resolves (nano-ide#595). A code-first app's derived `.bpmn` lives under
+   * `resources/processes/`, which `readModels` does NOT resolve when the manifest declares a
+   * `models` block (e.g. `models.workflows`) without `models.processes` — a declared block
+   * suppresses the `resources/` convention. Pass `deriveModels().models` so the scaffolder
+   * plans from the same fused model set the type-contract derivers saw.
+   */
+  extraModels?: ModelSource[];
 }
 
 export type StubStatus = "created" | "would-create" | "kept";
@@ -87,14 +104,21 @@ export async function scaffoldWorkers(opts: ScaffoldOptions): Promise<ScaffoldRu
   // Preserve the manifest's own indentation when we patch it back (default tab, matching the
   // scaffold's Biome config), so wiring a worker never reformats the file out from under lint.
   const manifestIndent = detectJsonIndent(manifestRaw);
-  const models = await readModels(root, io, manifest);
+  const diskModels = await readModels(root, io, manifest);
   const declaredTypeIds = Object.keys(manifest.types ?? {});
+
+  // Fuse on-disk models with any in-memory extras (code-first derived models — see
+  // `ScaffoldOptions.extraModels`), deduped by path so a derived model that also landed on
+  // disk is planned from exactly once.
+  const seenPaths = new Set(diskModels.map((m) => m.path));
+  const models = [...diskModels, ...(opts.extraModels ?? []).filter((m) => !seenPaths.has(m.path))];
 
   const { plans, skipped } = planWorkerScaffold(
     models,
     manifest.workers ?? [],
     declaredTypeIds,
     manifest.externalTaskTypes ?? [],
+    opts.inlineTaskTypes ?? [],
   );
 
   const outcomes: StubOutcome[] = [];

@@ -9,7 +9,7 @@
 // loader is absent — or the app authors its models directly (model-first) — derivation is a
 // no-op and the rest of `urban gen` proceeds on the authored/derived models unchanged.
 
-import { toDeployableBpmn } from "@nanobpm/workflow";
+import { inlineJobTypes, toDeployableBpmn } from "@nanobpm/workflow";
 import type { Workflow } from "@nanobpm/workflow";
 import type { DerivedArtifact } from "./artifact.ts";
 import type { GenIO } from "./gen.ts";
@@ -78,6 +78,13 @@ export interface DerivedModels {
   models: ModelSource[];
   /** Derived flow ids (used for the provenance-scoped stale sweep). */
   ids: string[];
+  /** Job types of inline-handled (`w.run`) steps across every derived declarative flow —
+   *  the set the app's in-process Worker already serves (nano-ide#595). The worker-stub
+   *  scaffolder skips these; only `w.task` (external) steps may be scaffolded. Empty when
+   *  derivation was a no-op (no loader / no workflow files) or all flows are imperative
+   *  (an imperative flow's steps run inside its single `:__orchestrate` job, which the
+   *  planner already skips). */
+  inlineTaskTypes: string[];
   /** Per-flow `{ id, kind, xml }` for the non-writing preview (`urban derive --stdout`). */
   list: DerivedModelInfo[];
   /** The output directory the artifacts were written into. */
@@ -101,6 +108,7 @@ function emptyDerived(outDir: string): DerivedModels {
     artifacts: [],
     models: [],
     ids: [],
+    inlineTaskTypes: [],
     list: [],
     outDir,
     attempted: false,
@@ -184,6 +192,7 @@ export async function deriveModels(
         const path = `${outDir}/${bpmnFilename(id)}`;
         out.artifacts.push({ path, content: xml });
         out.models.push({ path, xml });
+        if (value.kind === "declarative") out.inlineTaskTypes.push(...inlineJobTypes(value));
         out.list.push({ id, kind: value.kind, xml });
         out.ids.push(id);
       } catch (e) {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.15.1...@nanobpm/workflow-0.16.0) (2026-11-03)
+
+
+### Features
+
+* **urban:** job lock timeout (timeoutMs) for manifest, connector, and code-first workers ([#600](https://github.com/nanobpm/nano-ide/issues/600)) ([4184f33](https://github.com/nanobpm/nano-ide/commit/4184f3351a435d85c4fa981becc8961af9fcc8b1))
+
 ## [0.15.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.15.0...@nanobpm/workflow-0.15.1) (2026-11-03)
 
 

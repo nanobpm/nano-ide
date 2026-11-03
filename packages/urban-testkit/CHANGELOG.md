@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.7.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.6.0...@nanobpm/urban-testkit-1.7.0) (2026-11-03)
+
+
+### Features
+
+* **urban:** job lock timeout (timeoutMs) for manifest, connector, and code-first workers ([#600](https://github.com/nanobpm/nano-ide/issues/600)) ([4184f33](https://github.com/nanobpm/nano-ide/commit/4184f3351a435d85c4fa981becc8961af9fcc8b1))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from >=0.93.0 to >=0.97.0
+
 ## [1.6.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.5.0...@nanobpm/urban-testkit-1.6.0) (2026-10-04)
 
 

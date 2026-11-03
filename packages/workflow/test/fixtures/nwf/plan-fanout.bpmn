@@ -101,6 +101,7 @@
     <bpmn:serviceTask id="plan" name="Plan (agent)">
       <bpmn:extensionElements>
         <zeebe:taskDefinition type="senior:plan" />
+        <zeebe:agentDefinition agentType="external" />
         <zeebe:linkedResources>
           <zeebe:linkedResource resourceId="plan.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" />
         </zeebe:linkedResources>
@@ -127,6 +128,7 @@
     <bpmn:serviceTask id="review-plan" name="Review plan (agent)">
       <bpmn:extensionElements>
         <zeebe:taskDefinition type="senior:plan-review" />
+        <zeebe:agentDefinition agentType="external" />
         <zeebe:linkedResources>
           <zeebe:linkedResource resourceId="plan-review.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" />
         </zeebe:linkedResources>
@@ -208,6 +210,7 @@
       <bpmn:serviceTask id="implement-task" name="Implement (agent)">
         <bpmn:extensionElements>
           <zeebe:taskDefinition type="senior:feature" />
+          <zeebe:agentDefinition agentType="external" />
           <zeebe:linkedResources>
             <zeebe:linkedResource resourceId="feature.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" />
           </zeebe:linkedResources>
@@ -282,6 +285,7 @@
     <bpmn:serviceTask id="trial-merge" name="Trial merge (agent)">
       <bpmn:extensionElements>
         <zeebe:taskDefinition type="senior:trial-merge" />
+        <zeebe:agentDefinition agentType="external" />
         <zeebe:linkedResources>
           <zeebe:linkedResource resourceId="trial-merge.md" bindingType="latest" resourceType="GenericScript" linkName="prompt" />
         </zeebe:linkedResources>

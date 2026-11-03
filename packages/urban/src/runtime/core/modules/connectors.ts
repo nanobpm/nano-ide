@@ -18,7 +18,7 @@
 import type { AppApi, Mounted, RuntimeContext } from "../context.ts";
 import { errorMessage, isRecord } from "../guards.ts";
 import { BpmnError, type EngineJob, type JobHandler, type WorkerSubscription } from "../host.ts";
-import { workerJobType, type Worker } from "../manifest.ts";
+import { workerJobType, workerTimeoutMs, type Worker } from "../manifest.ts";
 import {
   drainDefinedWorkers,
   type ConnectorWorkerJob,
@@ -176,6 +176,32 @@ export function adaptConnectorHandler(worker: DefinedConnectorWorker): JobHandle
 }
 
 /**
+ * Validate a connector worker's job lock timeout (issue #596) before it reaches the
+ * engine. Unlike a manifest `workers[].timeoutMs` (author-time validated by
+ * `collectManifestIssues`) or a `w.run({ timeoutMs })` (validated at flow build), a
+ * connector timeout arrives from a THIRD-PARTY pack — `defineWorker({ timeoutMs })`
+ * in pack code or the `timeoutMs` field of its `nano-ide.ext.json` — with no
+ * validating gate in between. A zero/negative lock would expire instantly (the job
+ * re-activated mid-handler ⇒ duplicate execution) and a non-integer is a pack typo;
+ * fail closed at registration, naming the source, rather than propagate either to
+ * the engine.
+ */
+function validateConnectorTimeout(
+  value: number,
+  source: string,
+  jobType: string,
+  packId: string,
+): number {
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      `connector worker "${jobType}" (pack "${packId}"): ${source} timeoutMs must be a ` +
+        `positive integer (ms), got ${JSON.stringify(value)}`,
+    );
+  }
+  return value;
+}
+
+/**
  * Mount every enabled connector worker (`workers[]` entries carrying a
  * `connector` field). Fails closed on a seam mismatch (an enabled connector whose
  * pack or worker type is not installed); skips-with-warning a worker whose
@@ -262,13 +288,25 @@ export async function mountConnectors(ctx: RuntimeContext, app: AppApi): Promise
         { instanceKey: job.processInstanceKey, elementId: job.elementId, jobType },
         () => inner(job),
       );
+    // Job lock timeout (issue #596) precedence, first declared wins:
+    //   1. the pack's `defineWorker({ timeoutMs })`  — the authoritative runtime value
+    //   2. the pack's `nano-ide.ext.json` spec        — the pack's design-time default
+    //   3. the app manifest's `workers[].timeoutMs`   — the app author's declaration
+    // (mirrors the maxParallelJobs precedence below). The manifest value is already
+    // author-time validated (`collectManifestIssues`); the two pack-supplied values
+    // are validated here before either reaches the engine as a lock horizon.
+    const timeoutMs =
+      worker.timeoutMs !== undefined
+        ? validateConnectorTimeout(worker.timeoutMs, "defineWorker", jobType, packId)
+        : spec.timeoutMs !== undefined
+          ? validateConnectorTimeout(spec.timeoutMs, "nano-ide.ext.json", jobType, packId)
+          : workerTimeoutMs(decl);
     const sub = await ctx.engine.registerWorker(jobType, wrapped, {
       workerName: `${ctx.manifest.id}:${jobType}`,
       // The pack's `defineWorker({ maxParallelJobs })` is the authoritative runtime
       // value; the ext.json spec is a design-time default when the code omits it.
       maxParallelJobs: worker.maxParallelJobs ?? spec.maxParallelJobs,
-      // Same precedence for the job lock timeout (issue #596): code wins, spec is the default.
-      timeoutMs: worker.timeoutMs ?? spec.timeoutMs,
+      timeoutMs,
     });
     subs.push(sub);
     jobTypes.push(jobType);

@@ -234,6 +234,14 @@ entry (validated as a positive integer of ms):
 }
 ```
 
+Connector-backed workers resolve the lock timeout from three sources, first
+declared wins: the pack's `defineWorker({ timeoutMs })` (authoritative runtime
+value), then the pack's `nano-ide.ext.json` worker `timeoutMs` (design-time
+default), then the app manifest's `workers[].timeoutMs`. Pack-supplied values
+are validated at registration (a non-positive-integer fails the mount, naming
+the source); the manifest value is validated at author time like any other
+worker.
+
 ### Deploy by convention (`resources/`)
 
 Deployables are discovered by convention: with **no `models`** block in the

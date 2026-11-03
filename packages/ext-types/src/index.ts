@@ -291,7 +291,9 @@ export interface WorkerSpec {
   /** Job lock timeout, ms (maps to `defineWorker`'s `timeoutMs`; issue #596): how long the
    *  engine leases an activated job to this worker before re-activating it elsewhere. Set it
    *  above the handler's worst-case runtime for long-running outbound calls. The pack's
-   *  `defineWorker({ timeoutMs })` overrides this design-time default when both are set. */
+   *  `defineWorker({ timeoutMs })` overrides this design-time default when both are set, and
+   *  this default in turn overrides the app manifest's `workers[].timeoutMs`. Must be a
+   *  positive integer — the runtime rejects a malformed value at registration. */
   timeoutMs?: number;
   /**
    * Config fields surfaced **per-connector** in the project config surface when

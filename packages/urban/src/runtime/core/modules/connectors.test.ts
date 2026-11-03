@@ -197,6 +197,131 @@ test("mountConnectors carries a pack worker's defineWorker timeoutMs to register
   assert.equal(engine.workerOptions.get("slack:send-message")?.timeoutMs, 900_000);
 });
 
+test("mountConnectors falls back to the ext.json spec timeoutMs when defineWorker omits it (issue #596)", async () => {
+  const engine = new MiniEngine();
+  const files = slackFiles();
+  files[`/app/node_modules/${PKG}/nano-ide.ext.json`] = JSON.stringify({
+    id: PACK_ID,
+    workers: [
+      {
+        type: "slack:send-message",
+        entry: "worker.ts",
+        timeoutMs: 600_000,
+        configFields: [{ key: "botToken", env: "SLACK_BOT_TOKEN" }],
+      },
+    ],
+  });
+  const { ctx } = makeCtx(
+    { workers: [{ taskType: "slack:send-message", connector: PACK_ID }] },
+    engine,
+    {
+      files,
+      onImport: () => {
+        defineWorker({ type: "slack:send-message", async handle(job) { await job.complete({}); } });
+      },
+    },
+  );
+  await mountConnectors(ctx, makeApp({ SLACK_BOT_TOKEN: "xoxb-1" }));
+  assert.equal(engine.workerOptions.get("slack:send-message")?.timeoutMs, 600_000);
+});
+
+test("mountConnectors honours the manifest-declared timeoutMs for a connector worker (issue #596)", async () => {
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx(
+    { workers: [{ taskType: "slack:send-message", connector: PACK_ID, timeoutMs: 3_600_000 }] },
+    engine,
+    {
+      files: slackFiles(),
+      onImport: () => {
+        defineWorker({ type: "slack:send-message", async handle(job) { await job.complete({}); } });
+      },
+    },
+  );
+  await mountConnectors(ctx, makeApp({ SLACK_BOT_TOKEN: "xoxb-1" }));
+  assert.equal(engine.workerOptions.get("slack:send-message")?.timeoutMs, 3_600_000);
+});
+
+test("mountConnectors connector timeout precedence: defineWorker > ext.json spec > manifest (issue #596)", async () => {
+  // Pack code wins over the ext.json spec, which wins over the manifest declaration.
+  const engine = new MiniEngine();
+  const files = slackFiles();
+  files[`/app/node_modules/${PKG}/nano-ide.ext.json`] = JSON.stringify({
+    id: PACK_ID,
+    workers: [
+      {
+        type: "slack:send-message",
+        entry: "worker.ts",
+        timeoutMs: 600_000,
+        configFields: [{ key: "botToken", env: "SLACK_BOT_TOKEN" }],
+      },
+    ],
+  });
+  const { ctx } = makeCtx(
+    { workers: [{ taskType: "slack:send-message", connector: PACK_ID, timeoutMs: 3_600_000 }] },
+    engine,
+    {
+      files,
+      onImport: () => {
+        defineWorker({
+          type: "slack:send-message",
+          timeoutMs: 900_000,
+          async handle(job) { await job.complete({}); },
+        });
+      },
+    },
+  );
+  await mountConnectors(ctx, makeApp({ SLACK_BOT_TOKEN: "xoxb-1" }));
+  assert.equal(engine.workerOptions.get("slack:send-message")?.timeoutMs, 900_000);
+});
+
+test("mountConnectors rejects a non-positive-integer defineWorker timeoutMs (issue #596)", async () => {
+  const engine = new MiniEngine();
+  const { ctx } = makeCtx(
+    { workers: [{ taskType: "slack:send-message", connector: PACK_ID }] },
+    engine,
+    {
+      files: slackFiles(),
+      onImport: () => {
+        defineWorker({ type: "slack:send-message", timeoutMs: 0, async handle(job) { await job.complete({}); } });
+      },
+    },
+  );
+  await assert.rejects(
+    () => mountConnectors(ctx, makeApp({ SLACK_BOT_TOKEN: "xoxb-1" })),
+    /defineWorker timeoutMs must be a positive integer/,
+  );
+});
+
+test("mountConnectors rejects a malformed ext.json spec timeoutMs (issue #596)", async () => {
+  const engine = new MiniEngine();
+  const files = slackFiles();
+  files[`/app/node_modules/${PKG}/nano-ide.ext.json`] = JSON.stringify({
+    id: PACK_ID,
+    workers: [
+      {
+        type: "slack:send-message",
+        entry: "worker.ts",
+        timeoutMs: -5,
+        configFields: [{ key: "botToken", env: "SLACK_BOT_TOKEN" }],
+      },
+    ],
+  });
+  const { ctx } = makeCtx(
+    { workers: [{ taskType: "slack:send-message", connector: PACK_ID }] },
+    engine,
+    {
+      files,
+      onImport: () => {
+        defineWorker({ type: "slack:send-message", async handle(job) { await job.complete({}); } });
+      },
+    },
+  );
+  await assert.rejects(
+    () => mountConnectors(ctx, makeApp({ SLACK_BOT_TOKEN: "xoxb-1" })),
+    /nano-ide\.ext\.json timeoutMs must be a positive integer/,
+  );
+});
+
 test("mountConnectors skips a worker whose required env is unset", async () => {
   const engine = new MiniEngine();
   const { ctx, logs } = makeCtx(

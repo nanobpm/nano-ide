@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.96.3](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.96.2...@nanobpm/urban-0.96.3) (2026-11-03)
+
+
+### Bug Fixes
+
+* **urban:** never scaffold worker stubs for inline-handled w.run steps ([#599](https://github.com/nanobpm/nano-ide/issues/599)) ([b946a1a](https://github.com/nanobpm/nano-ide/commit/b946a1a774382e072dabec00bd7b7d8b6f0183d2))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @nanobpm/workflow bumped from ^0.15.0 to ^0.15.1
+    * create-urban-app bumped from ^0.15.2 to ^0.15.3
+
 ## [0.96.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.96.1...@nanobpm/urban-0.96.2) (2026-10-07)
 
 

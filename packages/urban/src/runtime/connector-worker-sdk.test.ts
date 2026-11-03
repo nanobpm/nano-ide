@@ -20,6 +20,15 @@ test("defineWorker records handlers that drainDefinedWorkers returns then clears
   assert.deepEqual(drainDefinedWorkers(), []);
 });
 
+test("defineWorker carries the declared job lock timeout (timeoutMs) through the drain (issue #596)", () => {
+  drainDefinedWorkers(); // start clean
+  defineWorker({ type: "a:slow", timeoutMs: 900_000, handle: async () => ({}) });
+  defineWorker({ type: "a:fast", handle: async () => ({}) });
+  const [slow, fast] = drainDefinedWorkers();
+  assert.equal(slow.timeoutMs, 900_000);
+  assert.equal(fast.timeoutMs, undefined);
+});
+
 test("defineWorker rejects a missing type or non-function handle", () => {
   assert.throws(() => defineWorker({ type: "", handle: async () => ({}) }), /type` is required/);
   const missingHandle: Parameters<typeof defineWorker>[0] = JSON.parse('{"type":"x"}');

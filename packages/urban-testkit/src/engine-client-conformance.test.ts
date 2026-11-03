@@ -17,6 +17,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ENGINE_CLIENT_METHODS, type EngineJob } from "@nanobpm/urban/runtime";
 import { createWasmEngineClient } from "./wasm-engine.ts";
+import { TestEngine } from "@nanobpm/engine-wasm/readmodel";
 
 test("WasmEngineClient implements the full EngineClient method surface", async () => {
   const engine = await createWasmEngineClient();
@@ -77,6 +78,71 @@ const SERVICE_TASK_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
     </bpmndi:BPMNPlane>
   </bpmndi:BPMNDiagram>
 </bpmn:definitions>`;
+
+test("EngineClient seam: registerWorker accepts a job lock timeout (timeoutMs) option (issue #596)", async () => {
+  // Both adapters accept `timeoutMs` on the registerWorker options bag and treat it as the
+  // job lock horizon. The WASM double completes jobs synchronously inside drain (its lock
+  // never actually expires), so the observable contract pinned here is: registration with
+  // the option succeeds and the worker still serves its jobs.
+  const engine = await createWasmEngineClient();
+  try {
+    await engine.deployResources([
+      { name: "incident_repair.bpmn", content: SERVICE_TASK_BPMN, contentType: "text/xml" },
+    ]);
+    const sub = await engine.registerWorker("work", () => ({ done: true }), { timeoutMs: 600_000 });
+    assert.equal(sub.jobType, "work");
+    const { processInstanceKey } = await engine.createInstance({
+      processDefinitionId: "incident_repair",
+    });
+    const [instance] = await engine.searchProcessInstances({
+      processInstanceKeys: [processInstanceKey],
+    });
+    assert.equal(instance?.state, "COMPLETED", "the timeout-carrying worker served the job");
+    await sub.unsubscribe();
+  } finally {
+    await engine.close();
+  }
+});
+
+/** Record the lock horizon (`timeout_ms`) the WASM adapter passes to the engine's `activateJobs`
+ *  for `jobType`, by wrapping the engine prototype for the duration of `body`. The double completes
+ *  jobs synchronously, so the activation argument is the only observable of the lock horizon. */
+async function activationTimeouts(jobType: string, body: () => Promise<void>): Promise<number[]> {
+  const seen: number[] = [];
+  const original = TestEngine.prototype.activateJobs;
+  TestEngine.prototype.activateJobs = function (type, maxJobs, timeoutMs, worker, withLease) {
+    if (type === jobType) seen.push(timeoutMs);
+    return original.call(this, type, maxJobs, timeoutMs, worker, withLease);
+  };
+  try {
+    await body();
+  } finally {
+    TestEngine.prototype.activateJobs = original;
+  }
+  return seen;
+}
+
+for (const [label, options, expected] of [
+  ["an explicit timeoutMs", { timeoutMs: 600_000 }, 600_000],
+  ["the default (timeoutMs omitted)", {}, 60_000],
+] as const) {
+  test(`EngineClient seam (WASM): activation uses ${label} as the job lock horizon (issue #596)`, async () => {
+    const engine = await createWasmEngineClient();
+    try {
+      await engine.deployResources([
+        { name: "incident_repair.bpmn", content: SERVICE_TASK_BPMN, contentType: "text/xml" },
+      ]);
+      const seen = await activationTimeouts("work", async () => {
+        await engine.registerWorker("work", () => ({ done: true }), options);
+        await engine.createInstance({ processDefinitionId: "incident_repair" });
+      });
+      assert.ok(seen.length > 0, "the worker activated at least once");
+      for (const t of seen) assert.equal(t, expected);
+    } finally {
+      await engine.close();
+    }
+  });
+}
 
 test("EngineClient seam: searchIncidents / setVariables / updateJobRetries / resolveIncident drive an incident-repair loop", async () => {
   const engine = await createWasmEngineClient();

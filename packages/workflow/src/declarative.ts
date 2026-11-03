@@ -102,7 +102,15 @@ export interface FlowBuilder<C extends object = object> {
   run<K extends string>(
     name: K,
     handler: TypedHandler<VarsOf<C, K>, ResultOf<C, K>>,
-    opts?: { io?: HumanIoMapping },
+    opts?: {
+      io?: HumanIoMapping;
+      /** Job lock timeout, ms, for this step's derived worker (issue #596): how long the
+       *  engine leases an activated job before re-activating it elsewhere. Set it above the
+       *  handler's worst-case runtime for long steps (transcription, an agent call, a
+       *  multi-GB upload) so the lock cannot expire mid-handler and the job run twice.
+       *  Overrides the `Worker`'s worker-wide `jobTimeoutMs` for this step's job type. */
+      timeoutMs?: number;
+    },
   ): FlowBuilder<C>;
   /**
    * A durable activity served by a worker OUTSIDE this program (a BPMN service

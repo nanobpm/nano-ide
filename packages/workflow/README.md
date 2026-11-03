@@ -105,6 +105,19 @@ const { processInstanceKey } = await client.start(onboarding, {});
 await client.signal(onboarding, "approved", userId, { by: "alice" });
 ```
 
+A long-running step (transcription, an agent call, a multi-GB upload) can
+outlive the engine's default job lock: the lease expires mid-handler, the
+engine re-activates the job, and a second worker runs it again. Declare the
+lock timeout per step with `w.run(name, handler, { timeoutMs })` (overrides the
+`Worker`'s worker-wide `jobTimeoutMs`, default 30s, for that step's job type):
+
+```ts
+const flow = defineFlow("uploads", (w) => {
+  w.run("transcode", transcode, { timeoutMs: 3_600_000 }); // 1h lock for this step
+  w.run("notify", notify);
+});
+```
+
 A human-in-the-loop **approval gate** with a form, an assignment, and an output
 mapping that stamps the decision back onto a process variable:
 

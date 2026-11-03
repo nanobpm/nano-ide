@@ -1366,12 +1366,15 @@ export class SdkEngineClient implements EngineClient {
   async registerWorker(
     jobType: string,
     handler: JobHandler,
-    options?: { workerName?: string; maxParallelJobs?: number; fetchVariables?: string[] },
+    options?: { workerName?: string; maxParallelJobs?: number; timeoutMs?: number; fetchVariables?: string[] },
   ): Promise<WorkerSubscription> {
     const worker = this.client.createJobWorker({
       jobType,
       workerName: options?.workerName ?? `urban:${jobType}`,
       maxParallelJobs: options?.maxParallelJobs ?? 8,
+      // The job lock timeout (issue #596): pass it through only when declared, so an
+      // undeclared worker keeps the SDK's default lock rather than an explicit value.
+      ...(options?.timeoutMs !== undefined ? { jobTimeoutMs: options.timeoutMs } : {}),
       fetchVariables: options?.fetchVariables,
       jobHandler: async (job) => {
         const rawKey = job.jobKey;

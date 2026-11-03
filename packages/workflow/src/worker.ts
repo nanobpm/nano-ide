@@ -84,6 +84,9 @@ export class Worker {
   private readonly onError?: WorkerOptions["onError"];
   /** job type → { workflowId, handle } */
   private readonly routes = new Map<string, { workflowId: string; handle: Handler }>();
+  /** Job lock timeout (ms) per derived job type, from a `run` step's `{ timeoutMs }`
+   *  (issue #596). Overrides the worker-wide `jobTimeoutMs` for that type. */
+  private readonly typeTimeoutMs = new Map<string, number>();
   private running = false;
   private workers: NanoJobWorker[] = [];
 
@@ -142,6 +145,9 @@ export class Worker {
             return { variables };
           },
         });
+        // A step-declared job lock timeout (issue #596) applies to this step's derived
+        // job type, overriding the worker-wide `jobTimeoutMs` at `start()`.
+        if (s.timeoutMs !== undefined) this.typeTimeoutMs.set(jobType(wf.id, s.name), s.timeoutMs);
       });
     }
   }
@@ -200,7 +206,8 @@ export class Worker {
         jobType: type,
         workerName: this.name,
         maxParallelJobs: this.maxParallelJobs,
-        jobTimeoutMs: this.jobTimeoutMs,
+        // A step-declared `{ timeoutMs }` (issue #596) wins over the worker-wide default.
+        jobTimeoutMs: this.typeTimeoutMs.get(type) ?? this.jobTimeoutMs,
         pollTimeoutMs: this.pollTimeoutMs,
         autoStart: false,
         jobHandler: (job) => this.handleJob(type, route, job),

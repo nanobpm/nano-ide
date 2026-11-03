@@ -881,6 +881,72 @@ test("defineFlow: rejects a non-object contracts arg and a missing build callbac
   assert.throws(() => defineFlow("f", { a: {} }), /build callback .* is required/);
 });
 
+// --- Job lock timeouts (issue #596) ------------------------------------------
+
+test("worker: a run step's { timeoutMs } overrides the worker-wide jobTimeoutMs for its job type", () => {
+  const flow = defineFlow("uploads", (w) => {
+    w.run("transcode", async () => ({}), { timeoutMs: 3_600_000 });
+    w.run("notify", async () => ({}));
+  });
+  const configs: Record<string, { jobTimeoutMs?: number }> = {};
+  const client = new WorkflowClient({
+    client: {
+      async createDeployment() {
+        return {};
+      },
+      async createProcessInstance() {
+        return {};
+      },
+      async correlateMessage() {
+        return {};
+      },
+      async getProcessInstance() {
+        return {};
+      },
+      createJobWorker(cfg: { jobType: string; jobTimeoutMs?: number }) {
+        configs[cfg.jobType] = cfg;
+        return { start() {}, stop() {} };
+      },
+    },
+  });
+  const worker = new Worker({ client, workflows: [flow], jobTimeoutMs: 30_000 });
+  worker.start();
+  // The step with a declared lock timeout gets it; the undeclared step keeps the
+  // worker-wide default.
+  assert.equal(configs["uploads:transcode"]?.jobTimeoutMs, 3_600_000);
+  assert.equal(configs["uploads:notify"]?.jobTimeoutMs, 30_000);
+});
+
+test("worker: a run step's { timeoutMs } applies when no worker-wide jobTimeoutMs is set", () => {
+  const flow = defineFlow("uploads2", (w) => {
+    w.run("transcode", async () => ({}), { timeoutMs: 600_000 });
+  });
+  const configs: Record<string, { jobTimeoutMs?: number }> = {};
+  const client = new WorkflowClient({
+    client: {
+      async createDeployment() {
+        return {};
+      },
+      async createProcessInstance() {
+        return {};
+      },
+      async correlateMessage() {
+        return {};
+      },
+      async getProcessInstance() {
+        return {};
+      },
+      createJobWorker(cfg: { jobType: string; jobTimeoutMs?: number }) {
+        configs[cfg.jobType] = cfg;
+        return { start() {}, stop() {} };
+      },
+    },
+  });
+  const worker = new Worker({ client, workflows: [flow] });
+  worker.start();
+  assert.equal(configs["uploads2:transcode"]?.jobTimeoutMs, 600_000);
+});
+
 test("defineFlow: rejects step names that collide with generated BPMN ids", () => {
   for (const bad of ["Start", "End", "Gw_0", "Loop_0", "Sub_0", "Msg_x", "f_0"]) {
     assert.throws(
@@ -1030,4 +1096,38 @@ test("declarative emit: break/continue cannot cross a forEach scope boundary", (
       ),
     /break\(\) is only valid inside a loop/,
   );
+});
+
+test("run: rejects a malformed { timeoutMs } at flow-build time (issue #596)", () => {
+  const bad: Array<[string, unknown]> = [
+    ["zero", 0],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["string", "1000"],
+    ["null", null],
+  ];
+  for (const [label, value] of bad) {
+    // A runtime-invalid option (as untyped JS would pass): JSON.parse yields `any`, so the
+    // malformed value reaches the guard without an `as` cast.
+    const opts = JSON.parse("{}");
+    opts.timeoutMs = value;
+    assert.throws(
+      () => defineFlow(`bad_timeout_${label.toLowerCase()}`, (w) => {
+        w.run("step", async () => ({}), opts);
+      }),
+      /timeoutMs must be a positive integer/,
+      `${label} timeoutMs must be rejected`,
+    );
+  }
+});
+
+test("run: accepts an omitted or positive-integer { timeoutMs } (issue #596)", () => {
+  assert.doesNotThrow(() => defineFlow("ok_timeout_omitted", (w) => {
+    w.run("step", async () => ({}));
+  }));
+  assert.doesNotThrow(() => defineFlow("ok_timeout_int", (w) => {
+    w.run("step", async () => ({}), { timeoutMs: 1 });
+  }));
 });

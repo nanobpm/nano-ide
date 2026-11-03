@@ -1075,3 +1075,37 @@ test("declarative emit: break/continue cannot cross a forEach scope boundary", (
     /break\(\) is only valid inside a loop/,
   );
 });
+
+test("run: rejects a malformed { timeoutMs } at flow-build time (issue #596)", () => {
+  const bad: Array<[string, unknown]> = [
+    ["zero", 0],
+    ["negative", -1],
+    ["fractional", 1.5],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["string", "1000"],
+    ["null", null],
+  ];
+  for (const [label, value] of bad) {
+    // A runtime-invalid option (as untyped JS would pass): JSON.parse yields `any`, so the
+    // malformed value reaches the guard without an `as` cast.
+    const opts = JSON.parse("{}");
+    opts.timeoutMs = value;
+    assert.throws(
+      () => defineFlow(`bad_timeout_${label.toLowerCase()}`, (w) => {
+        w.run("step", async () => ({}), opts);
+      }),
+      /timeoutMs must be a positive integer/,
+      `${label} timeoutMs must be rejected`,
+    );
+  }
+});
+
+test("run: accepts an omitted or positive-integer { timeoutMs } (issue #596)", () => {
+  assert.doesNotThrow(() => defineFlow("ok_timeout_omitted", (w) => {
+    w.run("step", async () => ({}));
+  }));
+  assert.doesNotThrow(() => defineFlow("ok_timeout_int", (w) => {
+    w.run("step", async () => ({}), { timeoutMs: 1 });
+  }));
+});

@@ -2023,6 +2023,10 @@ function buildEngineForm(cfg, row, onSuccess) {
         renderer.renderForm(f.schema, {
           submitLabel: "Complete",
           context: context || {},
+          // Rebase root-relative image sources ("/app/…") onto the app mount root,
+          // exactly like every page fetch — otherwise they escape the console's
+          // path-prefixed proxy (/console/app-view/<name>/) and 404.
+          resolveUrl: apiUrl,
           /** @param {Record<string, any>} variables */
           onSubmit: (variables) => {
             msg.className = "njf-msg";

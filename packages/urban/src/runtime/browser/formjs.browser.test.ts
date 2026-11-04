@@ -362,3 +362,136 @@ test("buildField honours explicitly supplied own values named like prototype mem
   const text = buildField({ type: "text", text: "{{__proto__}}/{{constructor}}" }, ctx);
   assert.equal(text!.field.textContent, "P/C");
 });
+
+// ── PR #604 round 3: comma data URLs, mount-rebased image sources, cleared prefill ──
+
+test("buildField allows a comma-delimited image data URL (no parameters, no ;base64)", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // RFC 2397: the mediatype may be followed directly by `,` — parameters and
+  // `;base64` are both optional. A percent-encoded PNG payload is a valid source.
+  const literal = "data:image/png,%89PNG%0D%0A%1A%0A";
+  const built = buildField({ type: "image", source: literal }, {});
+  assert.ok(built, "a comma-delimited data:image/png URL is accepted");
+  assert.equal(created.find((n) => n.tagName === "IMG")!.getAttribute("src"), literal);
+  // The same URL arriving via a `=varName` reference is accepted too.
+  created.length = 0;
+  const viaVar = buildField({ type: "image", source: "=img" }, { img: literal });
+  assert.ok(viaVar, "a comma-delimited data URL from a variable is accepted");
+  assert.equal(created.find((n) => n.tagName === "IMG")!.getAttribute("src"), literal);
+});
+
+test("buildField image source: opts.resolveUrl rebases a root-relative source onto the app mount", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // Behind the console proxy the app is mounted at /console/app-view/demo/: a
+  // literal (or variable) source of /app/thumb.png must request the APP's
+  // /app/thumb.png, not the console's. Both surfaces pass their mount-aware URL
+  // resolver as opts.resolveUrl; the resolver is applied AFTER the scheme
+  // allowlist, so it can never launder a rejected URL.
+  const rebase = (u: string) =>
+    u.startsWith("/") && !u.startsWith("//") ? "/console/app-view/demo" + u : u;
+  const literal = buildField({ type: "image", source: "/app/thumb.png" }, {}, { resolveUrl: rebase });
+  assert.equal(
+    created.filter((n) => n.tagName === "IMG").at(-1)!.getAttribute("src"),
+    "/console/app-view/demo/app/thumb.png",
+    "a literal root-relative source is rebased onto the app mount",
+  );
+  assert.ok(literal);
+  const viaVar = buildField({ type: "image", source: "=img" }, { img: "/app/thumb.png" }, { resolveUrl: rebase });
+  assert.equal(
+    created.filter((n) => n.tagName === "IMG").at(-1)!.getAttribute("src"),
+    "/console/app-view/demo/app/thumb.png",
+    "a variable holding a root-relative source is rebased too",
+  );
+  assert.ok(viaVar);
+  // Absolute http(s) and data: URLs pass through the resolver untouched (the
+  // resolver only rewrites single-leading-slash paths, exactly like apiUrl).
+  buildField({ type: "image", source: "https://cdn.example.com/t.png" }, {}, { resolveUrl: rebase });
+  assert.equal(
+    created.filter((n) => n.tagName === "IMG").at(-1)!.getAttribute("src"),
+    "https://cdn.example.com/t.png",
+    "an absolute URL is not rewritten",
+  );
+  // Without a resolver the historical behaviour stands (backwards compatible).
+  buildField({ type: "image", source: "/app/thumb.png" }, {});
+  assert.equal(
+    created.filter((n) => n.tagName === "IMG").at(-1)!.getAttribute("src"),
+    "/app/thumb.png",
+    "no resolver → the source is used verbatim",
+  );
+  // The allowlist still runs first: a rejected source never reaches the resolver.
+  assert.equal(buildField({ type: "image", source: "javascript:alert(1)" }, {}, { resolveUrl: rebase }), null);
+});
+
+test("renderForm threads opts.resolveUrl through to every image component", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const rebase = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? "/mounted" + u : u);
+  renderForm(
+    { components: [{ type: "image", source: "/app/a.png" }, { type: "image", source: "=img" }] },
+    { context: { img: "/app/b.png" }, resolveUrl: rebase, onSubmit: () => {} },
+  );
+  const srcs = created.filter((n) => n.tagName === "IMG").map((n) => n.getAttribute("src"));
+  assert.deepEqual(srcs, ["/mounted/app/a.png", "/mounted/app/b.png"]);
+});
+
+test("buildField submits an empty string when a prefilled textfield/textarea is cleared", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const tf = buildField({ type: "textfield", key: "title" }, { title: "Draft v2" });
+  const ta = buildField({ type: "textarea", key: "body" }, { body: "once upon a time" });
+  const input = created.find((n) => n.tagName === "INPUT")!;
+  const area = created.find((n) => n.tagName === "TEXTAREA")!;
+  assert.equal(input.value, "Draft v2");
+  assert.equal(area.value, "once upon a time");
+  input.value = "";
+  area.value = "";
+  assert.deepEqual(tf!.read!(), { key: "title", value: "" }, "a cleared prefilled textfield submits an empty string");
+  assert.deepEqual(ta!.read!(), { key: "body", value: "" }, "a cleared prefilled textarea submits an empty string");
+});
+
+test("buildField submits an empty string when a prefilled select is set back to the blank option", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const built = buildField(
+    {
+      type: "select",
+      key: "color",
+      values: [
+        { value: "r", label: "Red" },
+        { value: "g", label: "Green" },
+      ],
+    },
+    { color: "g" },
+  );
+  const sel = created.find((n) => n.tagName === "SELECT")!;
+  assert.equal(sel.value, "g", "prefilled from the context");
+  sel.value = ""; // the operator chooses the blank "—" option
+  assert.deepEqual(built!.read!(), { key: "color", value: "" }, "a cleared prefilled select submits an empty string");
+});
+
+test("buildField cleared-prefill regressions hold for number fields and no-context omission is preserved", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // A cleared prefilled NUMBER field submits an empty string (explicitly cleared),
+  // never null/NaN.
+  const num = buildField({ type: "number", key: "qty" }, { qty: 3 });
+  const numInput = created.filter((n) => n.tagName === "INPUT").at(-1)!;
+  assert.equal(numInput.value, "3");
+  numInput.value = "";
+  assert.deepEqual(num!.read!(), { key: "qty", value: "" }, "a cleared prefilled number field submits an empty string");
+  // No-context fields keep the historical omission behaviour: a blank field that
+  // was never prefilled is left out of the submitted variables entirely.
+  const plain = buildField({ type: "textfield", key: "note" }, { other: "x" });
+  const plainInput = created.filter((n) => n.tagName === "INPUT").at(-1)!;
+  assert.equal(plainInput.value, "");
+  assert.equal(plain!.read!(), null, "an untouched blank field with no prefill is still omitted");
+  const plainSelect = buildField(
+    { type: "select", key: "s", values: [{ value: "a", label: "A" }] },
+    {},
+  );
+  const sel = created.filter((n) => n.tagName === "SELECT").at(-1)!;
+  assert.equal(sel.value, "");
+  assert.equal(plainSelect!.read!(), null, "an untouched blank select with no prefill is still omitted");
+});

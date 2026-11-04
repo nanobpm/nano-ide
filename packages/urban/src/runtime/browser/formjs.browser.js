@@ -93,11 +93,19 @@ function fjOwnContext(context) {
  * `http(s):` URLs, app-relative paths (no scheme, no `//host` protocol-relative),
  * and `data:image/(png|jpeg|gif|webp)` URLs are allowed — never `javascript:` or
  * any other scheme. The URL is set with setAttribute (never innerHTML).
+ * `resolveUrl`, when supplied, rewrites an ACCEPTED URL just before it is set —
+ * both surfaces pass their app-mount-aware resolver (the pages runtime's `apiUrl`,
+ * the inbox page's mount prefix) so a root-relative `/app/…` source requests the
+ * app's own path even behind the console's path-prefixed proxy. It runs AFTER the
+ * allowlist, so it can never launder a rejected URL, and its result is used
+ * verbatim (a resolver is same-origin trusted code — the allowlist already gated
+ * the input).
  * @param {any} source
  * @param {Record<string, any>} context
+ * @param {(url: string) => string} [resolveUrl]
  * @returns {string | null}
  */
-function fjImageSrc(source, context) {
+function fjImageSrc(source, context, resolveUrl) {
   let url = source;
   if (typeof url === "string" && url.startsWith("=")) {
     const name = url.slice(1).trim();
@@ -111,13 +119,19 @@ function fjImageSrc(source, context) {
   // `/` before interpreting a URL, so `java\tscript:` or ` data:image/svg+xml` or
   // `/\\host` could slip past the allowlist below. Fail closed on any of them.
   if (/[\s\u0000-\u001f\u007f\\]/.test(url)) return null;
-  if (/^data:image\/(png|jpeg|gif|webp);/i.test(url)) return url;
+  // data:image — RFC 2397 lets the mediatype be followed directly by `,`
+  // (parameters and `;base64` are both optional), so accept `;` OR `,` after the
+  // subtype or a percent-encoded payload silently never renders.
+  if (/^data:image\/(png|jpeg|gif|webp)[;,]/i.test(url)) return url;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
     // A scheme: only http(s) is allowed (javascript:/data-text-html/etc. rejected).
     return /^https?:\/\//i.test(url) ? url : null;
   }
   if (url.startsWith("//")) return null; // protocol-relative → off-origin, reject
-  return url; // app-relative path
+  // App-relative path. A root-relative one ("/app/…") is only correct when the app
+  // is served at the origin root; behind the console's path-prefixed proxy it must
+  // be rebased onto the app mount (the resolver both surfaces pass).
+  return resolveUrl ? resolveUrl(url) : url;
 }
 
 /** The value a keyed input is prefilled with when its key is present in the render
@@ -141,9 +155,10 @@ function fjPrefill(context, key) {
  * input whose key is present is prefilled with its value.
  * @param {any} c
  * @param {Record<string, any>} [context]
+ * @param {{ resolveUrl?: (url: string) => string }} [opts]
  * @returns {{ field: any, read?: () => ({ key: string, value: any } | null) } | null}
  */
-function buildField(c, context) {
+function buildField(c, context, opts) {
   const ctx = fjOwnContext(context);
   const type = c && c.type;
   // Static (keyless) components: show text as a paragraph, ignore layout-only ones.
@@ -155,7 +170,7 @@ function buildField(c, context) {
   // an <img> whose src is resolved + scheme-gated by fjImageSrc. A rejected/absent
   // source renders nothing (null) rather than a broken or unsafe <img>.
   if (type === "image") {
-    const src = fjImageSrc(c.source, ctx);
+    const src = fjImageSrc(c.source, ctx, opts && opts.resolveUrl);
     if (src == null) return null;
     const attrs = { class: "njf-image", src, alt: typeof c.alt === "string" ? c.alt : "" };
     return { field: fjEl("img", attrs) };
@@ -178,10 +193,19 @@ function buildField(c, context) {
   const labelEl = fjEl("label", {}, label);
   wrap.appendChild(labelEl);
   let input;
+  // Was this field prefilled from the context? A prefilled field the operator
+  // CLEARS (empties the text input, picks the blank select option) must submit an
+  // empty string — returning null would omit the key and silently leave the
+  // original variable unchanged. A field that was never prefilled keeps the
+  // historical behaviour: blank means "not entered", so the key is omitted.
+  let prefilled = false;
   if (type === "textarea") {
     input = document.createElement("textarea");
     const pre = fjPrefill(ctx, key);
-    if (pre !== undefined) input.value = pre;
+    if (pre !== undefined) {
+      input.value = pre;
+      prefilled = true;
+    }
   } else if (type === "select") {
     input = document.createElement("select");
     input.appendChild(fjEl("option", { value: "" }, "\u2014"));
@@ -192,7 +216,10 @@ function buildField(c, context) {
       if (pre !== undefined && String(o.value) === pre) opt.setAttribute("selected", "");
       input.appendChild(opt);
     }
-    if (pre !== undefined) input.value = pre;
+    if (pre !== undefined) {
+      input.value = pre;
+      prefilled = true;
+    }
   } else if (type === "radio") {
     const name = "r" + Math.random().toString(36).slice(2);
     const pre = fjPrefill(ctx, key);
@@ -221,7 +248,10 @@ function buildField(c, context) {
     input = document.createElement("input");
     input.type = type === "number" ? "number" : type === "datetime" ? "datetime-local" : "text";
     const pre = fjPrefill(ctx, key);
-    if (pre !== undefined) input.value = pre;
+    if (pre !== undefined) {
+      input.value = pre;
+      prefilled = true;
+    }
   }
   // Associate the label with the input (for/id) so screen readers announce it on focus.
   const fieldId = "f" + Math.random().toString(36).slice(2);
@@ -233,7 +263,10 @@ function buildField(c, context) {
     field: wrap,
     read: () => {
       const raw = input.value;
-      if (raw === "" || raw == null) return null;
+      // A prefilled field the operator cleared submits an empty string (an explicit
+      // "set this variable to empty"), never an omission that would leave the
+      // original value in place. A never-prefilled blank field is still omitted.
+      if (raw === "" || raw == null) return prefilled ? { key, value: "" } : null;
       if (isNumber) {
         const n = Number(raw);
         // A non-numeric value in a number field is only reachable via tampering (the browser
@@ -253,10 +286,14 @@ function buildField(c, context) {
  * the button so the operator can retry. `opts.onCancel`, when supplied, wires a
  * cancel button. `opts.context` carries the task's variables — `{{name}}` text
  * templating, `=varName` image sources, and keyed-input prefill all resolve
- * against it (see buildField).
+ * against it (see buildField). `opts.resolveUrl`, when supplied, rewrites each
+ * ACCEPTED image source before it is set — both surfaces pass their app-mount-aware
+ * resolver so a root-relative `/app/…` image survives the console's path-prefixed
+ * proxy (see fjImageSrc).
  * @param {any} schema the parsed form-js document (`{ components: [...] }`)
  * @param {{ heading?: string, submitLabel?: string, cancelLabel?: string,
  *           context?: Record<string, any>,
+ *           resolveUrl?: (url: string) => string,
  *           onSubmit: (variables: Record<string, any>) => (void | Promise<void>),
  *           onCancel?: () => void }} opts
  * @returns {any} the built <form> element
@@ -270,7 +307,7 @@ function renderForm(schema, opts) {
   /** @type {Array<() => ({ key: string, value: any } | null)>} */
   const inputs = [];
   for (const c of components) {
-    const built = buildField(c, context);
+    const built = buildField(c, context, { resolveUrl: opts.resolveUrl });
     if (!built) continue;
     form.appendChild(built.field);
     if (built.read) inputs.push(built.read);

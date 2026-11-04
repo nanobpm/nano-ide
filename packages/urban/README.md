@@ -350,9 +350,9 @@ Supported form-js components:
 | Component | Behaviour |
 | --- | --- |
 | `text` | Static paragraph; `{{name}}` placeholders interpolate from the context (objects as JSON, unknown names empty). Rendered as **text only** — a variable holding markup renders literally, never as HTML. |
-| `image` | `<img class="njf-image">` (max-width 100%). `source` is a literal URL or `=varName` (a plain variable reference — full FEEL is not evaluated). Only `http(s):` URLs, app-relative paths, and `data:image/(png|jpeg|gif|webp)` URLs are allowed; anything else (`javascript:`, other schemes, protocol-relative, or any URL containing whitespace, control characters, or backslashes) renders nothing. `alt` sets the alt text. |
-| `textfield` / `textarea` / `number` / `datetime` | Keyed inputs; submitted as the completion `variables[key]`. A key present in the context **prefills** the input. |
-| `select` / `radio` | Keyed choice inputs from `values[]`; prefilled when the context value matches an option. |
+| `image` | `<img class="njf-image">` (max-width 100%). `source` is a literal URL or `=varName` (a plain variable reference — full FEEL is not evaluated). Only `http(s):` URLs, app-relative paths, and `data:image/(png|jpeg|gif|webp)` URLs are allowed (the data-URL mediatype may be followed directly by `,` — parameters and `;base64` are optional); anything else (`javascript:`, other schemes, protocol-relative, or any URL containing whitespace, control characters, or backslashes) renders nothing. A root-relative source (`/app/…`) is rebased onto the app's mount root, so it resolves correctly behind the console's path-prefixed proxy. `alt` sets the alt text. |
+| `textfield` / `textarea` / `number` / `datetime` | Keyed inputs; submitted as the completion `variables[key]`. A key present in the context **prefills** the input; clearing a prefilled input submits an empty string (an explicit clear), while a never-prefilled blank input is omitted. |
+| `select` / `radio` | Keyed choice inputs from `values[]`; prefilled when the context value matches an option. Choosing a select's blank option after a prefill submits an empty string. |
 | `checkbox` | Keyed boolean; pre-checked when the context value is `true`. |
 | other / keyless layout components | Skipped. |
 

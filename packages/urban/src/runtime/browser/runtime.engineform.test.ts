@@ -307,6 +307,57 @@ test("buildEngineForm loads the row's task variables and renders {{title}} + an 
   assert.equal(input!.value, "Draft v2", "the keyed input is prefilled from the same context");
 });
 
+test("buildEngineForm rebases a root-relative image source onto the app mount (console proxy prefix)", async (t) => {
+  // Behind the console proxy the app is mounted at /console/app-view/<name>/, so a
+  // form image source of /app/thumb.png must be rebased through the same
+  // mount-aware resolver apiUrl uses — otherwise the <img> requests the console's
+  // /app/thumb.png and app-served thumbnails 404.
+  const created: FakeElement[] = [];
+  const calls: FetchCall[] = [];
+  t.after(installFakeDom(created));
+  t.after(
+    installFakeFetch((url) => {
+      if (url.includes("/app/actions/form")) {
+        return {
+          status: 200,
+          json: {
+            schema: {
+              components: [
+                { type: "image", source: "/app/thumb.png", alt: "literal" },
+                { type: "image", source: "=img1", alt: "from variable" },
+              ],
+            },
+          },
+        };
+      }
+      if (url.includes("/app/actions/variables")) {
+        return { status: 200, json: { img1: "/app/var-thumb.png" } };
+      }
+      return { status: 200, json: { ok: true } };
+    }, calls),
+  );
+  const box = buildEngineForm(
+    CFG,
+    { form_key: "form-v", user_task_key: "ut-v", process_instance_key: "pi-v" },
+    () => {},
+  );
+  assert.ok(box);
+  await new Promise((r) => setTimeout(r, 0));
+  const srcs = created.filter((n) => n.tagName === "IMG").map((n) => n.getAttribute("src"));
+  assert.equal(srcs.length, 2, "both images rendered");
+  for (const src of srcs) {
+    assert.ok(src, "an src was set");
+    // The resolver rebased the root-relative source onto the app's mount root: it
+    // is now an absolute URL derived from the runtime module's own base (file://
+    // under the Node test runner; the deployment origin in a browser), with the
+    // /app/… path preserved beneath it — never the bare root-relative form that
+    // would escape the console proxy prefix.
+    assert.match(src!, /^[a-z][a-z0-9+.-]*:\/\//i, "the source was rebased to an absolute URL on the module's base");
+    assert.match(src!, /\/app\/(var-)?thumb\.png$/, "the /app/… path is preserved under the mount root");
+    assert.ok(!src!.startsWith("/app/"), "no longer the root-relative form that would hit the console's /app/");
+  }
+});
+
 test("buildEngineForm still renders the form when the variables fetch fails (#603 degradation)", async (t) => {
   const created: FakeElement[] = [];
   t.after(installFakeDom(created));

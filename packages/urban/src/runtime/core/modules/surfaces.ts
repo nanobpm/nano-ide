@@ -103,6 +103,10 @@ function openForm(t){
       submitLabel:'Submit',
       cancelLabel:'Cancel',
       context:context||{},
+      // Rebase root-relative image sources ('/app/…' — any single-leading-slash app
+      // path) onto THIS page's mount prefix (BASE derives from location.pathname),
+      // so they survive the console's path-prefixed proxy exactly like api() fetches.
+      resolveUrl:(u)=>u.startsWith('/')&&!u.startsWith('//')?BASE+u:u,
       onSubmit:(variables)=>complete(t.userTaskKey,variables),
       onCancel:loadTasks,
     }));

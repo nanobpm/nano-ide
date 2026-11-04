@@ -574,7 +574,7 @@ test("inbox client rebases image URLs onto the app mount (inbox route stripped),
   );
   assert.match(
     rendered,
-    /resolveUrl:\(u\)=>u\.startsWith\('\/\/'\)\?u:u\.startsWith\('\/'\)\?APP_BASE\+u:APP_BASE\+'\/'\+u/,
+    /resolveUrl:\(u\)=>u\.startsWith\('\/\/'\)\|\|\/\^\[a-zA-Z\]\[a-zA-Z0-9\+\.-\]\*:\/\.test\(u\)\?u:u\.startsWith\('\/'\)\?APP_BASE\+u:APP_BASE\+'\/'\+u/,
     "image resolver prefixes the app mount, not the inbox route",
   );
   // Direct deployment: page served at /tasks → BASE="/tasks", APP_BASE="".
@@ -696,15 +696,19 @@ test("inbox client rebases scheme-less RELATIVE image sources onto the app mount
   // route has no such handler (404). The resolver must rebase it onto APP_BASE
   // exactly like a root-relative source, while absolute http(s)/data: URLs still
   // pass through untouched.
-  assert.match(
-    rendered,
-    /resolveUrl:\(u\)=>u\.startsWith\('\/\/'\)\?u:u\.startsWith\('\/'\)\?APP_BASE\+u:APP_BASE\+'\/'\+u/,
-    "the resolver rebases root-relative AND scheme-less relative sources onto APP_BASE",
-  );
-  // Pin the behaviour with the resolver the client ships, for a nested inbox
-  // path, direct and proxied:
-  const resolve = (appBase: string) => (u: string) =>
-    u.startsWith("//") || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u) ? u : u.startsWith("/") ? appBase + u : appBase + "/" + u;
+  // Test the resolver the client ACTUALLY ships (extracted from the page), not a
+  // re-implementation that could drift from it.
+  const m = /resolveUrl:(\(u\)=>[^\n]*?),\n/.exec(rendered);
+  assert.ok(m, "the inbox page wires a resolveUrl");
+  const src = m[1];
+  const resolve = (appBase: string): ((u: string) => string) => new Function("APP_BASE", `return ${src};`)(appBase);
+  // Scheme-bearing (absolute) sources must pass through verbatim — never rebased
+  // into a bogus '/https://…' app path.
+  for (const base of ["", "/console/app-view/my-app"]) {
+    for (const abs of ["https://cdn.example.com/t.png", "http://x.example/t.png", "data:image/png;base64,iVBORw0KGgo="]) {
+      assert.equal(resolve(base)(abs), abs, `absolute ${abs} passes through under APP_BASE='${base}'`);
+    }
+  }
   const direct = resolve(""); // inbox at /review/tasks → APP_BASE ""
   assert.equal(direct("app/thumb.png"), "/app/thumb.png", "direct: a relative source lands on the app route, not /review/app/…");
   assert.equal(direct("/app/thumb.png"), "/app/thumb.png", "direct: a root-relative source is unchanged");
@@ -719,13 +723,8 @@ test("inbox client rebases scheme-less RELATIVE image sources onto the app mount
     "/console/app-view/my-app/app/thumb.png",
     "proxied: a root-relative source still rebases onto the app mount",
   );
-  // Absolute URLs and protocol-relative sources are never rewritten. Note the
-  // shipped resolver itself only special-cases "//" and "/": an absolute
-  // http(s)/data: source reaches it only after the renderer's allowlist has
-  // accepted it, and the renderer REVALIDATES the resolver's output with the
-  // same allowlist — so even if the resolver prefixed a scheme-bearing source,
-  // the result could never render as that scheme. Model the full pipeline here
-  // (resolver + the renderer's post-resolution allowlist) to pin that.
+  // End-to-end: the shipped resolver followed by the renderer's post-resolution
+  // allowlist keeps absolute https/data: sources intact and rejects '//host'.
   const allowlist = (u: string) =>
     /[\s\u0000-\u001f\u007f\\]/.test(u)
       ? null

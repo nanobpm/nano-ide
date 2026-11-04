@@ -133,9 +133,9 @@ function openForm(t){
       // A scheme-less RELATIVE source ('app/thumb.png') would otherwise resolve
       // against the page URL — under a nested inbox mount that requests
       // <inbox>/app/thumb.png, which has no handler — so rebase those onto
-      // APP_BASE too. Absolute http(s)/data: URLs and a protocol-relative
-      // '//host' (already rejected by the renderer's allowlist) pass through.
-      resolveUrl:(u)=>u.startsWith('//')?u:u.startsWith('/')?APP_BASE+u:APP_BASE+'/'+u,
+      // APP_BASE too. Any scheme-bearing source (http(s):, data:) and a protocol-relative
+      // '//host' (already rejected by the renderer's allowlist) pass through verbatim.
+      resolveUrl:(u)=>u.startsWith('//')||/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)?u:u.startsWith('/')?APP_BASE+u:APP_BASE+'/'+u,
       onSubmit:(variables)=>complete(t.userTaskKey,variables),
       onCancel:loadTasks,
     }));

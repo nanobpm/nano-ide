@@ -508,3 +508,51 @@ test("inbox client degrades to an empty context when the variables fetch fails",
     "a variables fetch failure degrades to an empty context rather than failing the form",
   );
 });
+
+// ── PR #604 review: the variables context is process-scoped, complete, and name-safe ─
+
+test("/api/variables uses only process-level variables — sibling task-local scopes never leak, in any order", async () => {
+  const rows = [
+    { variableKey: "a", name: "title", value: JSON.stringify("process"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+    { variableKey: "b", name: "title", value: JSON.stringify("sibling-local"), scopeKey: "ei-1", processInstanceKey: "pi-9", isTruncated: false },
+    { variableKey: "c", name: "only", value: JSON.stringify("sibling-only"), scopeKey: "ei-2", processInstanceKey: "pi-9", isTruncated: false },
+  ];
+  for (const order of [rows, [...rows].reverse()]) {
+    const engine: EngineClient = { ...fakeEngine, searchVariables: async () => order };
+    const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+    const route = s.routes.find((r) => r.source === "surface:taskInbox" && r.path.endsWith("/api/variables"))!;
+    const res = await call(route, { query: "processInstanceKey=pi-9" });
+    assert.deepEqual(JSON.parse(String(res.body)), { title: "process" });
+  }
+});
+
+test("/api/variables omits truncated previews so they can never be prefilled and submitted", async () => {
+  const engine: EngineClient = {
+    ...fakeEngine,
+    searchVariables: async () => [
+      { variableKey: "a", name: "big", value: JSON.stringify("clipped…"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: true },
+      { variableKey: "b", name: "small", value: JSON.stringify("ok"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+    ],
+  };
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+  const route = s.routes.find((r) => r.source === "surface:taskInbox" && r.path.endsWith("/api/variables"))!;
+  const res = await call(route, { query: "processInstanceKey=pi-9" });
+  assert.deepEqual(JSON.parse(String(res.body)), { small: "ok" });
+});
+
+test("/api/variables round-trips a variable named __proto__ as data", async () => {
+  for (const value of ["scalar", { nested: 1 }]) {
+    const engine: EngineClient = {
+      ...fakeEngine,
+      searchVariables: async () => [
+        { variableKey: "a", name: "__proto__", value: JSON.stringify(value), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+      ],
+    };
+    const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+    const route = s.routes.find((r) => r.source === "surface:taskInbox" && r.path.endsWith("/api/variables"))!;
+    const res = await call(route, { query: "processInstanceKey=pi-9" });
+    const parsed = JSON.parse(String(res.body));
+    assert.ok(Object.hasOwn(parsed, "__proto__"));
+    assert.deepEqual(parsed.__proto__, value);
+  }
+});

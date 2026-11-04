@@ -340,12 +340,17 @@ also loads the task's **variables** (the engine's variables search by the task's
 process instance) and passes them to the renderer as its **context**, so a
 reviewer sees what they are reviewing.
 
+The context holds only **process-level** variables (task-local variables of
+other element instances are excluded, so a sibling task's value can never leak
+in) and omits **truncated** previews (so a clipped value is never prefilled and
+resubmitted over the original). Lookups use the context's own properties only.
+
 Supported form-js components:
 
 | Component | Behaviour |
 | --- | --- |
 | `text` | Static paragraph; `{{name}}` placeholders interpolate from the context (objects as JSON, unknown names empty). Rendered as **text only** — a variable holding markup renders literally, never as HTML. |
-| `image` | `<img class="njf-image">` (max-width 100%). `source` is a literal URL or `=varName` (a plain variable reference — full FEEL is not evaluated). Only `http(s):` URLs, app-relative paths, and `data:image/(png|jpeg|gif|webp)` URLs are allowed; anything else (`javascript:`, other schemes, protocol-relative) renders nothing. `alt` sets the alt text. |
+| `image` | `<img class="njf-image">` (max-width 100%). `source` is a literal URL or `=varName` (a plain variable reference — full FEEL is not evaluated). Only `http(s):` URLs, app-relative paths, and `data:image/(png|jpeg|gif|webp)` URLs are allowed; anything else (`javascript:`, other schemes, protocol-relative, or any URL containing whitespace, control characters, or backslashes) renders nothing. `alt` sets the alt text. |
 | `textfield` / `textarea` / `number` / `datetime` | Keyed inputs; submitted as the completion `variables[key]`. A key present in the context **prefills** the input. |
 | `select` / `radio` | Keyed choice inputs from `values[]`; prefilled when the context value matches an option. |
 | `checkbox` | Keyed boolean; pre-checked when the context value is `true`. |

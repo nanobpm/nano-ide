@@ -78,7 +78,11 @@ export async function completeUserTaskResponse(
  * Each `VariableSummary.value` is the variable's serialized JSON (a string); it
  * is `JSON.parse`d here so the client receives real values (numbers, objects),
  * not double-encoded strings. A value that fails to parse is passed through as
- * the raw string rather than failing the whole read. A missing/blank
+ * the raw string rather than failing the whole read. Only PROCESS-level variables
+ * (`scopeKey === processInstanceKey`) are included — task-local variables of other
+ * element instances never leak into the context — and truncated previews
+ * (`isTruncated`) are omitted so they can never be prefilled and resubmitted over
+ * the full value. A missing/blank
  * `processInstanceKey` 400s — without it there is no well-defined scope to read.
  */
 export async function taskVariablesResponse(
@@ -88,8 +92,18 @@ export async function taskVariablesResponse(
   const key = processInstanceKey?.trim();
   if (!key) return json({ error: "processInstanceKey required" }, 400);
   const rows = await engine.searchVariables({ processInstanceKey: key });
-  const variables: Record<string, unknown> = {};
+  // A null-prototype bag: a variable named `__proto__` (or `constructor`) is stored
+  // as an own data property instead of invoking an inherited setter, so every
+  // variable name round-trips through `json()` as data.
+  const variables: Record<string, unknown> = Object.create(null);
   for (const row of rows) {
+    // Process-level scope only: a row whose scopeKey is an element instance is a
+    // task-LOCAL variable of some (possibly sibling) task. Flattening those by name
+    // would let another task's value win, so they are excluded outright.
+    if (row.scopeKey !== key) continue;
+    // A truncated row's `value` is a preview, not the variable. Prefilling it would
+    // let an untouched form submit clipped text over the original — omit it.
+    if (row.isTruncated) continue;
     try {
       variables[row.name] = JSON.parse(row.value);
     } catch {

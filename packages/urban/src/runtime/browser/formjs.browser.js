@@ -69,6 +69,23 @@ function fjTemplate(text, context) {
   });
 }
 
+/** Copy only the context's OWN enumerable properties into a null-prototype
+ * dictionary, so lookups like `ctx["constructor"]` or `ctx["__proto__"]` never
+ * resolve to inherited members (which would template/prefill bogus values), while
+ * an explicitly supplied own value with such a name is still honoured.
+ * @param {any} context
+ * @returns {Record<string, any>}
+ */
+function fjOwnContext(context) {
+  /** @type {Record<string, any>} */
+  const out = Object.create(null);
+  if (context == null || typeof context !== "object") return out;
+  for (const k of Object.keys(context)) {
+    Object.defineProperty(out, k, { value: context[k], enumerable: true, writable: true, configurable: true });
+  }
+  return out;
+}
+
 /** Resolve an `image` component's `source` to a URL the renderer will put on the
  * <img>, or null to reject it. `source` is either a literal URL or `=varName` — a
  * PLAIN variable reference into the render context (full FEEL is intentionally not
@@ -90,6 +107,10 @@ function fjImageSrc(source, context) {
     url = context[name];
   }
   if (typeof url !== "string" || url === "") return null;
+  // Browsers strip/normalise whitespace and control characters and treat `\` as
+  // `/` before interpreting a URL, so `java\tscript:` or ` data:image/svg+xml` or
+  // `/\\host` could slip past the allowlist below. Fail closed on any of them.
+  if (/[\s\u0000-\u001f\u007f\\]/.test(url)) return null;
   if (/^data:image\/(png|jpeg|gif|webp);/i.test(url)) return url;
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
     // A scheme: only http(s) is allowed (javascript:/data-text-html/etc. rejected).
@@ -123,7 +144,7 @@ function fjPrefill(context, key) {
  * @returns {{ field: any, read?: () => ({ key: string, value: any } | null) } | null}
  */
 function buildField(c, context) {
-  const ctx = context || {};
+  const ctx = fjOwnContext(context);
   const type = c && c.type;
   // Static (keyless) components: show text as a paragraph, ignore layout-only ones.
   if (type === "text") {
@@ -244,7 +265,7 @@ function renderForm(schema, opts) {
   const form = document.createElement("form");
   form.className = "njf-form";
   if (opts.heading) form.appendChild(fjEl("h2", { class: "njf-heading" }, opts.heading));
-  const context = opts.context || {};
+  const context = fjOwnContext(opts.context);
   const components = schema && Array.isArray(schema.components) ? schema.components : [];
   /** @type {Array<() => ({ key: string, value: any } | null)>} */
   const inputs = [];

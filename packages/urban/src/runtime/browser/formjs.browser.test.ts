@@ -312,3 +312,53 @@ test("renderForm without a context renders exactly as before (backwards compatib
   const input = created.find((n) => n.tagName === "INPUT");
   assert.equal(input!.value, "");
 });
+
+// ── PR #604 review: defect classes hardened ──────────────────────────────────
+
+test("buildField rejects disguised unsafe image URLs — whitespace, control chars, backslashes", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const disguised = [
+    "java\tscript:alert(1)",
+    "java\nscript:alert(1)",
+    " javascript:alert(1)",
+    " data:image/svg+xml,<svg onload=alert(1)>",
+    "\u0000javascript:alert(1)",
+    "/\\evil.example.com/x.png",
+    "\\\\evil.example.com/x.png",
+    "https://ok.example.com/a b.png",
+    "/x.png\u007f",
+  ];
+  for (const source of disguised) {
+    assert.equal(buildField({ type: "image", source }, {}), null, `literal ${JSON.stringify(source)} rejected`);
+    assert.equal(buildField({ type: "image", source: "=u" }, { u: source }), null, `variable ${JSON.stringify(source)} rejected`);
+  }
+  assert.equal(created.filter((n) => n.tagName === "IMG").length, 0);
+});
+
+test("buildField ignores inherited prototype members of the context (own properties only)", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  for (const key of ["__proto__", "constructor", "toString", "hasOwnProperty"]) {
+    const built = buildField({ type: "textfield", key }, {});
+    const input = created.filter((n) => n.tagName === "INPUT").at(-1);
+    assert.equal(input!.value, "", `${key}: an absent prototype member does not prefill`);
+    assert.equal(built!.read!(), null, `${key}: untouched field is omitted`);
+  }
+  const text = buildField({ type: "text", text: "[{{constructor}}][{{toString}}]" }, {});
+  assert.equal(text!.field.textContent, "[][]", "unknown prototype-member placeholders render empty");
+  assert.equal(buildField({ type: "image", source: "=constructor" }, {}), null);
+});
+
+test("buildField honours explicitly supplied own values named like prototype members", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  const ctx = JSON.parse('{"__proto__":"P","constructor":"C"}');
+  buildField({ type: "textfield", key: "__proto__" }, ctx);
+  buildField({ type: "textfield", key: "constructor" }, ctx);
+  const inputs = created.filter((n) => n.tagName === "INPUT");
+  assert.equal(inputs[0]!.value, "P");
+  assert.equal(inputs[1]!.value, "C");
+  const text = buildField({ type: "text", text: "{{__proto__}}/{{constructor}}" }, ctx);
+  assert.equal(text!.field.textContent, "P/C");
+});

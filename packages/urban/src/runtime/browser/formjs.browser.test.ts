@@ -624,3 +624,26 @@ test("buildField revalidates the RESOLVED image URL — a resolver cannot launde
   const src = created.find((n) => n.tagName === "IMG")!.getAttribute("src");
   assert.equal(src, "https://console.example.com/console/app-view/demo/app/thumb.png", "rebased onto the https app mount");
 });
+
+test("buildField keeps every SUPPORTED image source after resolution (path-returning, data:image, relative)", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // The inbox resolver returns a PATH (mount prefix + source), and both
+  // resolvers leave data:image and non-root-relative sources unchanged. The
+  // post-resolution check is the same allowlist as the raw-source check, so
+  // every source it accepts raw must survive an identity-preserving resolver.
+  const inboxRebase = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? "/console/app-view/demo" + u : u);
+  const png = "data:image/png;base64,iVBORw0KGgo=";
+  const cases: Array<[string, string]> = [
+    ["/app/thumb.png", "/console/app-view/demo/app/thumb.png"],
+    [png, png],
+    ["thumb.png", "thumb.png"],
+    ["img/thumb.png", "img/thumb.png"],
+  ];
+  for (const [source, expected] of cases) {
+    for (const [s, ctx] of [[source, {}], ["=u", { u: source }]] as const) {
+      assert.ok(buildField({ type: "image", source: s }, ctx, { resolveUrl: inboxRebase }), `${source} (${s}) accepted`);
+      assert.equal(created.filter((n) => n.tagName === "IMG").at(-1)!.getAttribute("src"), expected);
+    }
+  }
+});

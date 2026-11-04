@@ -157,13 +157,11 @@ function fjImageSrc(source, context, resolveUrl) {
   if (!resolveUrl) return allowed;
   const resolved = resolveUrl(allowed);
   if (typeof resolved !== "string" || resolved === "") return null;
-  // The resolver's output is used for a same-origin fetch/<img> src: it must stay
-  // an http(s) URL or a same-origin path. A non-http(s) scheme the URL parser
-  // honoured (file: under a test runner, a custom protocol handler in a browser)
-  // would silently never load, and anything worse is a laundered script/data URL —
-  // either way it is not an image this renderer may set.
-  if (!/^(https?:)?\/\//i.test(resolved)) return null;
-  return resolved;
+  // Re-run the SAME allowlist on the resolver's output (one source of truth):
+  // app-relative paths, http(s) and data:image survive; a forbidden scheme the
+  // resolver minted (e.g. "/javascript:…" stripped to "javascript:…"), a file:
+  // URL, or a protocol-relative URL is rejected.
+  return fjAllowImageUrl(resolved);
 }
 
 /** The value a keyed input is prefilled with when its key is present in the render

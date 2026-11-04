@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.98.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.97.0...@nanobpm/urban-0.98.0) (2026-11-04)
+
+
+### Features
+
+* **urban:** taskInbox/engineForm render task variables — {{var}} text templating, image component, prefill ([#604](https://github.com/nanobpm/nano-ide/issues/604)) ([01e3a4b](https://github.com/nanobpm/nano-ide/commit/01e3a4b1be45db7353d29468dcae93474d6cd27b))
+
 ## [0.97.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.96.3...@nanobpm/urban-0.97.0) (2026-11-03)
 
 

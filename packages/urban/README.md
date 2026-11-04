@@ -331,6 +331,29 @@ deploy-time string substitution (`{{name}}` templating has been removed).
 > model per environment. Pass the value as a process variable and reference it
 > with FEEL instead.
 
+### Task forms — what the `taskInbox` (and pages `engineForm`) renders
+
+A user task linked to a deployed `.form` is rendered by the ONE shared form-js
+renderer (`NanoFormJs`) in both human surfaces — the `taskInbox` page and a
+pages `dataGrid` `detail.engineForm` drawer. When a task is opened, the surface
+also loads the task's **variables** (the engine's variables search by the task's
+process instance) and passes them to the renderer as its **context**, so a
+reviewer sees what they are reviewing.
+
+Supported form-js components:
+
+| Component | Behaviour |
+| --- | --- |
+| `text` | Static paragraph; `{{name}}` placeholders interpolate from the context (objects as JSON, unknown names empty). Rendered as **text only** — a variable holding markup renders literally, never as HTML. |
+| `image` | `<img class="njf-image">` (max-width 100%). `source` is a literal URL or `=varName` (a plain variable reference — full FEEL is not evaluated). Only `http(s):` URLs, app-relative paths, and `data:image/(png|jpeg|gif|webp)` URLs are allowed; anything else (`javascript:`, other schemes, protocol-relative) renders nothing. `alt` sets the alt text. |
+| `textfield` / `textarea` / `number` / `datetime` | Keyed inputs; submitted as the completion `variables[key]`. A key present in the context **prefills** the input. |
+| `select` / `radio` | Keyed choice inputs from `values[]`; prefilled when the context value matches an option. |
+| `checkbox` | Keyed boolean; pre-checked when the context value is `true`. |
+| other / keyless layout components | Skipped. |
+
+Forms with no templating, images, or matching context keys render exactly as
+before — the context is additive.
+
 ### Triggers — the inbound I/O edge
 
 Declare `triggers[]` in the app manifest to turn outside events into engine

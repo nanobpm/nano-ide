@@ -65,3 +65,36 @@ export async function completeUserTaskResponse(
   await engine.completeUserTask(userTaskKey, variables);
   return json({ ok: true });
 }
+
+/**
+ * The shared task-variables endpoint (#603). Responds with the variables of one
+ * process instance as a plain `{ name: value }` object — the render context both
+ * form surfaces (taskInbox, pages `dataGrid` engine-form detail) pass to the
+ * shared form-js renderer for `{{name}}` text templating, `=varName` image
+ * sources, and keyed-input prefill. Sourced from `EngineClient.searchVariables`
+ * (the engine's user-task/process variables search), so the two surfaces can
+ * never drift on where the context comes from.
+ *
+ * Each `VariableSummary.value` is the variable's serialized JSON (a string); it
+ * is `JSON.parse`d here so the client receives real values (numbers, objects),
+ * not double-encoded strings. A value that fails to parse is passed through as
+ * the raw string rather than failing the whole read. A missing/blank
+ * `processInstanceKey` 400s — without it there is no well-defined scope to read.
+ */
+export async function taskVariablesResponse(
+  engine: Pick<EngineClient, "searchVariables">,
+  processInstanceKey: string | undefined,
+): Promise<HttpResponse> {
+  const key = processInstanceKey?.trim();
+  if (!key) return json({ error: "processInstanceKey required" }, 400);
+  const rows = await engine.searchVariables({ processInstanceKey: key });
+  const variables: Record<string, unknown> = {};
+  for (const row of rows) {
+    try {
+      variables[row.name] = JSON.parse(row.value);
+    } catch {
+      variables[row.name] = row.value;
+    }
+  }
+  return json(variables);
+}

@@ -437,3 +437,74 @@ test("MCP is listed as an active surface only when config-enabled, but its route
   assert.ok(Array.isArray(offEnabled) && !offEnabled.includes("mcp@/app/mcp"), "a disabled MCP surface must not be listed as active");
   assert.ok(off.routes.some((r) => r.path === "/app/mcp"), "the MCP route stays mounted even when disabled");
 });
+
+// ── #603: the inbox loads the task's variables and passes them to the renderer ─
+
+test("/api/variables returns the task's variables as a {name: value} context", async () => {
+  let seenFilter: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    searchVariables: async (filter) => {
+      seenFilter = filter;
+      return [
+        { variableKey: "v1", name: "title", value: JSON.stringify("Draft v2"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+        { variableKey: "v2", name: "img1", value: JSON.stringify("data:image/png;base64,iVBORw0KGgo="), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+        { variableKey: "v3", name: "count", value: "3", scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+      ];
+    },
+  };
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+  const variables = s.routes.find(
+    (r) => r.source === "surface:taskInbox" && r.method === "GET" && r.path.endsWith("/api/variables"),
+  )!;
+  const res = await call(variables, { query: "processInstanceKey=pi-9" });
+  assert.deepEqual(seenFilter, { processInstanceKey: "pi-9" }, "the route searches the engine's variables by process instance");
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(String(res.body)), {
+    title: "Draft v2",
+    img1: "data:image/png;base64,iVBORw0KGgo=",
+    count: 3,
+  }, "serialized-JSON values arrive parsed (strings as strings, numbers as numbers)");
+});
+
+test("/api/variables 400s without a processInstanceKey", async () => {
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), fakeApp);
+  const variables = s.routes.find(
+    (r) => r.source === "surface:taskInbox" && r.method === "GET" && r.path.endsWith("/api/variables"),
+  )!;
+  const res = await call(variables);
+  assert.equal(res.status, 400);
+});
+
+test("inbox client loads the task's variables and renders {{title}} + an =img1 image with them", async () => {
+  // The acceptance scenario: a task whose variables include `title` and `img1`,
+  // with a form using {{title}} and an image with source "=img1", renders both.
+  // The server half (the /api/variables route) is covered above; here we pin the
+  // CLIENT half: openForm must fetch the variables for the task's process
+  // instance and hand them to the shared renderer as its context.
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  assert.ok(
+    rendered.includes("'/api/variables?processInstanceKey='+encodeURIComponent(t.processInstanceKey)"),
+    "openForm fetches the task's variables by its processInstanceKey",
+  );
+  assert.ok(rendered.includes("Promise.all(["), "form schema and variables load together");
+  assert.ok(rendered.includes("context:context||{}"), "the variables are passed to NanoFormJs.renderForm as its context");
+  // The renderer the page embeds must be the context-aware one: it templates
+  // {{name}} in text components, resolves =varName image sources, and prefills
+  // keyed inputs — all from that one context.
+  assert.ok(rendered.includes("function fjTemplate"), "embedded renderer has {{name}} text templating");
+  assert.ok(rendered.includes("function fjImageSrc"), "embedded renderer has the image source resolver");
+  assert.ok(rendered.includes("njf-image"), "page styles the image component");
+});
+
+test("inbox client degrades to an empty context when the variables fetch fails", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // A failed variables fetch must not block the form: it falls back to {} so the
+  // schema still renders (untemplated/unprefilled).
+  assert.ok(
+    rendered.includes(".catch(()=>({}))"),
+    "a variables fetch failure degrades to an empty context rather than failing the form",
+  );
+});

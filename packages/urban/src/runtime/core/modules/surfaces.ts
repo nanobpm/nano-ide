@@ -10,7 +10,7 @@
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { html, json, normalizeRoutePath, type Route } from "../router.ts";
 import { FORMJS_JS } from "./formjs.gen.ts";
-import { completeUserTaskResponse, resolveFormResponse } from "./forms.ts";
+import { completeUserTaskResponse, resolveFormResponse, taskVariablesResponse } from "./forms.ts";
 import { mountActions } from "./actions.ts";
 import { mountAgent } from "./agent.ts";
 import { mountApi } from "./api.ts";
@@ -48,6 +48,7 @@ button{font:inherit;padding:.2rem .6rem;cursor:pointer}
 .njf-field input,.njf-field textarea,.njf-field select{font:inherit;padding:.3rem;width:100%;box-sizing:border-box;max-width:24rem}
 .njf-field input[type=checkbox],.njf-field input[type=radio]{width:auto}
 .njf-actions{margin-top:.6rem}
+.njf-image{display:block;max-width:100%;height:auto;margin:.6rem 0}
 #form{margin-top:1.5rem;border-top:1px solid #ddd;padding-top:1rem}
 .muted{color:#666}</style>
 <h1>Task inbox</h1><ul id="tasks"><li>loading…</li></ul>
@@ -84,7 +85,16 @@ function loadTasks(){
 function openForm(t){
   formEl.replaceChildren(el('p',{class:'muted'},'loading form…'));
   const q='formKey='+encodeURIComponent(t.formKey);
-  api('/api/form?'+q).then(f=>{
+  // Load the form schema AND the task's variables together (#603): the variables
+  // are the renderer's context — {{name}} text templating, =varName image
+  // sources, and keyed-input prefill all resolve against them, so the reviewer
+  // sees what they are reviewing. A variables fetch that fails degrades to an
+  // empty context (the form still renders, untemplated/unprefilled) rather than
+  // blocking the form.
+  const varsP=t.processInstanceKey
+    ?api('/api/variables?processInstanceKey='+encodeURIComponent(t.processInstanceKey)).catch(()=>({}))
+    :Promise.resolve({});
+  Promise.all([api('/api/form?'+q),varsP]).then(([f,context])=>{
     formEl.replaceChildren();
     if(!f||!f.schema){renderNoForm(t);return;}
     // Reuse the ONE shared form-js renderer (NanoFormJs) — no fork with the pages surface.
@@ -92,6 +102,7 @@ function openForm(t){
       heading:'Task '+(t.elementId||t.userTaskKey),
       submitLabel:'Submit',
       cancelLabel:'Cancel',
+      context:context||{},
       onSubmit:(variables)=>complete(t.userTaskKey,variables),
       onCancel:loadTasks,
     }));
@@ -162,6 +173,16 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       source: "surface:taskInbox",
       handler: async (req) =>
         resolveFormResponse(app.engine, req.query.get("formKey") ?? undefined, req.query.get("formId") ?? undefined),
+    });
+    // The task's variables (#603) — the render context the shared form-js renderer
+    // templates/prefills from. Same source as the pages surface's variables route
+    // (forms.ts `taskVariablesResponse`), so the two can never drift.
+    routes.push({
+      method: "GET",
+      path: `${base}/api/variables`,
+      source: "surface:taskInbox",
+      handler: async (req) =>
+        taskVariablesResponse(app.engine, req.query.get("processInstanceKey") ?? undefined),
     });
     routes.push({
       method: "POST",

@@ -1939,7 +1939,10 @@ function buildDetailForm(f, row, onSuccess) {
 //
 // `cfg.formKeyField` (default "form_key") names the row column carrying the engine
 // formKey; `cfg.userTaskKeyField` (default "user_task_key") names the column
-// carrying the user-task key to complete. A row with no formKey degrades to a bare
+// carrying the user-task key to complete; `cfg.processInstanceKeyField` (default
+// "process_instance_key", falling back to a camelCase `processInstanceKey` column)
+// names the column carrying the process-instance key whose variables become the
+// renderer's context (#603). A row with no formKey degrades to a bare
 // "Complete" button (empty variables), matching taskInbox's no-form fallback.
 /** @param {any} cfg
  *  @param {Record<string, any>} row
@@ -1994,8 +1997,22 @@ function buildEngineForm(cfg, row, onSuccess) {
     return box;
   }
   box.append(el("p", { class: "njf-text" }, "loading form\u2026"));
-  getJSON("/app/actions/form?formKey=" + encodeURIComponent(String(formKey)))
-    .then((f) => {
+  // Load the row's task variables alongside the form (#603): they are the
+  // renderer's context — `{{name}}` text templating, `=varName` image sources,
+  // and keyed-input prefill — so the drawer shows the reviewer what they are
+  // reviewing, exactly like the taskInbox surface. The row column naming the
+  // process-instance key is `cfg.processInstanceKeyField` (default
+  // "process_instance_key", falling back to a camelCase `processInstanceKey`
+  // column); a row without one (or a failed fetch) degrades to an empty context
+  // rather than blocking the form.
+  const pikField = cfg.processInstanceKeyField || "process_instance_key";
+  const pik = row[pikField] != null ? row[pikField] : row.processInstanceKey;
+  const varsP =
+    pik != null && pik !== ""
+      ? getJSON("/app/actions/variables?processInstanceKey=" + encodeURIComponent(String(pik))).catch(() => ({}))
+      : Promise.resolve({});
+  Promise.all([getJSON("/app/actions/form?formKey=" + encodeURIComponent(String(formKey))), varsP])
+    .then(([f, context]) => {
       box.replaceChildren();
       const renderer = /** @type {any} */ (globalThis).NanoFormJs;
       if (!f || !f.schema || !renderer) {
@@ -2005,6 +2022,7 @@ function buildEngineForm(cfg, row, onSuccess) {
       box.append(
         renderer.renderForm(f.schema, {
           submitLabel: "Complete",
+          context: context || {},
           /** @param {Record<string, any>} variables */
           onSubmit: (variables) => {
             msg.className = "njf-msg";

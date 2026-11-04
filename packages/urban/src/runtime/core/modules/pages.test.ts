@@ -2043,6 +2043,27 @@ test("GET /app/actions/form 204s when the form can't be resolved (client falls b
   assert.equal(res.body ?? "", "");
 });
 
+test("GET /app/actions/variables returns the row's task variables as the render context (#603)", async () => {
+  const { engine } = fakeEngine();
+  let seenFilter: unknown;
+  const withVars: EngineClient = {
+    ...engine,
+    async searchVariables(filter) {
+      seenFilter = filter;
+      return [
+        { variableKey: "v1", name: "title", value: JSON.stringify("Draft v2"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+        { variableKey: "v2", name: "img1", value: JSON.stringify("https://cdn.example.com/t1.png"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+      ];
+    },
+  };
+  const res = await formRouter(withVars)(req("GET", "/app/actions/variables", { query: "processInstanceKey=pi-9" }));
+  assert.equal(res.status, 200);
+  assert.deepEqual(seenFilter, { processInstanceKey: "pi-9" });
+  assert.deepEqual(JSON.parse(res.body ?? "{}"), { title: "Draft v2", img1: "https://cdn.example.com/t1.png" });
+  const missing = await formRouter(withVars)(req("GET", "/app/actions/variables"));
+  assert.equal(missing.status, 400, "a missing processInstanceKey 400s");
+});
+
 test("POST /app/actions/complete completes the row's user task with the submitted variables", async () => {
   const { engine, completeCalls } = formEngine();
   const res = await formRouter(engine)(

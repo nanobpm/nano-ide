@@ -256,3 +256,104 @@ test("buildEngineForm treats a whitespace-only completePath as absent", async (t
   assert.ok(completeReq, "a whitespace-only completePath still targets the default /app/actions/complete seam");
   assert.equal(completeReq!.body.userTaskKey, "ut-e");
 });
+
+test("buildEngineForm loads the row's task variables and renders {{title}} + an =img1 image with them (#603)", async (t) => {
+  // The acceptance scenario end to end through the pages drawer: a task whose
+  // variables include `title` and `img1`, with a form using {{title}} and an
+  // image with source "=img1", renders both — and prefills the keyed input.
+  const created: FakeElement[] = [];
+  const calls: FetchCall[] = [];
+  t.after(installFakeDom(created));
+  t.after(
+    installFakeFetch((url) => {
+      if (url.includes("/app/actions/form")) {
+        return {
+          status: 200,
+          json: {
+            schema: {
+              components: [
+                { type: "text", text: "Reviewing {{title}}" },
+                { type: "image", source: "=img1", alt: "Proposed thumbnail" },
+                { type: "textfield", key: "title" },
+              ],
+            },
+          },
+        };
+      }
+      if (url.includes("/app/actions/variables")) {
+        return { status: 200, json: { title: "Draft v2", img1: "https://cdn.example.com/t1.png" } };
+      }
+      return { status: 200, json: { ok: true } };
+    }, calls),
+  );
+  const box = buildEngineForm(
+    CFG,
+    { form_key: "form-v", user_task_key: "ut-v", process_instance_key: "pi-v" },
+    () => {},
+  );
+  assert.ok(box);
+  await new Promise((r) => setTimeout(r, 0));
+  const varsReq = calls.find((c) => c.url.includes("/app/actions/variables"));
+  assert.ok(varsReq, "the row's variables are fetched alongside the form");
+  assert.match(varsReq!.url, /processInstanceKey=pi-v/, "fetched by the row's process-instance key");
+  const p = created.find((n) => n.tagName === "P" && n.className.includes("njf-text") && n.textContent.includes("Reviewing"));
+  assert.ok(p, "the text component rendered");
+  assert.equal(p!.textContent, "Reviewing Draft v2", "{{title}} templated from the task's variables");
+  const img = created.find((n) => n.tagName === "IMG");
+  assert.ok(img, "the image component rendered");
+  assert.equal(img!.getAttribute("src"), "https://cdn.example.com/t1.png", "=img1 resolved from the task's variables");
+  assert.equal(img!.getAttribute("alt"), "Proposed thumbnail");
+  const input = created.find((n) => n.tagName === "INPUT");
+  assert.equal(input!.value, "Draft v2", "the keyed input is prefilled from the same context");
+});
+
+test("buildEngineForm still renders the form when the variables fetch fails (#603 degradation)", async (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  t.after(
+    installFakeFetch((url) => {
+      if (url.includes("/app/actions/form")) {
+        return { status: 200, json: { schema: { components: [{ type: "textfield", key: "note" }] } } };
+      }
+      return { status: 500 }; // variables fetch fails
+    }, []),
+  );
+  const box = buildEngineForm(CFG, { form_key: "form-x", user_task_key: "ut-x", process_instance_key: "pi-x" }, () => {});
+  assert.ok(box);
+  await new Promise((r) => setTimeout(r, 0));
+  const form = created.find((n) => n.tagName === "FORM");
+  assert.ok(form, "a variables-fetch failure does not block the form");
+  const input = created.find((n) => n.tagName === "INPUT");
+  assert.equal(input!.value, "", "no context → no prefill");
+});
+
+test("buildEngineForm honours a camelCase processInstanceKey column and a custom processInstanceKeyField", async (t) => {
+  const created: FakeElement[] = [];
+  const calls: FetchCall[] = [];
+  t.after(installFakeDom(created));
+  t.after(
+    installFakeFetch((url) => {
+      if (url.includes("/app/actions/form")) {
+        return { status: 200, json: { schema: { components: [] } } };
+      }
+      return { status: 200, json: {} };
+    }, calls),
+  );
+  buildEngineForm(CFG, { form_key: "f", user_task_key: "u", processInstanceKey: "pi-camel" }, () => {});
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(
+    calls.some((c) => c.url.includes("processInstanceKey=pi-camel")),
+    "a camelCase processInstanceKey column is picked up when process_instance_key is absent",
+  );
+  calls.length = 0;
+  buildEngineForm(
+    { ...CFG, processInstanceKeyField: "pi" },
+    { form_key: "f", user_task_key: "u", pi: "pi-custom" },
+    () => {},
+  );
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(
+    calls.some((c) => c.url.includes("processInstanceKey=pi-custom")),
+    "cfg.processInstanceKeyField names a custom column",
+  );
+});

@@ -10,7 +10,7 @@
 import type { AppApi, RuntimeContext } from "../context.ts";
 import { html, json, normalizeRoutePath, type Route } from "../router.ts";
 import { FORMJS_JS } from "./formjs.gen.ts";
-import { completeUserTaskResponse, resolveFormResponse } from "./forms.ts";
+import { completeUserTaskResponse, resolveFormResponse, taskVariablesResponse } from "./forms.ts";
 import { mountActions } from "./actions.ts";
 import { mountAgent } from "./agent.ts";
 import { mountApi } from "./api.ts";
@@ -30,7 +30,7 @@ export interface SurfacesHandle {
   describe(): Record<string, unknown>;
 }
 
-function inboxPage(): string {
+function inboxPage(inboxBase: string): string {
   // Reverse-proxy safe: the client derives its API base from location.pathname
   // (where THIS page was actually served) rather than an embedded absolute
   // route base. A hardcoded "/tasks" would escape the Nano console's
@@ -39,6 +39,20 @@ function inboxPage(): string {
   // <script> injection surface entirely: nothing manifest-supplied is embedded.
   // All task/form values are rendered via textContent / setAttribute — never
   // innerHTML — so nothing the engine returns can inject markup.
+  //
+  // The ONE manifest-derived value the page does embed is the configured inbox
+  // path's SEGMENT COUNT — numeric metadata, never the path string, so the
+  // injection surface stays closed. The client strips that many segments from
+  // BASE to derive the app mount: stripping a fixed single segment would retain
+  // a nested configured path (an inbox mounted at review+tasks would rebase
+  // '/app/thumb.png' to '…/review/app/thumb.png', which has no handler).
+  // normalizeRoutePath guarantees a leading slash and no trailing one, but
+  // PRESERVES interior repeated slashes (router.ts) — so count every slot the
+  // client's BASE.split('/') produces after the leading slash (split.length - 1),
+  // including the empty slots a configured '/review//tasks' yields. Counting only
+  // non-empty segments would strip too few: the client's split retains the empty
+  // slot, so APP_BASE would keep a segment that is not the app mount.
+  const inboxSegments = inboxBase.split("/").length - 1;
   return `<!doctype html><meta charset="utf-8"><title>Task inbox</title>
 <style>body{font:14px system-ui,sans-serif;margin:2rem;max-width:52rem}
 ul{list-style:none;padding:0}li{margin:.4rem 0;display:flex;align-items:center;gap:.5rem}
@@ -48,6 +62,7 @@ button{font:inherit;padding:.2rem .6rem;cursor:pointer}
 .njf-field input,.njf-field textarea,.njf-field select{font:inherit;padding:.3rem;width:100%;box-sizing:border-box;max-width:24rem}
 .njf-field input[type=checkbox],.njf-field input[type=radio]{width:auto}
 .njf-actions{margin-top:.6rem}
+.njf-image{display:block;max-width:100%;height:auto;margin:.6rem 0}
 #form{margin-top:1.5rem;border-top:1px solid #ddd;padding-top:1rem}
 .muted{color:#666}</style>
 <h1>Task inbox</h1><ul id="tasks"><li>loading…</li></ul>
@@ -55,6 +70,16 @@ button{font:inherit;padding:.2rem .6rem;cursor:pointer}
 <script>${FORMJS_JS}</script>
 <script>
 const BASE=location.pathname.replace(/[/]+$/,'');
+// The app-mount prefix: BASE ends with the WHOLE configured inbox route (this
+// page IS the inbox), so strip exactly that many segments — not a fixed one, or
+// a nested inbox path (e.g. review+tasks) would leave its leading segments
+// behind and '/app/thumb.png' would resolve under them (no handler there).
+// Root-relative APP paths ('/app/…') rebase onto APP_BASE — not BASE — otherwise
+// the URL keeps the inbox route ('/tasks/app/…'). Direct run: BASE='/tasks' →
+// APP_BASE=''. Proxied: BASE='/console/app-view/<name>/tasks' →
+// APP_BASE='/console/app-view/<name>'.
+const INBOX_SEGMENTS=${inboxSegments};
+const APP_BASE=BASE.split('/').slice(0,-INBOX_SEGMENTS).join('/');
 const tasksEl=document.getElementById('tasks');
 const formEl=document.getElementById('form');
 
@@ -84,7 +109,16 @@ function loadTasks(){
 function openForm(t){
   formEl.replaceChildren(el('p',{class:'muted'},'loading form…'));
   const q='formKey='+encodeURIComponent(t.formKey);
-  api('/api/form?'+q).then(f=>{
+  // Load the form schema AND the task's variables together (#603): the variables
+  // are the renderer's context — {{name}} text templating, =varName image
+  // sources, and keyed-input prefill all resolve against them, so the reviewer
+  // sees what they are reviewing. A variables fetch that fails degrades to an
+  // empty context (the form still renders, untemplated/unprefilled) rather than
+  // blocking the form.
+  const varsP=t.processInstanceKey
+    ?api('/api/variables?processInstanceKey='+encodeURIComponent(t.processInstanceKey)).catch(()=>({}))
+    :Promise.resolve({});
+  Promise.all([api('/api/form?'+q),varsP]).then(([f,context])=>{
     formEl.replaceChildren();
     if(!f||!f.schema){renderNoForm(t);return;}
     // Reuse the ONE shared form-js renderer (NanoFormJs) — no fork with the pages surface.
@@ -92,6 +126,16 @@ function openForm(t){
       heading:'Task '+(t.elementId||t.userTaskKey),
       submitLabel:'Submit',
       cancelLabel:'Cancel',
+      context:context||{},
+      // Rebase root-relative image sources ('/app/…' — any single-leading-slash app
+      // path) onto the APP mount (APP_BASE = BASE minus the inbox route), so they
+      // survive the console's path-prefixed proxy without keeping the inbox segment.
+      // A scheme-less RELATIVE source ('app/thumb.png') would otherwise resolve
+      // against the page URL — under a nested inbox mount that requests
+      // <inbox>/app/thumb.png, which has no handler — so rebase those onto
+      // APP_BASE too. Any scheme-bearing source (http(s):, data:) and a protocol-relative
+      // '//host' (already rejected by the renderer's allowlist) pass through verbatim.
+      resolveUrl:(u)=>u.startsWith('//')||/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)?u:u.startsWith('/')?APP_BASE+u:APP_BASE+'/'+u,
       onSubmit:(variables)=>complete(t.userTaskKey,variables),
       onCancel:loadTasks,
     }));
@@ -132,7 +176,7 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       method: "GET",
       path: base,
       source: "surface:taskInbox",
-      handler: () => html(inboxPage()),
+      handler: () => html(inboxPage(base)),
     });
     routes.push({
       method: "GET",
@@ -162,6 +206,16 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       source: "surface:taskInbox",
       handler: async (req) =>
         resolveFormResponse(app.engine, req.query.get("formKey") ?? undefined, req.query.get("formId") ?? undefined),
+    });
+    // The task's variables (#603) — the render context the shared form-js renderer
+    // templates/prefills from. Same source as the pages surface's variables route
+    // (forms.ts `taskVariablesResponse`), so the two can never drift.
+    routes.push({
+      method: "GET",
+      path: `${base}/api/variables`,
+      source: "surface:taskInbox",
+      handler: async (req) =>
+        taskVariablesResponse(app.engine, req.query.get("processInstanceKey") ?? undefined),
     });
     routes.push({
       method: "POST",

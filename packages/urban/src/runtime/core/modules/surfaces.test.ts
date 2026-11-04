@@ -437,3 +437,311 @@ test("MCP is listed as an active surface only when config-enabled, but its route
   assert.ok(Array.isArray(offEnabled) && !offEnabled.includes("mcp@/app/mcp"), "a disabled MCP surface must not be listed as active");
   assert.ok(off.routes.some((r) => r.path === "/app/mcp"), "the MCP route stays mounted even when disabled");
 });
+
+// ── #603: the inbox loads the task's variables and passes them to the renderer ─
+
+test("/api/variables returns the task's variables as a {name: value} context", async () => {
+  let seenFilter: unknown;
+  const engine: EngineClient = {
+    ...fakeEngine,
+    searchVariables: async (filter) => {
+      seenFilter = filter;
+      return [
+        { variableKey: "v1", name: "title", value: JSON.stringify("Draft v2"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+        { variableKey: "v2", name: "img1", value: JSON.stringify("data:image/png;base64,iVBORw0KGgo="), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+        { variableKey: "v3", name: "count", value: "3", scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+      ];
+    },
+  };
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+  const variables = s.routes.find(
+    (r) => r.source === "surface:taskInbox" && r.method === "GET" && r.path.endsWith("/api/variables"),
+  )!;
+  const res = await call(variables, { query: "processInstanceKey=pi-9" });
+  assert.deepEqual(seenFilter, { processInstanceKey: "pi-9" }, "the route searches the engine's variables by process instance");
+  assert.equal(res.status, 200);
+  assert.deepEqual(JSON.parse(String(res.body)), {
+    title: "Draft v2",
+    img1: "data:image/png;base64,iVBORw0KGgo=",
+    count: 3,
+  }, "serialized-JSON values arrive parsed (strings as strings, numbers as numbers)");
+});
+
+test("/api/variables 400s without a processInstanceKey", async () => {
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), fakeApp);
+  const variables = s.routes.find(
+    (r) => r.source === "surface:taskInbox" && r.method === "GET" && r.path.endsWith("/api/variables"),
+  )!;
+  const res = await call(variables);
+  assert.equal(res.status, 400);
+});
+
+test("inbox client loads the task's variables and renders {{title}} + an =img1 image with them", async () => {
+  // The acceptance scenario: a task whose variables include `title` and `img1`,
+  // with a form using {{title}} and an image with source "=img1", renders both.
+  // The server half (the /api/variables route) is covered above; here we pin the
+  // CLIENT half: openForm must fetch the variables for the task's process
+  // instance and hand them to the shared renderer as its context.
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  assert.ok(
+    rendered.includes("'/api/variables?processInstanceKey='+encodeURIComponent(t.processInstanceKey)"),
+    "openForm fetches the task's variables by its processInstanceKey",
+  );
+  assert.ok(rendered.includes("Promise.all(["), "form schema and variables load together");
+  assert.ok(rendered.includes("context:context||{}"), "the variables are passed to NanoFormJs.renderForm as its context");
+  // The renderer the page embeds must be the context-aware one: it templates
+  // {{name}} in text components, resolves =varName image sources, and prefills
+  // keyed inputs — all from that one context.
+  assert.ok(rendered.includes("function fjTemplate"), "embedded renderer has {{name}} text templating");
+  assert.ok(rendered.includes("function fjImageSrc"), "embedded renderer has the image source resolver");
+  assert.ok(rendered.includes("njf-image"), "page styles the image component");
+});
+
+test("inbox client degrades to an empty context when the variables fetch fails", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // A failed variables fetch must not block the form: it falls back to {} so the
+  // schema still renders (untemplated/unprefilled).
+  assert.ok(
+    rendered.includes(".catch(()=>({}))"),
+    "a variables fetch failure degrades to an empty context rather than failing the form",
+  );
+});
+
+// ── PR #604 review: the variables context is process-scoped, complete, and name-safe ─
+
+test("/api/variables uses only process-level variables — sibling task-local scopes never leak, in any order", async () => {
+  const rows = [
+    { variableKey: "a", name: "title", value: JSON.stringify("process"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+    { variableKey: "b", name: "title", value: JSON.stringify("sibling-local"), scopeKey: "ei-1", processInstanceKey: "pi-9", isTruncated: false },
+    { variableKey: "c", name: "only", value: JSON.stringify("sibling-only"), scopeKey: "ei-2", processInstanceKey: "pi-9", isTruncated: false },
+  ];
+  for (const order of [rows, [...rows].reverse()]) {
+    const engine: EngineClient = { ...fakeEngine, searchVariables: async () => order };
+    const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+    const route = s.routes.find((r) => r.source === "surface:taskInbox" && r.path.endsWith("/api/variables"))!;
+    const res = await call(route, { query: "processInstanceKey=pi-9" });
+    assert.deepEqual(JSON.parse(String(res.body)), { title: "process" });
+  }
+});
+
+test("/api/variables omits truncated previews so they can never be prefilled and submitted", async () => {
+  const engine: EngineClient = {
+    ...fakeEngine,
+    searchVariables: async () => [
+      { variableKey: "a", name: "big", value: JSON.stringify("clipped…"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: true },
+      { variableKey: "b", name: "small", value: JSON.stringify("ok"), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+    ],
+  };
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+  const route = s.routes.find((r) => r.source === "surface:taskInbox" && r.path.endsWith("/api/variables"))!;
+  const res = await call(route, { query: "processInstanceKey=pi-9" });
+  assert.deepEqual(JSON.parse(String(res.body)), { small: "ok" });
+});
+
+test("/api/variables round-trips a variable named __proto__ as data", async () => {
+  for (const value of ["scalar", { nested: 1 }]) {
+    const engine: EngineClient = {
+      ...fakeEngine,
+      searchVariables: async () => [
+        { variableKey: "a", name: "__proto__", value: JSON.stringify(value), scopeKey: "pi-9", processInstanceKey: "pi-9", isTruncated: false },
+      ],
+    };
+    const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/tasks" } }), appWith(engine));
+    const route = s.routes.find((r) => r.source === "surface:taskInbox" && r.path.endsWith("/api/variables"))!;
+    const res = await call(route, { query: "processInstanceKey=pi-9" });
+    const parsed = JSON.parse(String(res.body));
+    assert.ok(Object.hasOwn(parsed, "__proto__"));
+    assert.deepEqual(parsed.__proto__, value);
+  }
+});
+
+// ── PR #604 round 4: inbox image URLs rebase onto the APP mount, not the inbox route ──
+
+test("inbox client rebases image URLs onto the app mount (inbox route stripped), direct and proxied", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // The image resolver must NOT reuse BASE: BASE includes the inbox route
+  // (location.pathname is ".../tasks"), so `/app/thumb.png` would become
+  // `/tasks/app/thumb.png` — the inbox route has no /app handler, so the image
+  // 404s. The client derives a separate app-mount prefix by stripping the
+  // configured inbox route's segments, and the resolver prefixes THAT.
+  assert.match(
+    rendered,
+    /const APP_BASE=BASE\.split\('\/'\)\.slice\(0,-INBOX_SEGMENTS\)\.join\('\/'\)/,
+    "client derives the app mount by stripping the inbox route's segments from BASE",
+  );
+  assert.match(
+    rendered,
+    /resolveUrl:\(u\)=>u\.startsWith\('\/\/'\)\|\|\/\^\[a-zA-Z\]\[a-zA-Z0-9\+\.-\]\*:\/\.test\(u\)\?u:u\.startsWith\('\/'\)\?APP_BASE\+u:APP_BASE\+'\/'\+u/,
+    "image resolver prefixes the app mount, not the inbox route",
+  );
+  // Direct deployment: page served at /tasks → BASE="/tasks", APP_BASE="".
+  // Proxied: page at /console/app-view/<name>/tasks → APP_BASE="/console/app-view/<name>".
+  // Both reduce to the same derivation; pin the behaviour with the derivation the
+  // client ships (the default inbox path is single-segment):
+  const derive = (pathname: string) => {
+    const base = pathname.replace(/[/]+$/, "");
+    const appBase = base.split("/").slice(0, -1).join("/");
+    const resolveUrl = (u: string) => (u.startsWith("//") ? u : u.startsWith("/") ? appBase + u : appBase + "/" + u);
+    return resolveUrl(u0);
+  };
+  const u0 = "/app/thumb.png";
+  assert.equal(derive("/tasks"), "/app/thumb.png", "direct: the image URL keeps no inbox segment");
+  assert.equal(
+    derive("/console/app-view/my-app/tasks"),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied: the proxy prefix is kept, the inbox route is dropped",
+  );
+  // API fetches still use the inbox route (BASE) — only image rebasing moves to APP_BASE.
+  assert.match(rendered, /fetch\(BASE\+path/, "api() still fetches under the inbox route");
+});
+
+// ── PR #604 round 5: APP_BASE strips the ENTIRE configured inbox path ──
+
+test("inbox client derives APP_BASE from the configured inbox path's segment count (nested paths)", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // Stripping ONE trailing segment only works for a single-segment inbox path:
+  // a configured nested path like /review/tasks would leave "/review" behind, so
+  // /app/thumb.png resolves to /review/app/thumb.png (no handler — 404), and the
+  // console proxy keeps the unwanted segment too. The client must strip as many
+  // segments as the CONFIGURED inbox path has — numeric page metadata, not an
+  // embedded path string (nothing manifest-supplied becomes markup/JS text).
+  assert.match(
+    rendered,
+    /const INBOX_SEGMENTS=\d+;/,
+    "the inbox path's segment count is embedded as numeric metadata",
+  );
+  assert.match(
+    rendered,
+    /const APP_BASE=BASE\.split\('\/'\)\.slice\(0,-INBOX_SEGMENTS\)\.join\('\/'\)/,
+    "APP_BASE strips exactly INBOX_SEGMENTS segments from BASE",
+  );
+  // Pin the behaviour with the derivation the client ships, direct and proxied,
+  // for single-segment AND nested inbox paths:
+  const derive = (pathname: string, segments: number) => {
+    const base = pathname.replace(/[/]+$/, "");
+    const appBase = base.split("/").slice(0, -segments).join("/");
+    const resolveUrl = (u: string) => (u.startsWith("//") ? u : u.startsWith("/") ? appBase + u : appBase + "/" + u);
+    return resolveUrl(u0);
+  };
+  const u0 = "/app/thumb.png";
+  assert.equal(derive("/tasks", 1), "/app/thumb.png", "direct, single-segment inbox path");
+  assert.equal(
+    derive("/console/app-view/my-app/tasks", 1),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied, single-segment inbox path",
+  );
+  assert.equal(derive("/review/tasks", 2), "/app/thumb.png", "direct, nested inbox path — no /review retained");
+  assert.equal(
+    derive("/console/app-view/my-app/review/tasks", 2),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied, nested inbox path — the proxy prefix is kept, the whole inbox route is dropped",
+  );
+});
+
+test("inbox page embeds the configured inbox path's segment count, not the path string", async () => {
+  // A nested configured path contributes exactly its segment count as metadata —
+  // the path STRING itself is never embedded (the manifest→<script> injection
+  // surface stays closed).
+  for (const [path, segments] of [["/tasks", 1], ["/review/tasks", 2], ["/a/b/c", 3]] as const) {
+    const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path } }), appWith(fakeEngine));
+    const page = s.routes.find((r) => r.source === "surface:taskInbox" && r.method === "GET" && !r.path.includes("/api/"))!;
+    const body = String((await call(page)).body);
+    assert.ok(body.includes(`const INBOX_SEGMENTS=${segments};`), `${path} → INBOX_SEGMENTS=${segments}`);
+    if (path !== "/tasks") {
+      assert.ok(!body.includes(path), `the path string ${path} is not embedded`);
+    }
+  }
+});
+
+// ── PR #604 round 7: repeated-slash inbox paths; relative image sources rebase too ──
+
+test("inbox client counts repeated-slash slots when deriving the app base", async () => {
+  // normalizeRoutePath collapses LEADING slashes and drops trailing ones but
+  // preserves INTERIOR repeated slashes (router.ts), so a configured
+  // "/review//tasks" is served verbatim. The page's BASE.split('/') then retains
+  // the empty slot the double slash produces — the server-side segment count
+  // must count the SAME slots, or the client strips too few and APP_BASE keeps
+  // a segment that is not the app mount ("/review" instead of "").
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/review//tasks" } }), appWith(fakeEngine));
+  const page = s.routes.find((r) => r.source === "surface:taskInbox" && r.method === "GET" && !r.path.includes("/api/"))!;
+  const body = String((await call(page)).body);
+  // "/review//tasks".split("/") → ["", "review", "", "tasks"] — 3 slots after the
+  // leading slash, so the client must strip 3 (not the 2 non-empty segments).
+  assert.ok(body.includes("const INBOX_SEGMENTS=3;"), "the repeated-slash slot is counted (3, not 2)");
+  // Pin the derivation the client ships: BASE.split('/').slice(0,-INBOX_SEGMENTS).
+  const derive = (pathname: string, segments: number) => {
+    const base = pathname.replace(/[/]+$/, "");
+    return base.split("/").slice(0, -segments).join("/");
+  };
+  assert.equal(derive("/review//tasks", 3), "", "direct: the whole inbox route is stripped");
+  assert.equal(
+    derive("/console/app-view/my-app/review//tasks", 3),
+    "/console/app-view/my-app",
+    "proxied: only the proxy prefix remains",
+  );
+  // …whereas the old non-empty-segment count (2) would retain "/review".
+  assert.equal(derive("/review//tasks", 2), "/review", "the wrong count retains a bogus segment");
+});
+
+test("inbox client rebases scheme-less RELATIVE image sources onto the app mount", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // A source like "app/thumb.png" (no leading slash) is a scheme-less RELATIVE
+  // path: left unchanged, the browser resolves it against the page URL, so a
+  // nested inbox path (/review/tasks) requests /review/app/thumb.png — the inbox
+  // route has no such handler (404). The resolver must rebase it onto APP_BASE
+  // exactly like a root-relative source, while absolute http(s)/data: URLs still
+  // pass through untouched.
+  // Test the resolver the client ACTUALLY ships (extracted from the page), not a
+  // re-implementation that could drift from it.
+  const m = /resolveUrl:(\(u\)=>[^\n]*?),\n/.exec(rendered);
+  assert.ok(m, "the inbox page wires a resolveUrl");
+  const src = m[1];
+  const resolve = (appBase: string): ((u: string) => string) => new Function("APP_BASE", `return ${src};`)(appBase);
+  // Scheme-bearing (absolute) sources must pass through verbatim — never rebased
+  // into a bogus '/https://…' app path.
+  for (const base of ["", "/console/app-view/my-app"]) {
+    for (const abs of ["https://cdn.example.com/t.png", "http://x.example/t.png", "data:image/png;base64,iVBORw0KGgo="]) {
+      assert.equal(resolve(base)(abs), abs, `absolute ${abs} passes through under APP_BASE='${base}'`);
+    }
+  }
+  const direct = resolve(""); // inbox at /review/tasks → APP_BASE ""
+  assert.equal(direct("app/thumb.png"), "/app/thumb.png", "direct: a relative source lands on the app route, not /review/app/…");
+  assert.equal(direct("/app/thumb.png"), "/app/thumb.png", "direct: a root-relative source is unchanged");
+  const proxied = resolve("/console/app-view/my-app");
+  assert.equal(
+    proxied("app/thumb.png"),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied: a relative source lands under the app mount",
+  );
+  assert.equal(
+    proxied("/app/thumb.png"),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied: a root-relative source still rebases onto the app mount",
+  );
+  // End-to-end: the shipped resolver followed by the renderer's post-resolution
+  // allowlist keeps absolute https/data: sources intact and rejects '//host'.
+  const allowlist = (u: string) =>
+    /[\s\u0000-\u001f\u007f\\]/.test(u)
+      ? null
+      : /^data:image\/(png|jpeg|gif|webp)[;,]/i.test(u)
+        ? u
+        : /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)
+          ? /^https?:\/\//i.test(u) ? u : null
+          : u.startsWith("//") ? null : u;
+  const pipeline = (u: string) => {
+    const out = allowlist(resolve("/console/app-view/my-app")(u));
+    return out;
+  };
+  assert.equal(pipeline("https://cdn.example.com/t.png"), "https://cdn.example.com/t.png", "absolute https survives the pipeline");
+  assert.equal(
+    pipeline("data:image/png;base64,iVBORw0KGgo="),
+    "data:image/png;base64,iVBORw0KGgo=",
+    "a data:image source survives the pipeline",
+  );
+  assert.equal(pipeline("//evil.example.com/x.png"), null, "protocol-relative is rejected before the resolver runs");
+});

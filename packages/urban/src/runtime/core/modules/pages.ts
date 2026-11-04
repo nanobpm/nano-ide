@@ -32,7 +32,7 @@ import { html, json, type Route } from "../router.ts";
 import { cancelInstanceReconciling, type CancelInstanceResult } from "./cancel.ts";
 import { apiDocsPath } from "./api.ts";
 import { FORMJS_JS } from "./formjs.gen.ts";
-import { completeUserTaskResponse, resolveFormResponse } from "./forms.ts";
+import { completeUserTaskResponse, resolveFormResponse, taskVariablesResponse } from "./forms.ts";
 import { quoteIdent } from "./gateway.ts";
 import { RENDERER_JS } from "./runtime.gen.ts";
 import { isSqlIdentifier } from "../read-model.ts";
@@ -627,6 +627,17 @@ export function createPagesRoutes(opts: PagesOptions, deps: PagesDeps): Route[] 
     source: "surface:pages",
     handler: async (req) => completeUserTaskResponse(engine, await req.text()),
   });
+  // The selected row's task variables (#603) — the render context the engineForm
+  // drawer passes to the shared form-js renderer (text `{{name}}` templating,
+  // `=varName` image sources, keyed-input prefill). The SAME seam the taskInbox
+  // surface uses, reused via forms.ts so the context source can't drift.
+  routes.push({
+    method: "GET",
+    path: "/app/actions/variables",
+    source: "surface:pages",
+    handler: async (req) =>
+      taskVariablesResponse(engine, req.query.get("processInstanceKey") ?? undefined),
+  });
 
   // ── nested (multi-appView) sidecars (#442) ──────────────────────────────
   // An app with more than one `appView` cannot share the four FLAT sidecar names above:
@@ -910,6 +921,7 @@ body { margin:0; font:15px/1.5 system-ui,sans-serif; padding:2rem; max-width:64r
 .njf-form { display:flex; flex-direction:column; gap:.4rem; margin-top:.5rem; }
 .njf-heading { font-size:1rem; margin:0 0 .25rem; }
 .njf-text { color:var(--nano-text-muted); margin:.25rem 0; }
+.njf-image { display:block; max-width:100%; height:auto; margin:.4rem 0; }
 .njf-field { display:flex; flex-direction:column; gap:.25rem; }
 .njf-field label { font-size:.8rem; color:var(--nano-text-muted); }
 .njf-field input:not([type=checkbox]):not([type=radio]), .njf-field textarea, .njf-field select { padding:.5rem .6rem; border:1px solid var(--nano-edge); border-radius:.4rem; font:inherit; background:var(--nano-inset); color:var(--nano-text); max-width:24rem; }

@@ -574,7 +574,7 @@ test("inbox client rebases image URLs onto the app mount (inbox route stripped),
   );
   assert.match(
     rendered,
-    /resolveUrl:\(u\)=>u\.startsWith\('\/'\)&&!u\.startsWith\('\/\/'\)\?APP_BASE\+u:u/,
+    /resolveUrl:\(u\)=>u\.startsWith\('\/\/'\)\?u:u\.startsWith\('\/'\)\?APP_BASE\+u:APP_BASE\+'\/'\+u/,
     "image resolver prefixes the app mount, not the inbox route",
   );
   // Direct deployment: page served at /tasks → BASE="/tasks", APP_BASE="".
@@ -584,7 +584,7 @@ test("inbox client rebases image URLs onto the app mount (inbox route stripped),
   const derive = (pathname: string) => {
     const base = pathname.replace(/[/]+$/, "");
     const appBase = base.split("/").slice(0, -1).join("/");
-    const resolveUrl = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? appBase + u : u);
+    const resolveUrl = (u: string) => (u.startsWith("//") ? u : u.startsWith("/") ? appBase + u : appBase + "/" + u);
     return resolveUrl(u0);
   };
   const u0 = "/app/thumb.png";
@@ -624,7 +624,7 @@ test("inbox client derives APP_BASE from the configured inbox path's segment cou
   const derive = (pathname: string, segments: number) => {
     const base = pathname.replace(/[/]+$/, "");
     const appBase = base.split("/").slice(0, -segments).join("/");
-    const resolveUrl = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? appBase + u : u);
+    const resolveUrl = (u: string) => (u.startsWith("//") ? u : u.startsWith("/") ? appBase + u : appBase + "/" + u);
     return resolveUrl(u0);
   };
   const u0 = "/app/thumb.png";
@@ -655,4 +655,94 @@ test("inbox page embeds the configured inbox path's segment count, not the path 
       assert.ok(!body.includes(path), `the path string ${path} is not embedded`);
     }
   }
+});
+
+// ── PR #604 round 7: repeated-slash inbox paths; relative image sources rebase too ──
+
+test("inbox client counts repeated-slash slots when deriving the app base", async () => {
+  // normalizeRoutePath collapses LEADING slashes and drops trailing ones but
+  // preserves INTERIOR repeated slashes (router.ts), so a configured
+  // "/review//tasks" is served verbatim. The page's BASE.split('/') then retains
+  // the empty slot the double slash produces — the server-side segment count
+  // must count the SAME slots, or the client strips too few and APP_BASE keeps
+  // a segment that is not the app mount ("/review" instead of "").
+  const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path: "/review//tasks" } }), appWith(fakeEngine));
+  const page = s.routes.find((r) => r.source === "surface:taskInbox" && r.method === "GET" && !r.path.includes("/api/"))!;
+  const body = String((await call(page)).body);
+  // "/review//tasks".split("/") → ["", "review", "", "tasks"] — 3 slots after the
+  // leading slash, so the client must strip 3 (not the 2 non-empty segments).
+  assert.ok(body.includes("const INBOX_SEGMENTS=3;"), "the repeated-slash slot is counted (3, not 2)");
+  // Pin the derivation the client ships: BASE.split('/').slice(0,-INBOX_SEGMENTS).
+  const derive = (pathname: string, segments: number) => {
+    const base = pathname.replace(/[/]+$/, "");
+    return base.split("/").slice(0, -segments).join("/");
+  };
+  assert.equal(derive("/review//tasks", 3), "", "direct: the whole inbox route is stripped");
+  assert.equal(
+    derive("/console/app-view/my-app/review//tasks", 3),
+    "/console/app-view/my-app",
+    "proxied: only the proxy prefix remains",
+  );
+  // …whereas the old non-empty-segment count (2) would retain "/review".
+  assert.equal(derive("/review//tasks", 2), "/review", "the wrong count retains a bogus segment");
+});
+
+test("inbox client rebases scheme-less RELATIVE image sources onto the app mount", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // A source like "app/thumb.png" (no leading slash) is a scheme-less RELATIVE
+  // path: left unchanged, the browser resolves it against the page URL, so a
+  // nested inbox path (/review/tasks) requests /review/app/thumb.png — the inbox
+  // route has no such handler (404). The resolver must rebase it onto APP_BASE
+  // exactly like a root-relative source, while absolute http(s)/data: URLs still
+  // pass through untouched.
+  assert.match(
+    rendered,
+    /resolveUrl:\(u\)=>u\.startsWith\('\/\/'\)\?u:u\.startsWith\('\/'\)\?APP_BASE\+u:APP_BASE\+'\/'\+u/,
+    "the resolver rebases root-relative AND scheme-less relative sources onto APP_BASE",
+  );
+  // Pin the behaviour with the resolver the client ships, for a nested inbox
+  // path, direct and proxied:
+  const resolve = (appBase: string) => (u: string) =>
+    u.startsWith("//") || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u) ? u : u.startsWith("/") ? appBase + u : appBase + "/" + u;
+  const direct = resolve(""); // inbox at /review/tasks → APP_BASE ""
+  assert.equal(direct("app/thumb.png"), "/app/thumb.png", "direct: a relative source lands on the app route, not /review/app/…");
+  assert.equal(direct("/app/thumb.png"), "/app/thumb.png", "direct: a root-relative source is unchanged");
+  const proxied = resolve("/console/app-view/my-app");
+  assert.equal(
+    proxied("app/thumb.png"),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied: a relative source lands under the app mount",
+  );
+  assert.equal(
+    proxied("/app/thumb.png"),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied: a root-relative source still rebases onto the app mount",
+  );
+  // Absolute URLs and protocol-relative sources are never rewritten. Note the
+  // shipped resolver itself only special-cases "//" and "/": an absolute
+  // http(s)/data: source reaches it only after the renderer's allowlist has
+  // accepted it, and the renderer REVALIDATES the resolver's output with the
+  // same allowlist — so even if the resolver prefixed a scheme-bearing source,
+  // the result could never render as that scheme. Model the full pipeline here
+  // (resolver + the renderer's post-resolution allowlist) to pin that.
+  const allowlist = (u: string) =>
+    /[\s\u0000-\u001f\u007f\\]/.test(u)
+      ? null
+      : /^data:image\/(png|jpeg|gif|webp)[;,]/i.test(u)
+        ? u
+        : /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)
+          ? /^https?:\/\//i.test(u) ? u : null
+          : u.startsWith("//") ? null : u;
+  const pipeline = (u: string) => {
+    const out = allowlist(resolve("/console/app-view/my-app")(u));
+    return out;
+  };
+  assert.equal(pipeline("https://cdn.example.com/t.png"), "https://cdn.example.com/t.png", "absolute https survives the pipeline");
+  assert.equal(
+    pipeline("data:image/png;base64,iVBORw0KGgo="),
+    "data:image/png;base64,iVBORw0KGgo=",
+    "a data:image source survives the pipeline",
+  );
+  assert.equal(pipeline("//evil.example.com/x.png"), null, "protocol-relative is rejected before the resolver runs");
 });

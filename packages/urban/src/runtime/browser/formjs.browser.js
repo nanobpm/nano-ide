@@ -155,7 +155,18 @@ function fjImageSrc(source, context, resolveUrl) {
   // that strips the leading slash (the pages `apiUrl`) turns "/javascript:…" into
   // a forbidden-scheme URL, which must not reach the <img>.
   if (!resolveUrl) return allowed;
-  const resolved = resolveUrl(allowed);
+  // A resolver can THROW on an allowlist-accepted source: the pages `apiUrl`
+  // strips the leading slash and calls `new URL(...)`, which throws `Invalid URL`
+  // on a path that is not URL-path-shaped (e.g. "/http://"). Uncaught, that
+  // exception escapes buildField and the WHOLE task form fails to render. A
+  // failed resolution rejects just this image (null), exactly like a resolver
+  // that returned a rejected URL.
+  let resolved;
+  try {
+    resolved = resolveUrl(allowed);
+  } catch {
+    return null;
+  }
   if (typeof resolved !== "string" || resolved === "") return null;
   // Re-run the SAME allowlist on the resolver's output (one source of truth):
   // app-relative paths, http(s) and data:image survive; a forbidden scheme the
@@ -175,6 +186,24 @@ function fjPrefill(context, key) {
   const v = context[key];
   if (v == null) return undefined;
   return typeof v === "string" ? v : typeof v === "object" ? JSON.stringify(v) : String(v);
+}
+
+/** The prefill pair for a keyed input: `display` is the string the control shows
+ * (fjPrefill's rendering); `original` is the context value itself, captured at
+ * prefill time. An UNTOUCHED control — one that still shows exactly `display` —
+ * submits `original`, never `display`: the completion endpoint forwards submitted
+ * values verbatim, so forwarding the stringified rendering would retype the
+ * variable (a prefilled `{ approved: true }` textarea would overwrite the object
+ * with the STRING '{"approved":true}'; a numeric select/radio prefill would
+ * overwrite the number with "1"). Once the operator changes the control away
+ * from `display` the edited string (or its number coercion) submits instead.
+ * @param {Record<string, any>} context
+ * @param {string} key
+ * @returns {{ display: string, original: any } | undefined}
+ */
+function fjPrefillPair(context, key) {
+  const display = fjPrefill(context, key);
+  return display === undefined ? undefined : { display, original: context[key] };
 }
 
 /** Build one form-js component into its field element and (for keyed inputs) a reader
@@ -234,17 +263,20 @@ function buildField(c, context, opts) {
   // rejected prefill behaves like no prefill: blank means "not entered", so the
   // key is omitted.
   let prefilled = false;
+  /** @type {{ display: string, original: any } | undefined} */
+  let prefillPair;
   if (type === "textarea") {
     input = document.createElement("textarea");
-    const pre = fjPrefill(ctx, key);
-    if (pre !== undefined) {
-      input.value = pre;
+    prefillPair = fjPrefillPair(ctx, key);
+    if (prefillPair !== undefined) {
+      input.value = prefillPair.display;
       prefilled = true;
     }
   } else if (type === "select") {
     input = document.createElement("select");
     input.appendChild(fjEl("option", { value: "" }, "\u2014"));
-    const pre = fjPrefill(ctx, key);
+    prefillPair = fjPrefillPair(ctx, key);
+    const pre = prefillPair === undefined ? undefined : prefillPair.display;
     for (const o of Array.isArray(c.values) ? c.values : []) {
       const opt = fjEl("option", { value: String(o.value) }, String(o.label != null ? o.label : o.value));
       // Prefill: mark the option matching the context value as selected.
@@ -261,10 +293,12 @@ function buildField(c, context, opts) {
       // original variable with "".
       const accepted = (Array.isArray(c.values) ? c.values : []).some((/** @type {any} */ o) => String(o.value) === pre);
       prefilled = pre !== "" && accepted;
+      if (!prefilled) prefillPair = undefined; // a rejected prefill is not a prefill
     }
   } else if (type === "radio") {
     const name = "r" + Math.random().toString(36).slice(2);
-    const pre = fjPrefill(ctx, key);
+    const prefillRadio = fjPrefillPair(ctx, key);
+    const pre = prefillRadio === undefined ? undefined : prefillRadio.display;
     const group = fjEl("div", {});
     for (const o of Array.isArray(c.values) ? c.values : []) {
       const rlab = fjEl("label", {});
@@ -283,19 +317,26 @@ function buildField(c, context, opts) {
       field: wrap,
       read: () => {
         const sel = group.querySelector("input:checked");
-        return sel ? { key, value: sel.value } : null;
+        if (!sel) return null;
+        // Untouched (the checked option is still the prefill's): submit the
+        // ORIGINAL value so a numeric prefill stays a number — the completion
+        // endpoint forwards submitted values verbatim, and a radio option's
+        // value is always a string.
+        if (prefillRadio !== undefined && sel.value === prefillRadio.display) return { key, value: prefillRadio.original };
+        return { key, value: sel.value };
       },
     };
   } else {
     input = document.createElement("input");
     input.type = type === "number" ? "number" : type === "datetime" ? "datetime-local" : "text";
-    const pre = fjPrefill(ctx, key);
-    if (pre !== undefined) {
-      input.value = pre;
+    prefillPair = fjPrefillPair(ctx, key);
+    if (prefillPair !== undefined) {
+      input.value = prefillPair.display;
       // A typed control (number/datetime-local) sanitizes a value it cannot hold
       // to "" — e.g. a timezone-bearing timestamp assigned to datetime-local. Only
       // a value that survived counts as a successful prefill.
       prefilled = input.value !== "";
+      if (!prefilled) prefillPair = undefined; // a rejected prefill is not a prefill
     }
   }
   // Associate the label with the input (for/id) so screen readers announce it on focus.
@@ -312,6 +353,13 @@ function buildField(c, context, opts) {
       // "set this variable to empty"), never an omission that would leave the
       // original value in place. A never-prefilled blank field is still omitted.
       if (raw === "" || raw == null) return prefilled ? { key, value: "" } : null;
+      // Untouched (the control still shows exactly the prefill's rendering):
+      // submit the ORIGINAL context value, never the stringified display — the
+      // completion endpoint forwards submitted values verbatim, so the string
+      // would retype the variable (an object prefill would become its JSON
+      // string; a numeric prefill would become "3"). Once the operator changes
+      // the control away from the prefill, the edited value submits below.
+      if (prefillPair !== undefined && raw === prefillPair.display) return { key, value: prefillPair.original };
       if (isNumber) {
         const n = Number(raw);
         // A non-numeric value in a number field is only reachable via tampering (the browser

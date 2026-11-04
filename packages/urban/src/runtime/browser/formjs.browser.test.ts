@@ -647,3 +647,180 @@ test("buildField keeps every SUPPORTED image source after resolution (path-retur
     }
   }
 });
+
+// ── PR #604 round 7: untouched prefills keep their TYPE; resolver throws skip the image ──
+
+test("buildField submits the ORIGINAL typed value while a prefilled control still shows it", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // The bug class: a prefill is STRINGIFIED into the control (form-js semantics),
+  // but an untouched submit must not forward that stringified rendering — the
+  // completion endpoint sends submitted values verbatim, so a textarea holding
+  // { approved: true } would otherwise overwrite the object variable with the
+  // STRING "{\"approved\":true}", and a numeric select/radio prefill would
+  // overwrite the number with "1". While the control still shows exactly the
+  // prefill, the reader returns the captured ORIGINAL value (type preserved).
+  const ta = buildField({ type: "textarea", key: "review" }, { review: { approved: true } });
+  const area = created.find((n) => n.tagName === "TEXTAREA")!;
+  assert.equal(area.value, '{"approved":true}', "the object prefill is shown as JSON");
+  assert.deepEqual(
+    ta!.read!(),
+    { key: "review", value: { approved: true } },
+    "an untouched object prefill resubmits the OBJECT, not its JSON string",
+  );
+
+  const arr = buildField({ type: "textfield", key: "tags" }, { tags: ["a", "b"] });
+  const arrInput = created.filter((n) => n.tagName === "INPUT").at(-1)!;
+  assert.equal(arrInput.value, '["a","b"]', "the array prefill is shown as JSON");
+  assert.deepEqual(arr!.read!(), { key: "tags", value: ["a", "b"] }, "an untouched array prefill resubmits the ARRAY");
+
+  const sel = buildField(
+    {
+      type: "select",
+      key: "priority",
+      values: [
+        { value: 1, label: "One" },
+        { value: 2, label: "Two" },
+      ],
+    },
+    { priority: 2 },
+  );
+  const selEl = created.find((n) => n.tagName === "SELECT")!;
+  assert.equal(selEl.value, "2", "the numeric prefill selects the matching option");
+  assert.deepEqual(sel!.read!(), { key: "priority", value: 2 }, "an untouched numeric select prefill resubmits the NUMBER");
+
+  const radio = buildField(
+    {
+      type: "radio",
+      key: "level",
+      values: [
+        { value: 1, label: "One" },
+        { value: 2, label: "Two" },
+      ],
+    },
+    { level: 2 },
+  );
+  assert.deepEqual(radio!.read!(), { key: "level", value: 2 }, "an untouched numeric radio prefill resubmits the NUMBER");
+
+  const num = buildField({ type: "number", key: "qty" }, { qty: 3 });
+  const numInput = created.filter((n) => n.tagName === "INPUT").at(-1)!;
+  assert.equal(numInput.value, "3");
+  assert.deepEqual(num!.read!(), { key: "qty", value: 3 }, "an untouched number prefill resubmits the NUMBER");
+
+  const dt = buildField({ type: "datetime", key: "start" }, { start: "2026-11-04T10:30" });
+  assert.deepEqual(
+    dt!.read!(),
+    { key: "start", value: "2026-11-04T10:30" },
+    "an untouched datetime prefill resubmits the original string",
+  );
+});
+
+test("buildField an EDITED prefilled control submits the edited (string/number) value", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // The type preservation above is ONLY for the untouched case: once the operator
+  // changes the control away from the prefill rendering, the control holds what
+  // they typed and that (string, or coerced number for a number field) submits.
+  const ta = buildField({ type: "textarea", key: "review" }, { review: { approved: true } });
+  const area = created.find((n) => n.tagName === "TEXTAREA")!;
+  area.value = '{"approved":false}';
+  assert.deepEqual(
+    ta!.read!(),
+    { key: "review", value: '{"approved":false}' },
+    "an edited textarea submits the edited string (the renderer does not parse it)",
+  );
+
+  const sel = buildField(
+    {
+      type: "select",
+      key: "priority",
+      values: [
+        { value: 1, label: "One" },
+        { value: 2, label: "Two" },
+      ],
+    },
+    { priority: 2 },
+  );
+  const selEl = created.find((n) => n.tagName === "SELECT")!;
+  selEl.value = "1"; // the operator picks a different option
+  assert.deepEqual(sel!.read!(), { key: "priority", value: "1" }, "a changed select submits the picked option value");
+
+  const num = buildField({ type: "number", key: "qty" }, { qty: 3 });
+  const numInput = created.filter((n) => n.tagName === "INPUT").at(-1)!;
+  numInput.value = "5";
+  assert.deepEqual(num!.read!(), { key: "qty", value: 5 }, "an edited number field submits the coerced number");
+
+  // Clearing still submits an explicit empty string (round 3), never the prefill.
+  numInput.value = "";
+  assert.deepEqual(num!.read!(), { key: "qty", value: "" }, "a cleared prefilled number field submits an empty string");
+  area.value = "";
+  assert.deepEqual(ta!.read!(), { key: "review", value: "" }, "a cleared prefilled textarea submits an empty string");
+});
+
+test("renderForm an untouched prefill round-trips through submit with its type intact", async (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // End-to-end through the form submit handler: the variables bag the completion
+  // endpoint receives carries the typed values, so completing a task without
+  // touching the form can never retype its variables.
+  let submitted: Record<string, unknown> | undefined;
+  const form = renderForm(
+    {
+      components: [
+        { type: "textarea", key: "review" },
+        { type: "number", key: "qty" },
+      ],
+    },
+    {
+      context: { review: { approved: true }, qty: 3 },
+      onSubmit: (variables) => {
+        submitted = variables;
+      },
+    },
+  );
+  await form.fire("submit");
+  assert.ok(submitted);
+  assert.deepEqual(submitted!.review, { approved: true }, "the object variable survives an untouched submit");
+  assert.deepEqual(submitted!.qty, 3, "the numeric variable survives an untouched submit");
+});
+
+test("buildField a THROWING image resolver skips the image instead of failing the form", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // The pages runtime's apiUrl resolver does `new URL(u.slice(1), APP_BASE)`,
+  // which THROWS `Invalid URL` on an allowlist-accepted app-relative path that is
+  // not URL-path-shaped (e.g. "/http://" — the leading slash passes the raw
+  // allowlist, the stripped remainder does not parse). An uncaught throw escapes
+  // buildField and buildEngineForm fails to render the WHOLE task form. A
+  // resolver failure must reject just that image (null), exactly like a resolver
+  // that returns a rejected URL.
+  const apiUrl = (u: string) =>
+    u.startsWith("/") && !u.startsWith("//") ? new URL(u.slice(1), new URL("../", import.meta.url)).toString() : u;
+  // "/http://" is the throwing case: stripping the leading slash leaves
+  // "http://", which `new URL` cannot parse. ("/http://evil.example.com/x.png"
+  // strips to a VALID absolute http URL — the resolver succeeds and the
+  // post-resolution allowlist passes it as http:; that is correct, not a throw.)
+  for (const source of ["/http://"]) {
+    assert.equal(
+      buildField({ type: "image", source }, {}, { resolveUrl: apiUrl }),
+      null,
+      `literal ${JSON.stringify(source)}: a throwing resolver rejects the image`,
+    );
+    assert.equal(
+      buildField({ type: "image", source: "=u" }, { u: source }, { resolveUrl: apiUrl }),
+      null,
+      `variable holding ${JSON.stringify(source)}: a throwing resolver rejects the image`,
+    );
+  }
+  // An unconditionally-throwing resolver (any failure mode, not just Invalid URL)
+  // is contained the same way, and does not take the neighbouring fields down:
+  const alwaysThrows = () => {
+    throw new Error("resolver exploded");
+  };
+  assert.equal(buildField({ type: "image", source: "/app/t.png" }, {}, { resolveUrl: alwaysThrows }), null);
+  const text = buildField({ type: "textfield", key: "note" }, { note: "still here" });
+  const input = created.find((n) => n.tagName === "INPUT")!;
+  assert.equal(input.value, "still here", "a rejected image does not stop the next field rendering");
+  assert.deepEqual(text!.read!(), { key: "note", value: "still here" });
+  assert.equal(created.filter((n) => n.tagName === "IMG").length, 0, "no <img> was rendered for a failed resolution");
+});

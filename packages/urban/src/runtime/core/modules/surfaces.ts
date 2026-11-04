@@ -46,9 +46,13 @@ function inboxPage(inboxBase: string): string {
   // BASE to derive the app mount: stripping a fixed single segment would retain
   // a nested configured path (an inbox mounted at review+tasks would rebase
   // '/app/thumb.png' to '…/review/app/thumb.png', which has no handler).
-  // normalizeRoutePath guarantees a leading slash and no trailing one,
-  // so the count is exact.
-  const inboxSegments = inboxBase.split("/").filter(Boolean).length;
+  // normalizeRoutePath guarantees a leading slash and no trailing one, but
+  // PRESERVES interior repeated slashes (router.ts) — so count every slot the
+  // client's BASE.split('/') produces after the leading slash (split.length - 1),
+  // including the empty slots a configured '/review//tasks' yields. Counting only
+  // non-empty segments would strip too few: the client's split retains the empty
+  // slot, so APP_BASE would keep a segment that is not the app mount.
+  const inboxSegments = inboxBase.split("/").length - 1;
   return `<!doctype html><meta charset="utf-8"><title>Task inbox</title>
 <style>body{font:14px system-ui,sans-serif;margin:2rem;max-width:52rem}
 ul{list-style:none;padding:0}li{margin:.4rem 0;display:flex;align-items:center;gap:.5rem}
@@ -126,7 +130,12 @@ function openForm(t){
       // Rebase root-relative image sources ('/app/…' — any single-leading-slash app
       // path) onto the APP mount (APP_BASE = BASE minus the inbox route), so they
       // survive the console's path-prefixed proxy without keeping the inbox segment.
-      resolveUrl:(u)=>u.startsWith('/')&&!u.startsWith('//')?APP_BASE+u:u,
+      // A scheme-less RELATIVE source ('app/thumb.png') would otherwise resolve
+      // against the page URL — under a nested inbox mount that requests
+      // <inbox>/app/thumb.png, which has no handler — so rebase those onto
+      // APP_BASE too. Absolute http(s)/data: URLs and a protocol-relative
+      // '//host' (already rejected by the renderer's allowlist) pass through.
+      resolveUrl:(u)=>u.startsWith('//')?u:u.startsWith('/')?APP_BASE+u:APP_BASE+'/'+u,
       onSubmit:(variables)=>complete(t.userTaskKey,variables),
       onCancel:loadTasks,
     }));

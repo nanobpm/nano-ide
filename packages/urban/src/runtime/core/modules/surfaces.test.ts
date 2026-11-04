@@ -556,3 +556,44 @@ test("/api/variables round-trips a variable named __proto__ as data", async () =
     assert.deepEqual(parsed.__proto__, value);
   }
 });
+
+// ── PR #604 round 4: inbox image URLs rebase onto the APP mount, not the inbox route ──
+
+test("inbox client rebases image URLs onto the app mount (inbox route stripped), direct and proxied", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // The image resolver must NOT reuse BASE: BASE includes the inbox route
+  // (location.pathname is ".../tasks"), so `/app/thumb.png` would become
+  // `/tasks/app/thumb.png` — the inbox route has no /app handler, so the image
+  // 404s. The client derives a separate app-mount prefix by stripping the
+  // trailing inbox segment, and the resolver prefixes THAT.
+  assert.match(
+    rendered,
+    /const APP_BASE=BASE\.replace\(\/\[\^\/\]\+\$\/,''\)\.replace\(\/\[\/\]\+\$\/,''\)/,
+    "client derives the app mount by stripping the trailing inbox segment from BASE",
+  );
+  assert.match(
+    rendered,
+    /resolveUrl:\(u\)=>u\.startsWith\('\/'\)&&!u\.startsWith\('\/\/'\)\?APP_BASE\+u:u/,
+    "image resolver prefixes the app mount, not the inbox route",
+  );
+  // Direct deployment: page served at /tasks → BASE="/tasks", APP_BASE="".
+  // Proxied: page at /console/app-view/<name>/tasks → APP_BASE="/console/app-view/<name>".
+  // Both reduce to the same derivation; pin the behaviour with the derivation the
+  // client ships:
+  const derive = (pathname: string) => {
+    const base = pathname.replace(/[/]+$/, "");
+    const appBase = base.replace(/[^/]+$/, "").replace(/[/]+$/, "");
+    const resolveUrl = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? appBase + u : u);
+    return resolveUrl(u0);
+  };
+  const u0 = "/app/thumb.png";
+  assert.equal(derive("/tasks"), "/app/thumb.png", "direct: the image URL keeps no inbox segment");
+  assert.equal(
+    derive("/console/app-view/my-app/tasks"),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied: the proxy prefix is kept, the inbox route is dropped",
+  );
+  // API fetches still use the inbox route (BASE) — only image rebasing moves to APP_BASE.
+  assert.match(rendered, /fetch\(BASE\+path/, "api() still fetches under the inbox route");
+});

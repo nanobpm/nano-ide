@@ -12,12 +12,27 @@ export class FakeElement {
   textContent = "";
   hidden = false;
   disabled = false;
-  value = "";
   checked = false;
   type = "";
   name = "";
   id = "";
   listeners: Record<string, Array<(ev: unknown) => unknown>> = {};
+  private _value = "";
+
+  // Model the one piece of native value sanitization the renderer depends on:
+  // a datetime-local control rejects a value it cannot hold (e.g. a
+  // timezone-bearing timestamp) by blanking it AT ASSIGNMENT time. Every other
+  // input type stores the string verbatim.
+  get value(): string {
+    return this._value;
+  }
+  set value(v: string) {
+    const s = String(v);
+    this._value =
+      this.type === "datetime-local" && s !== "" && !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?$/.test(s)
+        ? ""
+        : s;
+  }
 
   constructor(tag: string) {
     this.tagName = String(tag).toUpperCase();

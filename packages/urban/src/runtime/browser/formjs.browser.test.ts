@@ -495,3 +495,85 @@ test("buildField cleared-prefill regressions hold for number fields and no-conte
   assert.equal(sel.value, "");
   assert.equal(plainSelect!.read!(), null, "an untouched blank select with no prefill is still omitted");
 });
+
+// ── PR #604 round 4: a REJECTED prefill is not a prefill — never overwrite with "" ──
+
+test("buildField select: a context value absent from values[] is a rejected prefill — untouched submit omits the key", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // The context value "b" matches NO option: a real browser select rejects the
+  // assignment and snaps back to the blank option. Model that native sanitization
+  // by leaving the fake control's value at "" (what the DOM would report).
+  const built = buildField(
+    {
+      type: "select",
+      key: "color",
+      values: [
+        { value: "r", label: "Red" },
+        { value: "g", label: "Green" },
+      ],
+    },
+    { color: "b" },
+  );
+  const sel = created.find((n) => n.tagName === "SELECT")!;
+  assert.ok(sel, "the select control was built");
+  // A real select snaps an out-of-range assignment back to the blank option; model
+  // that native behaviour (the fake DOM stores values verbatim). The renderer's
+  // guard is structural — the rejected value never counted as a prefill.
+  sel.value = "";
+  assert.equal(
+    built!.read!(),
+    null,
+    "an untouched form must NOT overwrite the original variable with an empty string",
+  );
+});
+
+test("buildField datetime-local: a timezone-bearing prefill the control rejects is omitted, not submitted as empty", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // A datetime-local control accepts only "YYYY-MM-DDTHH:mm" (no zone designator);
+  // the fake DOM models the browser blanking a timezone-bearing value at
+  // assignment time (see fake-dom.test-utils.ts), so the renderer's read-back
+  // sees exactly what the DOM would report.
+  const built = buildField({ type: "datetime", key: "due" }, { due: "2026-11-04T10:30:00Z" });
+  const input = created.find((n) => n.tagName === "INPUT")!;
+  assert.equal(input.value, "", "the control rejected the zoned value at assignment");
+  assert.equal(
+    built!.read!(),
+    null,
+    "a rejected datetime prefill leaves the original variable untouched on submit",
+  );
+  // …while a plain local datetime the control CAN hold is still a successful prefill.
+  const ok = buildField({ type: "datetime", key: "start" }, { start: "2026-11-04T10:30" });
+  const okInput = created.filter((n) => n.tagName === "INPUT").at(-1)!;
+  assert.equal(okInput.value, "2026-11-04T10:30");
+  assert.deepEqual(ok!.read!(), { key: "start", value: "2026-11-04T10:30" });
+});
+
+test("buildField rejected-prefill guard still allows an explicit clear after a SUCCESSFUL prefill", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // Select: a value present in values[] IS accepted, so clearing it afterwards is
+  // an explicit clear and submits "".
+  const sel = buildField(
+    {
+      type: "select",
+      key: "color",
+      values: [
+        { value: "r", label: "Red" },
+        { value: "g", label: "Green" },
+      ],
+    },
+    { color: "g" },
+  );
+  const selEl = created.find((n) => n.tagName === "SELECT")!;
+  assert.equal(selEl.value, "g", "accepted prefill");
+  selEl.value = "";
+  assert.deepEqual(sel!.read!(), { key: "color", value: "" }, "clearing an accepted select prefill submits an empty string");
+  // Typed input: a valid local datetime IS accepted; clearing it submits "".
+  const dt = buildField({ type: "datetime", key: "start" }, { start: "2026-11-04T10:30" });
+  const dtInput = created.filter((n) => n.tagName === "INPUT").at(-1)!;
+  assert.equal(dtInput.value, "2026-11-04T10:30", "accepted prefill");
+  dtInput.value = "";
+  assert.deepEqual(dt!.read!(), { key: "start", value: "" }, "clearing an accepted datetime prefill submits an empty string");
+});

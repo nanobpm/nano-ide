@@ -193,11 +193,16 @@ function buildField(c, context, opts) {
   const labelEl = fjEl("label", {}, label);
   wrap.appendChild(labelEl);
   let input;
-  // Was this field prefilled from the context? A prefilled field the operator
-  // CLEARS (empties the text input, picks the blank select option) must submit an
-  // empty string — returning null would omit the key and silently leave the
-  // original variable unchanged. A field that was never prefilled keeps the
-  // historical behaviour: blank means "not entered", so the key is omitted.
+  // Was this field prefilled from the context — AND did the control ACCEPT the
+  // value? Only a successful prefill counts: a prefilled field the operator CLEARS
+  // (empties the text input, picks the blank select option) must submit an empty
+  // string — returning null would omit the key and silently leave the original
+  // variable unchanged. But a REJECTED prefill (a select value matching no option,
+  // a timezone-bearing timestamp a datetime-local control blanks) leaves the
+  // control empty through no operator action; treating that as prefilled would
+  // submit "" from an untouched form and overwrite the original variable. A
+  // rejected prefill behaves like no prefill: blank means "not entered", so the
+  // key is omitted.
   let prefilled = false;
   if (type === "textarea") {
     input = document.createElement("textarea");
@@ -218,7 +223,14 @@ function buildField(c, context, opts) {
     }
     if (pre !== undefined) {
       input.value = pre;
-      prefilled = true;
+      // The select ACCEPTS the prefill only when it matches a declared option —
+      // otherwise the DOM snaps the value back to "" and the control sits blank.
+      // Check acceptance structurally (against the option list), not by reading
+      // the value back: the control must not be treated as prefilled when it
+      // could not take the value, or an untouched submit would overwrite the
+      // original variable with "".
+      const accepted = (Array.isArray(c.values) ? c.values : []).some((/** @type {any} */ o) => String(o.value) === pre);
+      prefilled = pre !== "" && accepted;
     }
   } else if (type === "radio") {
     const name = "r" + Math.random().toString(36).slice(2);
@@ -250,7 +262,10 @@ function buildField(c, context, opts) {
     const pre = fjPrefill(ctx, key);
     if (pre !== undefined) {
       input.value = pre;
-      prefilled = true;
+      // A typed control (number/datetime-local) sanitizes a value it cannot hold
+      // to "" — e.g. a timezone-bearing timestamp assigned to datetime-local. Only
+      // a value that survived counts as a successful prefill.
+      prefilled = input.value !== "";
     }
   }
   // Associate the label with the input (for/id) so screen readers announce it on focus.

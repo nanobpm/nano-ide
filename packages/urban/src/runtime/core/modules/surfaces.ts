@@ -56,6 +56,12 @@ button{font:inherit;padding:.2rem .6rem;cursor:pointer}
 <script>${FORMJS_JS}</script>
 <script>
 const BASE=location.pathname.replace(/[/]+$/,'');
+// The app-mount prefix: BASE ends with the inbox route (this page IS the inbox),
+// so strip that one trailing segment. Root-relative APP paths ('/app/…') rebase
+// onto APP_BASE — not BASE — otherwise the URL keeps the inbox route
+// ('/tasks/app/…'), which has no handler. Direct run: BASE='/tasks' → APP_BASE=''.
+// Proxied: BASE='/console/app-view/<name>/tasks' → APP_BASE='/console/app-view/<name>'.
+const APP_BASE=BASE.replace(/[^/]+$/,'').replace(/[/]+$/,'');
 const tasksEl=document.getElementById('tasks');
 const formEl=document.getElementById('form');
 
@@ -104,9 +110,9 @@ function openForm(t){
       cancelLabel:'Cancel',
       context:context||{},
       // Rebase root-relative image sources ('/app/…' — any single-leading-slash app
-      // path) onto THIS page's mount prefix (BASE derives from location.pathname),
-      // so they survive the console's path-prefixed proxy exactly like api() fetches.
-      resolveUrl:(u)=>u.startsWith('/')&&!u.startsWith('//')?BASE+u:u,
+      // path) onto the APP mount (APP_BASE = BASE minus the inbox route), so they
+      // survive the console's path-prefixed proxy without keeping the inbox segment.
+      resolveUrl:(u)=>u.startsWith('/')&&!u.startsWith('//')?APP_BASE+u:u,
       onSubmit:(variables)=>complete(t.userTaskKey,variables),
       onCancel:loadTasks,
     }));

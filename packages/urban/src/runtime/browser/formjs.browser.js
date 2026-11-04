@@ -86,6 +86,36 @@ function fjOwnContext(context) {
   return out;
 }
 
+/** The image-source allowlist, applied to BOTH the raw source and — when a
+ * `resolveUrl` rewrote it — the RESOLVED URL. A resolver is same-origin trusted
+ * code, but it TRANSFORMS the string (the pages runtime's `apiUrl` strips the
+ * leading slash before `new URL(...)`), and a transformation can mint a forbidden
+ * shape from an accepted one: a root-prefixed script-scheme path passes below as
+ * an app-relative path (the leading slash defeats the scheme check), then
+ * resolves to the bare forbidden-scheme URL. Re-running the allowlist on the
+ * resolver's result closes that laundering class at the single choke point every
+ * surface flows through, so no resolver — present or future — can widen the
+ * accepted set.
+ * @param {string} url
+ * @returns {string | null} the URL when allowed, null when rejected
+ */
+function fjAllowImageUrl(url) {
+  // Browsers strip/normalise whitespace and control characters and treat `\` as
+  // `/` before interpreting a URL, so `java\tscript:` or ` data:image/svg+xml` or
+  // `/\\host` could slip past the allowlist below. Fail closed on any of them.
+  if (/[\s\u0000-\u001f\u007f\\]/.test(url)) return null;
+  // data:image — RFC 2397 lets the mediatype be followed directly by `,`
+  // (parameters and `;base64` are both optional), so accept `;` OR `,` after the
+  // subtype or a percent-encoded payload silently never renders.
+  if (/^data:image\/(png|jpeg|gif|webp)[;,]/i.test(url)) return url;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
+    // A scheme: only http(s) is allowed (javascript:/data-text-html/etc. rejected).
+    return /^https?:\/\//i.test(url) ? url : null;
+  }
+  if (url.startsWith("//")) return null; // protocol-relative → off-origin, reject
+  return url; // app-relative path
+}
+
 /** Resolve an `image` component's `source` to a URL the renderer will put on the
  * <img>, or null to reject it. `source` is either a literal URL or `=varName` — a
  * PLAIN variable reference into the render context (full FEEL is intentionally not
@@ -96,10 +126,10 @@ function fjOwnContext(context) {
  * `resolveUrl`, when supplied, rewrites an ACCEPTED URL just before it is set —
  * both surfaces pass their app-mount-aware resolver (the pages runtime's `apiUrl`,
  * the inbox page's mount prefix) so a root-relative `/app/…` source requests the
- * app's own path even behind the console's path-prefixed proxy. It runs AFTER the
- * allowlist, so it can never launder a rejected URL, and its result is used
- * verbatim (a resolver is same-origin trusted code — the allowlist already gated
- * the input).
+ * app's own path even behind the console's path-prefixed proxy. The allowlist runs
+ * on the raw source AND again on the resolver's result (see fjAllowImageUrl), so a
+ * resolver can never launder a rejected URL — including one it minted itself by
+ * rebasing a disguised path.
  * @param {any} source
  * @param {Record<string, any>} context
  * @param {(url: string) => string} [resolveUrl]
@@ -115,23 +145,25 @@ function fjImageSrc(source, context, resolveUrl) {
     url = context[name];
   }
   if (typeof url !== "string" || url === "") return null;
-  // Browsers strip/normalise whitespace and control characters and treat `\` as
-  // `/` before interpreting a URL, so `java\tscript:` or ` data:image/svg+xml` or
-  // `/\\host` could slip past the allowlist below. Fail closed on any of them.
-  if (/[\s\u0000-\u001f\u007f\\]/.test(url)) return null;
-  // data:image — RFC 2397 lets the mediatype be followed directly by `,`
-  // (parameters and `;base64` are both optional), so accept `;` OR `,` after the
-  // subtype or a percent-encoded payload silently never renders.
-  if (/^data:image\/(png|jpeg|gif|webp)[;,]/i.test(url)) return url;
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) {
-    // A scheme: only http(s) is allowed (javascript:/data-text-html/etc. rejected).
-    return /^https?:\/\//i.test(url) ? url : null;
-  }
-  if (url.startsWith("//")) return null; // protocol-relative → off-origin, reject
+  const allowed = fjAllowImageUrl(url);
+  if (allowed == null) return null;
   // App-relative path. A root-relative one ("/app/…") is only correct when the app
   // is served at the origin root; behind the console's path-prefixed proxy it must
-  // be rebased onto the app mount (the resolver both surfaces pass).
-  return resolveUrl ? resolveUrl(url) : url;
+  // be rebased onto the app mount (the resolver both surfaces pass). Absolute
+  // http(s)/data: URLs pass through untouched (the resolvers only rewrite
+  // single-leading-slash paths), but revalidate the result regardless — a resolver
+  // that strips the leading slash (the pages `apiUrl`) turns "/javascript:…" into
+  // a forbidden-scheme URL, which must not reach the <img>.
+  if (!resolveUrl) return allowed;
+  const resolved = resolveUrl(allowed);
+  if (typeof resolved !== "string" || resolved === "") return null;
+  // The resolver's output is used for a same-origin fetch/<img> src: it must stay
+  // an http(s) URL or a same-origin path. A non-http(s) scheme the URL parser
+  // honoured (file: under a test runner, a custom protocol handler in a browser)
+  // would silently never load, and anything worse is a laundered script/data URL —
+  // either way it is not an image this renderer may set.
+  if (!/^(https?:)?\/\//i.test(resolved)) return null;
+  return resolved;
 }
 
 /** The value a keyed input is prefilled with when its key is present in the render

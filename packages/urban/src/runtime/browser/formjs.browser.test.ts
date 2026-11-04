@@ -387,21 +387,22 @@ test("buildField image source: opts.resolveUrl rebases a root-relative source on
   // Behind the console proxy the app is mounted at /console/app-view/demo/: a
   // literal (or variable) source of /app/thumb.png must request the APP's
   // /app/thumb.png, not the console's. Both surfaces pass their mount-aware URL
-  // resolver as opts.resolveUrl; the resolver is applied AFTER the scheme
-  // allowlist, so it can never launder a rejected URL.
+  // resolver as opts.resolveUrl; the resolver runs after the raw-source allowlist
+  // and its RESULT is revalidated (round 5), so it can never launder a rejected
+  // URL — and only an http(s)-ish output is ever set on the <img>.
   const rebase = (u: string) =>
-    u.startsWith("/") && !u.startsWith("//") ? "/console/app-view/demo" + u : u;
+    u.startsWith("/") && !u.startsWith("//") ? "https://console.example.com/console/app-view/demo" + u : u;
   const literal = buildField({ type: "image", source: "/app/thumb.png" }, {}, { resolveUrl: rebase });
   assert.equal(
     created.filter((n) => n.tagName === "IMG").at(-1)!.getAttribute("src"),
-    "/console/app-view/demo/app/thumb.png",
+    "https://console.example.com/console/app-view/demo/app/thumb.png",
     "a literal root-relative source is rebased onto the app mount",
   );
   assert.ok(literal);
   const viaVar = buildField({ type: "image", source: "=img" }, { img: "/app/thumb.png" }, { resolveUrl: rebase });
   assert.equal(
     created.filter((n) => n.tagName === "IMG").at(-1)!.getAttribute("src"),
-    "/console/app-view/demo/app/thumb.png",
+    "https://console.example.com/console/app-view/demo/app/thumb.png",
     "a variable holding a root-relative source is rebased too",
   );
   assert.ok(viaVar);
@@ -427,13 +428,13 @@ test("buildField image source: opts.resolveUrl rebases a root-relative source on
 test("renderForm threads opts.resolveUrl through to every image component", (t) => {
   const created: FakeElement[] = [];
   t.after(installFakeDom(created));
-  const rebase = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? "/mounted" + u : u);
+  const rebase = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? "https://app.example.com/mounted" + u : u);
   renderForm(
     { components: [{ type: "image", source: "/app/a.png" }, { type: "image", source: "=img" }] },
     { context: { img: "/app/b.png" }, resolveUrl: rebase, onSubmit: () => {} },
   );
   const srcs = created.filter((n) => n.tagName === "IMG").map((n) => n.getAttribute("src"));
-  assert.deepEqual(srcs, ["/mounted/app/a.png", "/mounted/app/b.png"]);
+  assert.deepEqual(srcs, ["https://app.example.com/mounted/app/a.png", "https://app.example.com/mounted/app/b.png"]);
 });
 
 test("buildField submits an empty string when a prefilled textfield/textarea is cleared", (t) => {
@@ -576,4 +577,50 @@ test("buildField rejected-prefill guard still allows an explicit clear after a S
   assert.equal(dtInput.value, "2026-11-04T10:30", "accepted prefill");
   dtInput.value = "";
   assert.deepEqual(dt!.read!(), { key: "start", value: "" }, "clearing an accepted datetime prefill submits an empty string");
+});
+
+// ── PR #604 round 5: the resolver's OUTPUT is revalidated — no allowlist bypass ──
+
+test("buildField revalidates the RESOLVED image URL — a resolver cannot launder a forbidden scheme", (t) => {
+  const created: FakeElement[] = [];
+  t.after(installFakeDom(created));
+  // The pages runtime's apiUrl strips the leading slash before `new URL(...)`,
+  // so an allowlist-accepted "app-relative" source of "/javascript:alert(1)"
+  // comes back as the forbidden-scheme URL "javascript:alert(1)". Model that
+  // resolver exactly (a file:// APP_BASE, like the Node test runner's
+  // import.meta.url) and require the renderer to re-run the allowlist on the
+  // resolver's RESULT rather than trusting it verbatim.
+  const base = new URL("../", import.meta.url);
+  const apiUrl = (u: string) =>
+    u.startsWith("/") && !u.startsWith("//") ? new URL(u.slice(1), base).toString() : u;
+  for (const source of ["/javascript:alert(1)", "/data:text/html;base64,PGI+", "/vbscript:msgbox(1)"]) {
+    assert.equal(
+      buildField({ type: "image", source }, {}, { resolveUrl: apiUrl }),
+      null,
+      `literal ${JSON.stringify(source)} rejected after resolution`,
+    );
+    assert.equal(
+      buildField({ type: "image", source: "=u" }, { u: source }, { resolveUrl: apiUrl }),
+      null,
+      `variable holding ${JSON.stringify(source)} rejected after resolution`,
+    );
+  }
+  assert.equal(created.filter((n) => n.tagName === "IMG").length, 0, "no <img> was rendered for a laundered source");
+  // The revalidation fails closed on ANY non-http(s)-ish resolver output: under
+  // this Node runner the module base is file://, so even a genuine app path
+  // resolves to a file: URL and is refused — in a browser the same resolver
+  // yields https:// and passes. Pin the fail-closed side here…
+  assert.equal(
+    buildField({ type: "image", source: "/app/thumb.png" }, {}, { resolveUrl: apiUrl }),
+    null,
+    "a file://-rebased resolver output is refused (not a fetchable image origin)",
+  );
+  // …and the pass side with an https-mount resolver (what a browser deployment
+  // actually produces): a genuine app path renders, rebased onto the mount.
+  const httpsRebase = (u: string) =>
+    u.startsWith("/") && !u.startsWith("//") ? new URL(u.slice(1), "https://console.example.com/console/app-view/demo/").toString() : u;
+  const ok = buildField({ type: "image", source: "/app/thumb.png" }, {}, { resolveUrl: httpsRebase });
+  assert.ok(ok, "a genuine app path survives an https-mount resolver");
+  const src = created.find((n) => n.tagName === "IMG")!.getAttribute("src");
+  assert.equal(src, "https://console.example.com/console/app-view/demo/app/thumb.png", "rebased onto the https app mount");
 });

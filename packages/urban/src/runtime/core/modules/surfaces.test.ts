@@ -566,11 +566,11 @@ test("inbox client rebases image URLs onto the app mount (inbox route stripped),
   // (location.pathname is ".../tasks"), so `/app/thumb.png` would become
   // `/tasks/app/thumb.png` — the inbox route has no /app handler, so the image
   // 404s. The client derives a separate app-mount prefix by stripping the
-  // trailing inbox segment, and the resolver prefixes THAT.
+  // configured inbox route's segments, and the resolver prefixes THAT.
   assert.match(
     rendered,
-    /const APP_BASE=BASE\.replace\(\/\[\^\/\]\+\$\/,''\)\.replace\(\/\[\/\]\+\$\/,''\)/,
-    "client derives the app mount by stripping the trailing inbox segment from BASE",
+    /const APP_BASE=BASE\.split\('\/'\)\.slice\(0,-INBOX_SEGMENTS\)\.join\('\/'\)/,
+    "client derives the app mount by stripping the inbox route's segments from BASE",
   );
   assert.match(
     rendered,
@@ -580,10 +580,10 @@ test("inbox client rebases image URLs onto the app mount (inbox route stripped),
   // Direct deployment: page served at /tasks → BASE="/tasks", APP_BASE="".
   // Proxied: page at /console/app-view/<name>/tasks → APP_BASE="/console/app-view/<name>".
   // Both reduce to the same derivation; pin the behaviour with the derivation the
-  // client ships:
+  // client ships (the default inbox path is single-segment):
   const derive = (pathname: string) => {
     const base = pathname.replace(/[/]+$/, "");
-    const appBase = base.replace(/[^/]+$/, "").replace(/[/]+$/, "");
+    const appBase = base.split("/").slice(0, -1).join("/");
     const resolveUrl = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? appBase + u : u);
     return resolveUrl(u0);
   };
@@ -596,4 +596,63 @@ test("inbox client rebases image URLs onto the app mount (inbox route stripped),
   );
   // API fetches still use the inbox route (BASE) — only image rebasing moves to APP_BASE.
   assert.match(rendered, /fetch\(BASE\+path/, "api() still fetches under the inbox route");
+});
+
+// ── PR #604 round 5: APP_BASE strips the ENTIRE configured inbox path ──
+
+test("inbox client derives APP_BASE from the configured inbox path's segment count (nested paths)", async () => {
+  const { page } = inboxRoutes(fakeEngine);
+  const rendered = String((await call(page)).body);
+  // Stripping ONE trailing segment only works for a single-segment inbox path:
+  // a configured nested path like /review/tasks would leave "/review" behind, so
+  // /app/thumb.png resolves to /review/app/thumb.png (no handler — 404), and the
+  // console proxy keeps the unwanted segment too. The client must strip as many
+  // segments as the CONFIGURED inbox path has — numeric page metadata, not an
+  // embedded path string (nothing manifest-supplied becomes markup/JS text).
+  assert.match(
+    rendered,
+    /const INBOX_SEGMENTS=\d+;/,
+    "the inbox path's segment count is embedded as numeric metadata",
+  );
+  assert.match(
+    rendered,
+    /const APP_BASE=BASE\.split\('\/'\)\.slice\(0,-INBOX_SEGMENTS\)\.join\('\/'\)/,
+    "APP_BASE strips exactly INBOX_SEGMENTS segments from BASE",
+  );
+  // Pin the behaviour with the derivation the client ships, direct and proxied,
+  // for single-segment AND nested inbox paths:
+  const derive = (pathname: string, segments: number) => {
+    const base = pathname.replace(/[/]+$/, "");
+    const appBase = base.split("/").slice(0, -segments).join("/");
+    const resolveUrl = (u: string) => (u.startsWith("/") && !u.startsWith("//") ? appBase + u : u);
+    return resolveUrl(u0);
+  };
+  const u0 = "/app/thumb.png";
+  assert.equal(derive("/tasks", 1), "/app/thumb.png", "direct, single-segment inbox path");
+  assert.equal(
+    derive("/console/app-view/my-app/tasks", 1),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied, single-segment inbox path",
+  );
+  assert.equal(derive("/review/tasks", 2), "/app/thumb.png", "direct, nested inbox path — no /review retained");
+  assert.equal(
+    derive("/console/app-view/my-app/review/tasks", 2),
+    "/console/app-view/my-app/app/thumb.png",
+    "proxied, nested inbox path — the proxy prefix is kept, the whole inbox route is dropped",
+  );
+});
+
+test("inbox page embeds the configured inbox path's segment count, not the path string", async () => {
+  // A nested configured path contributes exactly its segment count as metadata —
+  // the path STRING itself is never embedded (the manifest→<script> injection
+  // surface stays closed).
+  for (const [path, segments] of [["/tasks", 1], ["/review/tasks", 2], ["/a/b/c", 3]] as const) {
+    const s = mountSurfaces(ctxWith({ taskInbox: { enabled: true, path } }), appWith(fakeEngine));
+    const page = s.routes.find((r) => r.source === "surface:taskInbox" && r.method === "GET" && !r.path.includes("/api/"))!;
+    const body = String((await call(page)).body);
+    assert.ok(body.includes(`const INBOX_SEGMENTS=${segments};`), `${path} → INBOX_SEGMENTS=${segments}`);
+    if (path !== "/tasks") {
+      assert.ok(!body.includes(path), `the path string ${path} is not embedded`);
+    }
+  }
 });

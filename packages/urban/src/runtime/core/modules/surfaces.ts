@@ -30,7 +30,7 @@ export interface SurfacesHandle {
   describe(): Record<string, unknown>;
 }
 
-function inboxPage(): string {
+function inboxPage(inboxBase: string): string {
   // Reverse-proxy safe: the client derives its API base from location.pathname
   // (where THIS page was actually served) rather than an embedded absolute
   // route base. A hardcoded "/tasks" would escape the Nano console's
@@ -39,6 +39,16 @@ function inboxPage(): string {
   // <script> injection surface entirely: nothing manifest-supplied is embedded.
   // All task/form values are rendered via textContent / setAttribute — never
   // innerHTML — so nothing the engine returns can inject markup.
+  //
+  // The ONE manifest-derived value the page does embed is the configured inbox
+  // path's SEGMENT COUNT — numeric metadata, never the path string, so the
+  // injection surface stays closed. The client strips that many segments from
+  // BASE to derive the app mount: stripping a fixed single segment would retain
+  // a nested configured path (an inbox mounted at review+tasks would rebase
+  // '/app/thumb.png' to '…/review/app/thumb.png', which has no handler).
+  // normalizeRoutePath guarantees a leading slash and no trailing one,
+  // so the count is exact.
+  const inboxSegments = inboxBase.split("/").filter(Boolean).length;
   return `<!doctype html><meta charset="utf-8"><title>Task inbox</title>
 <style>body{font:14px system-ui,sans-serif;margin:2rem;max-width:52rem}
 ul{list-style:none;padding:0}li{margin:.4rem 0;display:flex;align-items:center;gap:.5rem}
@@ -56,12 +66,16 @@ button{font:inherit;padding:.2rem .6rem;cursor:pointer}
 <script>${FORMJS_JS}</script>
 <script>
 const BASE=location.pathname.replace(/[/]+$/,'');
-// The app-mount prefix: BASE ends with the inbox route (this page IS the inbox),
-// so strip that one trailing segment. Root-relative APP paths ('/app/…') rebase
-// onto APP_BASE — not BASE — otherwise the URL keeps the inbox route
-// ('/tasks/app/…'), which has no handler. Direct run: BASE='/tasks' → APP_BASE=''.
-// Proxied: BASE='/console/app-view/<name>/tasks' → APP_BASE='/console/app-view/<name>'.
-const APP_BASE=BASE.replace(/[^/]+$/,'').replace(/[/]+$/,'');
+// The app-mount prefix: BASE ends with the WHOLE configured inbox route (this
+// page IS the inbox), so strip exactly that many segments — not a fixed one, or
+// a nested inbox path (e.g. review+tasks) would leave its leading segments
+// behind and '/app/thumb.png' would resolve under them (no handler there).
+// Root-relative APP paths ('/app/…') rebase onto APP_BASE — not BASE — otherwise
+// the URL keeps the inbox route ('/tasks/app/…'). Direct run: BASE='/tasks' →
+// APP_BASE=''. Proxied: BASE='/console/app-view/<name>/tasks' →
+// APP_BASE='/console/app-view/<name>'.
+const INBOX_SEGMENTS=${inboxSegments};
+const APP_BASE=BASE.split('/').slice(0,-INBOX_SEGMENTS).join('/');
 const tasksEl=document.getElementById('tasks');
 const formEl=document.getElementById('form');
 
@@ -153,7 +167,7 @@ export function mountSurfaces(ctx: RuntimeContext, app: AppApi): SurfacesHandle 
       method: "GET",
       path: base,
       source: "surface:taskInbox",
-      handler: () => html(inboxPage()),
+      handler: () => html(inboxPage(base)),
     });
     routes.push({
       method: "GET",

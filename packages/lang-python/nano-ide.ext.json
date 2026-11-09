@@ -204,7 +204,7 @@
           "kind": "method",
           "insertText": "cancel_process_instance(${1:process_instance_key})",
           "snippet": true,
-          "detail": "cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceData | None | Unset = ...)",
+          "detail": "cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceRequest | None | Unset = ...)",
           "documentation": "Cancel process instance"
         },
         {
@@ -398,7 +398,7 @@
           "kind": "method",
           "insertText": "delete_decision_instance(${1:decision_evaluation_key})",
           "snippet": true,
-          "detail": "delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceData | None | Unset = ...)",
+          "detail": "delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceRequest | None | Unset = ...)",
           "documentation": "Delete decision instance"
         },
         {
@@ -454,7 +454,7 @@
           "kind": "method",
           "insertText": "delete_process_instance(${1:process_instance_key})",
           "snippet": true,
-          "detail": "delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceData | None | Unset = ...)",
+          "detail": "delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceRequest | None | Unset = ...)",
           "documentation": "Delete process instance"
         },
         {
@@ -1023,13 +1023,13 @@
           "label": "process_definition_version",
           "kind": "field",
           "detail": "ProcessCreationById.process_definition_version: int | Unset",
-          "documentation": "The version of the process. By default, the latest version of the process is used. Server default: -1."
+          "documentation": "The version of the process. If omitted, the latest active version is used. Server default: -1."
         },
         {
           "label": "ProcessCreationById",
           "kind": "class",
           "detail": "camunda_orchestration_sdk",
-          "documentation": "Attributes: process_definition_id (str): The BPMN process id of the process definition to start an instance of. Example: new-account-onboarding-workflow. process_definition_version (int | Unset): The version of the process. By default, the latest version of the process is used. Server default: -1. variables (ProcessInstanceCreationInstructionByIdVariables | Unset): JSON object that will instantiate the variables for the root variable scope of the process instance. tenant_id (str | Unset): The tenant id of the process definition. If multi-tenancy is enabled, provide the tenant id of the process definition to start a process instance of. If multi-tenancy is disabled, don't provide this parameter. Example: customer-service. operation_reference (int | Unset): A reference key chosen by the user that will be part of all records resulting from this operation. Must be > 0 if provided. start_instructions (list[ProcessInstanceCreationStartInstruction] | Unset): List of start instructions. By default, the process instance will start at the start event. If provided, the process instance will apply start instructions after it has been created. runtime_instructions (list[ProcessInstanceCreationTerminateInstruction] | Unset): Runtime instructions (alpha). List of instructions that affect the runtime behavior of the process instance. Refer to specific instruction types for more details."
+          "documentation": "Attributes: process_definition_id (str): The BPMN process id of the process definition to start an instance of. Example: new-account-onboarding-workflow. process_definition_version (int | Unset): The version of the process. If omitted, the latest active version is used. Server default: -1. variables (ProcessInstanceCreationInstructionByIdVariables | Unset): JSON object that will instantiate the variables for the root variable scope of the process instance. tenant_id (str | Unset): The tenant id of the process definition. If multi-tenancy is enabled, provide the tenant id of the process definition to start a process instance of. If multi-tenancy is disabled, don't provide this parameter. Example: customer-service. operation_reference (int | Unset): A reference key chosen by the user that will be part of all records resulting from this operation. Must be > 0 if provided. start_instructions (list[ProcessInstanceCreationStartInstruction] | Unset): List of start instructions. By default, the process instance will start at the start event. If provided, the process instance will apply start instructions after it has been created. runtime_instructions (list[ProcessInstanceCreationTerminateInstruction] | Unset): Runtime instructions (alpha). List of instructions that affect the runtime behavior of the process instance. Refer to specific instruction types for more details."
         },
         {
           "label": "ProcessCreationByKey",
@@ -1161,7 +1161,7 @@
           "kind": "method",
           "insertText": "search_clients_for_group(${1:group_id})",
           "snippet": true,
-          "detail": "search_clients_for_group(group_id: str, data: SearchClientsForGroupData | Unset = ...)",
+          "detail": "search_clients_for_group(group_id: str, data: GroupClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search group clients"
         },
         {
@@ -1169,7 +1169,7 @@
           "kind": "method",
           "insertText": "search_clients_for_role(${1:role_id})",
           "snippet": true,
-          "detail": "search_clients_for_role(role_id: str, data: SearchClientsForRoleData | Unset = ...)",
+          "detail": "search_clients_for_role(role_id: str, data: RoleClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search role clients"
         },
         {
@@ -1177,7 +1177,7 @@
           "kind": "method",
           "insertText": "search_clients_for_tenant(${1:tenant_id})",
           "snippet": true,
-          "detail": "search_clients_for_tenant(tenant_id: TenantId, data: SearchClientsForTenantData | Unset = ...)",
+          "detail": "search_clients_for_tenant(tenant_id: TenantId, data: TenantClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search clients for tenant"
         },
         {
@@ -1349,14 +1349,6 @@
           "documentation": "Search process instances"
         },
         {
-          "label": "search_resources",
-          "kind": "method",
-          "insertText": "search_resources()",
-          "snippet": true,
-          "detail": "search_resources(data: ResourceSearchQuery | Unset = ...)",
-          "documentation": "Search resources"
-        },
-        {
           "label": "search_roles",
           "kind": "method",
           "insertText": "search_roles()",
@@ -1401,7 +1393,7 @@
           "kind": "method",
           "insertText": "search_user_task_effective_variables(${1:user_task_key})",
           "snippet": true,
-          "detail": "search_user_task_effective_variables(user_task_key: UserTaskKey, data: SearchUserTaskEffectiveVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "detail": "search_user_task_effective_variables(user_task_key: UserTaskKey, data: UserTaskEffectiveVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search user task effective variables"
         },
         {
@@ -1409,7 +1401,7 @@
           "kind": "method",
           "insertText": "search_user_task_variables(${1:user_task_key})",
           "snippet": true,
-          "detail": "search_user_task_variables(user_task_key: UserTaskKey, data: SearchUserTaskVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "detail": "search_user_task_variables(user_task_key: UserTaskKey, data: UserTaskVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search user task variables"
         },
         {
@@ -1433,7 +1425,7 @@
           "kind": "method",
           "insertText": "search_users_for_group(${1:group_id})",
           "snippet": true,
-          "detail": "search_users_for_group(group_id: str, data: SearchUsersForGroupData | Unset = ...)",
+          "detail": "search_users_for_group(group_id: str, data: GroupUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search group users"
         },
         {
@@ -1441,7 +1433,7 @@
           "kind": "method",
           "insertText": "search_users_for_role(${1:role_id})",
           "snippet": true,
-          "detail": "search_users_for_role(role_id: str, data: SearchUsersForRoleData | Unset = ...)",
+          "detail": "search_users_for_role(role_id: str, data: RoleUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search role users"
         },
         {
@@ -1449,7 +1441,7 @@
           "kind": "method",
           "insertText": "search_users_for_tenant(${1:tenant_id})",
           "snippet": true,
-          "detail": "search_users_for_tenant(tenant_id: TenantId, data: SearchUsersForTenantData | Unset = ...)",
+          "detail": "search_users_for_tenant(tenant_id: TenantId, data: TenantUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search users for tenant"
         },
         {
@@ -1457,7 +1449,7 @@
           "kind": "method",
           "insertText": "search_variables()",
           "snippet": true,
-          "detail": "search_variables(data: SearchVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "detail": "search_variables(data: VariableSearchQuery | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search variables"
         },
         {
@@ -1783,7 +1775,7 @@
         },
         {
           "symbol": "cancel_process_instance",
-          "contents": "**`await CamundaAsyncClient.cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceData | None | Unset = ...)`**\n\nCancel process instance\n\n---\n\n**`CamundaClient.cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceData | None | Unset = ...)`**\n\nCancel process instance"
+          "contents": "**`await CamundaAsyncClient.cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceRequest | None | Unset = ...)`**\n\nCancel process instance\n\n---\n\n**`CamundaClient.cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceRequest | None | Unset = ...)`**\n\nCancel process instance"
         },
         {
           "symbol": "cancel_process_instances_batch_operation",
@@ -1883,7 +1875,7 @@
         },
         {
           "symbol": "delete_decision_instance",
-          "contents": "**`await CamundaAsyncClient.delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceData | None | Unset = ...)`**\n\nDelete decision instance\n\n---\n\n**`CamundaClient.delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceData | None | Unset = ...)`**\n\nDelete decision instance"
+          "contents": "**`await CamundaAsyncClient.delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceRequest | None | Unset = ...)`**\n\nDelete decision instance\n\n---\n\n**`CamundaClient.delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceRequest | None | Unset = ...)`**\n\nDelete decision instance"
         },
         {
           "symbol": "delete_decision_instances_batch_operation",
@@ -1911,7 +1903,7 @@
         },
         {
           "symbol": "delete_process_instance",
-          "contents": "**`await CamundaAsyncClient.delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceData | None | Unset = ...)`**\n\nDelete process instance\n\n---\n\n**`CamundaClient.delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceData | None | Unset = ...)`**\n\nDelete process instance"
+          "contents": "**`await CamundaAsyncClient.delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceRequest | None | Unset = ...)`**\n\nDelete process instance\n\n---\n\n**`CamundaClient.delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceRequest | None | Unset = ...)`**\n\nDelete process instance"
         },
         {
           "symbol": "delete_process_instances_batch_operation",
@@ -1959,7 +1951,7 @@
         },
         {
           "symbol": "fetch_variables",
-          "contents": "**`WorkerConfig.fetch_variables`** — `list[str] | None`\n\n---\n\n**`ProcessCreationById.fetch_variables`** — `list[str] | Unset`\n\nList of variables by name to be included in the response when awaitCompletion is set to true. If empty, all visible variables in the root scope will be returned.\n\n---\n\n**`ProcessCreationByKey.fetch_variables`** — `list[str] | Unset`\n\nList of variables by name to be included in the response when awaitCompletion is set to true. If empty, all visible variables in the root scope will be returned."
+          "contents": "**`WorkerConfig.fetch_variables`** — `list[str] | None`\n\n---\n\n**`ProcessCreationById.fetch_variables`** — `list[str] | Unset`\n\nList of variables by name to be included in the response when awaitCompletion is set to true. If empty, all visible variables in the root scope will be returned. Example: [].\n\n---\n\n**`ProcessCreationByKey.fetch_variables`** — `list[str] | Unset`\n\nList of variables by name to be included in the response when awaitCompletion is set to true. If empty, all visible variables in the root scope will be returned. Example: []."
         },
         {
           "symbol": "get_audit_log",
@@ -2207,11 +2199,11 @@
         },
         {
           "symbol": "process_definition_version",
-          "contents": "**`ProcessCreationById.process_definition_version`** — `int | Unset`\n\nThe version of the process. By default, the latest version of the process is used. Server default: -1.\n\n---\n\n**`ProcessCreationByKey.process_definition_version`** — `int | Unset`\n\nAs the version is already identified by the `processDefinitionKey`, the value of this field is ignored. It's here for backwards-compatibility only as previous releases accepted it in request bodies. Server default: -1."
+          "contents": "**`ProcessCreationById.process_definition_version`** — `int | Unset`\n\nThe version of the process. If omitted, the latest active version is used. Server default: -1.\n\n---\n\n**`ProcessCreationByKey.process_definition_version`** — `int | Unset`\n\nAs the version is already identified by the `processDefinitionKey`, the value of this field is ignored. It's here for backwards-compatibility only as previous releases accepted it in request bodies. Server default: -1."
         },
         {
           "symbol": "ProcessCreationById",
-          "contents": "**`class ProcessCreationById`** — camunda_orchestration_sdk\n\nAttributes: process_definition_id (str): The BPMN process id of the process definition to start an instance of. Example: new-account-onboarding-workflow. process_definition_version (int | Unset): The version of the process. By default, the latest version of the process is used. Server default: -1. variables (ProcessInstanceCreationInstructionByIdVariables | Unset): JSON object that will instantiate the variables for the root variable scope of the process instance. tenant_id (str | Unset): The tenant id of the process definition. If multi-tenancy is enabled, provide the tenant id of the process definition to start a process instance of. If multi-tenancy is disabled, don't provide this parameter. Example: customer-service. operation_reference (int | Unset): A reference key chosen by the user that will be part of all records resulting from this operation. Must be > 0 if provided. start_instructions (list[ProcessInstanceCreationStartInstruction] | Unset): List of start instructions. By default, the process instance will start at the start event. If provided, the process instance will apply start instructions after it has been created. runtime_instructions (list[ProcessInstanceCreationTerminateInstruction] | Unset): Runtime instructions (alpha). List of instructions that affect the runtime behavior of the process instance. Refer to specific instruction types for more details."
+          "contents": "**`class ProcessCreationById`** — camunda_orchestration_sdk\n\nAttributes: process_definition_id (str): The BPMN process id of the process definition to start an instance of. Example: new-account-onboarding-workflow. process_definition_version (int | Unset): The version of the process. If omitted, the latest active version is used. Server default: -1. variables (ProcessInstanceCreationInstructionByIdVariables | Unset): JSON object that will instantiate the variables for the root variable scope of the process instance. tenant_id (str | Unset): The tenant id of the process definition. If multi-tenancy is enabled, provide the tenant id of the process definition to start a process instance of. If multi-tenancy is disabled, don't provide this parameter. Example: customer-service. operation_reference (int | Unset): A reference key chosen by the user that will be part of all records resulting from this operation. Must be > 0 if provided. start_instructions (list[ProcessInstanceCreationStartInstruction] | Unset): List of start instructions. By default, the process instance will start at the start event. If provided, the process instance will apply start instructions after it has been created. runtime_instructions (list[ProcessInstanceCreationTerminateInstruction] | Unset): Runtime instructions (alpha). List of instructions that affect the runtime behavior of the process instance. Refer to specific instruction types for more details."
         },
         {
           "symbol": "ProcessCreationByKey",
@@ -2287,15 +2279,15 @@
         },
         {
           "symbol": "search_clients_for_group",
-          "contents": "**`await CamundaAsyncClient.search_clients_for_group(group_id: str, data: SearchClientsForGroupData | Unset = ...)`**\n\nSearch group clients\n\n---\n\n**`CamundaClient.search_clients_for_group(group_id: str, data: SearchClientsForGroupData | Unset = ...)`**\n\nSearch group clients"
+          "contents": "**`await CamundaAsyncClient.search_clients_for_group(group_id: str, data: GroupClientSearchQueryRequest | Unset = ...)`**\n\nSearch group clients\n\n---\n\n**`CamundaClient.search_clients_for_group(group_id: str, data: GroupClientSearchQueryRequest | Unset = ...)`**\n\nSearch group clients"
         },
         {
           "symbol": "search_clients_for_role",
-          "contents": "**`await CamundaAsyncClient.search_clients_for_role(role_id: str, data: SearchClientsForRoleData | Unset = ...)`**\n\nSearch role clients\n\n---\n\n**`CamundaClient.search_clients_for_role(role_id: str, data: SearchClientsForRoleData | Unset = ...)`**\n\nSearch role clients"
+          "contents": "**`await CamundaAsyncClient.search_clients_for_role(role_id: str, data: RoleClientSearchQueryRequest | Unset = ...)`**\n\nSearch role clients\n\n---\n\n**`CamundaClient.search_clients_for_role(role_id: str, data: RoleClientSearchQueryRequest | Unset = ...)`**\n\nSearch role clients"
         },
         {
           "symbol": "search_clients_for_tenant",
-          "contents": "**`await CamundaAsyncClient.search_clients_for_tenant(tenant_id: TenantId, data: SearchClientsForTenantData | Unset = ...)`**\n\nSearch clients for tenant\n\n---\n\n**`CamundaClient.search_clients_for_tenant(tenant_id: TenantId, data: SearchClientsForTenantData | Unset = ...)`**\n\nSearch clients for tenant"
+          "contents": "**`await CamundaAsyncClient.search_clients_for_tenant(tenant_id: TenantId, data: TenantClientSearchQueryRequest | Unset = ...)`**\n\nSearch clients for tenant\n\n---\n\n**`CamundaClient.search_clients_for_tenant(tenant_id: TenantId, data: TenantClientSearchQueryRequest | Unset = ...)`**\n\nSearch clients for tenant"
         },
         {
           "symbol": "search_cluster_variables",
@@ -2382,10 +2374,6 @@
           "contents": "**`await CamundaAsyncClient.search_process_instances(data: ProcessInstanceSearchQuery | Unset = ...)`**\n\nSearch process instances\n\n---\n\n**`CamundaClient.search_process_instances(data: ProcessInstanceSearchQuery | Unset = ...)`**\n\nSearch process instances"
         },
         {
-          "symbol": "search_resources",
-          "contents": "**`await CamundaAsyncClient.search_resources(data: ResourceSearchQuery | Unset = ...)`**\n\nSearch resources\n\n---\n\n**`CamundaClient.search_resources(data: ResourceSearchQuery | Unset = ...)`**\n\nSearch resources"
-        },
-        {
           "symbol": "search_roles",
           "contents": "**`await CamundaAsyncClient.search_roles(data: RoleSearchQueryRequest | Unset = ...)`**\n\nSearch roles\n\n---\n\n**`CamundaClient.search_roles(data: RoleSearchQueryRequest | Unset = ...)`**\n\nSearch roles"
         },
@@ -2407,11 +2395,11 @@
         },
         {
           "symbol": "search_user_task_effective_variables",
-          "contents": "**`await CamundaAsyncClient.search_user_task_effective_variables(user_task_key: UserTaskKey, data: SearchUserTaskEffectiveVariablesData | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch user task effective variables\n\n---\n\n**`CamundaClient.search_user_task_effective_variables(user_task_key: UserTaskKey, data: SearchUserTaskEffectiveVariablesData | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch user task effective variables"
+          "contents": "**`await CamundaAsyncClient.search_user_task_effective_variables(user_task_key: UserTaskKey, data: UserTaskEffectiveVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch user task effective variables\n\n---\n\n**`CamundaClient.search_user_task_effective_variables(user_task_key: UserTaskKey, data: UserTaskEffectiveVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch user task effective variables"
         },
         {
           "symbol": "search_user_task_variables",
-          "contents": "**`await CamundaAsyncClient.search_user_task_variables(user_task_key: UserTaskKey, data: SearchUserTaskVariablesData | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch user task variables\n\n---\n\n**`CamundaClient.search_user_task_variables(user_task_key: UserTaskKey, data: SearchUserTaskVariablesData | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch user task variables"
+          "contents": "**`await CamundaAsyncClient.search_user_task_variables(user_task_key: UserTaskKey, data: UserTaskVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch user task variables\n\n---\n\n**`CamundaClient.search_user_task_variables(user_task_key: UserTaskKey, data: UserTaskVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch user task variables"
         },
         {
           "symbol": "search_user_tasks",
@@ -2423,19 +2411,19 @@
         },
         {
           "symbol": "search_users_for_group",
-          "contents": "**`await CamundaAsyncClient.search_users_for_group(group_id: str, data: SearchUsersForGroupData | Unset = ...)`**\n\nSearch group users\n\n---\n\n**`CamundaClient.search_users_for_group(group_id: str, data: SearchUsersForGroupData | Unset = ...)`**\n\nSearch group users"
+          "contents": "**`await CamundaAsyncClient.search_users_for_group(group_id: str, data: GroupUserSearchQueryRequest | Unset = ...)`**\n\nSearch group users\n\n---\n\n**`CamundaClient.search_users_for_group(group_id: str, data: GroupUserSearchQueryRequest | Unset = ...)`**\n\nSearch group users"
         },
         {
           "symbol": "search_users_for_role",
-          "contents": "**`await CamundaAsyncClient.search_users_for_role(role_id: str, data: SearchUsersForRoleData | Unset = ...)`**\n\nSearch role users\n\n---\n\n**`CamundaClient.search_users_for_role(role_id: str, data: SearchUsersForRoleData | Unset = ...)`**\n\nSearch role users"
+          "contents": "**`await CamundaAsyncClient.search_users_for_role(role_id: str, data: RoleUserSearchQueryRequest | Unset = ...)`**\n\nSearch role users\n\n---\n\n**`CamundaClient.search_users_for_role(role_id: str, data: RoleUserSearchQueryRequest | Unset = ...)`**\n\nSearch role users"
         },
         {
           "symbol": "search_users_for_tenant",
-          "contents": "**`await CamundaAsyncClient.search_users_for_tenant(tenant_id: TenantId, data: SearchUsersForTenantData | Unset = ...)`**\n\nSearch users for tenant\n\n---\n\n**`CamundaClient.search_users_for_tenant(tenant_id: TenantId, data: SearchUsersForTenantData | Unset = ...)`**\n\nSearch users for tenant"
+          "contents": "**`await CamundaAsyncClient.search_users_for_tenant(tenant_id: TenantId, data: TenantUserSearchQueryRequest | Unset = ...)`**\n\nSearch users for tenant\n\n---\n\n**`CamundaClient.search_users_for_tenant(tenant_id: TenantId, data: TenantUserSearchQueryRequest | Unset = ...)`**\n\nSearch users for tenant"
         },
         {
           "symbol": "search_variables",
-          "contents": "**`await CamundaAsyncClient.search_variables(data: SearchVariablesData | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch variables\n\n---\n\n**`CamundaClient.search_variables(data: SearchVariablesData | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch variables"
+          "contents": "**`await CamundaAsyncClient.search_variables(data: VariableSearchQuery | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch variables\n\n---\n\n**`CamundaClient.search_variables(data: VariableSearchQuery | Unset = ..., truncate_values: bool | Unset = ...)`**\n\nSearch variables"
         },
         {
           "symbol": "start_instructions",
@@ -2999,27 +2987,27 @@
         },
         {
           "trigger": "cancel_process_instance",
-          "label": "cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceData | None | Unset = ...)",
+          "label": "cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceRequest | None | Unset = ...)",
           "documentation": "Cancel process instance",
           "parameters": [
             {
               "label": "process_instance_key: ProcessInstanceKey"
             },
             {
-              "label": "data: CancelProcessInstanceData | None | Unset = ..."
+              "label": "data: CancelProcessInstanceRequest | None | Unset = ..."
             }
           ]
         },
         {
           "trigger": "cancel_process_instance",
-          "label": "cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceData | None | Unset = ...)",
+          "label": "cancel_process_instance(process_instance_key: ProcessInstanceKey, data: CancelProcessInstanceRequest | None | Unset = ...)",
           "documentation": "Cancel process instance",
           "parameters": [
             {
               "label": "process_instance_key: ProcessInstanceKey"
             },
             {
-              "label": "data: CancelProcessInstanceData | None | Unset = ..."
+              "label": "data: CancelProcessInstanceRequest | None | Unset = ..."
             }
           ]
         },
@@ -3526,27 +3514,27 @@
         },
         {
           "trigger": "delete_decision_instance",
-          "label": "delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceData | None | Unset = ...)",
+          "label": "delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceRequest | None | Unset = ...)",
           "documentation": "Delete decision instance",
           "parameters": [
             {
               "label": "decision_evaluation_key: DecisionEvaluationKey"
             },
             {
-              "label": "data: DeleteDecisionInstanceData | None | Unset = ..."
+              "label": "data: DeleteDecisionInstanceRequest | None | Unset = ..."
             }
           ]
         },
         {
           "trigger": "delete_decision_instance",
-          "label": "delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceData | None | Unset = ...)",
+          "label": "delete_decision_instance(decision_evaluation_key: DecisionEvaluationKey, data: DeleteDecisionInstanceRequest | None | Unset = ...)",
           "documentation": "Delete decision instance",
           "parameters": [
             {
               "label": "decision_evaluation_key: DecisionEvaluationKey"
             },
             {
-              "label": "data: DeleteDecisionInstanceData | None | Unset = ..."
+              "label": "data: DeleteDecisionInstanceRequest | None | Unset = ..."
             }
           ]
         },
@@ -3678,27 +3666,27 @@
         },
         {
           "trigger": "delete_process_instance",
-          "label": "delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceData | None | Unset = ...)",
+          "label": "delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceRequest | None | Unset = ...)",
           "documentation": "Delete process instance",
           "parameters": [
             {
               "label": "process_instance_key: ProcessInstanceKey"
             },
             {
-              "label": "data: DeleteProcessInstanceData | None | Unset = ..."
+              "label": "data: DeleteProcessInstanceRequest | None | Unset = ..."
             }
           ]
         },
         {
           "trigger": "delete_process_instance",
-          "label": "delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceData | None | Unset = ...)",
+          "label": "delete_process_instance(process_instance_key: ProcessInstanceKey, data: DeleteProcessInstanceRequest | None | Unset = ...)",
           "documentation": "Delete process instance",
           "parameters": [
             {
               "label": "process_instance_key: ProcessInstanceKey"
             },
             {
-              "label": "data: DeleteProcessInstanceData | None | Unset = ..."
+              "label": "data: DeleteProcessInstanceRequest | None | Unset = ..."
             }
           ]
         },
@@ -5166,79 +5154,79 @@
         },
         {
           "trigger": "search_clients_for_group",
-          "label": "search_clients_for_group(group_id: str, data: SearchClientsForGroupData | Unset = ...)",
+          "label": "search_clients_for_group(group_id: str, data: GroupClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search group clients",
           "parameters": [
             {
               "label": "group_id: str"
             },
             {
-              "label": "data: SearchClientsForGroupData | Unset = ..."
+              "label": "data: GroupClientSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_clients_for_group",
-          "label": "search_clients_for_group(group_id: str, data: SearchClientsForGroupData | Unset = ...)",
+          "label": "search_clients_for_group(group_id: str, data: GroupClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search group clients",
           "parameters": [
             {
               "label": "group_id: str"
             },
             {
-              "label": "data: SearchClientsForGroupData | Unset = ..."
+              "label": "data: GroupClientSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_clients_for_role",
-          "label": "search_clients_for_role(role_id: str, data: SearchClientsForRoleData | Unset = ...)",
+          "label": "search_clients_for_role(role_id: str, data: RoleClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search role clients",
           "parameters": [
             {
               "label": "role_id: str"
             },
             {
-              "label": "data: SearchClientsForRoleData | Unset = ..."
+              "label": "data: RoleClientSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_clients_for_role",
-          "label": "search_clients_for_role(role_id: str, data: SearchClientsForRoleData | Unset = ...)",
+          "label": "search_clients_for_role(role_id: str, data: RoleClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search role clients",
           "parameters": [
             {
               "label": "role_id: str"
             },
             {
-              "label": "data: SearchClientsForRoleData | Unset = ..."
+              "label": "data: RoleClientSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_clients_for_tenant",
-          "label": "search_clients_for_tenant(tenant_id: TenantId, data: SearchClientsForTenantData | Unset = ...)",
+          "label": "search_clients_for_tenant(tenant_id: TenantId, data: TenantClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search clients for tenant",
           "parameters": [
             {
               "label": "tenant_id: TenantId"
             },
             {
-              "label": "data: SearchClientsForTenantData | Unset = ..."
+              "label": "data: TenantClientSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_clients_for_tenant",
-          "label": "search_clients_for_tenant(tenant_id: TenantId, data: SearchClientsForTenantData | Unset = ...)",
+          "label": "search_clients_for_tenant(tenant_id: TenantId, data: TenantClientSearchQueryRequest | Unset = ...)",
           "documentation": "Search clients for tenant",
           "parameters": [
             {
               "label": "tenant_id: TenantId"
             },
             {
-              "label": "data: SearchClientsForTenantData | Unset = ..."
+              "label": "data: TenantClientSearchQueryRequest | Unset = ..."
             }
           ]
         },
@@ -5711,26 +5699,6 @@
           ]
         },
         {
-          "trigger": "search_resources",
-          "label": "search_resources(data: ResourceSearchQuery | Unset = ...)",
-          "documentation": "Search resources",
-          "parameters": [
-            {
-              "label": "data: ResourceSearchQuery | Unset = ..."
-            }
-          ]
-        },
-        {
-          "trigger": "search_resources",
-          "label": "search_resources(data: ResourceSearchQuery | Unset = ...)",
-          "documentation": "Search resources",
-          "parameters": [
-            {
-              "label": "data: ResourceSearchQuery | Unset = ..."
-            }
-          ]
-        },
-        {
           "trigger": "search_roles",
           "label": "search_roles(data: RoleSearchQueryRequest | Unset = ...)",
           "documentation": "Search roles",
@@ -5850,14 +5818,14 @@
         },
         {
           "trigger": "search_user_task_effective_variables",
-          "label": "search_user_task_effective_variables(user_task_key: UserTaskKey, data: SearchUserTaskEffectiveVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "label": "search_user_task_effective_variables(user_task_key: UserTaskKey, data: UserTaskEffectiveVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search user task effective variables",
           "parameters": [
             {
               "label": "user_task_key: UserTaskKey"
             },
             {
-              "label": "data: SearchUserTaskEffectiveVariablesData | Unset = ..."
+              "label": "data: UserTaskEffectiveVariableSearchQueryRequest | Unset = ..."
             },
             {
               "label": "truncate_values: bool | Unset = ..."
@@ -5866,14 +5834,14 @@
         },
         {
           "trigger": "search_user_task_effective_variables",
-          "label": "search_user_task_effective_variables(user_task_key: UserTaskKey, data: SearchUserTaskEffectiveVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "label": "search_user_task_effective_variables(user_task_key: UserTaskKey, data: UserTaskEffectiveVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search user task effective variables",
           "parameters": [
             {
               "label": "user_task_key: UserTaskKey"
             },
             {
-              "label": "data: SearchUserTaskEffectiveVariablesData | Unset = ..."
+              "label": "data: UserTaskEffectiveVariableSearchQueryRequest | Unset = ..."
             },
             {
               "label": "truncate_values: bool | Unset = ..."
@@ -5882,14 +5850,14 @@
         },
         {
           "trigger": "search_user_task_variables",
-          "label": "search_user_task_variables(user_task_key: UserTaskKey, data: SearchUserTaskVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "label": "search_user_task_variables(user_task_key: UserTaskKey, data: UserTaskVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search user task variables",
           "parameters": [
             {
               "label": "user_task_key: UserTaskKey"
             },
             {
-              "label": "data: SearchUserTaskVariablesData | Unset = ..."
+              "label": "data: UserTaskVariableSearchQueryRequest | Unset = ..."
             },
             {
               "label": "truncate_values: bool | Unset = ..."
@@ -5898,14 +5866,14 @@
         },
         {
           "trigger": "search_user_task_variables",
-          "label": "search_user_task_variables(user_task_key: UserTaskKey, data: SearchUserTaskVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "label": "search_user_task_variables(user_task_key: UserTaskKey, data: UserTaskVariableSearchQueryRequest | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search user task variables",
           "parameters": [
             {
               "label": "user_task_key: UserTaskKey"
             },
             {
-              "label": "data: SearchUserTaskVariablesData | Unset = ..."
+              "label": "data: UserTaskVariableSearchQueryRequest | Unset = ..."
             },
             {
               "label": "truncate_values: bool | Unset = ..."
@@ -5954,89 +5922,89 @@
         },
         {
           "trigger": "search_users_for_group",
-          "label": "search_users_for_group(group_id: str, data: SearchUsersForGroupData | Unset = ...)",
+          "label": "search_users_for_group(group_id: str, data: GroupUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search group users",
           "parameters": [
             {
               "label": "group_id: str"
             },
             {
-              "label": "data: SearchUsersForGroupData | Unset = ..."
+              "label": "data: GroupUserSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_users_for_group",
-          "label": "search_users_for_group(group_id: str, data: SearchUsersForGroupData | Unset = ...)",
+          "label": "search_users_for_group(group_id: str, data: GroupUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search group users",
           "parameters": [
             {
               "label": "group_id: str"
             },
             {
-              "label": "data: SearchUsersForGroupData | Unset = ..."
+              "label": "data: GroupUserSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_users_for_role",
-          "label": "search_users_for_role(role_id: str, data: SearchUsersForRoleData | Unset = ...)",
+          "label": "search_users_for_role(role_id: str, data: RoleUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search role users",
           "parameters": [
             {
               "label": "role_id: str"
             },
             {
-              "label": "data: SearchUsersForRoleData | Unset = ..."
+              "label": "data: RoleUserSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_users_for_role",
-          "label": "search_users_for_role(role_id: str, data: SearchUsersForRoleData | Unset = ...)",
+          "label": "search_users_for_role(role_id: str, data: RoleUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search role users",
           "parameters": [
             {
               "label": "role_id: str"
             },
             {
-              "label": "data: SearchUsersForRoleData | Unset = ..."
+              "label": "data: RoleUserSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_users_for_tenant",
-          "label": "search_users_for_tenant(tenant_id: TenantId, data: SearchUsersForTenantData | Unset = ...)",
+          "label": "search_users_for_tenant(tenant_id: TenantId, data: TenantUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search users for tenant",
           "parameters": [
             {
               "label": "tenant_id: TenantId"
             },
             {
-              "label": "data: SearchUsersForTenantData | Unset = ..."
+              "label": "data: TenantUserSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_users_for_tenant",
-          "label": "search_users_for_tenant(tenant_id: TenantId, data: SearchUsersForTenantData | Unset = ...)",
+          "label": "search_users_for_tenant(tenant_id: TenantId, data: TenantUserSearchQueryRequest | Unset = ...)",
           "documentation": "Search users for tenant",
           "parameters": [
             {
               "label": "tenant_id: TenantId"
             },
             {
-              "label": "data: SearchUsersForTenantData | Unset = ..."
+              "label": "data: TenantUserSearchQueryRequest | Unset = ..."
             }
           ]
         },
         {
           "trigger": "search_variables",
-          "label": "search_variables(data: SearchVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "label": "search_variables(data: VariableSearchQuery | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search variables",
           "parameters": [
             {
-              "label": "data: SearchVariablesData | Unset = ..."
+              "label": "data: VariableSearchQuery | Unset = ..."
             },
             {
               "label": "truncate_values: bool | Unset = ..."
@@ -6045,11 +6013,11 @@
         },
         {
           "trigger": "search_variables",
-          "label": "search_variables(data: SearchVariablesData | Unset = ..., truncate_values: bool | Unset = ...)",
+          "label": "search_variables(data: VariableSearchQuery | Unset = ..., truncate_values: bool | Unset = ...)",
           "documentation": "Search variables",
           "parameters": [
             {
-              "label": "data: SearchVariablesData | Unset = ..."
+              "label": "data: VariableSearchQuery | Unset = ..."
             },
             {
               "label": "truncate_values: bool | Unset = ..."

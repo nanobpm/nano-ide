@@ -53,6 +53,7 @@ test("tool_call → a tool-call using title as the name and rawInput as args", (
     callId: "call-1",
     name: "Read config",
     args: { path: "/etc/app.conf" },
+    pending: true,
   });
 });
 
@@ -88,9 +89,24 @@ test("tool_call_update failed → a failed tool-result falling back to content",
   assert.equal(result.kind === "tool-result" && result.ok, false);
 });
 
-test("an intermediate tool_call_update (in_progress) is ignored", () => {
-  const result = classifyUpdate({ sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "in_progress" });
-  assert.equal(result.kind, "ignored");
+test("an intermediate tool_call_update: in_progress or restated rawInput → tool-call-update, otherwise ignored", () => {
+  assert.deepEqual(classifyUpdate({ sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "in_progress" }), {
+    kind: "tool-call-update",
+    callId: "call-1",
+    running: true,
+  });
+  // opencode: the command arrives after the pending tool_call announced only {cwd}.
+  assert.deepEqual(
+    classifyUpdate({ sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "in_progress", rawInput: { command: "ls", cwd: "/w" } }),
+    { kind: "tool-call-update", callId: "call-1", running: true, args: { command: "ls", cwd: "/w" } },
+  );
+  assert.deepEqual(classifyUpdate({ sessionUpdate: "tool_call_update", toolCallId: "call-1", rawInput: { q: 1 } }), {
+    kind: "tool-call-update",
+    callId: "call-1",
+    running: false,
+    args: { q: 1 },
+  });
+  assert.equal(classifyUpdate({ sessionUpdate: "tool_call_update", toolCallId: "call-1", status: "pending" }).kind, "ignored");
 });
 
 test("inherited Object.prototype keys are not treated as chunk types (no prototype pollution)", () => {

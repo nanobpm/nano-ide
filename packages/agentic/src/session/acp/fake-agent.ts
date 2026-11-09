@@ -21,6 +21,8 @@ export interface FakeAcpAgentScript {
   readonly promptUpdates?: readonly unknown[];
   /** The `stopReason` the `session/prompt` resolves with. Default `"end_turn"`. */
   readonly promptStopReason?: string;
+  /** Fail the first N `session/prompt` requests with a JSON-RPC error *after* streaming their updates. Default `0`. */
+  readonly failPrompts?: number;
   /** `update` objects the agent replays (as `session/update`) during `session/load`. */
   readonly loadUpdates?: readonly unknown[];
   /** The session id `session/new` hands out. Default `"sess-fake"`. */
@@ -59,10 +61,15 @@ export function startFakeAcpAgent(transport: AcpTransport, script: FakeAcpAgentS
     return { modes: null, configOptions: null };
   });
 
+  let promptsToFail = script.failPrompts ?? 0;
   connection.onRequest("session/prompt", (params) => {
     const sid = sessionIdOf(params, sessionId);
     for (const update of script.promptUpdates ?? []) {
       connection.notify("session/update", { sessionId: sid, update });
+    }
+    if (promptsToFail > 0) {
+      promptsToFail--;
+      throw new Error("prompt failed");
     }
     return { stopReason: script.promptStopReason ?? "end_turn" };
   });

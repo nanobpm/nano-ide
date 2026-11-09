@@ -144,6 +144,32 @@ test("a call announced pending is held until its arguments are final (opencode's
   ]);
 });
 
+test("a failed prompt still releases its held calls and buffered message; nothing leaks into the next turn", async () => {
+  const { sink, events } = collector();
+  const { client } = connectClient(
+    {
+      failPrompts: 1,
+      promptUpdates: [
+        { sessionUpdate: "agent_message_chunk", messageId: "m1", content: { type: "text", text: "hi" } },
+        { sessionUpdate: "tool_call", toolCallId: "t1", title: "grep", status: "pending", rawInput: { q: "z" } },
+      ],
+    },
+    sink,
+  );
+  await client.initialize();
+  await client.newSession({ cwd: CWD });
+  await assert.rejects(() => client.prompt("go"), /prompt failed/);
+  const afterFailure = events.map((e) => e.type);
+  assert.ok(afterFailure.includes("tool-call"), `held call released on failure: ${afterFailure.join(",")}`);
+  assert.ok(afterFailure.includes("assistant"), `buffered message flushed on failure: ${afterFailure.join(",")}`);
+
+  const second = await client.prompt("again");
+  // The second turn's own events only — no stale t1 carried over from the failed turn.
+  const secondCalls = second.events.filter((e) => e.type === "tool-call").length;
+  assert.equal(secondCalls, 1);
+  assert.equal(events.filter((e) => e.type === "tool-call").length, 2);
+});
+
 test("restore replays prior history via session/load, then the agent continues", async () => {
   const { backend, log } = openInMemorySession(KEY, 1);
   const { client: clientTransport, agent: agentTransport } = inMemoryTransportPair();

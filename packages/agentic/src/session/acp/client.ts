@@ -227,13 +227,14 @@ export class AcpSessionClient {
     this.#collector = events;
     try {
       const result = await op();
-      // Every session/update queued before the response has been ingested by now
-      // (ordered transport delivery); flush the final in-flight message and any
-      // call that never left `pending`.
-      this.#flushMessage();
-      this.#releaseHeldCalls();
       return { result, events };
     } finally {
+      // Every session/update queued before the response (success *or* error) has
+      // been ingested by now (ordered transport delivery); flush the final in-flight
+      // message and any call that never left `pending` into *this* turn's collector,
+      // so a failed turn neither loses them nor leaks them into the next turn.
+      this.#flushMessage();
+      this.#releaseHeldCalls();
       this.#collector = previous;
     }
   }

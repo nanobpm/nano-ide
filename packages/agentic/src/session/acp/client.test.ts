@@ -106,6 +106,44 @@ test("a driven session normalises the update stream into canonical events on the
   assert.equal(done.parentId, toolResult.id);
 });
 
+test("a call announced pending is held until its arguments are final (opencode's shape)", async () => {
+  const { backend, log } = openInMemorySession(KEY, 1);
+  const { client: clientTransport, agent: agentTransport } = inMemoryTransportPair();
+  startFakeAcpAgent(agentTransport, {
+    promptUpdates: [
+      // opencode: pending with only {cwd}, then in_progress with the command, then the result.
+      { sessionUpdate: "tool_call", toolCallId: "t1", title: "bash", kind: "execute", status: "pending", rawInput: { cwd: "/w" } },
+      { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", title: "ls | wc -l", rawInput: { command: "ls | wc -l", cwd: "/w" } },
+      { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "in_progress", rawInput: { command: "ls | wc -l", cwd: "/w" } },
+      { sessionUpdate: "tool_call_update", toolCallId: "t1", status: "completed", rawOutput: { output: "1" } },
+      // args only on the terminal update
+      { sessionUpdate: "tool_call", toolCallId: "t2", title: "read", status: "pending" },
+      { sessionUpdate: "tool_call_update", toolCallId: "t2", status: "completed", rawInput: { path: "a" }, rawOutput: "x" },
+      // never progresses: released at the end of the turn with what it had
+      { sessionUpdate: "tool_call", toolCallId: "t3", title: "grep", status: "pending", rawInput: { q: "z" } },
+      // nano-coder: in_progress from the start, full args → emitted at once
+      { sessionUpdate: "tool_call", toolCallId: "t4", title: "bash", status: "in_progress", rawInput: { command: "pwd" } },
+      { sessionUpdate: "tool_call_update", toolCallId: "t4", status: "in_progress", rawInput: { command: "ignored" } },
+    ],
+  });
+  const client = new AcpSessionClient(new AcpConnection(clientTransport), backend, { newEventId: seqIds("e") });
+  await client.initialize();
+  await client.newSession({ cwd: CWD });
+  await client.prompt("go");
+
+  const logged = log.replay(KEY, 0).map((e) =>
+    e.type === "tool-call" ? `call ${e.callId} ${e.name} ${JSON.stringify(e.args)}` : e.type === "tool-result" ? `result ${e.callId}` : e.type,
+  );
+  assert.deepEqual(logged, [
+    'call t1 bash {"command":"ls | wc -l","cwd":"/w"}',
+    "result t1",
+    'call t2 read {"path":"a"}',
+    "result t2",
+    'call t4 bash {"command":"pwd"}',
+    'call t3 grep {"q":"z"}',
+  ]);
+});
+
 test("restore replays prior history via session/load, then the agent continues", async () => {
   const { backend, log } = openInMemorySession(KEY, 1);
   const { client: clientTransport, agent: agentTransport } = inMemoryTransportPair();

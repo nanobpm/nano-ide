@@ -46,8 +46,26 @@ export type AcpClassifiedUpdate =
       readonly messageId: string | null;
       readonly text: string;
     }
-  | { readonly kind: "tool-call"; readonly callId: string; readonly name: string; readonly args: unknown }
-  | { readonly kind: "tool-result"; readonly callId: string; readonly ok: boolean; readonly result: unknown }
+  | {
+      readonly kind: "tool-call";
+      readonly callId: string;
+      readonly name: string;
+      readonly args: unknown;
+      /** The call was announced at status `pending`: its `rawInput` may still be
+       *  incomplete (opencode sends `{cwd}` first, the command in a later update). */
+      readonly pending?: true;
+    }
+  /** A non-terminal `tool_call_update`: the call started running (`in_progress`)
+   *  and/or its arguments were (re)stated in `rawInput`. */
+  | { readonly kind: "tool-call-update"; readonly callId: string; readonly running: boolean; readonly args?: unknown }
+  | {
+      readonly kind: "tool-result";
+      readonly callId: string;
+      readonly ok: boolean;
+      readonly result: unknown;
+      /** `rawInput` restated on the terminal update, when present. */
+      readonly args?: unknown;
+    }
   | { readonly kind: "ignored"; readonly sessionUpdate: string; readonly reason: string };
 
 // A null-prototype map so `sessionUpdate in CHUNK_ROLE` and `CHUNK_ROLE[sessionUpdate]`
@@ -99,7 +117,7 @@ function classifyToolCall(update: Record<string, unknown>): AcpClassifiedUpdate 
   // canonical `ToolCallEvent.args` is a JSON-serialisable value, and `undefined`
   // is dropped by `JSON.stringify`, which would violate that shape on persist/replay.
   const args = "rawInput" in update && update.rawInput !== undefined ? update.rawInput : null;
-  return { kind: "tool-call", callId, name, args };
+  return { kind: "tool-call", callId, name, args, ...(update.status === "pending" ? { pending: true as const } : {}) };
 }
 
 function classifyToolCallUpdate(update: Record<string, unknown>): AcpClassifiedUpdate {
@@ -108,14 +126,20 @@ function classifyToolCallUpdate(update: Record<string, unknown>): AcpClassifiedU
     return ignored("tool_call_update", `tool_call_update missing a string "toolCallId"`);
   }
   const status = update.status;
+  const hasArgs = "rawInput" in update && update.rawInput !== undefined;
   if (status !== "completed" && status !== "failed") {
     // pending / in_progress / unknown / status-less patch — an intermediate
-    // lifecycle beat, not yet a canonical result.
+    // lifecycle beat, not a canonical result. It still matters to a call announced
+    // as `pending`: the arguments often arrive here, and `in_progress` means they
+    // are final (the tool is running). The client folds it into the held call.
+    if (status === "in_progress" || hasArgs) {
+      return { kind: "tool-call-update", callId, running: status === "in_progress", ...(hasArgs ? { args: update.rawInput } : {}) };
+    }
     return ignored("tool_call_update", `tool_call_update status "${String(status)}" is not terminal`);
   }
   // Prefer the structured `rawOutput`; fall back to the display `content` array.
   const result = "rawOutput" in update ? update.rawOutput : (update.content ?? null);
-  return { kind: "tool-result", callId, ok: status === "completed", result };
+  return { kind: "tool-result", callId, ok: status === "completed", result, ...(hasArgs ? { args: update.rawInput } : {}) };
 }
 
 /**

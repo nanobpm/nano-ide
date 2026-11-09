@@ -119,6 +119,10 @@ export class AcpSessionClient {
   readonly #clientInfo: { name: string; version: string };
   #lastId: string | null = null;
   #buffer: MessageBuffer | undefined;
+  /** Tool calls announced at status `pending`, held until their arguments are final:
+   *  the call starts running (`in_progress`), its result arrives, or the turn ends.
+   *  Some agents (opencode) announce a call before its arguments are known. */
+  readonly #heldCalls = new Map<string, { name: string; args: unknown }>();
   #collector: SessionEvent[] | null = null;
   #sessionId: string | undefined;
 
@@ -213,6 +217,7 @@ export class AcpSessionClient {
   /** Close the underlying connection and flush any pending buffered message. */
   close(): void {
     this.#flushMessage();
+    this.#releaseHeldCalls();
     this.#connection.close();
   }
 
@@ -223,8 +228,10 @@ export class AcpSessionClient {
     try {
       const result = await op();
       // Every session/update queued before the response has been ingested by now
-      // (ordered transport delivery); flush the final in-flight message.
+      // (ordered transport delivery); flush the final in-flight message and any
+      // call that never left `pending`.
       this.#flushMessage();
+      this.#releaseHeldCalls();
       return { result, events };
     } finally {
       this.#collector = previous;
@@ -249,12 +256,28 @@ export class AcpSessionClient {
         return;
       case "tool-call": {
         this.#flushMessage();
-        const { id, parentId } = this.#nextIdentity();
-        this.#push({ type: "tool-call", id, parentId, callId: update.callId, name: update.name, args: update.args });
+        if (update.pending) {
+          this.#heldCalls.set(update.callId, { name: update.name, args: update.args });
+          return;
+        }
+        this.#emitToolCall(update.callId, update.name, update.args);
+        return;
+      }
+      case "tool-call-update": {
+        const held = this.#heldCalls.get(update.callId);
+        if (held === undefined) return; // already emitted (or unknown): args are settled
+        if ("args" in update) held.args = update.args;
+        if (update.running) {
+          this.#flushMessage();
+          this.#releaseHeldCall(update.callId);
+        }
         return;
       }
       case "tool-result": {
         this.#flushMessage();
+        const held = this.#heldCalls.get(update.callId);
+        if (held !== undefined && "args" in update) held.args = update.args;
+        this.#releaseHeldCall(update.callId);
         const { id, parentId } = this.#nextIdentity();
         this.#push({ type: "tool-result", id, parentId, callId: update.callId, ok: update.ok, result: update.result });
         return;
@@ -262,6 +285,22 @@ export class AcpSessionClient {
       case "ignored":
         return;
     }
+  }
+
+  #emitToolCall(callId: string, name: string, args: unknown): void {
+    const { id, parentId } = this.#nextIdentity();
+    this.#push({ type: "tool-call", id, parentId, callId, name, args });
+  }
+
+  #releaseHeldCall(callId: string): void {
+    const held = this.#heldCalls.get(callId);
+    if (held === undefined) return;
+    this.#heldCalls.delete(callId);
+    this.#emitToolCall(callId, held.name, held.args);
+  }
+
+  #releaseHeldCalls(): void {
+    for (const callId of [...this.#heldCalls.keys()]) this.#releaseHeldCall(callId);
   }
 
   #appendMessage(update: Extract<AcpClassifiedUpdate, { kind: "message" }>): void {

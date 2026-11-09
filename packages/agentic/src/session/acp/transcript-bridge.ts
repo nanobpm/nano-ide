@@ -113,6 +113,7 @@ function classifiedToTranscriptEvent(classified: AcpClassifiedUpdate): Transcrip
         ...(content !== undefined ? { content } : {}),
       };
     }
+    case "tool-call-update": // folded into the call by the stateful client; nothing to emit per update
     case "ignored":
       return null;
   }

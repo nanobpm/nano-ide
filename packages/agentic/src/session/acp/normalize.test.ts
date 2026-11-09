@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ACP_FIDELITY_GAPS, type AcpClassifiedUpdate, classifyUpdate } from "./normalize.ts";
+import { ACP_FIDELITY_GAPS, type AcpClassifiedUpdate, classifyUpdate, parsePromptUsage } from "./normalize.ts";
 
 function textChunk(sessionUpdate: string, text: string, extra: Record<string, unknown> = {}): unknown {
   return { sessionUpdate, content: { type: "text", text }, ...extra };
@@ -123,7 +123,7 @@ test("non-canonical updates (plan, unknown, malformed) are ignored without throw
   for (const value of [
     { sessionUpdate: "plan", plan: { entries: [] } },
     { sessionUpdate: "available_commands_update", availableCommands: [] },
-    { sessionUpdate: "usage_update", used: 10, size: 100 },
+    { sessionUpdate: "usage_update", used: -1, size: 100 },
     { notAnUpdate: true },
     "nonsense",
     null,
@@ -154,6 +154,26 @@ test("the classifier only ever produces the five canonical event kinds", () => {
     ["assistant", "reasoning", "tool-call", "tool-result", "user"],
     "ACP can only reconstruct message/tool events; everything else is a documented gap",
   );
+});
+
+test("usage_update is context-window occupancy (with cost when reported)", () => {
+  assert.deepEqual(classifyUpdate({ sessionUpdate: "usage_update", used: 13943, size: 200000, cost: { amount: 0.02, currency: "USD" } }), {
+    kind: "context-usage",
+    used: 13943,
+    size: 200000,
+    cost: { amount: 0.02, currency: "USD" },
+  });
+  assert.deepEqual(classifyUpdate({ sessionUpdate: "usage_update", used: 10, size: 100, cost: { amount: "x" } }), { kind: "context-usage", used: 10, size: 100 });
+});
+
+test("parsePromptUsage reads the session/prompt response's usage (opencode's shape)", () => {
+  assert.deepEqual(
+    parsePromptUsage({ stopReason: "end_turn", usage: { inputTokens: 119, outputTokens: 12, totalTokens: 13979, thoughtTokens: 24, cachedReadTokens: 13824 } }),
+    { inputTokens: 119, outputTokens: 12, totalTokens: 13979, thoughtTokens: 24, cachedReadTokens: 13824 },
+  );
+  assert.equal(parsePromptUsage({ stopReason: "end_turn" }), undefined);
+  assert.equal(parsePromptUsage({ stopReason: "end_turn", usage: { inputTokens: 1 } }), undefined);
+  assert.deepEqual(parsePromptUsage({ usage: { inputTokens: 1, outputTokens: 2, thoughtTokens: -3 } }), { inputTokens: 1, outputTokens: 2 });
 });
 
 test("ACP_FIDELITY_GAPS documents the canonical concepts ACP cannot reconstruct", () => {

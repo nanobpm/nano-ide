@@ -114,6 +114,7 @@ function classifiedToTranscriptEvent(classified: AcpClassifiedUpdate): Transcrip
       };
     }
     case "tool-call-update": // folded into the call by the stateful client; nothing to emit per update
+    case "context-usage": // context-window occupancy, not a transcript event
     case "ignored":
       return null;
   }

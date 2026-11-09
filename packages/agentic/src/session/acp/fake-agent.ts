@@ -23,6 +23,8 @@ export interface FakeAcpAgentScript {
   readonly promptStopReason?: string;
   /** Fail the first N `session/prompt` requests with a JSON-RPC error *after* streaming their updates. Default `0`. */
   readonly failPrompts?: number;
+  /** The `usage` the `session/prompt` response carries. Default: none. */
+  readonly promptUsage?: Record<string, unknown>;
   /** `update` objects the agent replays (as `session/update`) during `session/load`. */
   readonly loadUpdates?: readonly unknown[];
   /** The session id `session/new` hands out. Default `"sess-fake"`. */
@@ -71,7 +73,7 @@ export function startFakeAcpAgent(transport: AcpTransport, script: FakeAcpAgentS
       promptsToFail--;
       throw new Error("prompt failed");
     }
-    return { stopReason: script.promptStopReason ?? "end_turn" };
+    return { stopReason: script.promptStopReason ?? "end_turn", ...(script.promptUsage ? { usage: script.promptUsage } : {}) };
   });
 
   return connection;

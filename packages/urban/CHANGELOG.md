@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.98.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.98.1...@nanobpm/urban-0.98.2) (2026-11-09)
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * dependencies
+    * @nanobpm/agentic bumped from ^0.15.1 to ^0.16.0
+
 ## [0.98.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.98.0...@nanobpm/urban-0.98.1) (2026-11-09)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.15.0...@nanobpm/agentic-0.15.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **agentic:** keep final arguments for ACP tool calls announced pending ([#607](https://github.com/nanobpm/nano-ide/issues/607)) ([71bd70d](https://github.com/nanobpm/nano-ide/commit/71bd70db950ab31fb4ca90456d3e21dacbe2f25e))
+
 ## [0.15.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.14.0...@nanobpm/agentic-0.15.0) (2026-10-01)
 
 

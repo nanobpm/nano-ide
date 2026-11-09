@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.15.1...@nanobpm/agentic-0.16.0) (2026-11-09)
+
+
+### Features
+
+* **agentic:** report ACP usage — token counts from the prompt response, context/cost from usage_update ([#606](https://github.com/nanobpm/nano-ide/issues/606)) ([000cdcf](https://github.com/nanobpm/nano-ide/commit/000cdcf9cc84b2a5ddfb52f9104c417b8f7cecbb))
+
 ## [0.15.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/agentic-0.15.0...@nanobpm/agentic-0.15.1) (2026-11-09)
 
 

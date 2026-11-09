@@ -21,6 +21,15 @@
  *    canonical `tool-result`; the tool-call lifecycle is exactly the
  *    checkpoint/effect boundary the world half (slice 4) consumes.
  *
+ * Usage has two ACP sources, neither a `session/update` mind event:
+ *
+ *  - the `session/prompt` **response** may carry `usage` (input/output/thought/
+ *    cached token counts for the whole prompt turn) → {@link parsePromptUsage},
+ *    which the client emits as a canonical `usage` event;
+ *  - `usage_update` reports **context-window occupancy** (`used`/`size`, optional
+ *    cumulative `cost`) → classified `context-usage`, surfaced on the prompt
+ *    result rather than emitted (it is not a per-turn token count).
+ *
  * Everything else ACP streams — `plan`, `available_commands_update`,
  * `current_mode_update`, `config_option_update`, `session_info_update`, and the
  * intermediate `tool_call_update`s (status `pending`/`in_progress`) — is
@@ -66,6 +75,7 @@ export type AcpClassifiedUpdate =
       /** `rawInput` restated on the terminal update, when present. */
       readonly args?: unknown;
     }
+  | ({ readonly kind: "context-usage" } & AcpContextUsage)
   | { readonly kind: "ignored"; readonly sessionUpdate: string; readonly reason: string };
 
 // A null-prototype map so `sessionUpdate in CHUNK_ROLE` and `CHUNK_ROLE[sessionUpdate]`
@@ -165,7 +175,66 @@ export function classifyUpdate(value: unknown): AcpClassifiedUpdate {
   if (sessionUpdate === "tool_call_update") {
     return classifyToolCallUpdate(value);
   }
+  if (sessionUpdate === "usage_update") {
+    return classifyUsageUpdate(value);
+  }
   return ignored(sessionUpdate, `${sessionUpdate} is not a canonical mind event`);
+}
+
+/**
+ * Context-window occupancy from a `usage_update`: tokens currently in context,
+ * the window size, and — when the agent reports it — the session's cumulative cost.
+ */
+export interface AcpContextUsage {
+  readonly used: number;
+  readonly size: number;
+  readonly cost?: { readonly amount: number; readonly currency: string };
+}
+
+/** Token accounting for one prompt turn, from the `session/prompt` response's `usage`. */
+export interface AcpPromptUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens?: number;
+  readonly thoughtTokens?: number;
+  readonly cachedReadTokens?: number;
+  readonly cachedWriteTokens?: number;
+}
+
+// Token counts and context occupancy are persisted into the session log and
+// re-read through `parseSessionEvent`, which requires non-negative *safe*
+// integers (`session/events.ts`). An integer above `Number.MAX_SAFE_INTEGER`
+// would pass `Number.isInteger` here yet be rejected on replay, making the
+// logged history unreadable — so the ingestion boundary must fail closed on it.
+const nonNegInt = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
+
+function classifyUsageUpdate(update: Record<string, unknown>): AcpClassifiedUpdate {
+  const { used, size } = update;
+  if (!nonNegInt(used) || !nonNegInt(size)) {
+    return ignored("usage_update", `usage_update needs non-negative integer "used" and "size"`);
+  }
+  const cost = update.cost;
+  const validCost =
+    isRecord(cost) && typeof cost.amount === "number" && Number.isFinite(cost.amount) && typeof cost.currency === "string"
+      ? { amount: cost.amount, currency: cost.currency }
+      : undefined;
+  return { kind: "context-usage", used, size, ...(validCost ? { cost: validCost } : {}) };
+}
+
+/**
+ * Read the token accounting from a `session/prompt` response (`result.usage`).
+ * `undefined` when the agent does not report usage or the shape is malformed
+ * (`inputTokens`/`outputTokens` are required; the rest are kept when well-formed).
+ */
+export function parsePromptUsage(result: unknown): AcpPromptUsage | undefined {
+  if (!isRecord(result) || !isRecord(result.usage)) return undefined;
+  const u = result.usage;
+  if (!nonNegInt(u.inputTokens) || !nonNegInt(u.outputTokens)) return undefined;
+  const usage: { -readonly [K in keyof AcpPromptUsage]: AcpPromptUsage[K] } = { inputTokens: u.inputTokens, outputTokens: u.outputTokens };
+  for (const k of ["totalTokens", "thoughtTokens", "cachedReadTokens", "cachedWriteTokens"] as const) {
+    if (nonNegInt(u[k])) usage[k] = u[k];
+  }
+  return usage;
 }
 
 /** One place where ACP is thinner than a native transcript (ADR 0062 §5). */
@@ -187,10 +256,10 @@ export const ACP_FIDELITY_GAPS: readonly AcpFidelityGap[] = [
   {
     concept: "usage / token accounting (UsageEvent)",
     detail:
-      "ACP's usage_update reports context-window occupancy ({ used, size, cost }), " +
-      "not per-turn input/output token counts. It cannot reconstruct a canonical " +
-      "UsageEvent's inputTokens/outputTokens, so usage is dropped rather than " +
-      "mis-attributed; a native transcript carries the real accounting.",
+      "Token counts come only from the optional `usage` on the session/prompt response: " +
+      "one total per prompt turn (not per model call), and absent when the agent does not " +
+      "report it. usage_update is context-window occupancy ({ used, size, cost }), surfaced " +
+      "as context usage, not as a UsageEvent. A native transcript carries per-call accounting.",
   },
   {
     concept: "reasoning continuation (ReasoningEvent.providerContinuation)",

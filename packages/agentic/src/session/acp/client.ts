@@ -24,7 +24,7 @@
 import { randomUUID } from "node:crypto";
 import type { SessionEvent } from "../events.ts";
 import { AcpConnection } from "./jsonrpc.ts";
-import { type AcpClassifiedUpdate, classifyUpdate } from "./normalize.ts";
+import { type AcpClassifiedUpdate, type AcpContextUsage, type AcpPromptUsage, classifyUpdate, parsePromptUsage } from "./normalize.ts";
 import {
   ACP_CLIENT_METHOD,
   ACP_METHOD,
@@ -79,6 +79,12 @@ export interface AcpPromptResult {
   readonly stopReason: string | null;
   /** The canonical events emitted while this prompt ran, in emission order. */
   readonly events: readonly SessionEvent[];
+  /** Token accounting for the turn, when the agent reports `usage` on the response
+   *  (also emitted as a canonical `usage` event, last in `events`). */
+  readonly usage?: AcpPromptUsage;
+  /** The latest context-window occupancy (`usage_update`) seen during the turn,
+   *  including the session's cumulative cost when the agent reports it. */
+  readonly context?: AcpContextUsage;
 }
 
 /** Parameters shared by `session/new` and `session/load`. */
@@ -123,6 +129,8 @@ export class AcpSessionClient {
    *  the call starts running (`in_progress`), its result arrives, or the turn ends.
    *  Some agents (opencode) announce a call before its arguments are known. */
   readonly #heldCalls = new Map<string, { name: string; args: unknown }>();
+  /** Latest `usage_update` of the running prompt turn. */
+  #context: AcpContextUsage | undefined;
   #collector: SessionEvent[] | null = null;
   #sessionId: string | undefined;
 
@@ -202,10 +210,24 @@ export class AcpSessionClient {
       throw new Error("prompt requires an active session — call newSession() or restore() first");
     }
     const prompt = typeof input === "string" ? [{ type: "text", text: input }] : input;
+    this.#context = undefined;
     const collected = await this.#collecting(() =>
       this.#connection.request(ACP_METHOD.sessionPrompt, { sessionId: this.#sessionId, prompt }),
     );
-    return { stopReason: readStopReason(collected.result), events: collected.events };
+    const usage = parsePromptUsage(collected.result);
+    if (usage !== undefined) {
+      const { id, parentId } = this.#nextIdentity();
+      const event: SessionEvent = { type: "usage", id, parentId, inputTokens: usage.inputTokens, outputTokens: usage.outputTokens };
+      this.#push(event);
+      collected.events.push(event);
+    }
+    const context = this.#context;
+    return {
+      stopReason: readStopReason(collected.result),
+      events: collected.events,
+      ...(usage !== undefined ? { usage } : {}),
+      ...(context !== undefined ? { context } : {}),
+    };
   }
 
   /** **steer** — request cancellation of the running turn (`session/cancel`, a notification). */
@@ -281,6 +303,11 @@ export class AcpSessionClient {
         this.#releaseHeldCall(update.callId);
         const { id, parentId } = this.#nextIdentity();
         this.#push({ type: "tool-result", id, parentId, callId: update.callId, ok: update.ok, result: update.result });
+        return;
+      }
+      case "context-usage": {
+        const { kind: _kind, ...context } = update;
+        this.#context = context;
         return;
       }
       case "ignored":

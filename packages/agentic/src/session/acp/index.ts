@@ -34,8 +34,11 @@ export {
 export {
   ACP_FIDELITY_GAPS,
   type AcpClassifiedUpdate,
+  type AcpContextUsage,
   type AcpFidelityGap,
+  type AcpPromptUsage,
   classifyUpdate,
+  parsePromptUsage,
 } from "./normalize.ts";
 
 export { acpUpdateToTranscriptChunk } from "./transcript-bridge.ts";

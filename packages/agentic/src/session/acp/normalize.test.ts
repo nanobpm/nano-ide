@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ACP_FIDELITY_GAPS, type AcpClassifiedUpdate, classifyUpdate } from "./normalize.ts";
+import { ACP_FIDELITY_GAPS, type AcpClassifiedUpdate, classifyUpdate, parsePromptUsage } from "./normalize.ts";
 
 function textChunk(sessionUpdate: string, text: string, extra: Record<string, unknown> = {}): unknown {
   return { sessionUpdate, content: { type: "text", text }, ...extra };
@@ -123,7 +123,7 @@ test("non-canonical updates (plan, unknown, malformed) are ignored without throw
   for (const value of [
     { sessionUpdate: "plan", plan: { entries: [] } },
     { sessionUpdate: "available_commands_update", availableCommands: [] },
-    { sessionUpdate: "usage_update", used: 10, size: 100 },
+    { sessionUpdate: "usage_update", used: -1, size: 100 },
     { notAnUpdate: true },
     "nonsense",
     null,
@@ -154,6 +154,58 @@ test("the classifier only ever produces the five canonical event kinds", () => {
     ["assistant", "reasoning", "tool-call", "tool-result", "user"],
     "ACP can only reconstruct message/tool events; everything else is a documented gap",
   );
+});
+
+test("usage_update is context-window occupancy (with cost when reported)", () => {
+  assert.deepEqual(classifyUpdate({ sessionUpdate: "usage_update", used: 13943, size: 200000, cost: { amount: 0.02, currency: "USD" } }), {
+    kind: "context-usage",
+    used: 13943,
+    size: 200000,
+    cost: { amount: 0.02, currency: "USD" },
+  });
+  assert.deepEqual(classifyUpdate({ sessionUpdate: "usage_update", used: 10, size: 100, cost: { amount: "x" } }), { kind: "context-usage", used: 10, size: 100 });
+});
+
+test("parsePromptUsage reads the session/prompt response's usage (opencode's shape)", () => {
+  assert.deepEqual(
+    parsePromptUsage({ stopReason: "end_turn", usage: { inputTokens: 119, outputTokens: 12, totalTokens: 13979, thoughtTokens: 24, cachedReadTokens: 13824 } }),
+    { inputTokens: 119, outputTokens: 12, totalTokens: 13979, thoughtTokens: 24, cachedReadTokens: 13824 },
+  );
+  assert.equal(parsePromptUsage({ stopReason: "end_turn" }), undefined);
+  assert.equal(parsePromptUsage({ stopReason: "end_turn", usage: { inputTokens: 1 } }), undefined);
+  assert.deepEqual(parsePromptUsage({ usage: { inputTokens: 1, outputTokens: 2, thoughtTokens: -3 } }), { inputTokens: 1, outputTokens: 2 });
+});
+
+test("usage parsing rejects integers outside the safe range (they must never reach the session log)", () => {
+  // A token count above Number.MAX_SAFE_INTEGER would pass `Number.isInteger` yet
+  // fail `parseSessionEvent`'s safe-integer check on replay — the log would persist
+  // an event it can never read back, making the session history unreadable. The
+  // boundary must be discarded here, at ingestion.
+  const unsafe = Number.MAX_SAFE_INTEGER + 1; // 9007199254740992 — an integer, but not a *safe* one.
+  assert.equal(Number.isInteger(unsafe), true, "precondition: the test value is a plain integer");
+  assert.equal(Number.isSafeInteger(unsafe), false, "precondition: the test value is not safe");
+
+  // Required prompt-usage fields: any unsafe count poisons the whole usage report.
+  assert.equal(parsePromptUsage({ usage: { inputTokens: unsafe, outputTokens: 2 } }), undefined);
+  assert.equal(parsePromptUsage({ usage: { inputTokens: 1, outputTokens: unsafe } }), undefined);
+  // Optional fields: an unsafe optional count is dropped, the safe rest is kept.
+  for (const k of ["totalTokens", "thoughtTokens", "cachedReadTokens", "cachedWriteTokens"]) {
+    assert.deepEqual(parsePromptUsage({ usage: { inputTokens: 1, outputTokens: 2, [k]: unsafe } }), { inputTokens: 1, outputTokens: 2 });
+  }
+  // The safe boundary itself is still accepted.
+  assert.deepEqual(parsePromptUsage({ usage: { inputTokens: Number.MAX_SAFE_INTEGER, outputTokens: 2 } }), {
+    inputTokens: Number.MAX_SAFE_INTEGER,
+    outputTokens: 2,
+  });
+
+  // usage_update occupancy follows the same rule: unsafe used/size is ignored, not classified.
+  assert.equal(classifyUpdate({ sessionUpdate: "usage_update", used: unsafe, size: 100 }).kind, "ignored");
+  assert.equal(classifyUpdate({ sessionUpdate: "usage_update", used: 10, size: unsafe }).kind, "ignored");
+  assert.deepEqual(classifyUpdate({ sessionUpdate: "usage_update", used: Number.MAX_SAFE_INTEGER, size: 100 }), {
+    kind: "context-usage",
+    used: Number.MAX_SAFE_INTEGER,
+    size: 100,
+  });
 });
 
 test("ACP_FIDELITY_GAPS documents the canonical concepts ACP cannot reconstruct", () => {

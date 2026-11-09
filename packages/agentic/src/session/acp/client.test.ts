@@ -170,6 +170,44 @@ test("a failed prompt still releases its held calls and buffered message; nothin
   assert.equal(events.filter((e) => e.type === "tool-call").length, 2);
 });
 
+test("prompt usage becomes a canonical usage event; usage_update surfaces as context", async () => {
+  const { backend, log } = openInMemorySession(KEY, 1);
+  const { client: clientTransport, agent: agentTransport } = inMemoryTransportPair();
+  startFakeAcpAgent(agentTransport, {
+    promptUpdates: [
+      { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } },
+      { sessionUpdate: "usage_update", used: 500, size: 200000, cost: { amount: 0.01, currency: "USD" } },
+    ],
+    promptUsage: { inputTokens: 119, outputTokens: 12, cachedReadTokens: 400 },
+  });
+  const client = new AcpSessionClient(new AcpConnection(clientTransport), backend, { newEventId: seqIds("e") });
+  await client.initialize();
+  await client.newSession({ cwd: CWD });
+  const result = await client.prompt("hello");
+
+  assert.deepEqual(result.usage, { inputTokens: 119, outputTokens: 12, cachedReadTokens: 400 });
+  assert.deepEqual(result.context, { used: 500, size: 200000, cost: { amount: 0.01, currency: "USD" } });
+  const logged = log.replay(KEY, 0);
+  assert.deepEqual(logged.map((e) => e.type), ["assistant", "usage"]);
+  const usage = logged[1];
+  assert.equal(usage.type === "usage" && usage.inputTokens, 119);
+  assert.equal(usage.parentId, logged[0].id);
+  assert.deepEqual(result.events.map((e) => e.type), ["assistant", "usage"]);
+});
+
+test("an agent that reports no usage yields no usage event, usage or context", async () => {
+  const { backend, log } = openInMemorySession(KEY, 1);
+  const { client: clientTransport, agent: agentTransport } = inMemoryTransportPair();
+  startFakeAcpAgent(agentTransport, { promptUpdates: [{ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hi" } }] });
+  const client = new AcpSessionClient(new AcpConnection(clientTransport), backend, { newEventId: seqIds("e") });
+  await client.initialize();
+  await client.newSession({ cwd: CWD });
+  const result = await client.prompt("hello");
+  assert.equal(result.usage, undefined);
+  assert.equal(result.context, undefined);
+  assert.deepEqual(log.replay(KEY, 0).map((e) => e.type), ["assistant"]);
+});
+
 test("restore replays prior history via session/load, then the agent continues", async () => {
   const { backend, log } = openInMemorySession(KEY, 1);
   const { client: clientTransport, agent: agentTransport } = inMemoryTransportPair();

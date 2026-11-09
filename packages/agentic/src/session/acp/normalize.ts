@@ -201,7 +201,12 @@ export interface AcpPromptUsage {
   readonly cachedWriteTokens?: number;
 }
 
-const nonNegInt = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= 0;
+// Token counts and context occupancy are persisted into the session log and
+// re-read through `parseSessionEvent`, which requires non-negative *safe*
+// integers (`session/events.ts`). An integer above `Number.MAX_SAFE_INTEGER`
+// would pass `Number.isInteger` here yet be rejected on replay, making the
+// logged history unreadable — so the ingestion boundary must fail closed on it.
+const nonNegInt = (v: unknown): v is number => typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
 
 function classifyUsageUpdate(update: Record<string, unknown>): AcpClassifiedUpdate {
   const { used, size } = update;

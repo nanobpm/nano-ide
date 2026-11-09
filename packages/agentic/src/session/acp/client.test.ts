@@ -193,7 +193,6 @@ test("prompt usage becomes a canonical usage event; usage_update surfaces as con
   assert.equal(usage.type === "usage" && usage.inputTokens, 119);
   assert.equal(usage.parentId, logged[0].id);
   assert.deepEqual(result.events.map((e) => e.type), ["assistant", "usage"]);
-
 });
 
 test("an agent that reports no usage yields no usage event, usage or context", async () => {

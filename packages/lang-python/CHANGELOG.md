@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/nano-ide-lang-python@1.3.0...@nanobpm/nano-ide-lang-python-1.3.1) (2026-11-09)
+
+
+### Bug Fixes
+
+* **agentic:** keep final arguments for ACP tool calls announced pending ([#607](https://github.com/nanobpm/nano-ide/issues/607)) ([71bd70d](https://github.com/nanobpm/nano-ide/commit/71bd70db950ab31fb4ca90456d3e21dacbe2f25e))
+
 ## [1.3.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/nano-ide-lang-python@1.2.0...@nanobpm/nano-ide-lang-python-1.3.0) (2026-09-01)
 
 

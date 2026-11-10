@@ -135,9 +135,13 @@ registerNodeKind("forEach", {
     const startId = `${subId}_start`;
     api.addPlainStart(startId);
     const innerOut = api.emitList(node.body, [api.newEdge(startId)], null);
-    const endId = `${subId}_end`;
-    api.addPlainEnd(endId);
-    api.connect(innerOut, endId);
+    // Every path of the body may already have ended (`end()`); then there is
+    // nothing left to cap with the scope's own end event.
+    if (innerOut.length > 0) {
+      const endId = `${subId}_end`;
+      api.addPlainEnd(endId);
+      api.connect(innerOut, endId);
+    }
     api.popScope();
     return [api.newEdge(subId)];
   },

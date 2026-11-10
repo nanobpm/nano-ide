@@ -229,7 +229,7 @@ interface BuilderCtx {
 /** Ids the emitter generates for structural nodes / flows / messages. A step
  *  name that collides with one of these would produce a duplicate BPMN id and an
  *  invalid model, so reject them at authoring time. */
-const RESERVED_PREFIXES = /^(Gw_|Loop_|Sub_|Msg_|f_)/;
+const RESERVED_PREFIXES = /^(Gw_|Loop_|Sub_|Msg_|f_|End_)/;
 const TIMER_START_KEYS = ["cycle", "after", "at"] as const;
 
 function timerStartValue(
@@ -253,7 +253,7 @@ function claimName(ctx: BuilderCtx, id: string, name: string): void {
   }
   if (RESERVED_PREFIXES.test(name)) {
     throw new Error(
-      `step name "${name}" uses a reserved prefix (Gw_/Loop_/Sub_/Msg_/f_ are generated ids) in flow "${id}"`,
+      `step name "${name}" uses a reserved prefix (Gw_/Loop_/Sub_/Msg_/f_/End_ are generated ids) in flow "${id}"`,
     );
   }
   if (ctx.seen.has(name)) throw new Error(`duplicate step name "${name}" in flow "${id}"`);
@@ -909,7 +909,13 @@ class Compiler {
 
   private emitList(list: FlowNode[], incoming: Edge[], loop: LoopCtx | null): Edge[] {
     let cur = incoming;
-    for (const node of list) cur = this.emitNode(node, cur, loop);
+    list.forEach((node, i) => {
+      // `end()` stops the path: a step after it could never run.
+      if (i > 0 && list[i - 1].kind === "end") {
+        throw new Error(`flow "${this.flow.id}": nothing can follow end() in the same block (found a "${node.kind}" step after it)`);
+      }
+      cur = this.emitNode(node, cur, loop);
+    });
     return cur;
   }
 
@@ -977,11 +983,14 @@ class Compiler {
     });
     const s0 = this.newEdge("Start");
     const finalDanglers = this.emitList(this.flow.steps, [s0], null);
-    this.nodes.push({
-      id: "End",
-      render: (inc) => `    <bpmn:endEvent id="End">${incomingOnly(inc)}</bpmn:endEvent>`,
-    });
-    this.connect(finalDanglers, "End");
+    // Every path may already have ended early (`w.end()`): then no final End.
+    if (finalDanglers.length > 0) {
+      this.nodes.push({
+        id: "End",
+        render: (inc) => `    <bpmn:endEvent id="End">${incomingOnly(inc)}</bpmn:endEvent>`,
+      });
+      this.connect(finalDanglers, "End");
+    }
 
     // A sequence flow needs both ends; drop any edge that never got a target.
     this.live = this.edges.filter((e) => e.to !== undefined);

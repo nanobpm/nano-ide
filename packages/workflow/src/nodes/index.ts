@@ -10,6 +10,7 @@ import "./boundary.js";
 import "./branch.js";
 import "./break.js";
 import "./continue.js";
+import "./end.js";
 import "./forEach.js";
 import "./human.js";
 import "./loop.js";

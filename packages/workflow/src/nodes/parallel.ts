@@ -5,7 +5,23 @@
 
 import type { FlowNode } from "../types.js";
 import type { Block } from "../declarative.js";
-import { registerNodeKind } from "./registry.js";
+import { registerNodeKind, requireNodeKind } from "./registry.js";
+
+/** Whether this subtree has a plain (non-terminate) `end()` that would end a
+ *  parallel branch's token — not looking inside a `forEach` body, whose own
+ *  sub-process scope such an `end()` ends instead. */
+function hasPlainEnd(list: FlowNode[]): boolean {
+  let found = false;
+  const visit = (nodes: FlowNode[]) => {
+    for (const n of nodes) {
+      if (found) return;
+      if (n.kind === "end" && !n.terminate) found = true;
+      else if (n.kind !== "forEach") requireNodeKind(n.kind).walk?.(n, visit);
+    }
+  };
+  visit(list);
+  return found;
+}
 
 declare module "../types.js" {
   interface FlowNodeRegistry {
@@ -24,7 +40,14 @@ registerNodeKind("parallel", {
     // Each branch runs in its own token scope up to the AND-join, so a
     // `break`/`continue` must not escape into an enclosing loop. Scope branches
     // (loopDepth resets to 0) so cross-boundary break/continue is rejected.
-    api.out.push({ kind: "parallel", branches: branches.map((fn) => api.childScoped(fn)) });
+    const bodies = branches.map((fn) => api.childScoped(fn));
+    if (bodies.some(hasPlainEnd)) {
+      throw new Error(
+        `parallel(): a branch can't end() on its own — the join would wait for it forever. ` +
+          `Use end({ terminate: true }) to end the whole instance, or let the branch reach the join`,
+      );
+    }
+    api.out.push({ kind: "parallel", branches: bodies });
     return api.self();
   },
   walk: (node, recurse) => {

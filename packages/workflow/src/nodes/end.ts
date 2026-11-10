@@ -41,6 +41,8 @@ declare module "../declarative.js" {
      * wait for that branch forever. Use `{ terminate: true }` there.
      */
     end(name?: string, opts?: EndOptions): FlowBuilder<C>;
+    /** `w.end({ terminate: true })` — an unnamed end with options. */
+    end(opts: EndOptions): FlowBuilder<C>;
   }
 }
 

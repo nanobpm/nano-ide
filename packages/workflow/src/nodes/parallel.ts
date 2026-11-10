@@ -16,6 +16,9 @@ function hasPlainEnd(list: FlowNode[]): boolean {
     for (const n of nodes) {
       if (found) return;
       if (n.kind === "end" && !n.terminate) found = true;
+      // A non-interrupting boundary's timeout body is an EXTRA token: ending it
+      // leaves the host activity on its way to the join.
+      else if (n.kind === "boundary" && !n.interrupting) continue;
       else if (n.kind !== "forEach") requireNodeKind(n.kind).walk?.(n, visit);
     }
   };
@@ -64,6 +67,15 @@ registerNodeKind("parallel", {
     for (const branch of node.branches) {
       const e = api.newEdge(splitId);
       const branchOut = api.emitList(branch, [e], loop);
+      // A branch that always ends (`end({ terminate: true })` on every path)
+      // never arrives: the AND-join would fire on the OTHER branches alone and
+      // run the continuation before the terminate. Reject it.
+      if (branchOut.length === 0) {
+        throw new Error(
+          `parallel(): every path of a branch ends, so it never reaches the join — the steps after parallel() ` +
+            `could run before it terminates. Make the end conditional, or move it after parallel()`,
+        );
+      }
       api.connect(branchOut, joinId);
     }
     return [api.newEdge(joinId)];

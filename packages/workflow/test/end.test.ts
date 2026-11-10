@@ -162,3 +162,50 @@ test("end: names are claimed like step names; End_ is reserved for generated ids
   // @ts-expect-error terminate must be a boolean
   assert.throws(() => defineFlow("opt", (w) => w.end("x", { terminate: "yes" })), /terminate/);
 });
+
+test("end: a step after a block whose paths all end is unreachable", () => {
+  assert.throws(
+    () =>
+      declarativeToBpmn(
+        defineFlow("all-arms-end", (w) => {
+          w.switch("x", { a: (b) => b.end("a"), default: (b) => b.end("d") });
+          w.run("after", noop);
+        }),
+      ),
+    /"run" step after a "switch" step whose paths all end is unreachable/,
+  );
+});
+
+test("end: in a parallel branch, a non-interrupting boundary's timeout body may end; an always-terminating branch is rejected", () => {
+  assert.doesNotThrow(() =>
+    declarativeToBpmn(
+      defineFlow("par-nudge", (w) => {
+        w.parallel([
+          (b) => b.run("l", noop),
+          (b) => b.run("slow", noop).boundary({ timer: "PT1H", interrupting: false, onTimeout: (c) => c.run("nudge", noop).end("nudge-done") }),
+        ]);
+        w.run("after", noop);
+      }),
+    ),
+  );
+  assert.throws(
+    () =>
+      defineFlow("par-int", (w) => {
+        w.parallel([
+          (b) => b.run("l", noop),
+          (b) => b.run("slow", noop).boundary({ timer: "PT1H", onTimeout: (c) => c.end("gave-up") }),
+        ]);
+      }),
+    /a branch can't end\(\) on its own/,
+  );
+  assert.throws(
+    () =>
+      declarativeToBpmn(
+        defineFlow("par-always", (w) => {
+          w.parallel([(b) => b.run("fast", noop), (b) => b.timer("slow", { after: "PT1M" }).end("stop", { terminate: true })]);
+          w.run("after", noop);
+        }),
+      ),
+    /never reaches the join/,
+  );
+});

@@ -910,9 +910,12 @@ class Compiler {
   private emitList(list: FlowNode[], incoming: Edge[], loop: LoopCtx | null): Edge[] {
     let cur = incoming;
     list.forEach((node, i) => {
-      // `end()` stops the path: a step after it could never run.
-      if (i > 0 && list[i - 1].kind === "end") {
-        throw new Error(`flow "${this.flow.id}": nothing can follow end() in the same block (found a "${node.kind}" step after it)`);
+      // Every path so far has stopped (`end()`, or a branch whose arms all end):
+      // a step after it could never run and would be emitted disconnected.
+      if (i > 0 && cur.length === 0) {
+        throw new Error(
+          `flow "${this.flow.id}": the "${node.kind}" step after ${list[i - 1].kind === "end" ? "end()" : `a "${list[i - 1].kind}" step whose paths all end`} is unreachable — nothing can follow end() in the same block`,
+        );
       }
       cur = this.emitNode(node, cur, loop);
     });

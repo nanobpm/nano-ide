@@ -104,3 +104,13 @@ export const serviceIo = defineFlow("service-io", (w) => {
   });
   w.run("compute", async () => ({ n: 1 }), { io: { output: [{ source: "=n", target: "n" }] } });
 });
+
+// `w.end` — named, options-only, and named-with-options forms all type-check.
+export const ends = defineFlow("ends", (w) => {
+  w.switch("x", {
+    a: (b) => b.end(),
+    b: (b) => b.end("b-done"),
+    c: (b) => b.end({ terminate: true }),
+    default: (b) => b.run("go", async () => ({})).end("stopped", { terminate: false }),
+  });
+});

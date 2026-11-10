@@ -56,7 +56,10 @@ registerNodeKind("end", {
     if (opts !== undefined && (opts === null || typeof opts !== "object")) {
       throw new Error(`end() options must be an object like { terminate: true }`);
     }
-    const terminate = opts?.terminate ?? false;
+    // Default only an omitted (`undefined`) value: an explicit `null` is a
+    // supplied value and must fail the boolean check, not silently coerce to
+    // `false` and emit a normal end event.
+    const terminate = opts?.terminate === undefined ? false : opts.terminate;
     if (typeof terminate !== "boolean") throw new Error(`end() { terminate } must be true or false`);
     if (name !== undefined) {
       if (typeof name !== "string") throw new Error(`end() name must be a string`);

@@ -161,6 +161,15 @@ test("end: names are claimed like step names; End_ is reserved for generated ids
   assert.throws(() => defineFlow("res", (w) => w.run("End_1", noop)), /reserved prefix/);
   // @ts-expect-error terminate must be a boolean
   assert.throws(() => defineFlow("opt", (w) => w.end("x", { terminate: "yes" })), /terminate/);
+  // An explicit `null` is a supplied value, not an omitted one: it must fail
+  // validation, not silently default to `false` and emit a normal end event.
+  assert.throws(
+    () => defineFlow("opt-null", (w) => w.end("x", JSON.parse(`{"terminate":null}`))),
+    /end\(\) \{ terminate \} must be true or false/,
+  );
+  // Omitted (`undefined`) still defaults to a plain end event.
+  const xml = declarativeToBpmn(defineFlow("opt-omitted", (w) => w.end("x", JSON.parse(`{}`))));
+  assert.ok(endEvents(xml).some((e) => e.id === "x" && !e.terminate));
 });
 
 test("end: a step after a block whose paths all end is unreachable", () => {

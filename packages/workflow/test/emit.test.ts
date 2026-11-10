@@ -803,6 +803,25 @@ test("validateEnvelope: required, scalar types, lists, datetime; extra fields al
   assert.deepEqual(validateEnvelope(In, [1]), [{ field: "", message: "In must be an object" }]);
 });
 
+test("validateEnvelope: impossible calendar dates are rejected; leap days are not", () => {
+  const In = envelope("In", { at: "datetime" });
+  for (const at of ["2026-02-29", "2026-02-30T12:00:00Z", "2026-04-31", "2026-13-01", "2026-00-10", "1900-02-29"]) {
+    assert.deepEqual(validateEnvelope(In, { at }), [{ field: "at", message: "must be an ISO 8601 date or date-time" }], at);
+  }
+  for (const at of ["2028-02-29", "2000-02-29T00:00:00Z", "2026-12-31", "2026-04-30T23:59:59+02:00"]) {
+    assert.deepEqual(validateEnvelope(In, { at }), [], at);
+  }
+});
+
+test("validateEnvelope: an optional field may be absent, but a supplied null is type-checked", () => {
+  const In = envelope("In", { note: { type: "string", optional: true }, tags: { type: "string", list: true, optional: true } });
+  assert.deepEqual(validateEnvelope(In, {}), []);
+  assert.deepEqual(validateEnvelope(In, { note: null, tags: null }), [
+    { field: "note", message: "must be a string" },
+    { field: "tags", message: "must be a list" },
+  ]);
+});
+
 test("signal: a typed payload envelope is lifted onto the message", () => {
   const Answer = envelope("Answer", { verdict: "string" });
   const flow = defineFlow(

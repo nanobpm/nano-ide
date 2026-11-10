@@ -146,7 +146,20 @@ export interface EnvelopeProblem {
   message: string;
 }
 
-const DATETIME = /^\d{4}-\d{2}-\d{2}([Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:?\d{2})?)?$/;
+const DATETIME = /^(\d{4})-(\d{2})-(\d{2})([Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:?\d{2})?)?$/;
+
+/** A real calendar day: `Date.parse` rolls 2026-02-30 over to March instead of rejecting it. */
+function isCalendarDate(y: number, m: number, d: number): boolean {
+  const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return m >= 1 && m <= 12 && d >= 1 && d <= days[m - 1];
+}
+
+function isDatetime(v: unknown): boolean {
+  if (typeof v !== "string") return false;
+  const m = DATETIME.exec(v);
+  return !!m && isCalendarDate(Number(m[1]), Number(m[2]), Number(m[3])) && !Number.isNaN(Date.parse(v));
+}
 
 function scalarProblem(type: ScalarType, v: unknown): string | undefined {
   switch (type) {
@@ -159,7 +172,7 @@ function scalarProblem(type: ScalarType, v: unknown): string | undefined {
     case "integer":
       return typeof v === "number" && Number.isInteger(v) ? undefined : "must be a whole number";
     case "datetime":
-      return typeof v === "string" && DATETIME.test(v) && !Number.isNaN(Date.parse(v))
+      return isDatetime(v)
         ? undefined
         : "must be an ISO 8601 date or date-time";
   }
@@ -171,8 +184,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * Check a value against an envelope: every required field present (not `undefined`
- * or `null`), and each present field of its declared scalar type (a `list` field an
- * array of it). Fields the envelope doesn't declare are allowed — an envelope is the
+ * or `null`), and each supplied field of its declared scalar type (a `list` field an
+ * array of it). An optional field may be absent, but a supplied `null` is checked like
+ * any other value (and fails). Fields the envelope doesn't declare are allowed — an envelope is the
  * data a step needs, not all it may see. Returns the problems (empty = valid); it
  * does not coerce. Use it where untyped data enters a typed flow, e.g. the variables
  * a new instance is started with, checked against `flow.input`.
@@ -182,7 +196,7 @@ export function validateEnvelope(env: Pick<Envelope, "name" | "fields">, value: 
   const problems: EnvelopeProblem[] = [];
   for (const f of env.fields) {
     const v = value[f.name];
-    if (v === undefined || v === null) {
+    if (v === undefined || (v === null && !f.optional)) {
       if (!f.optional) problems.push({ field: f.name, message: "is required" });
       continue;
     }

@@ -68,7 +68,9 @@ registerNodeKind("end", {
     return api.self();
   },
   emit: (node, incoming, _loop, api) => {
-    const id = node.name ?? `End_${api.nextGw()}`;
+    // A generated id must not collide with the process id (a flow may be named `End_0`).
+    let id = node.name ?? `End_${api.nextGw()}`;
+    while (node.name === undefined && id === api.flowId) id = `End_${api.nextGw()}`;
     api.addNode({
       id,
       render: (inc) =>

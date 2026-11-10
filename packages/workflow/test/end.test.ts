@@ -209,3 +209,10 @@ test("end: in a parallel branch, a non-interrupting boundary's timeout body may 
     /never reaches the join/,
   );
 });
+
+test("end: a generated id never collides with the process id", () => {
+  const xml = declarativeToBpmn(defineFlow("End_0", (w) => w.run("a", noop).end()));
+  const ids = [...xml.matchAll(/ id="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(ids.filter((id) => id === "End_0").length, 1, "only the process has id End_0");
+  assert.ok(endEvents(xml).some((e) => e.id === "End_1"));
+});

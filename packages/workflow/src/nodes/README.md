@@ -1,7 +1,7 @@
 # `src/nodes/` — the flow-node kind extension seam
 
 Every flow-node **kind** in the declarative surface (`run`, `task`, `signal`,
-`timer`, `switch`, `branch`, `loop`, `break`, `continue`, `parallel`, `forEach`,
+`timer`, `switch`, `branch`, `loop`, `break`, `continue`, `end`, `parallel`, `forEach`,
 and any kind a feature slice adds) lives in its **own module** here. Adding a
 kind is: **drop one `src/nodes/<kind>.ts` file.** You never edit a shared union,
 a central `switch`, or the barrel.

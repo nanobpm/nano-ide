@@ -56,6 +56,12 @@ approval gate rendered on a task list), composed with control-flow combinators:
   list / the Zeebe user-task API.
 - `w.loop(body)` — a durable loop (back-edge to the loop head).
 - `w.break()` / `w.continue()` — exit the enclosing loop, or jump back to its head.
+- `w.end(name?, { terminate? })` — end this path here (a BPMN end event), e.g. an
+  "abandoned" outcome deep inside a `switch` or `loop`. Nothing may follow it in its
+  block. `{ terminate: true }` ends the whole instance at once, cancelling every other
+  active path (a terminate end event); inside a `forEach` body either form ends only
+  that item's child. A plain `end()` in a `parallel` branch is rejected (the join
+  would wait forever); use `terminate` there.
 - `w.parallel([blockA, blockB, …])` — a static fork/join: every block runs
   concurrently on its own branch, rejoined by an AND-join (all branches must
   arrive before the flow continues).

@@ -7,6 +7,7 @@ import {
   defineWorkflow,
   defineFlow,
   envelope,
+  validateEnvelope,
   toBpmn,
   toDeployableBpmn,
   declarativeToLayoutedBpmn,
@@ -739,6 +740,92 @@ test("envelope: an unreferenced envelope is NOT lifted (only used shapes appear)
   const xml = toBpmn(flow);
   assert.match(xml, /<nano:shape id="Used">/);
   assert.doesNotMatch(xml, /Unused/);
+});
+
+test("Start contract: the flow's input envelope is lifted onto the start event and exposed as flow.input", () => {
+  const ReviewInput = envelope("ReviewInput", {
+    pr: "integer",
+    repo: "string",
+    note: { type: "string", optional: true },
+  });
+  const flow = defineFlow("review", { Start: { in: ReviewInput } }, (w) => w.run("fetch", async () => ({})));
+  assert.equal(flow.input, ReviewInput);
+  const xml = toBpmn(flow);
+  // The start event carries the input envelope, ahead of its outgoing flow.
+  assert.match(
+    xml,
+    /<bpmn:startEvent id="Start">\s*<bpmn:extensionElements>\s*<zeebe:properties>\s*<zeebe:property name="io.nanobpm.dataEnvelope.in" value="ReviewInput" \/>\s*<\/zeebe:properties>\s*<\/bpmn:extensionElements>\s*<bpmn:outgoing>/,
+  );
+  // …and its shape is lifted like any step envelope.
+  assert.match(xml, /<nano:shape id="ReviewInput">/);
+  assert.match(xml, /<nano:extend name="pr" type="integer" \/>/);
+  // A flow without a Start contract keeps the bare start event.
+  const plain = defineFlow("plain", (w) => w.run("a", async () => ({})));
+  assert.equal(plain.input, undefined);
+  assert.match(toBpmn(plain), /<bpmn:startEvent id="Start"><bpmn:outgoing>/);
+});
+
+test("Start contract: also on a timer start; an `out` is rejected", async () => {
+  const Cfg = envelope("Cfg", { region: "string" });
+  const flow = defineFlow("nightly", { Start: { in: Cfg } }, (w) => {
+    w.startOn({ cycle: "R/PT24H" });
+    w.run("sweep", async () => ({}));
+  });
+  const xml = toBpmn(flow);
+  assert.match(xml, /<bpmn:startEvent id="Start">\s*<bpmn:extensionElements>[\s\S]*value="Cfg"[\s\S]*<bpmn:outgoing>[\s\S]*<bpmn:timerEventDefinition>/);
+  assert.throws(
+    () => defineFlow("bad", { Start: { in: Cfg, out: Cfg } }, (w) => w.run("a", async () => ({}))),
+    /Start contract takes only `in`/,
+  );
+  // Layout keeps the envelope on the start event.
+  const laid = await declarativeToLayoutedBpmn(flow);
+  assert.match(laid, /bpmnElement="Start"/);
+  assert.match(laid, /name="io.nanobpm.dataEnvelope.in" value="Cfg"/);
+});
+
+test("validateEnvelope: required, scalar types, lists, datetime; extra fields allowed", () => {
+  const In = envelope("In", {
+    pr: "integer",
+    total: "number",
+    draft: "boolean",
+    since: { type: "datetime", optional: true },
+    labels: { type: "string", list: true, optional: true },
+  });
+  assert.deepEqual(validateEnvelope(In, { pr: 7, total: 1.5, draft: false, extra: "ok" }), []);
+  assert.deepEqual(validateEnvelope(In, { pr: 7, total: 1, draft: true, since: "2026-11-10T01:22:16Z", labels: ["a"] }), []);
+  assert.deepEqual(validateEnvelope(In, { pr: 1.5, total: "3", draft: null, since: "yesterday", labels: ["a", 2] }), [
+    { field: "pr", message: "must be a whole number" },
+    { field: "total", message: "must be a number" },
+    { field: "draft", message: "is required" },
+    { field: "since", message: "must be an ISO 8601 date or date-time" },
+    { field: "labels", message: "item 1 must be a string" },
+  ]);
+  assert.deepEqual(validateEnvelope(In, [1]), [{ field: "", message: "In must be an object" }]);
+});
+
+test("validateEnvelope: impossible calendar dates are rejected; leap days are not", () => {
+  const In = envelope("In", { at: "datetime" });
+  for (const at of ["2026-02-29", "2026-02-30T12:00:00Z", "2026-04-31", "2026-13-01", "2026-00-10", "1900-02-29"]) {
+    assert.deepEqual(validateEnvelope(In, { at }), [{ field: "at", message: "must be an ISO 8601 date or date-time" }], at);
+  }
+  for (const at of ["2028-02-29", "2000-02-29T00:00:00Z", "2026-12-31", "2026-04-30T23:59:59+02:00"]) {
+    assert.deepEqual(validateEnvelope(In, { at }), [], at);
+  }
+});
+
+test("validateEnvelope: field names like constructor/toString read own properties, not Object.prototype", () => {
+  const In = envelope("In", { constructor: { type: "string", optional: true }, toString: "string" });
+  assert.deepEqual(validateEnvelope(In, {}), [{ field: "toString", message: "is required" }]);
+  assert.deepEqual(validateEnvelope(In, { toString: "x", constructor: "y" }), []);
+});
+
+test("validateEnvelope: an optional field may be absent, but a supplied null is type-checked", () => {
+  const In = envelope("In", { note: { type: "string", optional: true }, tags: { type: "string", list: true, optional: true } });
+  assert.deepEqual(validateEnvelope(In, {}), []);
+  assert.deepEqual(validateEnvelope(In, { note: null, tags: null }), [
+    { field: "note", message: "must be a string" },
+    { field: "tags", message: "must be a list" },
+  ]);
 });
 
 test("signal: a typed payload envelope is lifted onto the message", () => {

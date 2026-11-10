@@ -135,3 +135,64 @@ export function envelope<const S extends Record<string, FieldSpec>>(
   for (const f of list) assertIdent("envelope field name", f.name);
   return new EnvelopeDef(name, list);
 }
+
+/** One way a value fails its envelope: the field (or "" for the value itself) and why. */
+export interface EnvelopeProblem {
+  field: string;
+  message: string;
+}
+
+const DATETIME = /^\d{4}-\d{2}-\d{2}([Tt ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([Zz]|[+-]\d{2}:?\d{2})?)?$/;
+
+function scalarProblem(type: ScalarType, v: unknown): string | undefined {
+  switch (type) {
+    case "string":
+      return typeof v === "string" ? undefined : "must be a string";
+    case "boolean":
+      return typeof v === "boolean" ? undefined : "must be true or false";
+    case "number":
+      return typeof v === "number" && Number.isFinite(v) ? undefined : "must be a number";
+    case "integer":
+      return typeof v === "number" && Number.isInteger(v) ? undefined : "must be a whole number";
+    case "datetime":
+      return typeof v === "string" && DATETIME.test(v) && !Number.isNaN(Date.parse(v))
+        ? undefined
+        : "must be an ISO 8601 date or date-time";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Check a value against an envelope: every required field present (not `undefined`
+ * or `null`), and each present field of its declared scalar type (a `list` field an
+ * array of it). Fields the envelope doesn't declare are allowed — an envelope is the
+ * data a step needs, not all it may see. Returns the problems (empty = valid); it
+ * does not coerce. Use it where untyped data enters a typed flow, e.g. the variables
+ * a new instance is started with, checked against `flow.input`.
+ */
+export function validateEnvelope(env: Pick<Envelope, "name" | "fields">, value: unknown): EnvelopeProblem[] {
+  if (!isRecord(value)) return [{ field: "", message: `${env.name} must be an object` }];
+  const problems: EnvelopeProblem[] = [];
+  for (const f of env.fields) {
+    const v = value[f.name];
+    if (v === undefined || v === null) {
+      if (!f.optional) problems.push({ field: f.name, message: "is required" });
+      continue;
+    }
+    if (f.list) {
+      if (!Array.isArray(v)) {
+        problems.push({ field: f.name, message: "must be a list" });
+        continue;
+      }
+      const bad = v.findIndex((item) => scalarProblem(f.type, item) !== undefined);
+      if (bad >= 0) problems.push({ field: f.name, message: `item ${bad} ${scalarProblem(f.type, v[bad])}` });
+      continue;
+    }
+    const p = scalarProblem(f.type, v);
+    if (p) problems.push({ field: f.name, message: p });
+  }
+  return problems;
+}

@@ -42,15 +42,16 @@
 export { defineWorkflow, imperativeToBpmn, replayOnce } from "./imperative.js";
 export type { Journal, ReplayStep } from "./imperative.js";
 export { defineFlow, declarativeToBpmn, externalJobTypes, inlineJobTypes, walkNodes } from "./declarative.js";
-export type { FlowBuilder } from "./declarative.js";
+export type { FlowBuilder, StartVars } from "./declarative.js";
 // The `.boundary(...)` option type (its builder method augments FlowBuilder from
 // the boundary kind module — S2/#317).
 export type { BoundaryOptions } from "./nodes/boundary.js";
 export type { HumanOptions, HumanIoMapping, HumanIoEntry } from "./nodes/human.js";
 export { layoutBpmn, declarativeToLayoutedBpmn } from "./layout.js";
-export { envelope } from "./envelope.js";
+export { envelope, validateEnvelope } from "./envelope.js";
 export type {
   Envelope,
+  EnvelopeProblem,
   EnvelopeType,
   EnvelopeField,
   FieldSpec,

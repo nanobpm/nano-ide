@@ -67,6 +67,9 @@ export type OutPayload<Ct> = Ct extends { out: Envelope } ? Ct["out"]["type"] & 
 export type VarsOf<C, K extends string> = K extends keyof C ? InPayload<C[K]> : JsonObject;
 /** The output payload type of step `K` under contracts `C`. */
 export type ResultOf<C, K extends string> = K extends keyof C ? OutPayload<C[K]> : JsonObject;
+/** The start variables of a flow with contracts `C`: the `in` envelope of its
+ *  `Start` contract (the flow's input), else `JsonObject`. */
+export type StartVars<C> = VarsOf<C, "Start">;
 
 /** A typed handler for a `run` step: its job variables and result are resolved
  *  from the flow contracts by the step name. */
@@ -255,6 +258,17 @@ function claimName(ctx: BuilderCtx, id: string, name: string): void {
   }
   if (ctx.seen.has(name)) throw new Error(`duplicate step name "${name}" in flow "${id}"`);
   ctx.seen.add(name);
+}
+
+/** The flow's input: the `in` envelope of the reserved `Start` contract. `Start` is
+ *  the start event's element id (and a reserved step name), so the contract keyed by
+ *  it types the data a new instance receives. It has no `out`: a start event
+ *  produces nothing beyond its input. */
+function startInput(id: string, contracts: FlowContracts): Envelope | undefined {
+  const c: StepContract | undefined = contracts.Start;
+  if (!c) return undefined;
+  if (c.out) throw new Error(`flow "${id}": the Start contract takes only \`in\` (the flow's input), not \`out\``);
+  return c.in;
 }
 
 /** Resolve a step's declared envelopes from the flow contracts. */
@@ -533,6 +547,8 @@ export function defineFlow(
   if (steps.length === 0) throw new Error(`flow "${id}" declared no steps`);
   const flow: DeclarativeFlow = { kind: "declarative", id, steps, handlers };
   if (ctx.startTimer) flow.startTimer = ctx.startTimer;
+  const input = startInput(id, contracts);
+  if (input) flow.input = input;
   return flow;
 }
 
@@ -921,10 +937,21 @@ class Compiler {
   }
 
   /** Render the Start event — a plain none start, or a timer start when the
-   *  flow declared `startOn(...)`. */
+   *  flow declared `startOn(...)` — carrying the flow's input envelope, if any. */
   private renderStart(outg: string[]): string {
     const t = this.flow.startTimer;
-    if (!t) return `    <bpmn:startEvent id="Start">${outgoingOnly(outg)}</bpmn:startEvent>`;
+    const input = this.flow.input;
+    this.recordEnvelope(input);
+    // extensionElements precede outgoing in a BPMN flow node.
+    const ext = input
+      ? `      <bpmn:extensionElements>\n` +
+        `        <zeebe:properties>\n${envelopeProp("in", input.name)}\n        </zeebe:properties>\n` +
+        `      </bpmn:extensionElements>\n`
+      : "";
+    if (!t) {
+      if (!ext) return `    <bpmn:startEvent id="Start">${outgoingOnly(outg)}</bpmn:startEvent>`;
+      return `    <bpmn:startEvent id="Start">\n${ext}      ${outgoingOnly(outg)}\n    </bpmn:startEvent>`;
+    }
     const body =
       t.cycle !== undefined
         ? `<bpmn:timeCycle>${escapeXml(t.cycle)}</bpmn:timeCycle>`
@@ -933,6 +960,7 @@ class Compiler {
           : `<bpmn:timeDate>${escapeXml(requireStartAt(t))}</bpmn:timeDate>`;
     return (
       `    <bpmn:startEvent id="Start">\n` +
+      ext +
       `      ${outgoingOnly(outg)}\n` +
       `      <bpmn:timerEventDefinition>\n` +
       `        ${body}\n` +

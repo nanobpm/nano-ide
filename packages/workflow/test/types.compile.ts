@@ -13,6 +13,7 @@
 // back to `JsonObject`.
 
 import { defineFlow, envelope } from "../src/index.js";
+import type { StartVars } from "../src/index.js";
 import type { HumanIoMapping } from "../src/index.js";
 
 // (A) Untyped flow whose handlers RETURN DATA — the exact shape that regressed.
@@ -42,6 +43,16 @@ export const orders = defineFlow(
       return { ok: total > 0 }; // typed ChargeOut
     }),
 );
+
+// (B2) A flow input: the `Start` contract types the start variables (StartVars) and
+//      is exposed on the flow for hosts (start forms, validation).
+const ReviewInput = envelope("ReviewInput", { pr: "integer", note: { type: "string", optional: true } });
+const reviewContracts = { Start: { in: ReviewInput } };
+export const review = defineFlow("review", reviewContracts, (w) => w.run("fetch", async () => ({})));
+export const startVars: StartVars<typeof reviewContracts> = { pr: 7 };
+// @ts-expect-error pr is required and a number
+export const badStartVars: StartVars<typeof reviewContracts> = { note: "x" };
+export const inputFields: readonly { name: string }[] | undefined = review.input?.fields;
 
 // (C) Parallelism primitives — `parallel` fans out concurrent branches, `forEach`
 //     fans out over a FEEL collection. Inside their blocks the builder is the

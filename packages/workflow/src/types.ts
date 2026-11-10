@@ -113,6 +113,12 @@ export interface DeclarativeFlow {
   /** When set, the flow's start event is a durable timer start (see
    *  {@link TimerStart}) rather than a plain none start. */
   startTimer?: TimerStart;
+  /** The flow's input contract: the `in` envelope of the `Start` contract
+   *  (`defineFlow(id, { Start: { in: MyInput } }, …)`). Lifted onto the start
+   *  event as `io.nanobpm.dataEnvelope.in`, so the model says what a new instance
+   *  takes; a host can render a start form from it and check start variables
+   *  with {@link validateEnvelope}. Absent = untyped start. */
+  input?: Envelope;
 }
 
 // --- Imperative surface (Strategy B: a replayed orchestration function) -------

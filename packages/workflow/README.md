@@ -215,6 +215,35 @@ const orders = defineFlow(
 );
 ```
 
+#### The flow's input (`Start` contract)
+
+The contract keyed by `Start` (the start event's id, already a reserved step name) is
+the **flow's input**: the data a new instance is started with. Its `in` envelope is
+lifted onto the start event as `io.nanobpm.dataEnvelope.in` (plus its `nano:shape`), so
+the model says what the process takes, and it is exposed as `flow.input` for hosts. A
+host can render a start form from `flow.input.fields`, describe the input to an agent,
+and check start variables with `validateEnvelope`. `StartVars<C>` types them.
+
+```ts
+import { defineFlow, envelope, validateEnvelope, type StartVars } from "@nanobpm/workflow";
+
+const ReviewInput = envelope("ReviewInput", {
+  pr: "integer",
+  repo: "string",
+  note: { type: "string", optional: true },
+});
+const contracts = { Start: { in: ReviewInput } };
+const review = defineFlow("review", contracts, (w) => w.run("fetch", fetchPr));
+
+const vars: StartVars<typeof contracts> = { pr: 42, repo: "nanobpm/nano-ide" };
+validateEnvelope(review.input!, { pr: "42" });
+// → [{ field: "pr", message: "must be a whole number" }, { field: "repo", message: "is required" }]
+```
+
+`Start` takes only `in` (a start event produces nothing else), and works with a timer
+start (`startOn`) too. `validateEnvelope` checks required fields and scalar types
+(`list` fields element-wise) and allows undeclared fields; it does not coerce.
+
 #### Agent tasks — bind an LLM prompt to a worker (`w.task(name, { prompt })`)
 
 An **agent service task** is a `w.task` that additionally binds an LLM **prompt
@@ -357,6 +386,7 @@ once.
 | `defineWorkflow(id, orchFn)` | Imperative (replayed) workflow — experimental/internal. |
 | `defineFlow(id, [contracts,] build)` | Declarative flow: `run`/`task`/`signal`/`timer` + `switch`/`branch`/`loop`/`break`/`continue` + `parallel`/`forEach`, with an optional typed contracts map. |
 | `envelope(name, fields)` | A typed data envelope; lifted into the model as a `nano:shape` + `dataEnvelope` wiring. |
+| `validateEnvelope(env, value)` | Check a value against an envelope (required fields, scalar types); returns the problems. Use it on start variables against `flow.input`. |
 | `externalJobTypes(flow)` | The job types of a flow's external `task` steps (each overridable per-step via `w.task(name, { jobType })`). |
 | `WorkflowClient` | `deploy`, `start`, `signal`, `getInstance` over REST v2. |
 | `Worker` | Generic job runtime; routes job types → handlers, hosts the replay loop. |

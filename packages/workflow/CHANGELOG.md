@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.17.0...@nanobpm/workflow-0.18.0) (2026-11-10)
+
+
+### Features
+
+* **workflow:** w.end() — end a path early, or the whole instance with { terminate: true } ([#612](https://github.com/nanobpm/nano-ide/issues/612)) ([78fca2f](https://github.com/nanobpm/nano-ide/commit/78fca2feb07d53929a456dfb2386a543d931a69c))
+
 ## [0.17.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.16.0...@nanobpm/workflow-0.17.0) (2026-11-10)
 
 

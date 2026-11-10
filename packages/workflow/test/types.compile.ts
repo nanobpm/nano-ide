@@ -53,6 +53,15 @@ export const startVars: StartVars<typeof reviewContracts> = { pr: 7 };
 // @ts-expect-error pr is required and a number
 export const badStartVars: StartVars<typeof reviewContracts> = { note: "x" };
 export const inputFields: readonly { name: string }[] | undefined = review.input?.fields;
+// A list field doesn't stop an envelope fitting a contract (Start or a step), and it
+// types as an array.
+const Tagged = envelope("Tagged", { id: "integer", tags: { type: "string", list: true, optional: true } });
+export const tagged = defineFlow("tagged", { Start: { in: Tagged }, tag: { in: Tagged } }, (w) =>
+  w.run("tag", async (job) => {
+    const tags: string[] | undefined = job.variables.tags;
+    return { count: tags?.length ?? 0 };
+  }),
+);
 
 // (C) Parallelism primitives — `parallel` fans out concurrent branches, `forEach`
 //     fans out over a FEEL collection. Inside their blocks the builder is the

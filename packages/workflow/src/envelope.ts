@@ -43,14 +43,18 @@ export type FieldSpec =
   | ScalarType
   | { type: ScalarType; optional?: boolean; list?: boolean };
 
-/** The TS type of a single field spec (applies `list` before `optional`). */
+/** The TS type of a single field spec (applies `list` before `optional`). A spec
+ *  whose `list` isn't a literal (the widened `FieldSpec` of a plain `Envelope`) may
+ *  be either, so a declared envelope with list fields still fits `Envelope`. */
 export type FieldTs<F> = F extends ScalarType
   ? ScalarTs<F>
   : F extends { type: infer T extends ScalarType; list: true }
     ? ScalarTs<T>[]
-    : F extends { type: infer T extends ScalarType }
+    : F extends { type: infer T extends ScalarType; list?: false }
       ? ScalarTs<T>
-      : never;
+      : F extends { type: infer T extends ScalarType }
+        ? ScalarTs<T> | ScalarTs<T>[]
+        : never;
 
 type OptionalKeys<S> = {
   [K in keyof S]: S[K] extends { optional: true } ? K : never;

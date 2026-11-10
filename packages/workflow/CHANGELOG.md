@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.16.0...@nanobpm/workflow-0.17.0) (2026-11-10)
+
+
+### Features
+
+* **workflow:** flow input — the Start contract's envelope on the start event, flow.input, validateEnvelope ([#610](https://github.com/nanobpm/nano-ide/issues/610)) ([cf5f381](https://github.com/nanobpm/nano-ide/commit/cf5f381c7083481c4103fc8338a14aee7d2af16e))
+
 ## [0.16.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.15.1...@nanobpm/workflow-0.16.0) (2026-11-03)
 
 

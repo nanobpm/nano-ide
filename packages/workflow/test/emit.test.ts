@@ -813,6 +813,12 @@ test("validateEnvelope: impossible calendar dates are rejected; leap days are no
   }
 });
 
+test("validateEnvelope: field names like constructor/toString read own properties, not Object.prototype", () => {
+  const In = envelope("In", { constructor: { type: "string", optional: true }, toString: "string" });
+  assert.deepEqual(validateEnvelope(In, {}), [{ field: "toString", message: "is required" }]);
+  assert.deepEqual(validateEnvelope(In, { toString: "x", constructor: "y" }), []);
+});
+
 test("validateEnvelope: an optional field may be absent, but a supplied null is type-checked", () => {
   const In = envelope("In", { note: { type: "string", optional: true }, tags: { type: "string", list: true, optional: true } });
   assert.deepEqual(validateEnvelope(In, {}), []);

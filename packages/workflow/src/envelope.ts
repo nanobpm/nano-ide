@@ -195,7 +195,8 @@ export function validateEnvelope(env: Pick<Envelope, "name" | "fields">, value: 
   if (!isRecord(value)) return [{ field: "", message: `${env.name} must be an object` }];
   const problems: EnvelopeProblem[] = [];
   for (const f of env.fields) {
-    const v = value[f.name];
+    // Own properties only: `{}` has no `constructor` field of its own.
+    const v = Object.hasOwn(value, f.name) ? value[f.name] : undefined;
     if (v === undefined || (v === null && !f.optional)) {
       if (!f.optional) problems.push({ field: f.name, message: "is required" });
       continue;

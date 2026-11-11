@@ -1383,3 +1383,14 @@ test("layoutBpmn: sub-process / process / diagram tags inside comments or CDATA 
   assert.match(out, /^[^]*<!-- <bpmn:definitions> -->/);
   assert.doesNotMatch(tags[0] ?? "", /xmlns:bpmndi=/);
 });
+
+test("seedExpandedSubProcesses: a whitespace-around-= xmlns on definitions is honoured, never re-declared in the seeded XML", () => {
+  const xml =
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi = "http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc=\'http://www.omg.org/spec/DD/20100524/DC\' id="d" targetNamespace="t">' +
+    '<bpmn:process id="p"><bpmn:subProcess id="sp"><bpmn:startEvent id="s2"/></bpmn:subProcess></bpmn:process></bpmn:definitions>';
+  const seeded = seedExpandedSubProcesses(xml);
+  const defs = /<bpmn:definitions\b[^>]*>/.exec(seeded)?.[0] ?? "";
+  assert.equal((defs.match(/xmlns:bpmndi\s*=/g) ?? []).length, 1);
+  assert.equal((defs.match(/xmlns:dc\s*=/g) ?? []).length, 1);
+  assert.match(seeded, /bpmnElement="sp" isExpanded="true"/);
+});

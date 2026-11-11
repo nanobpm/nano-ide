@@ -72,11 +72,13 @@ const DI_NS = {
  * it, so seeding a shape for an id it cannot see would leave a dangling
  * `bpmnElement` and crash the layout.
  */
-function xmlAttrs(tag: string): Map<string, string> {
+function xmlAttrs(tag: string, allowSpacedEquals = false): Map<string, string> {
   const attrs = new Map<string, string>();
   const body = tag.replace(/^<[^\s/>]+/, "");
   for (const m of body.matchAll(/([^\s=/>]+)(\s*)=(\s*)(?:"([^"]*)"|'([^']*)')/g)) {
-    if (m[2] !== "" || m[3] !== "") continue;
+    // A spaced `=` is still consumed (so its value is skipped whole), but by
+    // default it is not reported: the layouter's parser drops such attributes.
+    if (!allowSpacedEquals && (m[2] !== "" || m[3] !== "")) continue;
     const name = m[1];
     const value = m[4] ?? m[5];
     if (name !== undefined && value !== undefined && !attrs.has(name)) attrs.set(name, value);
@@ -143,7 +145,9 @@ export function seedExpandedSubProcesses(bpmnXml: string): string {
   if (end === null || defs === null) return bpmnXml;
   // Only declarations on the definitions element are in scope for the appended
   // diagram; one declared on a child element does not bind the prefix there.
-  const defsAttrs = xmlAttrs(defs[0]);
+  // Any well-formed declaration binds the prefix, however it is spaced, so
+  // count spaced ones too — re-declaring the prefix would be invalid XML.
+  const defsAttrs = xmlAttrs(defs[0], true);
   const missing = Object.entries(DI_NS)
     .filter(([prefix]) => !defsAttrs.has(`xmlns:${prefix}`))
     .map(([prefix, uri]) => ` xmlns:${prefix}="${uri}"`)

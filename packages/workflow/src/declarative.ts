@@ -49,6 +49,7 @@ import type {
 } from "./types.js";
 import type { Envelope, EnvelopeField } from "./envelope.js";
 import type { HumanIoMapping } from "./io-mapping.js";
+import type { ForEachOpts } from "./nodes/forEach.js";
 import { assertIdent, assertTimerCycle, assertTimerDate, assertTimerDuration, escapeXml, jobType, messageName } from "./xml.js";
 import { eachNodeKind, requireNodeKind } from "./nodes/registry.js";
 // Import the generated barrel purely for its registration side effects: every
@@ -189,6 +190,8 @@ export interface FlowBuilder<C extends object = object> {
    * item bound to the `itemVar` variable in the child's scope. A single-activity
    * body attaches the multi-instance characteristics to that activity; a
    * multi-step body is wrapped in an embedded multi-instance sub-process. Options:
+   *  - `name` — label the multi-step body's sub-process on the diagram (e.g.
+   *    "Review & challenge each file"); a single-step body keeps its step's name.
    *  - `sequential` — run children one at a time (a sequential MI) instead of all
    *    at once (the default: a parallel MI).
    *  - `outputCollection` / `outputElement` — collect each child's `outputElement`
@@ -202,12 +205,7 @@ export interface FlowBuilder<C extends object = object> {
     collection: string,
     itemVar: string,
     body: Block<C>,
-    opts?: {
-      sequential?: boolean;
-      outputCollection?: string;
-      outputElement?: string;
-      completionCondition?: string;
-    },
+    opts?: ForEachOpts,
   ): FlowBuilder<C>;
   /** Exit the enclosing loop (routes to whatever follows it). Only valid inside
    *  a `loop`. */
@@ -686,8 +684,9 @@ export interface EmitApi {
   addGateway(id: string, name?: string): RenderNode;
   /** Place a `<bpmn:parallelGateway>`. */
   addParallelGateway(id: string): RenderNode;
-  /** Place an embedded `<bpmn:subProcess>` whose body renders in its own scope. */
-  addSubProcess(id: string, mi: string): RenderNode;
+  /** Place an embedded `<bpmn:subProcess>` whose body renders in its own scope,
+   *  optionally labelled with `name`. */
+  addSubProcess(id: string, mi: string, name?: string): RenderNode;
   /** Place a plain none `<bpmn:startEvent>` (for an embedded sub-process). */
   addPlainStart(id: string): void;
   /** Place a plain `<bpmn:endEvent>` (for an embedded sub-process). */
@@ -733,7 +732,7 @@ class Compiler {
       addTimerCatchEvent: (node) => this.addTimerCatchEvent(node),
       addGateway: (id, name) => this.addGateway(id, name),
       addParallelGateway: (id) => this.addParallelGateway(id),
-      addSubProcess: (id, mi) => this.addSubProcess(id, mi),
+      addSubProcess: (id, mi, name) => this.addSubProcess(id, mi, name),
       addPlainStart: (id) => this.addPlainStart(id),
       addPlainEnd: (id) => this.addPlainEnd(id),
       nextGw: () => this.gw++,
@@ -892,12 +891,12 @@ class Compiler {
 
   /** An embedded sub-process whose body renders nested in its own scope, with the
    *  given multi-instance characteristics lifted onto it. */
-  private addSubProcess(id: string, mi: string): RenderNode {
+  private addSubProcess(id: string, mi: string, name?: string): RenderNode {
     const node: RenderNode = {
       id,
       scope: this.currentScope(),
       render: (inc, outg) =>
-        `    <bpmn:subProcess id="${escapeXml(id)}">\n` +
+        `    <bpmn:subProcess id="${escapeXml(id)}"${name ? ` name="${escapeXml(name)}"` : ""}>\n` +
         incomingOutgoing(inc, outg) +
         mi +
         this.renderScope(id) +

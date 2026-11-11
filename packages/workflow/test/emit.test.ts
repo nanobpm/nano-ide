@@ -1,6 +1,7 @@
 // Unit tests for the authoring surfaces + model derivation + the replay engine.
 // These need no gateway and always run. Run against the built `dist` artifact.
 import { test } from "node:test";
+import { seedExpandedSubProcesses } from "../dist/layout.js";
 import assert from "node:assert/strict";
 
 import {
@@ -1158,6 +1159,69 @@ test("declarative emit: a multi-step forEach body becomes an embedded multi-inst
   assert.match(xml, /sourceRef="Sub_0" targetRef="report"/);
 });
 
+test("declarative emit: forEach { name } names the multi-step sub-process (escaped)", () => {
+  const flow = defineFlow("named", (w) =>
+    w.forEach("files", "file", (b) => {
+      b.task("review");
+      b.task("challenge");
+    }, { name: "Review & challenge each file" }),
+  );
+  assert.match(toBpmn(flow), /<bpmn:subProcess id="Sub_0" name="Review &amp; challenge each file">/);
+});
+
+test("declarative emit: forEach { name } on a single-step body leaves the step's own name", () => {
+  // The fast path lifts the MI onto the step itself: the step IS the box, so it
+  // keeps the name it was declared with.
+  const flow = defineFlow("lifted", (w) => w.forEach("xs", "x", (b) => b.task("handle"), { name: "Handle each" }));
+  const xml = toBpmn(flow);
+  assert.match(xml, /<bpmn:serviceTask id="handle" name="handle">/);
+  assert.doesNotMatch(xml, /Handle each/);
+});
+
+test("declarative emit: forEach { name } must be a non-empty string", () => {
+  const body = (b: Parameters<Parameters<typeof defineFlow>[1]>[0]) => {
+    b.task("a");
+    b.task("b");
+  };
+  assert.throws(() => defineFlow("f", (w) => w.forEach("xs", "x", body, { name: "  " })), /forEach\("x"\) name/);
+  assert.throws(
+    () => defineFlow("f", (w) => w.forEach("xs", "x", body, { name: JSON.parse("3") })),
+    /forEach\("x"\) name/,
+  );
+});
+
+test("layoutBpmn: a multi-step forEach sub-process is laid out EXPANDED, its steps on the main diagram", async () => {
+  const flow = defineFlow("fanout", (w) => {
+    w.task("plan");
+    w.forEach("files", "file", (b) => {
+      b.task("review");
+      b.task("challenge");
+    });
+    w.task("fix");
+  });
+  const laid = await layoutBpmn(toBpmn(flow));
+  // One diagram, one plane: the body is not pushed onto a drill-down plane.
+  assert.equal((laid.match(/<bpmndi:BPMNDiagram\b/g) ?? []).length, 1);
+  assert.equal((laid.match(/<bpmndi:BPMNPlane\b/g) ?? []).length, 1);
+  assert.match(laid, /<bpmndi:BPMNShape [^>]*bpmnElement="Sub_0" isExpanded="true"/);
+  assert.match(laid, /<bpmndi:BPMNShape [^>]*bpmnElement="review"/);
+  assert.match(laid, /<bpmndi:BPMNShape [^>]*bpmnElement="challenge"/);
+});
+
+test("layoutBpmn: input that already has DI keeps its own expanded/collapsed choice", async () => {
+  const flow = defineFlow("fanout", (w) =>
+    w.forEach("files", "file", (b) => {
+      b.task("review");
+      b.task("challenge");
+    }),
+  );
+  const expanded = await layoutBpmn(toBpmn(flow));
+  // An author (or modeller) collapsed it: re-laying-out must not re-expand it.
+  const collapsed = expanded.replace(/ isExpanded="true"/g, "");
+  const again = await layoutBpmn(collapsed);
+  assert.doesNotMatch(again, /isExpanded="true"/);
+});
+
 test("declarative emit: forEach validates its inputs", () => {
   assert.throws(() => defineFlow("f", (w) => w.forEach("", "x", (b) => b.task("a"))), /non-empty FEEL collection/);
   assert.throws(() => defineFlow("f", (w) => w.forEach("xs", "1bad", (b) => b.task("a"))), /forEach itemVar/);
@@ -1217,4 +1281,116 @@ test("run: accepts an omitted or positive-integer { timeoutMs } (issue #596)", (
   assert.doesNotThrow(() => defineFlow("ok_timeout_int", (w) => {
     w.run("step", async () => ({}), { timeoutMs: 1 });
   }));
+});
+
+test("layoutBpmn: DI-less event sub-processes are NOT seeded expanded; whitespace-around-= xmlns is not duplicated", async () => {
+  const xml =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi = "http://www.omg.org/spec/BPMN/20100524/DI" id="d" targetNamespace="t">' +
+    '<bpmn:process id="p" isExecutable="true">' +
+    '<bpmn:startEvent id="s"/><bpmn:sequenceFlow id="f1" sourceRef="s" targetRef="sp"/>' +
+    '<bpmn:subProcess id="sp"><bpmn:startEvent id="s2"/><bpmn:sequenceFlow id="f2" sourceRef="s2" targetRef="e2"/><bpmn:endEvent id="e2"/></bpmn:subProcess>' +
+    '<bpmn:sequenceFlow id="f3" sourceRef="sp" targetRef="e"/><bpmn:endEvent id="e"/>' +
+    '<bpmn:subProcess id="esp" triggeredByEvent="true"><bpmn:startEvent id="s3"/></bpmn:subProcess>' +
+    "</bpmn:process></bpmn:definitions>";
+  const out = await layoutBpmn(xml);
+  assert.equal((out.match(/xmlns:bpmndi\s*=/g) ?? []).length, 1);
+  assert.match(out, /bpmnElement="sp"[^>]*isExpanded="true"/);
+  assert.doesNotMatch(out, /bpmnElement="esp"[^>]*isExpanded="true"/);
+});
+
+test("layoutBpmn: DI-less ids in either quote style are seeded; ids the layouter cannot parse are not seeded", async () => {
+  const model = (procId: string, subId: string): string =>
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">' +
+    `<bpmn:process ${procId} isExecutable="true">` +
+    '<bpmn:startEvent id="s"/><bpmn:sequenceFlow id="f1" sourceRef="s" targetRef="sp"/>' +
+    `<bpmn:subProcess ${subId}><bpmn:startEvent id="s2"/><bpmn:sequenceFlow id="f2" sourceRef="s2" targetRef="e2"/><bpmn:endEvent id="e2"/></bpmn:subProcess>` +
+    '<bpmn:sequenceFlow id="f3" sourceRef="sp" targetRef="e"/><bpmn:endEvent id="e"/>' +
+    "</bpmn:process></bpmn:definitions>";
+  for (const [procId, subId] of [
+    ["id='p'", "id='sp'"],
+    ['id="p"', "id='sp'"],
+    ["id='p'", 'id="sp"'],
+  ]) {
+    const out = await layoutBpmn(model(procId, subId));
+    assert.match(out, /bpmnElement="sp"[^>]*isExpanded="true"/, `${procId} / ${subId}`);
+  }
+  // Whitespace around `=` is dropped by the layouter's XML parser; seeding a
+  // shape for such an id must not happen (its bpmnElement would dangle).
+  assert.doesNotMatch(seedExpandedSubProcesses(model('id="p"', 'id = "sp"')), /bpmnElement="sp"/);
+});
+
+test("layoutBpmn: a DI namespace declared only on a child element is still declared on definitions", async () => {
+  const xml =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">' +
+    '<bpmn:process id="p" isExecutable="true">' +
+    '<bpmn:startEvent id="s"/><bpmn:sequenceFlow id="f1" sourceRef="s" targetRef="sp"/>' +
+    '<bpmn:subProcess id="sp" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"><bpmn:startEvent id="s2"/><bpmn:sequenceFlow id="f2" sourceRef="s2" targetRef="e2"/><bpmn:endEvent id="e2"/></bpmn:subProcess>' +
+    '<bpmn:sequenceFlow id="f3" sourceRef="sp" targetRef="e"/><bpmn:endEvent id="e"/>' +
+    "</bpmn:process></bpmn:definitions>";
+  const defs = /<bpmn:definitions\b[^>]*>/.exec(seedExpandedSubProcesses(xml))?.[0] ?? "";
+  assert.match(defs, /xmlns:dc\s*=/);
+  assert.match(defs, /xmlns:bpmndi\s*=/);
+});
+
+test("layoutBpmn: an id-like text inside another attribute's value is not mistaken for the id", async () => {
+  const model = (procAttrs: string, subAttrs: string): string =>
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">' +
+    `<bpmn:process ${procAttrs} isExecutable="true">` +
+    '<bpmn:startEvent id="s"/><bpmn:sequenceFlow id="f1" sourceRef="s" targetRef="sp"/>' +
+    `<bpmn:subProcess ${subAttrs}><bpmn:startEvent id="s2"/><bpmn:sequenceFlow id="f2" sourceRef="s2" targetRef="e2"/><bpmn:endEvent id="e2"/></bpmn:subProcess>` +
+    '<bpmn:sequenceFlow id="f3" sourceRef="sp" targetRef="e"/><bpmn:endEvent id="e"/>' +
+    "</bpmn:process></bpmn:definitions>";
+  for (const [procAttrs, subAttrs] of [
+    ['id="p"', `name="Review id='ghost'" id="sp"`],
+    ['id="p"', `name='Review id="ghost"' id="sp"`],
+    [`name="x id='ghost'" id="p"`, 'id="sp"'],
+  ]) {
+    const seeded = seedExpandedSubProcesses(model(procAttrs, subAttrs));
+    assert.doesNotMatch(seeded, /bpmnElement="ghost"/, `${procAttrs} / ${subAttrs}`);
+    const out = await layoutBpmn(model(procAttrs, subAttrs));
+    assert.match(out, /bpmnElement="sp"[^>]*isExpanded="true"/, `${procAttrs} / ${subAttrs}`);
+  }
+  // A label containing triggeredByEvent="true" text does not exclude a real sub-process.
+  assert.match(seedExpandedSubProcesses(model('id="p"', `name='triggeredByEvent="true"' id="sp"`)), /bpmnElement="sp"/);
+});
+
+test("layoutBpmn: sub-process / process / diagram tags inside comments or CDATA are not discovered", () => {
+  const base = (inner: string, outer = ""): string =>
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    `${outer}<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">` +
+    '<bpmn:process id="p" isExecutable="true">' +
+    `${inner}<bpmn:subProcess id="sp"><bpmn:startEvent id="s2"/></bpmn:subProcess>` +
+    "</bpmn:process></bpmn:definitions>";
+  for (const inner of [
+    '<!-- <bpmn:subProcess id="removed"/> -->',
+    '<bpmn:documentation><![CDATA[<bpmn:subProcess id="removed">]]></bpmn:documentation>',
+  ]) {
+    const out = seedExpandedSubProcesses(base(inner));
+    assert.doesNotMatch(out, /bpmnElement="removed"/, inner);
+    assert.match(out, /bpmnElement="sp"/, inner);
+  }
+  // A commented-out diagram does not suppress seeding.
+  assert.match(seedExpandedSubProcesses(base('<!-- <bpmndi:BPMNDiagram id="old"/> -->')), /bpmnElement="sp"/);
+  // A commented-out definitions tag before the real one does not receive the xmlns.
+  const out = seedExpandedSubProcesses(base("", "<!-- <bpmn:definitions> -->"));
+  const real = /<bpmn:definitions\b[^>]*>/g;
+  const tags = [...out.matchAll(real)].map((m) => m[0]);
+  assert.match(tags[1] ?? "", /xmlns:bpmndi=/);
+  assert.match(out, /^[^]*<!-- <bpmn:definitions> -->/);
+  assert.doesNotMatch(tags[0] ?? "", /xmlns:bpmndi=/);
+});
+
+test("seedExpandedSubProcesses: a whitespace-around-= xmlns on definitions is honoured, never re-declared in the seeded XML", () => {
+  const xml =
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi = "http://www.omg.org/spec/BPMN/20100524/DI" xmlns:dc=\'http://www.omg.org/spec/DD/20100524/DC\' id="d" targetNamespace="t">' +
+    '<bpmn:process id="p"><bpmn:subProcess id="sp"><bpmn:startEvent id="s2"/></bpmn:subProcess></bpmn:process></bpmn:definitions>';
+  const seeded = seedExpandedSubProcesses(xml);
+  const defs = /<bpmn:definitions\b[^>]*>/.exec(seeded)?.[0] ?? "";
+  assert.equal((defs.match(/xmlns:bpmndi\s*=/g) ?? []).length, 1);
+  assert.equal((defs.match(/xmlns:dc\s*=/g) ?? []).length, 1);
+  assert.match(seeded, /bpmnElement="sp" isExpanded="true"/);
 });

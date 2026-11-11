@@ -78,7 +78,12 @@ function seedExpandedSubProcesses(bpmnXml: string): string {
   if (/<(?:\w+:)?BPMNDiagram\b/.test(bpmnXml)) return bpmnXml;
   const planes: string[] = [];
   for (const proc of bpmnXml.matchAll(/<bpmn:process\b[^>]*\bid="([^"]+)"[\s\S]*?<\/bpmn:process>/g)) {
-    const subs = [...proc[0].matchAll(/<bpmn:subProcess\b[^>]*\bid="([^"]+)"/g)].map((m) => m[1]);
+    // Event sub-processes (`triggeredByEvent="true"`) are excluded: they are not
+    // forEach bodies and keep the layouter's default treatment.
+    const subs = [...proc[0].matchAll(/<bpmn:subProcess\b[^>]*>/g)]
+      .filter((m) => !/\btriggeredByEvent\s*=\s*["']true["']/.test(m[0]))
+      .map((m) => /\bid\s*=\s*"([^"]+)"/.exec(m[0])?.[1])
+      .filter((id): id is string => id !== undefined);
     if (subs.length === 0) continue;
     const shapes = subs.map(
       (id, i) =>
@@ -94,7 +99,7 @@ function seedExpandedSubProcesses(bpmnXml: string): string {
   if (planes.length === 0) return bpmnXml;
   let xml = bpmnXml.replace(/<\/bpmn:definitions>\s*$/, `${planes.join("")}</bpmn:definitions>`);
   for (const [prefix, uri] of Object.entries(DI_NS)) {
-    if (!new RegExp(`xmlns:${prefix}=`).test(xml)) {
+    if (!new RegExp(`\\bxmlns:${prefix}\\s*=`).test(xml)) {
       xml = xml.replace(/<bpmn:definitions\b/, `<bpmn:definitions xmlns:${prefix}="${uri}"`);
     }
   }

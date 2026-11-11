@@ -1184,7 +1184,7 @@ test("declarative emit: forEach { name } must be a non-empty string", () => {
   };
   assert.throws(() => defineFlow("f", (w) => w.forEach("xs", "x", body, { name: "  " })), /forEach\("x"\) name/);
   assert.throws(
-    () => defineFlow("f", (w) => w.forEach("xs", "x", body, { name: 3 as unknown as string })),
+    () => defineFlow("f", (w) => w.forEach("xs", "x", body, { name: JSON.parse("3") })),
     /forEach\("x"\) name/,
   );
 });
@@ -1280,4 +1280,20 @@ test("run: accepts an omitted or positive-integer { timeoutMs } (issue #596)", (
   assert.doesNotThrow(() => defineFlow("ok_timeout_int", (w) => {
     w.run("step", async () => ({}), { timeoutMs: 1 });
   }));
+});
+
+test("layoutBpmn: DI-less event sub-processes are NOT seeded expanded; whitespace-around-= xmlns is not duplicated", async () => {
+  const xml =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" xmlns:bpmndi = "http://www.omg.org/spec/BPMN/20100524/DI" id="d" targetNamespace="t">' +
+    '<bpmn:process id="p" isExecutable="true">' +
+    '<bpmn:startEvent id="s"/><bpmn:sequenceFlow id="f1" sourceRef="s" targetRef="sp"/>' +
+    '<bpmn:subProcess id="sp"><bpmn:startEvent id="s2"/><bpmn:sequenceFlow id="f2" sourceRef="s2" targetRef="e2"/><bpmn:endEvent id="e2"/></bpmn:subProcess>' +
+    '<bpmn:sequenceFlow id="f3" sourceRef="sp" targetRef="e"/><bpmn:endEvent id="e"/>' +
+    '<bpmn:subProcess id="esp" triggeredByEvent="true"><bpmn:startEvent id="s3"/></bpmn:subProcess>' +
+    "</bpmn:process></bpmn:definitions>";
+  const out = await layoutBpmn(xml);
+  assert.equal((out.match(/xmlns:bpmndi\s*=/g) ?? []).length, 1);
+  assert.match(out, /bpmnElement="sp"[^>]*isExpanded="true"/);
+  assert.doesNotMatch(out, /bpmnElement="esp"[^>]*isExpanded="true"/);
 });

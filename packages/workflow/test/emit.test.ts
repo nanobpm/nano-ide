@@ -1158,6 +1158,69 @@ test("declarative emit: a multi-step forEach body becomes an embedded multi-inst
   assert.match(xml, /sourceRef="Sub_0" targetRef="report"/);
 });
 
+test("declarative emit: forEach { name } names the multi-step sub-process (escaped)", () => {
+  const flow = defineFlow("named", (w) =>
+    w.forEach("files", "file", (b) => {
+      b.task("review");
+      b.task("challenge");
+    }, { name: "Review & challenge each file" }),
+  );
+  assert.match(toBpmn(flow), /<bpmn:subProcess id="Sub_0" name="Review &amp; challenge each file">/);
+});
+
+test("declarative emit: forEach { name } on a single-step body leaves the step's own name", () => {
+  // The fast path lifts the MI onto the step itself: the step IS the box, so it
+  // keeps the name it was declared with.
+  const flow = defineFlow("lifted", (w) => w.forEach("xs", "x", (b) => b.task("handle"), { name: "Handle each" }));
+  const xml = toBpmn(flow);
+  assert.match(xml, /<bpmn:serviceTask id="handle" name="handle">/);
+  assert.doesNotMatch(xml, /Handle each/);
+});
+
+test("declarative emit: forEach { name } must be a non-empty string", () => {
+  const body = (b: Parameters<Parameters<typeof defineFlow>[1]>[0]) => {
+    b.task("a");
+    b.task("b");
+  };
+  assert.throws(() => defineFlow("f", (w) => w.forEach("xs", "x", body, { name: "  " })), /forEach\("x"\) name/);
+  assert.throws(
+    () => defineFlow("f", (w) => w.forEach("xs", "x", body, { name: 3 as unknown as string })),
+    /forEach\("x"\) name/,
+  );
+});
+
+test("layoutBpmn: a multi-step forEach sub-process is laid out EXPANDED, its steps on the main diagram", async () => {
+  const flow = defineFlow("fanout", (w) => {
+    w.task("plan");
+    w.forEach("files", "file", (b) => {
+      b.task("review");
+      b.task("challenge");
+    });
+    w.task("fix");
+  });
+  const laid = await layoutBpmn(toBpmn(flow));
+  // One diagram, one plane: the body is not pushed onto a drill-down plane.
+  assert.equal((laid.match(/<bpmndi:BPMNDiagram\b/g) ?? []).length, 1);
+  assert.equal((laid.match(/<bpmndi:BPMNPlane\b/g) ?? []).length, 1);
+  assert.match(laid, /<bpmndi:BPMNShape [^>]*bpmnElement="Sub_0" isExpanded="true"/);
+  assert.match(laid, /<bpmndi:BPMNShape [^>]*bpmnElement="review"/);
+  assert.match(laid, /<bpmndi:BPMNShape [^>]*bpmnElement="challenge"/);
+});
+
+test("layoutBpmn: input that already has DI keeps its own expanded/collapsed choice", async () => {
+  const flow = defineFlow("fanout", (w) =>
+    w.forEach("files", "file", (b) => {
+      b.task("review");
+      b.task("challenge");
+    }),
+  );
+  const expanded = await layoutBpmn(toBpmn(flow));
+  // An author (or modeller) collapsed it: re-laying-out must not re-expand it.
+  const collapsed = expanded.replace(/ isExpanded="true"/g, "");
+  const again = await layoutBpmn(collapsed);
+  assert.doesNotMatch(again, /isExpanded="true"/);
+});
+
 test("declarative emit: forEach validates its inputs", () => {
   assert.throws(() => defineFlow("f", (w) => w.forEach("", "x", (b) => b.task("a"))), /non-empty FEEL collection/);
   assert.throws(() => defineFlow("f", (w) => w.forEach("xs", "1bad", (b) => b.task("a"))), /forEach itemVar/);

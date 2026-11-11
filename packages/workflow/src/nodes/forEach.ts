@@ -25,6 +25,8 @@ interface ForEachNode {
   outputElement?: string;
   /** FEEL boolean that, once true, completes the body early. */
   completionCondition?: string;
+  /** Label for the multi-step body's sub-process (what the box does, on the diagram). */
+  name?: string;
 }
 
 declare module "../types.js" {
@@ -33,7 +35,12 @@ declare module "../types.js" {
   }
 }
 
-interface ForEachOpts {
+/** `forEach` options — the single definition `FlowBuilder.forEach` uses too. */
+export interface ForEachOpts {
+  /** Label the multi-step body's sub-process, e.g. "Review & challenge each file".
+   *  A single-step body has no box of its own (the MI is lifted onto the step,
+   *  which keeps its own name), so the label does not apply there. */
+  name?: string;
   sequential?: boolean;
   outputCollection?: string;
   outputElement?: string;
@@ -104,6 +111,12 @@ registerNodeKind("forEach", {
       }
       node.completionCondition = compCond;
     }
+    if (opts?.name !== undefined) {
+      if (typeof opts.name !== "string" || opts.name.trim() === "") {
+        throw new Error(`forEach("${itemVar}") name must be a non-empty string`);
+      }
+      node.name = opts.name.trim();
+    }
     if (node.outputElement && !node.outputCollection) {
       throw new Error(`forEach("${itemVar}") outputElement needs an outputCollection to collect into`);
     }
@@ -129,7 +142,7 @@ registerNodeKind("forEach", {
       return [api.newEdge(only.name)];
     }
     const subId = `Sub_${api.nextGw()}`;
-    api.addSubProcess(subId, mi);
+    api.addSubProcess(subId, mi, node.name);
     api.connect(incoming, subId);
     api.pushScope(subId);
     const startId = `${subId}_start`;

@@ -51,11 +51,54 @@ export async function layoutBpmn(bpmnXml: string): Promise<string> {
       { cause },
     );
   }
-  const result = await layoutProcess(bpmnXml);
+  const result = await layoutProcess(seedExpandedSubProcesses(bpmnXml));
   // Version-shape normalization: bpmn-auto-layout 2.x (and >= 1.4) resolves to
   // `{ xml, warnings }`; 1.3.x resolved to the laid-out XML string directly. We
   // pin >= 2.0.0-alpha.2 but normalize both so the SDK tolerates the whole range.
   return typeof result === "string" ? result : result.xml;
+}
+
+const DI_NS = {
+  bpmndi: "http://www.omg.org/spec/BPMN/20100524/DI",
+  dc: "http://www.omg.org/spec/DD/20100524/DC",
+};
+
+/**
+ * bpmn-auto-layout 2 draws a sub-process EXPANDED (its steps inline, on the
+ * main diagram) only when the input's own DI says `isExpanded="true"`; otherwise
+ * it collapses it onto a drill-down plane, which hides the steps — e.g. a
+ * multi-step `forEach` body — from anyone reading the diagram. A code-first
+ * model has no DI, so seed a minimal diagram that marks each embedded
+ * sub-process expanded (one plane per process). Input that already has a
+ * diagram is returned untouched: its expanded/collapsed choices are the author's.
+ * Only the `bpmn:` prefix our emitters write is recognised; other input passes
+ * through and lays out as before.
+ */
+function seedExpandedSubProcesses(bpmnXml: string): string {
+  if (/<(?:\w+:)?BPMNDiagram\b/.test(bpmnXml)) return bpmnXml;
+  const planes: string[] = [];
+  for (const proc of bpmnXml.matchAll(/<bpmn:process\b[^>]*\bid="([^"]+)"[\s\S]*?<\/bpmn:process>/g)) {
+    const subs = [...proc[0].matchAll(/<bpmn:subProcess\b[^>]*\bid="([^"]+)"/g)].map((m) => m[1]);
+    if (subs.length === 0) continue;
+    const shapes = subs.map(
+      (id, i) =>
+        `<bpmndi:BPMNShape id="Seed_${i}_${id}_di" bpmnElement="${id}" isExpanded="true">` +
+        `<dc:Bounds x="0" y="0" width="100" height="80"/></bpmndi:BPMNShape>`,
+    );
+    planes.push(
+      `<bpmndi:BPMNDiagram id="Seed_${proc[1]}_diagram"><bpmndi:BPMNPlane id="Seed_${proc[1]}_plane" bpmnElement="${proc[1]}">` +
+        shapes.join("") +
+        `</bpmndi:BPMNPlane></bpmndi:BPMNDiagram>`,
+    );
+  }
+  if (planes.length === 0) return bpmnXml;
+  let xml = bpmnXml.replace(/<\/bpmn:definitions>\s*$/, `${planes.join("")}</bpmn:definitions>`);
+  for (const [prefix, uri] of Object.entries(DI_NS)) {
+    if (!new RegExp(`xmlns:${prefix}=`).test(xml)) {
+      xml = xml.replace(/<bpmn:definitions\b/, `<bpmn:definitions xmlns:${prefix}="${uri}"`);
+    }
+  }
+  return xml;
 }
 
 /**

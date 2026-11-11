@@ -64,6 +64,18 @@ const DI_NS = {
 };
 
 /**
+ * Value of attribute `name` in an opening tag, in either quote style. Whitespace
+ * around `=` is deliberately NOT accepted: the layouter's XML parser (saxen)
+ * drops such an attribute, so seeding a shape for an id it cannot see would
+ * leave a dangling `bpmnElement` and crash the layout.
+ */
+function xmlAttr(tag: string, name: string): string | undefined {
+  const m = new RegExp(`\\s${name}=(?:"([^"]*)"|'([^']*)')`).exec(tag);
+  const v = m?.[1] ?? m?.[2];
+  return v === undefined || v === "" ? undefined : v;
+}
+
+/**
  * bpmn-auto-layout 2 draws a sub-process EXPANDED (its steps inline, on the
  * main diagram) only when the input's own DI says `isExpanded="true"`; otherwise
  * it collapses it onto a drill-down plane, which hides the steps — e.g. a
@@ -72,17 +84,20 @@ const DI_NS = {
  * sub-process expanded (one plane per process). Input that already has a
  * diagram is returned untouched: its expanded/collapsed choices are the author's.
  * Only the `bpmn:` prefix our emitters write is recognised; other input passes
- * through and lays out as before.
+ * through and lays out as before. Exported for tests only (not re-exported
+ * from the package index).
  */
-function seedExpandedSubProcesses(bpmnXml: string): string {
+export function seedExpandedSubProcesses(bpmnXml: string): string {
   if (/<(?:\w+:)?BPMNDiagram\b/.test(bpmnXml)) return bpmnXml;
   const planes: string[] = [];
-  for (const proc of bpmnXml.matchAll(/<bpmn:process\b[^>]*\bid="([^"]+)"[\s\S]*?<\/bpmn:process>/g)) {
+  for (const proc of bpmnXml.matchAll(/<bpmn:process\b[^>]*>[\s\S]*?<\/bpmn:process>/g)) {
+    const procId = xmlAttr(proc[0].slice(0, proc[0].indexOf(">") + 1), "id");
+    if (procId === undefined) continue;
     // Event sub-processes (`triggeredByEvent="true"`) are excluded: they are not
     // forEach bodies and keep the layouter's default treatment.
     const subs = [...proc[0].matchAll(/<bpmn:subProcess\b[^>]*>/g)]
       .filter((m) => !/\btriggeredByEvent\s*=\s*["']true["']/.test(m[0]))
-      .map((m) => /\bid\s*=\s*"([^"]+)"/.exec(m[0])?.[1])
+      .map((m) => xmlAttr(m[0], "id"))
       .filter((id): id is string => id !== undefined);
     if (subs.length === 0) continue;
     const shapes = subs.map(
@@ -91,15 +106,18 @@ function seedExpandedSubProcesses(bpmnXml: string): string {
         `<dc:Bounds x="0" y="0" width="100" height="80"/></bpmndi:BPMNShape>`,
     );
     planes.push(
-      `<bpmndi:BPMNDiagram id="Seed_${proc[1]}_diagram"><bpmndi:BPMNPlane id="Seed_${proc[1]}_plane" bpmnElement="${proc[1]}">` +
+      `<bpmndi:BPMNDiagram id="Seed_${procId}_diagram"><bpmndi:BPMNPlane id="Seed_${procId}_plane" bpmnElement="${procId}">` +
         shapes.join("") +
         `</bpmndi:BPMNPlane></bpmndi:BPMNDiagram>`,
     );
   }
   if (planes.length === 0) return bpmnXml;
   let xml = bpmnXml.replace(/<\/bpmn:definitions>\s*$/, `${planes.join("")}</bpmn:definitions>`);
+  // Only declarations on the definitions element are in scope for the appended
+  // diagram; one declared on a child element does not bind the prefix there.
+  const defsTag = /<bpmn:definitions\b[^>]*>/.exec(xml)?.[0] ?? "";
   for (const [prefix, uri] of Object.entries(DI_NS)) {
-    if (!new RegExp(`\\bxmlns:${prefix}\\s*=`).test(xml)) {
+    if (!new RegExp(`\\bxmlns:${prefix}\\s*=`).test(defsTag)) {
       xml = xml.replace(/<bpmn:definitions\b/, `<bpmn:definitions xmlns:${prefix}="${uri}"`);
     }
   }

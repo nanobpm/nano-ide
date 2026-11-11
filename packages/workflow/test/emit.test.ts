@@ -1,6 +1,7 @@
 // Unit tests for the authoring surfaces + model derivation + the replay engine.
 // These need no gateway and always run. Run against the built `dist` artifact.
 import { test } from "node:test";
+import { seedExpandedSubProcesses } from "../dist/layout.js";
 import assert from "node:assert/strict";
 
 import {
@@ -1296,4 +1297,40 @@ test("layoutBpmn: DI-less event sub-processes are NOT seeded expanded; whitespac
   assert.equal((out.match(/xmlns:bpmndi\s*=/g) ?? []).length, 1);
   assert.match(out, /bpmnElement="sp"[^>]*isExpanded="true"/);
   assert.doesNotMatch(out, /bpmnElement="esp"[^>]*isExpanded="true"/);
+});
+
+test("layoutBpmn: DI-less ids in either quote style are seeded; ids the layouter cannot parse are not seeded", async () => {
+  const model = (procId: string, subId: string): string =>
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">' +
+    `<bpmn:process ${procId} isExecutable="true">` +
+    '<bpmn:startEvent id="s"/><bpmn:sequenceFlow id="f1" sourceRef="s" targetRef="sp"/>' +
+    `<bpmn:subProcess ${subId}><bpmn:startEvent id="s2"/><bpmn:sequenceFlow id="f2" sourceRef="s2" targetRef="e2"/><bpmn:endEvent id="e2"/></bpmn:subProcess>` +
+    '<bpmn:sequenceFlow id="f3" sourceRef="sp" targetRef="e"/><bpmn:endEvent id="e"/>' +
+    "</bpmn:process></bpmn:definitions>";
+  for (const [procId, subId] of [
+    ["id='p'", "id='sp'"],
+    ['id="p"', "id='sp'"],
+    ["id='p'", 'id="sp"'],
+  ]) {
+    const out = await layoutBpmn(model(procId, subId));
+    assert.match(out, /bpmnElement="sp"[^>]*isExpanded="true"/, `${procId} / ${subId}`);
+  }
+  // Whitespace around `=` is dropped by the layouter's XML parser; seeding a
+  // shape for such an id must not happen (its bpmnElement would dangle).
+  assert.doesNotMatch(seedExpandedSubProcesses(model('id="p"', 'id = "sp"')), /bpmnElement="sp"/);
+});
+
+test("layoutBpmn: a DI namespace declared only on a child element is still declared on definitions", async () => {
+  const xml =
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">' +
+    '<bpmn:process id="p" isExecutable="true">' +
+    '<bpmn:startEvent id="s"/><bpmn:sequenceFlow id="f1" sourceRef="s" targetRef="sp"/>' +
+    '<bpmn:subProcess id="sp" xmlns:dc="http://www.omg.org/spec/DD/20100524/DC" xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"><bpmn:startEvent id="s2"/><bpmn:sequenceFlow id="f2" sourceRef="s2" targetRef="e2"/><bpmn:endEvent id="e2"/></bpmn:subProcess>' +
+    '<bpmn:sequenceFlow id="f3" sourceRef="sp" targetRef="e"/><bpmn:endEvent id="e"/>' +
+    "</bpmn:process></bpmn:definitions>";
+  const defs = /<bpmn:definitions\b[^>]*>/.exec(seedExpandedSubProcesses(xml))?.[0] ?? "";
+  assert.match(defs, /xmlns:dc\s*=/);
+  assert.match(defs, /xmlns:bpmndi\s*=/);
 });

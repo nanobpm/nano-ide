@@ -1334,3 +1334,52 @@ test("layoutBpmn: a DI namespace declared only on a child element is still decla
   assert.match(defs, /xmlns:dc\s*=/);
   assert.match(defs, /xmlns:bpmndi\s*=/);
 });
+
+test("layoutBpmn: an id-like text inside another attribute's value is not mistaken for the id", async () => {
+  const model = (procAttrs: string, subAttrs: string): string =>
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">' +
+    `<bpmn:process ${procAttrs} isExecutable="true">` +
+    '<bpmn:startEvent id="s"/><bpmn:sequenceFlow id="f1" sourceRef="s" targetRef="sp"/>' +
+    `<bpmn:subProcess ${subAttrs}><bpmn:startEvent id="s2"/><bpmn:sequenceFlow id="f2" sourceRef="s2" targetRef="e2"/><bpmn:endEvent id="e2"/></bpmn:subProcess>` +
+    '<bpmn:sequenceFlow id="f3" sourceRef="sp" targetRef="e"/><bpmn:endEvent id="e"/>' +
+    "</bpmn:process></bpmn:definitions>";
+  for (const [procAttrs, subAttrs] of [
+    ['id="p"', `name="Review id='ghost'" id="sp"`],
+    ['id="p"', `name='Review id="ghost"' id="sp"`],
+    [`name="x id='ghost'" id="p"`, 'id="sp"'],
+  ]) {
+    const seeded = seedExpandedSubProcesses(model(procAttrs, subAttrs));
+    assert.doesNotMatch(seeded, /bpmnElement="ghost"/, `${procAttrs} / ${subAttrs}`);
+    const out = await layoutBpmn(model(procAttrs, subAttrs));
+    assert.match(out, /bpmnElement="sp"[^>]*isExpanded="true"/, `${procAttrs} / ${subAttrs}`);
+  }
+  // A label containing triggeredByEvent="true" text does not exclude a real sub-process.
+  assert.match(seedExpandedSubProcesses(model('id="p"', `name='triggeredByEvent="true"' id="sp"`)), /bpmnElement="sp"/);
+});
+
+test("layoutBpmn: sub-process / process / diagram tags inside comments or CDATA are not discovered", () => {
+  const base = (inner: string, outer = ""): string =>
+    '<?xml version="1.0" encoding="UTF-8"?>' +
+    `${outer}<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL" id="d" targetNamespace="t">` +
+    '<bpmn:process id="p" isExecutable="true">' +
+    `${inner}<bpmn:subProcess id="sp"><bpmn:startEvent id="s2"/></bpmn:subProcess>` +
+    "</bpmn:process></bpmn:definitions>";
+  for (const inner of [
+    '<!-- <bpmn:subProcess id="removed"/> -->',
+    '<bpmn:documentation><![CDATA[<bpmn:subProcess id="removed">]]></bpmn:documentation>',
+  ]) {
+    const out = seedExpandedSubProcesses(base(inner));
+    assert.doesNotMatch(out, /bpmnElement="removed"/, inner);
+    assert.match(out, /bpmnElement="sp"/, inner);
+  }
+  // A commented-out diagram does not suppress seeding.
+  assert.match(seedExpandedSubProcesses(base('<!-- <bpmndi:BPMNDiagram id="old"/> -->')), /bpmnElement="sp"/);
+  // A commented-out definitions tag before the real one does not receive the xmlns.
+  const out = seedExpandedSubProcesses(base("", "<!-- <bpmn:definitions> -->"));
+  const real = /<bpmn:definitions\b[^>]*>/g;
+  const tags = [...out.matchAll(real)].map((m) => m[0]);
+  assert.match(tags[1] ?? "", /xmlns:bpmndi=/);
+  assert.match(out, /^[^]*<!-- <bpmn:definitions> -->/);
+  assert.doesNotMatch(tags[0] ?? "", /xmlns:bpmndi=/);
+});

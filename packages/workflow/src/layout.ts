@@ -64,15 +64,39 @@ const DI_NS = {
 };
 
 /**
- * Value of attribute `name` in an opening tag, in either quote style. Whitespace
- * around `=` is deliberately NOT accepted: the layouter's XML parser (saxen)
- * drops such an attribute, so seeding a shape for an id it cannot see would
- * leave a dangling `bpmnElement` and crash the layout.
+ * Attributes of an opening tag, tokenised left to right so each quoted value is
+ * consumed whole — id-like text inside another attribute's value (e.g.
+ * `name="Review id='x'"`) is never read as an attribute. Either quote style is
+ * accepted. An attribute written with whitespace around `=` is consumed (so its
+ * value cannot leak) but NOT recorded: the layouter's XML parser (saxen) drops
+ * it, so seeding a shape for an id it cannot see would leave a dangling
+ * `bpmnElement` and crash the layout.
  */
-function xmlAttr(tag: string, name: string): string | undefined {
-  const m = new RegExp(`\\s${name}=(?:"([^"]*)"|'([^']*)')`).exec(tag);
-  const v = m?.[1] ?? m?.[2];
-  return v === undefined || v === "" ? undefined : v;
+function xmlAttrs(tag: string): Map<string, string> {
+  const attrs = new Map<string, string>();
+  const body = tag.replace(/^<[^\s/>]+/, "");
+  for (const m of body.matchAll(/([^\s=/>]+)(\s*)=(\s*)(?:"([^"]*)"|'([^']*)')/g)) {
+    if (m[2] !== "" || m[3] !== "") continue;
+    const name = m[1];
+    const value = m[4] ?? m[5];
+    if (name !== undefined && value !== undefined && !attrs.has(name)) attrs.set(name, value);
+  }
+  return attrs;
+}
+
+/** Non-empty `id` of an opening tag, per {@link xmlAttrs}. */
+function xmlId(tag: string): string | undefined {
+  const id = xmlAttrs(tag).get("id");
+  return id === undefined || id === "" ? undefined : id;
+}
+
+/**
+ * Blank out comments, CDATA sections and processing instructions with spaces of
+ * the same length, so markup-like text inside them is never discovered as an
+ * element while every index still maps 1:1 onto the original XML.
+ */
+function maskNonMarkup(xml: string): string {
+  return xml.replace(/<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<\?[\s\S]*?\?>/g, (m) => " ".repeat(m.length));
 }
 
 /**
@@ -88,16 +112,18 @@ function xmlAttr(tag: string, name: string): string | undefined {
  * from the package index).
  */
 export function seedExpandedSubProcesses(bpmnXml: string): string {
-  if (/<(?:\w+:)?BPMNDiagram\b/.test(bpmnXml)) return bpmnXml;
+  // All discovery runs on a masked copy (same indices); output edits the original.
+  const scan = maskNonMarkup(bpmnXml);
+  if (/<(?:\w+:)?BPMNDiagram\b/.test(scan)) return bpmnXml;
   const planes: string[] = [];
-  for (const proc of bpmnXml.matchAll(/<bpmn:process\b[^>]*>[\s\S]*?<\/bpmn:process>/g)) {
-    const procId = xmlAttr(proc[0].slice(0, proc[0].indexOf(">") + 1), "id");
+  for (const proc of scan.matchAll(/<bpmn:process\b[^>]*>[\s\S]*?<\/bpmn:process>/g)) {
+    const procId = xmlId(proc[0].slice(0, proc[0].indexOf(">") + 1));
     if (procId === undefined) continue;
     // Event sub-processes (`triggeredByEvent="true"`) are excluded: they are not
     // forEach bodies and keep the layouter's default treatment.
     const subs = [...proc[0].matchAll(/<bpmn:subProcess\b[^>]*>/g)]
-      .filter((m) => !/\btriggeredByEvent\s*=\s*["']true["']/.test(m[0]))
-      .map((m) => xmlAttr(m[0], "id"))
+      .filter((m) => xmlAttrs(m[0]).get("triggeredByEvent") !== "true")
+      .map((m) => xmlId(m[0]))
       .filter((id): id is string => id !== undefined);
     if (subs.length === 0) continue;
     const shapes = subs.map(
@@ -112,15 +138,23 @@ export function seedExpandedSubProcesses(bpmnXml: string): string {
     );
   }
   if (planes.length === 0) return bpmnXml;
-  let xml = bpmnXml.replace(/<\/bpmn:definitions>\s*$/, `${planes.join("")}</bpmn:definitions>`);
+  const end = /<\/bpmn:definitions>\s*$/.exec(scan);
+  const defs = /<bpmn:definitions\b[^>]*>/.exec(scan);
+  if (end === null || defs === null) return bpmnXml;
   // Only declarations on the definitions element are in scope for the appended
   // diagram; one declared on a child element does not bind the prefix there.
-  const defsTag = /<bpmn:definitions\b[^>]*>/.exec(xml)?.[0] ?? "";
-  for (const [prefix, uri] of Object.entries(DI_NS)) {
-    if (!new RegExp(`\\bxmlns:${prefix}\\s*=`).test(defsTag)) {
-      xml = xml.replace(/<bpmn:definitions\b/, `<bpmn:definitions xmlns:${prefix}="${uri}"`);
-    }
-  }
+  const defsAttrs = xmlAttrs(defs[0]);
+  const missing = Object.entries(DI_NS)
+    .filter(([prefix]) => !defsAttrs.has(`xmlns:${prefix}`))
+    .map(([prefix, uri]) => ` xmlns:${prefix}="${uri}"`)
+    .join("");
+  const insertAt = defs.index + "<bpmn:definitions".length;
+  const xml =
+    bpmnXml.slice(0, insertAt) +
+    missing +
+    bpmnXml.slice(insertAt, end.index) +
+    planes.join("") +
+    bpmnXml.slice(end.index);
   return xml;
 }
 

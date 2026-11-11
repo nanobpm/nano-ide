@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.19.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.18.0...@nanobpm/workflow-0.19.0) (2026-11-11)
+
+
+### Features
+
+* **workflow:** name forEach sub-processes; lay out embedded sub-processes expanded ([#615](https://github.com/nanobpm/nano-ide/issues/615)) ([47b904b](https://github.com/nanobpm/nano-ide/commit/47b904b64591facd466404c2015f28200382f5cf))
+
 ## [0.18.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.17.0...@nanobpm/workflow-0.18.0) (2026-11-10)
 
 

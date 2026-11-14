@@ -66,7 +66,9 @@ const errors: [string, unknown, RegExp][] = [
   ["non-array positional", { command: ["a"], positional: "issue" }, /^Error: w\.positional: must be an array/],
   ["empty positional", { command: ["a"], positional: [""] }, /^Error: w\.positional\[0\]: must be a non-empty string/],
   ["duplicate positional", { command: ["a"], positional: ["x", "x"] }, /^Error: w\.positional: duplicate field "x"/],
-  ["non-array aliases", { command: ["a"], aliases: ["b"] }, /^Error: w\.aliases\[0\]: must be a non-empty array/],
+  ["non-string positional", { command: ["a"], positional: [1] }, /^Error: w\.positional\[0\]: must be a non-empty string/],
+  ["non-array aliases", { command: ["a"], aliases: "b" }, /^Error: w\.aliases: must be an array of command word arrays/],
+  ["non-array alias element", { command: ["a"], aliases: ["b"] }, /^Error: w\.aliases\[0\]: must be a non-empty array/],
   ["non-kebab alias", { command: ["a"], aliases: [["B"]] }, /^Error: w\.aliases\[0\]\[0\]: "B" is not a kebab-case word/],
 ];
 for (const [name, ext, re] of errors) {

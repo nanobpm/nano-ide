@@ -144,6 +144,19 @@ export type {
   OperationInfo,
 } from "../openapi/spec.ts";
 
+// The CLI command projection (`x-cli`, ADR 0068): the parser, the single
+// effective-audience rule, and the projection walker a CLI consumer reads.
+export {
+  collectCliProjection,
+  effectiveCliAudience,
+  parseCliExtension,
+} from "../openapi/spec.ts";
+export type {
+  CliAudience,
+  CliExtension,
+  CliProjection,
+} from "../openapi/spec.ts";
+
 // The registry of all derivers (for discovery / IDE migration).
 import { migrationsDeriver } from "./derivers/migrations.ts";
 import { domainDeriver } from "./derivers/domain.ts";

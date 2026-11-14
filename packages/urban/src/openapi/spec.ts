@@ -207,6 +207,10 @@ export interface OperationInfo {
    *  Security-relevant: this is the single authoring switch that keeps an operator-only door (e.g.
    *  a human-gated dispatch) out of the agent-facing tool surface. See {@link isMcpExcluded}. */
   mcpExcluded: boolean;
+  /** The parsed `x-cli` extension (ADR 0068 — CLI command projection), or absent when the
+   *  operation declares none. Validated by {@link parseCliExtension}; command paths are unique
+   *  across the document. A CLI reads the effective audience via {@link effectiveCliAudience}. */
+  cli?: CliExtension;
   summary?: string;
 }
 
@@ -366,6 +370,7 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
       // door crash projection/guards for the whole document — even though that door is withheld.
       // Excluded ops therefore carry no `resolvedSchema`/`requestBodySchemaResolved` (unused).
       const mcpExcluded = isMcpExcluded(opRaw["x-mcp"]);
+      const cli = parseCliExtension(opRaw["x-cli"], `paths.${path}.${method}.x-cli`);
       const opParams = Array.isArray(opRaw.parameters) ? opRaw.parameters : [];
       const parameters = normalizeParameters([...pathParams, ...opParams]).map((p) => ({
         ...p,
@@ -404,11 +409,164 @@ export function collectOperations(doc: OpenApiDoc): OperationInfo[] {
         security,
         eject: opRaw["x-urban-eject"] === true,
         mcpExcluded,
+        ...(cli ? { cli } : {}),
         summary: typeof opRaw.summary === "string" ? opRaw.summary : undefined,
       });
     }
   }
+  assertUniqueCliCommands(out);
   return out;
+}
+
+/** The audiences an `x-cli` operation may declare. `operator` = shown by a CLI only behind an
+ *  explicit operator switch (e.g. `--operator`). Absent = the default (everyone) audience. */
+export type CliAudience = "operator";
+
+/** A parsed, validated `x-cli` operation extension (ADR 0068). Optional authoring keys are
+ *  normalised: `exclude` defaults to `false`, `positional`/`aliases` to `[]`. `command` is empty
+ *  only for an excluded operation that omitted it. */
+export interface CliExtension {
+  /** Namespace-relative kebab-case command words, e.g. `["start", "feature"]`. */
+  command: string[];
+  /** Hide the operation from CLI projection entirely. */
+  exclude: boolean;
+  audience?: CliAudience;
+  /** Body/parameter field names accepted positionally, in order. */
+  positional: string[];
+  /** Alternative command paths (each a kebab-case word list), e.g. `[["feature", "start"]]`. */
+  aliases: string[][];
+}
+
+const CLI_KEYS: readonly string[] = ["command", "exclude", "audience", "positional", "aliases"];
+const CLI_AUDIENCES: readonly CliAudience[] = ["operator"];
+const KEBAB_WORD = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function isCliAudience(v: unknown): v is CliAudience {
+  return CLI_AUDIENCES.some((a) => a === v);
+}
+
+function parseCommandWords(v: unknown, where: string): string[] {
+  if (!Array.isArray(v) || v.length === 0) {
+    throw new Error(`${where}: must be a non-empty array of kebab-case words`);
+  }
+  return v.map((w, i) => {
+    if (typeof w !== "string" || !KEBAB_WORD.test(w)) {
+      throw new Error(`${where}[${i}]: ${JSON.stringify(w)} is not a kebab-case word (expected ${KEBAB_WORD})`);
+    }
+    return w;
+  });
+}
+
+/**
+ * Parse and validate the `x-cli` operation extension (ADR 0068 — CLI command projection). Returns
+ * `undefined` when the extension is absent; throws a `where`-qualified error (e.g.
+ * `paths./features.post.x-cli.command[1]: …`) on unknown keys, a `command` that is not a non-empty
+ * array of kebab-case words (required unless `exclude: true`), a non-boolean `exclude`, an unknown
+ * `audience`, a non-string-array `positional`, or malformed `aliases`. Cross-operation uniqueness
+ * of command paths is enforced by the walker ({@link collectOperations}).
+ *
+ * Default when ABSENT: a CLI derives names itself; an operation that `x-mcp` excludes and that has
+ * no `x-cli` is treated as `audience: operator` (see {@link effectiveCliAudience}).
+ */
+export function parseCliExtension(ext: unknown, where = "x-cli"): CliExtension | undefined {
+  if (ext === undefined) return undefined;
+  if (!isRecord(ext)) throw new Error(`${where}: must be an object`);
+  for (const key of Object.keys(ext)) {
+    if (!CLI_KEYS.includes(key)) {
+      throw new Error(`${where}: unknown key "${key}" (allowed: ${CLI_KEYS.join(", ")})`);
+    }
+  }
+  if (ext.exclude !== undefined && typeof ext.exclude !== "boolean") {
+    throw new Error(`${where}.exclude: must be a boolean`);
+  }
+  const exclude = ext.exclude === true;
+  const command =
+    ext.command === undefined && exclude ? [] : parseCommandWords(ext.command, `${where}.command`);
+  if (ext.audience !== undefined && !isCliAudience(ext.audience)) {
+    throw new Error(`${where}.audience: ${JSON.stringify(ext.audience)} is not one of: ${CLI_AUDIENCES.join(", ")}`);
+  }
+  let positional: string[] = [];
+  if (ext.positional !== undefined) {
+    const raw = ext.positional;
+    if (!Array.isArray(raw)) throw new Error(`${where}.positional: must be an array of field names`);
+    positional = raw.map((f, i) => {
+      if (typeof f !== "string" || f.length === 0) {
+        throw new Error(`${where}.positional[${i}]: must be a non-empty string`);
+      }
+      return f;
+    });
+    const dup = positional.find((f, i) => positional.indexOf(f) !== i);
+    if (dup !== undefined) throw new Error(`${where}.positional: duplicate field "${dup}"`);
+  }
+  let aliases: string[][] = [];
+  if (ext.aliases !== undefined) {
+    const raw = ext.aliases;
+    if (!Array.isArray(raw)) throw new Error(`${where}.aliases: must be an array of command word arrays`);
+    aliases = raw.map((a, i) => parseCommandWords(a, `${where}.aliases[${i}]`));
+  }
+  return {
+    command,
+    exclude,
+    ...(ext.audience !== undefined && isCliAudience(ext.audience) ? { audience: ext.audience } : {}),
+    positional,
+    aliases,
+  };
+}
+
+/** Every command path (primary and aliases) of non-excluded operations must be unique across the
+ *  document — two operations answering to the same words would make CLI dispatch ambiguous. */
+function assertUniqueCliCommands(ops: OperationInfo[]): void {
+  const owner = new Map<string, string>();
+  for (const op of ops) {
+    if (!op.cli || op.cli.exclude) continue;
+    const where = `paths.${op.path}.${op.method}.x-cli`;
+    const paths: [string, string[]][] = [
+      [`${where}.command`, op.cli.command],
+      ...op.cli.aliases.map((a, i): [string, string[]] => [`${where}.aliases[${i}]`, a]),
+    ];
+    for (const [at, words] of paths) {
+      const key = words.join(" ");
+      const prior = owner.get(key);
+      if (prior !== undefined) {
+        throw new Error(`${at}: duplicate command path "${key}" (already declared at ${prior})`);
+      }
+      owner.set(key, at);
+    }
+  }
+}
+
+/**
+ * The effective CLI audience of an operation — the single documented default rule (ADR 0068), so
+ * CLIs never each invent one: an explicit `x-cli.audience` wins; otherwise an `x-mcp`-excluded
+ * operation WITHOUT `x-cli` is `operator` (an operator-only door withheld from agents must not be
+ * handed back to them via a shell); otherwise the default audience (`undefined`).
+ */
+export function effectiveCliAudience(op: Pick<OperationInfo, "cli" | "mcpExcluded">): CliAudience | undefined {
+  if (op.cli) return op.cli.audience;
+  return op.mcpExcluded ? "operator" : undefined;
+}
+
+/** One operation's CLI-projection facts (snapshot unit, mirrors {@link McpToolProjection}). */
+export interface CliProjection {
+  operationId: string;
+  method: HttpMethodLower;
+  path: string;
+  cli?: CliExtension;
+  audience?: CliAudience;
+}
+
+/** Project every operationId-bearing operation to its CLI facts, in walker order. */
+export function collectCliProjection(doc: OpenApiDoc): CliProjection[] {
+  return collectOperations(doc).map((op) => {
+    const audience = effectiveCliAudience(op);
+    return {
+      operationId: op.operationId,
+      method: op.method,
+      path: op.path,
+      ...(op.cli ? { cli: op.cli } : {}),
+      ...(audience ? { audience } : {}),
+    };
+  });
 }
 
 /**

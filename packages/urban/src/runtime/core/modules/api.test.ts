@@ -758,6 +758,16 @@ test("serves the OpenAPI spec at {base}-docs/openapi.json, rebased to the mounte
   assert.deepEqual(doc.servers, [{ url: "api" }]);
 });
 
+test("the served openapi.json keeps the x-cli extension (CLIs read it at runtime, ADR 0068)", async () => {
+  const doc0 = JSON.parse(spec);
+  doc0.paths["/invoices"].post["x-cli"] = { command: ["invoice", "create"], positional: ["id"] };
+  const { router } = build({ spec: "openapi.json" }, {}, JSON.stringify(doc0));
+  const res = await router(req("GET", "/app/api-docs/openapi.json"));
+  assert.equal(res.status, 200);
+  const doc = JSON.parse(res.body ?? "{}");
+  assert.deepEqual(doc.paths["/invoices"].post["x-cli"], { command: ["invoice", "create"], positional: ["id"] });
+});
+
 test("serves the Swagger UI page at {base}-docs by default", async () => {
   const { router } = build({ spec: "openapi.json" }, {});
   const res = await router(req("GET", "/app/api-docs"));

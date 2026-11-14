@@ -1,0 +1,61 @@
+[
+  {
+    "operationId": "dispatchDeliveryGraph",
+    "method": "post",
+    "path": "/delivery-graphs/dispatch",
+    "cli": {
+      "command": [
+        "dispatch",
+        "delivery-graph"
+      ],
+      "exclude": false,
+      "audience": "operator",
+      "positional": [],
+      "aliases": []
+    },
+    "audience": "operator"
+  },
+  {
+    "operationId": "listFeatures",
+    "method": "get",
+    "path": "/features"
+  },
+  {
+    "operationId": "startFeature",
+    "method": "post",
+    "path": "/features",
+    "cli": {
+      "command": [
+        "start",
+        "feature"
+      ],
+      "exclude": false,
+      "positional": [
+        "issue"
+      ],
+      "aliases": [
+        [
+          "feature",
+          "start"
+        ]
+      ]
+    }
+  },
+  {
+    "operationId": "agentHook",
+    "method": "post",
+    "path": "/hooks/agent",
+    "cli": {
+      "command": [],
+      "exclude": true,
+      "positional": [],
+      "aliases": []
+    }
+  },
+  {
+    "operationId": "reindex",
+    "method": "post",
+    "path": "/internal/reindex",
+    "audience": "operator"
+  }
+]

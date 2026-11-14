@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.99.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.98.5...@nanobpm/urban-0.99.0) (2026-11-14)
+
+
+### Features
+
+* **urban:** x-cli OpenAPI operation extension for CLI command projection ([#618](https://github.com/nanobpm/nano-ide/issues/618)) ([f469578](https://github.com/nanobpm/nano-ide/commit/f469578bef05f4cbe9c8f31fbf45d65456f36ab8))
+
 ## [0.98.5](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.98.4...@nanobpm/urban-0.98.5) (2026-11-11)
 
 

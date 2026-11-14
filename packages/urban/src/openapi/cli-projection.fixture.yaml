@@ -1,0 +1,56 @@
+# CLI-projection fixture (ADR 0068) — NOT an app spec.
+#
+# Exercises every `x-cli` form and the documented default so `cli-projection.snapshot.json`
+# (asserted by `cli-projection.test.ts`) pins the parsed `cli` metadata:
+#   - full form (command + positional + aliases)
+#   - operator audience
+#   - exclude: true (command omitted)
+#   - x-mcp-excluded WITHOUT x-cli  → effective audience `operator` (the default rule)
+#   - no extensions at all          → no `cli`, default audience
+# Regenerate with: UPDATE_CLI_SNAPSHOT=1 npm test -w packages/urban
+openapi: 3.1.0
+info:
+  title: cli-projection-fixture
+  version: 0.0.0
+paths:
+  /features:
+    post:
+      operationId: startFeature
+      x-cli:
+        command: [start, feature]
+        positional: [issue]
+        aliases: [[feature, start]]
+      responses:
+        "202":
+          description: accepted
+    get:
+      operationId: listFeatures
+      responses:
+        "200":
+          description: ok
+  /delivery-graphs/dispatch:
+    post:
+      operationId: dispatchDeliveryGraph
+      x-mcp:
+        exclude: true
+      x-cli:
+        command: [dispatch, delivery-graph]
+        audience: operator
+      responses:
+        "202":
+          description: accepted
+  /hooks/agent:
+    post:
+      operationId: agentHook
+      x-cli:
+        exclude: true
+      responses:
+        "204":
+          description: no content
+  /internal/reindex:
+    post:
+      operationId: reindex
+      x-mcp: false
+      responses:
+        "202":
+          description: accepted

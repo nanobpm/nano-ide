@@ -49,3 +49,14 @@ npm run check:mcp-conformance -w packages/urban
 
 If a refreshed spec would project a broken tool the guard fails — then either the
 projection (`openapi/spec.ts`) or the offending consumer spec is fixed deliberately.
+
+## CLI projection (`x-cli`, ADR 0068)
+
+Consumer specs may also carry the `x-cli` operation extension that names an operation's
+CLI command (`command`, `exclude`, `audience`, `positional`, `aliases`). It is parsed and
+validated by the same walker (`parseCliExtension` in `../spec.ts`), so a vendored spec
+with an invalid `x-cli` — unknown key, non-kebab or empty `command`, or a command path
+duplicated across operations — fails the conformance guard with a path-qualified error.
+When an operation is `x-mcp`-excluded and has **no** `x-cli`, CLIs treat it as
+`audience: operator` (`effectiveCliAudience`). See
+[`docs/adr/0068-cli-command-projection.md`](../../../../../docs/adr/0068-cli-command-projection.md).

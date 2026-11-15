@@ -41,7 +41,7 @@ export type ScalarTs<T extends ScalarType> = T extends "string" | "datetime"
 /** A field spec: either a bare scalar type, or an object with modifiers. */
 export type FieldSpec =
   | ScalarType
-  | { type: ScalarType; optional?: boolean; list?: boolean };
+  | { type: ScalarType; optional?: boolean; list?: boolean; description?: string };
 
 /** The TS type of a single field spec (applies `list` before `optional`). A spec
  *  whose `list` isn't a literal (the widened `FieldSpec` of a plain `Envelope`) may
@@ -74,6 +74,9 @@ export interface EnvelopeField {
   type: ScalarType;
   optional: boolean;
   list: boolean;
+  /** Human-readable field doc (e.g. surfaced as an MCP tool input description).
+   *  Present only when declared. */
+  description?: string;
 }
 
 /**
@@ -116,12 +119,19 @@ function normaliseField(name: string, spec: FieldSpec): EnvelopeField {
       `envelope field "${name}": unknown type "${raw.type}" (expected one of ${[...SCALARS].join(", ")})`,
     );
   }
-  return {
+  const field: EnvelopeField = {
     name,
     type: raw.type,
     optional: typeof spec === "object" && spec.optional === true,
     list: typeof spec === "object" && spec.list === true,
   };
+  if (typeof spec === "object" && spec.description !== undefined) {
+    if (typeof spec.description !== "string") {
+      throw new Error(`envelope field "${name}": description must be a string`);
+    }
+    field.description = spec.description;
+  }
+  return field;
 }
 
 /**

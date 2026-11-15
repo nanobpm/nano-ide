@@ -119,6 +119,30 @@ export interface DeclarativeFlow {
    *  takes; a host can render a start form from it and check start variables
    *  with {@link validateEnvelope}. Absent = untyped start. */
   input?: Envelope;
+  /** When set, the flow is exposed as an MCP tool: its start event renders as a
+   *  MESSAGE start carrying the `io.camunda.tool:*` properties (see
+   *  {@link ToolExposure}). Set by `w.exposeAsTool(...)`. */
+  tool?: ToolExposure;
+}
+
+/** How a flow is exposed as an MCP tool (`w.exposeAsTool(...)`). Emitted as the
+ *  Camunda `io.camunda.tool:*` `zeebe:properties` on a message start event (the
+ *  bindings of the `io.camunda.mcp.start-message` template). The typed
+ *  `io.camunda.tool:input_N_*` superset is DERIVED from the flow's `Start` input
+ *  envelope — never restated here. */
+export interface ToolExposure {
+  /** The tool name (`io.camunda.tool:name`). */
+  name: string;
+  /** What the tool does (`io.camunda.tool:purpose`). */
+  purpose: string;
+  /** Free-text description of the inputs (`io.camunda.tool:inputs`). */
+  inputs?: string;
+  /** When an agent should call it (`io.camunda.tool:when_to_use`). */
+  whenToUse?: string;
+  /** When an agent should not call it (`io.camunda.tool:when_not_to_use`). */
+  whenNotToUse?: string;
+  /** What the tool returns (`io.camunda.tool:results`). */
+  results?: string;
 }
 
 // --- Imperative surface (Strategy B: a replayed orchestration function) -------

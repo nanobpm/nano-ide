@@ -79,6 +79,7 @@ export type {
   FlowNode,
   SwitchCase,
   TimerStart,
+  ToolExposure,
   NodeEnvelopes,
   StepContract,
   FlowContracts,

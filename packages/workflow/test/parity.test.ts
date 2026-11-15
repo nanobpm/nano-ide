@@ -75,6 +75,7 @@ test("isFlowBuilder: fails fast when a core built-in method is missing (tree-sha
   // Every built-in method present + all-functions → a valid builder.
   const complete = {
     startOn: () => {},
+    exposeAsTool: () => {},
     run: () => {},
     task: () => {},
     signal: () => {},
@@ -101,6 +102,7 @@ test("isFlowBuilder: fails fast when a core built-in method is missing (tree-sha
 test("assemblyFailureMessage: names the missing built-in method(s) so the failure is actionable", () => {
   const complete = {
     startOn: () => {},
+    exposeAsTool: () => {},
     run: () => {},
     task: () => {},
     signal: () => {},
@@ -130,6 +132,7 @@ test("assemblyFailureMessage: names the missing built-in method(s) so the failur
 test("assemblyFailureMessage: names a non-function own-property when every built-in is present", () => {
   const complete = {
     startOn: () => {},
+    exposeAsTool: () => {},
     run: () => {},
     task: () => {},
     signal: () => {},

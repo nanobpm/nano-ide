@@ -250,6 +250,38 @@ validateEnvelope(review.input!, { pr: "42" });
 start (`startOn`) too. `validateEnvelope` checks required fields and scalar types
 (`list` fields element-wise) and allows undeclared fields; it does not coerce.
 
+#### Expose a flow as an MCP tool (`w.exposeAsTool`)
+
+Call `w.exposeAsTool({ name, purpose, inputs?, whenToUse?, whenNotToUse?, results? })`
+first in a flow to expose it as an MCP tool (Nano `/mcp/processes`, Camunda 8.10). The
+start event renders as a **message start** (`<bpmn:message name="<flowId>:Start">`)
+carrying Camunda's `io.camunda.tool:*` bindings. Nano's typed
+`io.camunda.tool:input_N_{name,type,description,required}` superset is **derived** from
+the `Start` input envelope — field name, JSON-schema type (`list` → `array`), the
+field's `description`, and `optional` — so you never restate it. Exclusive with `startOn`.
+
+Two names are rejected at authoring time, since the generated model or the MCP
+surface cannot honour them: the flow id and the input-envelope name must not be
+`Msg_Start` (the generated start message's id — a duplicate would make the BPMN
+document invalid), and the input envelope must not declare a `businessId` field
+(the MCP tool surface reserves that name for its own metadata and strips it from
+the process variables, so the field would never reach the flow).
+More generally, no envelope anywhere in a flow (step `in`/`out`, signal payloads,
+nested steps) may be named like a generated `<bpmn:message>` id — `Msg_Start` for a
+tool flow, `Msg_<signal>` for each signal step — since it lifts to a `nano:shape`
+with that id; `toBpmn` rejects the collision.
+
+```ts
+const BookIn = envelope("BookIn", {
+  destination: { type: "string", description: "Where to fly" },
+  seats: "integer",
+});
+defineFlow("book-trip", { Start: { in: BookIn } }, (w) => {
+  w.exposeAsTool({ name: "book_trip", purpose: "Book a trip" });
+  w.run("book", book);
+});
+```
+
 #### Agent tasks — bind an LLM prompt to a worker (`w.task(name, { prompt })`)
 
 An **agent service task** is a `w.task` that additionally binds an LLM **prompt

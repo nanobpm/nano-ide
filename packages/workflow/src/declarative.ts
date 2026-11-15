@@ -46,6 +46,7 @@ import type {
   StepContract,
   StepHandler,
   TimerStart,
+  ToolExposure,
 } from "./types.js";
 import type { Envelope, EnvelopeField } from "./envelope.js";
 import type { HumanIoMapping } from "./io-mapping.js";
@@ -146,6 +147,15 @@ export interface FlowBuilder<C extends object = object> {
    */
   timer<K extends string>(name: K, opts: { after: string } | { at: string }): FlowBuilder<C>;
   /**
+   * Expose this flow as an MCP tool. The start event renders as a MESSAGE start
+   * (MCP tool calls correlate its start message) carrying the Camunda
+   * `io.camunda.tool:*` properties, plus Nano's typed `io.camunda.tool:input_N_*`
+   * superset DERIVED from the flow's `Start` input envelope (field name, JSON
+   * type, `description`, required). Top level only, before any step; exclusive
+   * with `startOn`.
+   */
+  exposeAsTool(opts: ToolExposure): FlowBuilder<C>;
+  /**
    * Make this flow's start event a durable TIMER start rather than an explicit
    * `client.start(...)`. Must be the first statement, at the top level. Pass
    * exactly one of `{ cycle }` — a recurring ISO-8601 interval (`R/PT1H`,
@@ -222,6 +232,8 @@ interface BuilderCtx {
   loopDepth: number;
   /** Set by `startOn()` (root builder only); lifted onto the flow. */
   startTimer?: TimerStart;
+  /** Set by `exposeAsTool()` (root builder only); lifted onto the flow. */
+  tool?: ToolExposure;
 }
 
 /** Ids the emitter generates for structural nodes / flows / messages. A step
@@ -315,6 +327,8 @@ export interface BuildApi {
   contractEnvelopes(name: string): { in?: Envelope; out?: Envelope } | undefined;
   /** Lift a durable timer start onto the flow (used only by `startOn`). */
   setStartTimer(t: TimerStart): void;
+  /** Lift an MCP tool exposure onto the flow (used only by `exposeAsTool`). */
+  setTool(t: ToolExposure): void;
 }
 
 /** Build a FlowBuilder that appends its nodes to `out`, sharing the flow-wide
@@ -347,7 +361,17 @@ function makeBuilder<C extends object>(
     }
     if (out.length !== 0) throw new Error(`startOn() must be the first statement in flow "${id}"`);
     if (ctx.startTimer) throw new Error(`startOn() may be called only once in flow "${id}"`);
+    if (ctx.tool) throw new Error(`startOn() cannot be combined with exposeAsTool() in flow "${id}"`);
     ctx.startTimer = t;
+  };
+  const setTool = (t: ToolExposure): void => {
+    if (!isRoot) {
+      throw new Error(`exposeAsTool() is only valid at the top level of flow "${id}" (not inside switch/branch/loop)`);
+    }
+    if (out.length !== 0) throw new Error(`exposeAsTool() must precede every step in flow "${id}"`);
+    if (ctx.tool) throw new Error(`exposeAsTool() may be called only once in flow "${id}"`);
+    if (ctx.startTimer) throw new Error(`exposeAsTool() cannot be combined with startOn() in flow "${id}"`);
+    ctx.tool = t;
   };
 
   let builderRef: FlowBuilder | undefined;
@@ -373,6 +397,7 @@ function makeBuilder<C extends object>(
       return contractEnvelopes(ctx, name);
     },
     setStartTimer,
+    setTool,
   };
 
   // `startOn` is not a node KIND — it lifts a timer onto the start event and
@@ -386,6 +411,7 @@ function makeBuilder<C extends object>(
   // name into a prototype-mutating footgun. A null prototype removes both.
   const methods: Record<string, BuilderMethod> = Object.create(null);
   methods.startOn = startOnMethod(api);
+  methods.exposeAsTool = exposeAsToolMethod(api);
   for (const [kind, handlers] of eachNodeKind()) {
     if (!handlers.build) continue;
     const method = handlers.builderMethod ?? kind;
@@ -425,6 +451,7 @@ function makeBuilder<C extends object>(
  *  and exercised through its `registerNodeKind` registration and tests. */
 const BUILTIN_BUILDER_METHODS = [
   "startOn",
+  "exposeAsTool",
   "run",
   "task",
   "signal",
@@ -506,6 +533,32 @@ function startOnMethod(api: BuildApi): BuilderMethod {
   };
 }
 
+const TOOL_TEXT_KEYS = ["inputs", "whenToUse", "whenNotToUse", "results"] as const;
+
+/** The central `exposeAsTool` builder method (not a node kind). */
+function exposeAsToolMethod(api: BuildApi): BuilderMethod {
+  return (opts: ToolExposure) => {
+    if (opts === null || typeof opts !== "object") {
+      throw new Error(`exposeAsTool() needs an options object in flow "${api.id}"`);
+    }
+    for (const key of ["name", "purpose"] as const) {
+      const v: unknown = opts[key];
+      if (typeof v !== "string" || v.trim() === "") {
+        throw new Error(`exposeAsTool() needs a non-empty \`${key}\` in flow "${api.id}"`);
+      }
+    }
+    const tool: ToolExposure = { name: opts.name.trim(), purpose: opts.purpose };
+    for (const key of TOOL_TEXT_KEYS) {
+      const v: unknown = opts[key];
+      if (v === undefined) continue;
+      if (typeof v !== "string") throw new Error(`exposeAsTool() \`${key}\` must be a string in flow "${api.id}"`);
+      tool[key] = v;
+    }
+    api.setTool(tool);
+    return api.self();
+  };
+}
+
 /**
  * Define a declarative flow. Pass a typed `contracts` map (keyed by step name)
  * to type each step's I/O and lift its data envelopes into the model; or omit it
@@ -545,9 +598,42 @@ export function defineFlow(
   if (steps.length === 0) throw new Error(`flow "${id}" declared no steps`);
   const flow: DeclarativeFlow = { kind: "declarative", id, steps, handlers };
   if (ctx.startTimer) flow.startTimer = ctx.startTimer;
+  if (ctx.tool) flow.tool = ctx.tool;
   const input = startInput(id, contracts);
   if (input) flow.input = input;
+  if (ctx.tool) assertToolExposure(id, input);
   return flow;
+}
+
+/** Fail-closed guards for an MCP-tool flow, run once the flow is assembled so
+ *  the generated model can never be invalid or mis-served:
+ *  - the generated start message is `<bpmn:message id="Msg_Start">`, so a flow
+ *    id (the process id) or an input-envelope name (its `nano:shape` id) of
+ *    `Msg_Start` would duplicate that id and produce an invalid BPMN document;
+ *  - Nano's MCP tool surface treats `businessId` as reserved metadata (stripped
+ *    from the process variables before the instance starts), so an input field
+ *    with that name would never reach the flow — its declared contract would lie.
+ *  Step names are already guarded by {@link claimName} (the `Msg_` prefix and
+ *  `Start` are reserved), so a signal step cannot collide here. */
+function assertToolExposure(id: string, input: Envelope | undefined): void {
+  if (id === TOOL_START_MESSAGE_ID) {
+    throw new Error(
+      `exposeAsTool() in flow "${id}": the flow id "${TOOL_START_MESSAGE_ID}" collides with the generated start message id — rename the flow`,
+    );
+  }
+  if (input === undefined) return;
+  if (input.name === TOOL_START_MESSAGE_ID) {
+    throw new Error(
+      `exposeAsTool() in flow "${id}": the input envelope "${TOOL_START_MESSAGE_ID}" collides with the generated start message id (it lifts to a nano:shape with that id) — rename the envelope`,
+    );
+  }
+  for (const f of input.fields) {
+    if (f.name === TOOL_RESERVED_INPUT_FIELD) {
+      throw new Error(
+        `exposeAsTool() in flow "${id}": the input field "${TOOL_RESERVED_INPUT_FIELD}" is reserved by the MCP tool surface (it is stripped from the process variables), so the field would never reach the flow — rename it`,
+      );
+    }
+  }
 }
 
 // --- Tree walkers ------------------------------------------------------------
@@ -706,6 +792,9 @@ class Compiler {
   private readonly edges: Edge[] = [];
   /** envelope name → its fields, deduped for lifting to a single nano:shape. */
   private readonly envelopes = new Map<string, EnvelopeField[]>();
+  /** Every `<bpmn:message>` id emitted, recorded by {@link emitMessages} (the
+   *  single source) so lifted shape ids can be checked against it. */
+  private readonly messageIds = new Set<string>();
   /** The stack of open sub-process scopes; `.at(-1)` is the current scope (a
    *  node/edge created now nests inside it). Empty at the top level. */
   private readonly scopeStack: string[] = [];
@@ -951,11 +1040,24 @@ class Compiler {
     const input = this.flow.input;
     this.recordEnvelope(input);
     // extensionElements precede outgoing in a BPMN flow node.
-    const ext = input
+    const props = [
+      ...(input ? [envelopeProp("in", input.name)] : []),
+      ...(this.flow.tool ? toolProps(this.flow.tool, input) : []),
+    ];
+    const ext = props.length
       ? `      <bpmn:extensionElements>\n` +
-        `        <zeebe:properties>\n${envelopeProp("in", input.name)}\n        </zeebe:properties>\n` +
+        `        <zeebe:properties>\n${props.join("\n")}\n        </zeebe:properties>\n` +
         `      </bpmn:extensionElements>\n`
       : "";
+    if (this.flow.tool) {
+      return (
+        `    <bpmn:startEvent id="Start">\n` +
+        ext +
+        `      ${outgoingOnly(outg)}\n` +
+        `      <bpmn:messageEventDefinition messageRef="${TOOL_START_MESSAGE_ID}" />\n` +
+        `    </bpmn:startEvent>`
+      );
+    }
     if (!t) {
       if (!ext) return `    <bpmn:startEvent id="Start">${outgoingOnly(outg)}</bpmn:startEvent>`;
       return `    <bpmn:startEvent id="Start">\n${ext}      ${outgoingOnly(outg)}\n    </bpmn:startEvent>`;
@@ -999,6 +1101,7 @@ class Compiler {
 
     const bodyXml = this.renderScope(undefined);
     const messageXml = this.emitMessages();
+    this.assertShapeIdsDisjointFromMessages();
     const shapeXml = this.emitShapes();
 
     return (
@@ -1023,9 +1126,16 @@ class Compiler {
    *  typed) its payload data envelope. */
   private emitMessages(): string {
     const msgs: string[] = [];
+    if (this.flow.tool) {
+      this.messageIds.add(TOOL_START_MESSAGE_ID);
+      msgs.push(
+        `  <bpmn:message id="${TOOL_START_MESSAGE_ID}" name="${escapeXml(messageName(this.flow.id, "Start"))}" />`,
+      );
+    }
     walkNodes(this.flow.steps, (n) => {
       if (n.kind !== "signal") return;
       const msgId = `Msg_${n.name}`;
+      this.messageIds.add(msgId);
       const payloadProp = n.payload
         ? `\n      <zeebe:properties>\n${envelopeProp("in", n.payload.name)}\n      </zeebe:properties>`
         : "";
@@ -1039,6 +1149,21 @@ class Compiler {
       );
     });
     return msgs.join("\n");
+  }
+
+  /** Every lifted envelope becomes `<nano:shape id=NAME>` and every message a
+   *  `<bpmn:message id="Msg_…">` (the tool start message and one per signal step,
+   *  anywhere in the tree). Any overlap is a duplicate id → an invalid document,
+   *  so check the COLLECTED shape set (step in/out, signal payloads, nested
+   *  steps — every envelope source) against the derived message ids, fail-closed. */
+  private assertShapeIdsDisjointFromMessages(): void {
+    for (const name of this.envelopes.keys()) {
+      if (this.messageIds.has(name)) {
+        throw new Error(
+          `envelope "${name}" collides with the generated <bpmn:message> id in flow "${this.flow.id}" — rename the envelope`,
+        );
+      }
+    }
   }
 
   /** Lift the referenced data envelopes into a `<nano:shapes>` container on the
@@ -1068,6 +1193,58 @@ export function declarativeToBpmn(flow: DeclarativeFlow): string {
 }
 
 // --- small XML / FEEL helpers ------------------------------------------------
+
+/** The `<bpmn:message>` id of an MCP-tool flow's start message. `Msg_` is a
+ *  reserved step-name prefix and `Start` a reserved step name, so it cannot
+ *  collide with a signal step's `Msg_<name>`. The OTHER collision surfaces — a
+ *  flow id or an input-envelope (`nano:shape`) name of `Msg_Start` — are guarded
+ *  by {@link assertToolExposure} at `defineFlow` time. */
+const TOOL_START_MESSAGE_ID = "Msg_Start";
+
+/** An input-field name the MCP tool surface reserves for its own metadata (it is
+ *  stripped from the process variables before the instance starts), so an
+ *  envelope field with this name would never reach the flow. Guarded by
+ *  {@link assertToolExposure}. */
+const TOOL_RESERVED_INPUT_FIELD = "businessId";
+
+const toolProp = (key: string, value: string): string =>
+  `          <zeebe:property name="io.camunda.tool:${key}" value="${escapeXml(value)}" />`;
+
+/** The JSON-schema type of an envelope field (a `list` field is an `array`). */
+function jsonSchemaType(f: EnvelopeField): string {
+  if (f.list) return "array";
+  switch (f.type) {
+    case "string":
+    case "datetime":
+      return "string";
+    case "integer":
+      return "integer";
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+  }
+}
+
+/** The `io.camunda.tool:*` properties for an MCP-tool start event: Camunda's
+ *  bindings, then Nano's typed `input_N_*` superset DERIVED from the input
+ *  envelope (single source of truth — the author never restates the fields). */
+function toolProps(tool: ToolExposure, input: Envelope | undefined): string[] {
+  const props = [toolProp("name", tool.name), toolProp("purpose", tool.purpose)];
+  if (tool.inputs !== undefined) props.push(toolProp("inputs", tool.inputs));
+  if (tool.whenToUse !== undefined) props.push(toolProp("when_to_use", tool.whenToUse));
+  if (tool.whenNotToUse !== undefined) props.push(toolProp("when_not_to_use", tool.whenNotToUse));
+  if (tool.results !== undefined) props.push(toolProp("results", tool.results));
+  input?.fields.forEach((f, idx) => {
+    // 1-based, matching Nano's `/mcp/processes` reader and Camunda's template.
+    const i = idx + 1;
+    props.push(toolProp(`input_${i}_name`, f.name));
+    props.push(toolProp(`input_${i}_type`, jsonSchemaType(f)));
+    if (f.description !== undefined) props.push(toolProp(`input_${i}_description`, f.description));
+    props.push(toolProp(`input_${i}_required`, f.optional ? "false" : "true"));
+  });
+  return props;
+}
 
 const envelopeProp = (dir: "in" | "out", value: string): string =>
   `          <zeebe:property name="io.nanobpm.dataEnvelope.${dir}" value="${escapeXml(value)}" />`;

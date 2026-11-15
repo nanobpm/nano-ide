@@ -136,6 +136,60 @@ test("exposeAsTool: authoring guards", () => {
   );
 });
 
+test("exposeAsTool: rejects ids that would collide with the generated Msg_Start message", () => {
+  // The tool start message is emitted as `<bpmn:message id="Msg_Start">` — a flow
+  // id or input-envelope (nano:shape) name of `Msg_Start` would duplicate that id
+  // and produce an invalid BPMN document. Rejected at authoring time, not emission.
+  assert.throws(
+    () =>
+      defineFlow("Msg_Start", (w) => {
+        w.exposeAsTool({ name: "t", purpose: "p" });
+        w.run("a", async () => ({}));
+      }),
+    /flow id "Msg_Start" collides with the generated start message id/,
+  );
+  const MsgStartIn = envelope("Msg_Start", { q: "string" });
+  assert.throws(
+    () =>
+      defineFlow("ok", { Start: { in: MsgStartIn } }, (w) => {
+        w.exposeAsTool({ name: "t", purpose: "p" });
+        w.run("a", async () => ({}));
+      }),
+    /input envelope "Msg_Start" collides with the generated start message id/,
+  );
+  // …but the same envelope is fine in a flow that is NOT exposed as a tool.
+  const xml = toBpmn(defineFlow("ok", { Start: { in: MsgStartIn } }, (w) => w.run("a", async () => ({}))));
+  assert.ok(xml.includes('<nano:shape id="Msg_Start">'));
+});
+
+test("exposeAsTool: rejects the reserved `businessId` input field", () => {
+  // Nano's MCP tool surface treats `businessId` as reserved metadata (stripped from
+  // the process variables before the instance starts), so an envelope field with
+  // that name would never reach the flow — its declared input contract would lie.
+  const BizIn = envelope("BizIn", { businessId: "string", q: "string" });
+  assert.throws(
+    () =>
+      defineFlow("ok", { Start: { in: BizIn } }, (w) => {
+        w.exposeAsTool({ name: "t", purpose: "p" });
+        w.run("a", async () => ({}));
+      }),
+    /input field "businessId" is reserved/,
+  );
+  // Optional or typed variants are equally reserved.
+  const BizOpt = envelope("BizOpt", { businessId: { type: "integer", optional: true } });
+  assert.throws(
+    () =>
+      defineFlow("ok", { Start: { in: BizOpt } }, (w) => {
+        w.exposeAsTool({ name: "t", purpose: "p" });
+        w.run("a", async () => ({}));
+      }),
+    /input field "businessId" is reserved/,
+  );
+  // …but the same envelopes are fine in a flow that is NOT exposed as a tool.
+  const xml = toBpmn(defineFlow("ok", { Start: { in: BizIn } }, (w) => w.run("a", async () => ({}))));
+  assert.ok(xml.includes('name="businessId" type="string"'));
+});
+
 test("envelope: description is carried on the field and validated", () => {
   assert.equal(BookIn.fields[0].description, "Where to fly");
   assert.equal("description" in BookIn.fields[1], false);

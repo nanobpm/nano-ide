@@ -260,6 +260,13 @@ carrying Camunda's `io.camunda.tool:*` bindings. Nano's typed
 the `Start` input envelope — field name, JSON-schema type (`list` → `array`), the
 field's `description`, and `optional` — so you never restate it. Exclusive with `startOn`.
 
+Two names are rejected at authoring time, since the generated model or the MCP
+surface cannot honour them: the flow id and the input-envelope name must not be
+`Msg_Start` (the generated start message's id — a duplicate would make the BPMN
+document invalid), and the input envelope must not declare a `businessId` field
+(the MCP tool surface reserves that name for its own metadata and strips it from
+the process variables, so the field would never reach the flow).
+
 ```ts
 const BookIn = envelope("BookIn", {
   destination: { type: "string", description: "Where to fly" },

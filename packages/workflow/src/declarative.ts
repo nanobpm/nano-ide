@@ -601,7 +601,39 @@ export function defineFlow(
   if (ctx.tool) flow.tool = ctx.tool;
   const input = startInput(id, contracts);
   if (input) flow.input = input;
+  if (ctx.tool) assertToolExposure(id, input);
   return flow;
+}
+
+/** Fail-closed guards for an MCP-tool flow, run once the flow is assembled so
+ *  the generated model can never be invalid or mis-served:
+ *  - the generated start message is `<bpmn:message id="Msg_Start">`, so a flow
+ *    id (the process id) or an input-envelope name (its `nano:shape` id) of
+ *    `Msg_Start` would duplicate that id and produce an invalid BPMN document;
+ *  - Nano's MCP tool surface treats `businessId` as reserved metadata (stripped
+ *    from the process variables before the instance starts), so an input field
+ *    with that name would never reach the flow — its declared contract would lie.
+ *  Step names are already guarded by {@link claimName} (the `Msg_` prefix and
+ *  `Start` are reserved), so a signal step cannot collide here. */
+function assertToolExposure(id: string, input: Envelope | undefined): void {
+  if (id === TOOL_START_MESSAGE_ID) {
+    throw new Error(
+      `exposeAsTool() in flow "${id}": the flow id "${TOOL_START_MESSAGE_ID}" collides with the generated start message id — rename the flow`,
+    );
+  }
+  if (input === undefined) return;
+  if (input.name === TOOL_START_MESSAGE_ID) {
+    throw new Error(
+      `exposeAsTool() in flow "${id}": the input envelope "${TOOL_START_MESSAGE_ID}" collides with the generated start message id (it lifts to a nano:shape with that id) — rename the envelope`,
+    );
+  }
+  for (const f of input.fields) {
+    if (f.name === TOOL_RESERVED_INPUT_FIELD) {
+      throw new Error(
+        `exposeAsTool() in flow "${id}": the input field "${TOOL_RESERVED_INPUT_FIELD}" is reserved by the MCP tool surface (it is stripped from the process variables), so the field would never reach the flow — rename it`,
+      );
+    }
+  }
 }
 
 // --- Tree walkers ------------------------------------------------------------
@@ -1143,8 +1175,16 @@ export function declarativeToBpmn(flow: DeclarativeFlow): string {
 
 /** The `<bpmn:message>` id of an MCP-tool flow's start message. `Msg_` is a
  *  reserved step-name prefix and `Start` a reserved step name, so it cannot
- *  collide with a signal step's `Msg_<name>`. */
+ *  collide with a signal step's `Msg_<name>`. The OTHER collision surfaces — a
+ *  flow id or an input-envelope (`nano:shape`) name of `Msg_Start` — are guarded
+ *  by {@link assertToolExposure} at `defineFlow` time. */
 const TOOL_START_MESSAGE_ID = "Msg_Start";
+
+/** An input-field name the MCP tool surface reserves for its own metadata (it is
+ *  stripped from the process variables before the instance starts), so an
+ *  envelope field with this name would never reach the flow. Guarded by
+ *  {@link assertToolExposure}. */
+const TOOL_RESERVED_INPUT_FIELD = "businessId";
 
 const toolProp = (key: string, value: string): string =>
   `          <zeebe:property name="io.camunda.tool:${key}" value="${escapeXml(value)}" />`;

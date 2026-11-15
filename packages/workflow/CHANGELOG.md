@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.20.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.19.0...@nanobpm/workflow-0.20.0) (2026-11-15)
+
+
+### Features
+
+* **workflow:** expose a flow as an MCP tool (exposeAsTool) ([#621](https://github.com/nanobpm/nano-ide/issues/621)) ([330e47a](https://github.com/nanobpm/nano-ide/commit/330e47a15e4b07ba0741431ccdbaa1e9a14c8999))
+
 ## [0.19.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/workflow-0.18.0...@nanobpm/workflow-0.19.0) (2026-11-11)
 
 

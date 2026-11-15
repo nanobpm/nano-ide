@@ -195,3 +195,33 @@ test("envelope: description is carried on the field and validated", () => {
   assert.equal("description" in BookIn.fields[1], false);
   assert.throws(() => envelope("Bad", JSON.parse('{"a":{"type":"string","description":1}}')), /description must be a string/);
 });
+
+test("message ids: no lifted envelope (nano:shape) may share an id with a generated bpmn:message", () => {
+  // Defect class: every lifted envelope becomes `<nano:shape id=NAME>` and every
+  // message becomes `<bpmn:message id="Msg_…">`; any overlap is a duplicate id and
+  // an invalid BPMN document. Guarded at emission against the COLLECTED set of
+  // shapes, so step in/out, signal payloads and nested steps are all covered.
+  const Clash = envelope("Msg_Start", { q: "string" });
+  const tool = (build: (w: any) => void, contracts: any) =>
+    defineFlow("ok", contracts, (w: any) => {
+      w.exposeAsTool({ name: "t", purpose: "p" });
+      build(w);
+    });
+  const re = /envelope "Msg_Start" collides with the generated <bpmn:message> id/;
+  // step input / output envelopes
+  assert.throws(() => toBpmn(tool((w) => w.run("a", async () => ({})), { a: { in: Clash } })), re);
+  assert.throws(() => toBpmn(tool((w) => w.run("a", async () => ({})), { a: { out: Clash } })), re);
+  // signal payload envelope
+  assert.throws(() => toBpmn(tool((w) => w.signal("s", { correlationKey: "k" }), { s: { in: Clash } })), re);
+  // nested step (inside a loop body), in a flow with no Start envelope
+  assert.throws(
+    () => toBpmn(tool((w) => w.loop((b: any) => { b.run("a", async () => ({})); b.break(); }), { a: { in: Clash } })),
+    re,
+  );
+  // The same class without exposeAsTool: a signal's `Msg_<name>` message id.
+  const Sig = envelope("Msg_approve", { q: "string" });
+  assert.throws(
+    () => toBpmn(defineFlow("ok", { a: { in: Sig } }, (w: any) => { w.run("a", async () => ({})); w.signal("approve", { correlationKey: "k" }); })),
+    /envelope "Msg_approve" collides with the generated <bpmn:message> id/,
+  );
+});

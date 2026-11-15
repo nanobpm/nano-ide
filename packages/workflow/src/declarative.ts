@@ -792,6 +792,9 @@ class Compiler {
   private readonly edges: Edge[] = [];
   /** envelope name → its fields, deduped for lifting to a single nano:shape. */
   private readonly envelopes = new Map<string, EnvelopeField[]>();
+  /** Every `<bpmn:message>` id emitted, recorded by {@link emitMessages} (the
+   *  single source) so lifted shape ids can be checked against it. */
+  private readonly messageIds = new Set<string>();
   /** The stack of open sub-process scopes; `.at(-1)` is the current scope (a
    *  node/edge created now nests inside it). Empty at the top level. */
   private readonly scopeStack: string[] = [];
@@ -1098,6 +1101,7 @@ class Compiler {
 
     const bodyXml = this.renderScope(undefined);
     const messageXml = this.emitMessages();
+    this.assertShapeIdsDisjointFromMessages();
     const shapeXml = this.emitShapes();
 
     return (
@@ -1123,6 +1127,7 @@ class Compiler {
   private emitMessages(): string {
     const msgs: string[] = [];
     if (this.flow.tool) {
+      this.messageIds.add(TOOL_START_MESSAGE_ID);
       msgs.push(
         `  <bpmn:message id="${TOOL_START_MESSAGE_ID}" name="${escapeXml(messageName(this.flow.id, "Start"))}" />`,
       );
@@ -1130,6 +1135,7 @@ class Compiler {
     walkNodes(this.flow.steps, (n) => {
       if (n.kind !== "signal") return;
       const msgId = `Msg_${n.name}`;
+      this.messageIds.add(msgId);
       const payloadProp = n.payload
         ? `\n      <zeebe:properties>\n${envelopeProp("in", n.payload.name)}\n      </zeebe:properties>`
         : "";
@@ -1143,6 +1149,21 @@ class Compiler {
       );
     });
     return msgs.join("\n");
+  }
+
+  /** Every lifted envelope becomes `<nano:shape id=NAME>` and every message a
+   *  `<bpmn:message id="Msg_…">` (the tool start message and one per signal step,
+   *  anywhere in the tree). Any overlap is a duplicate id → an invalid document,
+   *  so check the COLLECTED shape set (step in/out, signal payloads, nested
+   *  steps — every envelope source) against the derived message ids, fail-closed. */
+  private assertShapeIdsDisjointFromMessages(): void {
+    for (const name of this.envelopes.keys()) {
+      if (this.messageIds.has(name)) {
+        throw new Error(
+          `envelope "${name}" collides with the generated <bpmn:message> id in flow "${this.flow.id}" — rename the envelope`,
+        );
+      }
+    }
   }
 
   /** Lift the referenced data envelopes into a `<nano:shapes>` container on the

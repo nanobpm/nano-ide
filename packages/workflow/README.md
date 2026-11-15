@@ -266,6 +266,10 @@ surface cannot honour them: the flow id and the input-envelope name must not be
 document invalid), and the input envelope must not declare a `businessId` field
 (the MCP tool surface reserves that name for its own metadata and strips it from
 the process variables, so the field would never reach the flow).
+More generally, no envelope anywhere in a flow (step `in`/`out`, signal payloads,
+nested steps) may be named like a generated `<bpmn:message>` id — `Msg_Start` for a
+tool flow, `Msg_<signal>` for each signal step — since it lifts to a `nano:shape`
+with that id; `toBpmn` rejects the collision.
 
 ```ts
 const BookIn = envelope("BookIn", {

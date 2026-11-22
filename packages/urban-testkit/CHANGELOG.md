@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.7.0...@nanobpm/urban-testkit-1.7.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **deps:** bump engine-wasm/engine-testkit/urban ranges (urban-testkit) ([#623](https://github.com/nanobpm/nano-ide/issues/623)) ([87a8ad8](https://github.com/nanobpm/nano-ide/commit/87a8ad894897e3b97f836251934a7634cbcacb37))
+
 ## [1.7.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.6.0...@nanobpm/urban-testkit-1.7.0) (2026-11-03)
 
 

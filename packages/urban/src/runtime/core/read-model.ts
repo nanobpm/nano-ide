@@ -383,7 +383,12 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
     return alias;
   };
 
-  const walk = (node: Expr, projTable: string | undefined, existsDepth: number): string => {
+  // `filter` marks a pure boolean-filter position (an EXISTS `WHERE`, a CASE `WHEN`, or an AND/OR clause
+  // nested in one). There NULL already behaves like false, so the COALESCE 0/1 normalisation is
+  // semantically redundant — and harmful: SQLite cannot use an index through `COALESCE((a = b), 0)`,
+  // turning every correlated EXISTS into a full scan per outer row (#625). The normalisation is kept
+  // wherever the value is *projected* (`filter === false`), so the TS/SQL 0/1 parity is unchanged.
+  const walk = (node: Expr, projTable: string | undefined, existsDepth: number, filter = false): string => {
     switch (node.kind) {
       case "lit":
         return sqlLiteral(node.value);
@@ -402,16 +407,23 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
       case "compare":
         // SQLite comparisons against NULL yield NULL, but the TS backend (compareValues) collapses any
         // nullish operand to `false`/0. COALESCE the SQL result to 0 so both backends agree on NULL inputs.
-        return `COALESCE((${walk(node.left, projTable, existsDepth)} ${SQL_COMPARE[node.op]} ${walk(node.right, projTable, existsDepth)}), 0)`;
+        {
+          const cmp = `${walk(node.left, projTable, existsDepth)} ${SQL_COMPARE[node.op]} ${walk(node.right, projTable, existsDepth)}`;
+          return filter ? `(${cmp})` : `COALESCE((${cmp}), 0)`;
+        }
       case "and":
         // `NULL AND 0`/`NULL OR 0` can yield NULL in SQLite, but the TS backend coerces each clause through
         // `truthy(...)` (NULL → false), so COALESCE the boolean expression to 0 to keep the 0/1 domain aligned.
         return node.clauses.length
-          ? `COALESCE((${node.clauses.map((c) => walk(c, projTable, existsDepth)).join(" AND ")}), 0)`
+          ? filter
+            ? `(${node.clauses.map((c) => walk(c, projTable, existsDepth, true)).join(" AND ")})`
+            : `COALESCE((${node.clauses.map((c) => walk(c, projTable, existsDepth)).join(" AND ")}), 0)`
           : "1";
       case "or":
         return node.clauses.length
-          ? `COALESCE((${node.clauses.map((c) => walk(c, projTable, existsDepth)).join(" OR ")}), 0)`
+          ? filter
+            ? `(${node.clauses.map((c) => walk(c, projTable, existsDepth, true)).join(" OR ")})`
+            : `COALESCE((${node.clauses.map((c) => walk(c, projTable, existsDepth)).join(" OR ")}), 0)`
           : "0";
       case "not":
         // `NOT NULL` is NULL in SQLite, while the TS backend returns `!truthy(NULL)` → true. Compile as
@@ -422,7 +434,7 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
         return `(${walk(node.expr, projTable, existsDepth)} IS NULL)`;
       case "case": {
         const whens = node.whens
-          .map((w) => `WHEN ${walk(w.when, projTable, existsDepth)} THEN ${walk(w.then, projTable, existsDepth)}`)
+          .map((w) => `WHEN ${walk(w.when, projTable, existsDepth, true)} THEN ${walk(w.then, projTable, existsDepth)}`)
           .join(" ");
         return `CASE ${whens} ELSE ${walk(node.else, projTable, existsDepth)} END`;
       }
@@ -432,7 +444,7 @@ export function compileToSqlSelect(expr: Expr, options: SqlCompileOptions = {}):
         // predicate always correlates to the OUTER base row (via `pcol` binds to this alias). The closed
         // AST keeps the correlation explicit and injection-free.
         const projAlias = projAliasAt(existsDepth);
-        return `EXISTS (SELECT 1 FROM ${quoteIdent(table)} AS ${quoteIdent(projAlias)} WHERE ${walk(node.where, projAlias, existsDepth + 1)})`;
+        return `EXISTS (SELECT 1 FROM ${quoteIdent(table)} AS ${quoteIdent(projAlias)} WHERE ${walk(node.where, projAlias, existsDepth + 1, true)})`;
       }
     }
   };

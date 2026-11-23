@@ -51,6 +51,7 @@ interface Flags {
   models: boolean;
   stdout: boolean;
   install: boolean;
+  serve: boolean;
   style?: "model" | "code";
   help: boolean;
   version: boolean;
@@ -58,7 +59,7 @@ interface Flags {
 }
 
 function parse(argv: string[]): Flags {
-  const f: Flags = { root: ".", manifest: "nano.app.json", check: false, deno: false, models: true, stdout: false, install: true, help: false, version: false, _: [] };
+  const f: Flags = { root: ".", manifest: "nano.app.json", check: false, deno: false, models: true, stdout: false, install: true, serve: false, help: false, version: false, _: [] };
   const need = (i: number, flag: string): string => {
     const v = argv[i];
     if (v === undefined || v.startsWith("-")) throw new Error(`flag ${flag} requires a value`);
@@ -69,6 +70,7 @@ function parse(argv: string[]): Flags {
     if (a === "-h" || a === "--help") f.help = true;
     else if (a === "-v" || a === "--version") f.version = true;
     else if (a === "--check") f.check = true;
+    else if (a === "--serve") f.serve = true;
     else if (a === "--deno") f.deno = true;
     else if (a === "--no-models") f.models = false;
     else if (a === "--models") f.models = true;
@@ -116,6 +118,9 @@ Usage:
   urban data                        DB-manager op gateway: read a JSON request on stdin
                                     ({op:sources|schema|query|exec|script|migrations|migrate,…}),
                                     write a JSON result on stdout
+  urban data --serve                long-lived gateway: one JSON request per stdin line (with an
+                                    \`id\`), one JSON response per stdout line echoing that \`id\`;
+                                    exits 0 on stdin EOF
 
 Global flags:
   --root <dir>        app root (default ".")
@@ -319,30 +324,111 @@ export async function cmdData(f: Flags, readInput: () => Promise<string> = readS
   try {
     req = JSON.parse(await readInput());
   } catch (err) {
-    console.log(
-      JSON.stringify({
-        ok: false,
-        error: `bad request: ${err instanceof Error ? err.message : String(err)}`,
-      }),
-    );
+    console.log(JSON.stringify({ ok: false, error: `bad request: ${errorMessage(err)}` }));
     return 0;
   }
-  // Lazily the only modules `urban data` loads (nano-ide#592): the host detector (both
-  // adapters, no toolkit) and the data-op runner (gateway + SQLite adapter; the toolkit
-  // derivers behind the `domaintypes` op load only when that op is dispatched). Imported
-  // directly rather than via the runtime barrel, which would pull in the whole runtime.
+  const run = await loadDataRunner(f);
+  console.log(JSON.stringify(await run(req)));
+  return 0;
+}
+
+type DataEnvelope = { ok: true; [k: string]: unknown } | { ok: false; error: string };
+
+/**
+ * Lazily load the only modules `urban data` needs (nano-ide#592): the host detector (both
+ * adapters, no toolkit) and the data-op runner (gateway + SQLite adapter; the toolkit derivers
+ * behind the `domaintypes` op load only when that op is dispatched). Imported directly rather
+ * than via the runtime barrel, which would pull in the whole runtime. Returns a runner that never
+ * throws: a failed op becomes an `{ ok: false, error }` envelope.
+ */
+async function loadDataRunner(f: Flags): Promise<(req: DataRequest) => Promise<DataEnvelope>> {
   const { selectHost } = await import("./runtime/adapters/detect.ts");
   const { runDataOp } = await import("./runtime/core/modules/dataops.ts");
   const host = selectHost({ cwd: f.root });
-  try {
-    // Mirror runFromEnv: the host is anchored at f.root, so pass root "." to avoid
-    // double-prefixing every manifest/db path (host.abs already resolves against f.root).
-    const result = await runDataOp(host, ".", f.manifest, req);
-    console.log(JSON.stringify({ ok: true, ...result }));
-  } catch (err) {
-    console.log(
-      JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }),
-    );
+  return async (req) => {
+    try {
+      // Mirror runFromEnv: the host is anchored at f.root, so pass root "." to avoid
+      // double-prefixing every manifest/db path (host.abs already resolves against f.root).
+      const result = await runDataOp(host, ".", f.manifest, req);
+      return { ok: true, ...result };
+    } catch (err) {
+      return { ok: false, error: errorMessage(err) };
+    }
+  };
+}
+
+/** Split an async stream of text chunks into lines (LF or CRLF); a final unterminated line is yielded. */
+async function* splitLines(chunks: AsyncIterable<string | Uint8Array>): AsyncGenerator<string> {
+  const dec = new TextDecoder();
+  let buf = "";
+  for await (const chunk of chunks) {
+    buf += typeof chunk === "string" ? chunk : dec.decode(chunk, { stream: true });
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      yield line.endsWith("\r") ? line.slice(0, -1) : line;
+    }
+  }
+  buf += dec.decode();
+  if (buf.length > 0) yield buf;
+}
+
+function stdinChunks(): AsyncIterable<string | Uint8Array> {
+  const p = processGlobal();
+  if (p?.stdin && Symbol.asyncIterator in p.stdin) return p.stdin as AsyncIterable<string | Uint8Array>;
+  const d = denoGlobal() as { stdin?: { readable?: AsyncIterable<Uint8Array> } } | undefined;
+  if (d?.stdin?.readable) return d.stdin.readable;
+  return (async function* () {})();
+}
+
+/** Write one line to stdout, honouring backpressure so large replies are never truncated (#549). */
+async function writeStdoutLine(line: string): Promise<void> {
+  const p = processGlobal() as { stdout?: { write(s: string, cb?: () => void): boolean } } | undefined;
+  if (p?.stdout?.write) {
+    const out = p.stdout;
+    await new Promise<void>((resolve) => {
+      out.write(`${line}\n`, () => resolve());
+    });
+    return;
+  }
+  console.log(line);
+}
+
+/**
+ * `urban data --serve` — the long-lived DB-manager op gateway (nano-bpm#1836). Instead of one
+ * process per op, the caller keeps a single worker and streams NDJSON:
+ *
+ * - **request**: one JSON object per stdin line, `{ id, op, source?, sql?, … }`. `id` is any
+ *   JSON value chosen by the caller (string or number); it is echoed back verbatim.
+ * - **response**: one JSON object per stdout line, `{ id, ok: true, ...result }` or
+ *   `{ id, ok: false, error }`. Requests are processed sequentially, so responses arrive in
+ *   request order. An unparseable line (or a non-object) yields `{ id: null, ok: false, error }`
+ *   — a bad request never crashes the worker. Blank lines are ignored.
+ * - **lifecycle**: the process exits 0 when stdin reaches EOF.
+ */
+export async function cmdDataServe(
+  f: Flags,
+  input: AsyncIterable<string | Uint8Array> = stdinChunks(),
+  writeLine: (line: string) => Promise<void> = writeStdoutLine,
+): Promise<number> {
+  const run = await loadDataRunner(f);
+  for await (const line of splitLines(input)) {
+    if (line.trim() === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (err) {
+      await writeLine(JSON.stringify({ id: null, ok: false, error: `bad request: ${errorMessage(err)}` }));
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      await writeLine(JSON.stringify({ id: null, ok: false, error: "bad request: expected a JSON object" }));
+      continue;
+    }
+    const { id = null, ...req } = parsed as Record<string, unknown>;
+    const reply = await run(req as unknown as DataRequest);
+    await writeLine(JSON.stringify({ id, ...reply }));
   }
   return 0;
 }
@@ -446,7 +532,7 @@ export async function main(argv: string[]): Promise<number> {
     case "add":
       return cmdAdd(f);
     case "data":
-      return cmdData(f);
+      return f.serve ? cmdDataServe(f) : cmdData(f);
     case "run":
       return cmdRun(f);
     case "dev":

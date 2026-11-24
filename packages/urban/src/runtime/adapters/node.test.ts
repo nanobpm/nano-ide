@@ -271,6 +271,10 @@ test("serveHttp never aborts req.signal for a completed request, and leaks no li
   const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
   const sockets = new Set<import("node:net").Socket>();
   native.on("connection", (s) => sockets.add(s));
+  // Baseline close-listener count per socket is runtime-specific (Deno's node:http compat
+  // attaches more internal listeners than Node), so assert *no growth* across requests
+  // rather than an absolute number.
+  const closeCounts: number[] = [];
   try {
     for (let i = 0; i < 50; i++) {
       const body = await new Promise<string>((resolve, reject) => {
@@ -283,9 +287,14 @@ test("serveHttp never aborts req.signal for a completed request, and leaks no li
           .on("error", reject);
       });
       assert.equal(body, "ok");
+      for (const s of sockets) closeCounts.push(s.listenerCount("close"));
     }
     assert.equal(sockets.size, 1, "requests reused one keep-alive socket");
-    for (const s of sockets) assert.ok(s.listenerCount("close") <= 2, `socket close listeners: ${s.listenerCount("close")}`);
+    assert.equal(closeCounts.length, 50);
+    assert.ok(
+      closeCounts.every((c) => c === closeCounts[0]),
+      `socket close listeners grew across requests: ${closeCounts[0]} -> ${closeCounts[closeCounts.length - 1]}`,
+    );
     agent.destroy();
     await new Promise((r) => setTimeout(r, 50));
     assert.equal(signals.length, 50);

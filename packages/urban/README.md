@@ -35,6 +35,8 @@ Deno users can still import the TypeScript source directly via the `./source` ex
 | `urban run` | generate, then run the app — starts its workers and serves its surfaces |
 | `urban dev` | run the app (hot-reload is not yet implemented) |
 | `urban deploy` | deploy the app's models to the engine, then exit |
+| `urban data` | DB-manager op gateway: one JSON request on stdin, one JSON reply on stdout |
+| `urban data --serve` | long-lived DB-manager gateway speaking NDJSON (see below) |
 
 ### Options
 
@@ -51,6 +53,29 @@ The engine address comes from `$CAMUNDA_REST_ADDRESS` (default
 `auto`): the `@nanobpm/nano-sdk` client upgrades instance creation and job
 serving to Falcon on a Nano server and falls back to REST elsewhere. Set it to
 `rest`, `falcon`, or `embedded` to pin a specific transport.
+
+### `urban data --serve` — the long-lived data gateway
+
+`urban data` answers one request and exits, so a caller pays a process start-up
+per op. `urban data --serve` keeps one worker alive and speaks newline-delimited
+JSON:
+
+- **Request** — one JSON object per stdin line: the usual `urban data` request
+  (`{ op, source?, sql?, params?, statements? }`) plus an `id` of the caller's
+  choosing (string or number).
+- **Response** — one JSON object per stdout line, echoing the `id`:
+  `{ "id": …, "ok": true, …result }` or `{ "id": …, "ok": false, "error": "…" }`.
+  Requests are handled sequentially, so responses come back in request order.
+- **Errors never crash the worker** — a failed op is an `ok: false` response; an
+  unparseable line (or a non-object) gets `{ "id": null, "ok": false, "error": "bad request: …" }`.
+  Blank lines are ignored.
+- **Lifecycle** — the process exits 0 when stdin reaches EOF.
+
+```sh
+$ printf '%s\n' '{"id":1,"op":"sources"}' '{"id":2,"op":"query","sql":"SELECT 1 AS x"}' | urban data --serve
+{"id":1,"ok":true,…}
+{"id":2,"ok":true,…}
+```
 
 ### Network bind interface
 

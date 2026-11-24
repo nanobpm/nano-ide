@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.7.1...@nanobpm/urban-testkit-1.7.2) (2026-11-24)
+
+
+### Bug Fixes
+
+* **urban-testkit:** adopt @nanobpm/engine-wasm ^0.12.0 and @nanobpm/urban ^0.100.0 ([#631](https://github.com/nanobpm/nano-ide/issues/631)) ([7b2571d](https://github.com/nanobpm/nano-ide/commit/7b2571deb56848bb19e4ac63e8ba51e9ec5ca6d7))
+
 ## [1.7.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.7.0...@nanobpm/urban-testkit-1.7.1) (2026-11-22)
 
 

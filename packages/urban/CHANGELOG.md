@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.99.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.99.1...@nanobpm/urban-0.99.2) (2026-11-24)
+
+
+### Performance Improvements
+
+* **urban:** index-friendly EXISTS predicates in read-model SQL ([#626](https://github.com/nanobpm/nano-ide/issues/626)) ([005a0a5](https://github.com/nanobpm/nano-ide/commit/005a0a51a0e08723710dff1a19fd5b0f7be3c42a))
+
 ## [0.99.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.99.0...@nanobpm/urban-0.99.1) (2026-11-15)
 
 

@@ -181,6 +181,7 @@ test("urban data --serve answers each line in order, echoing ids, and survives b
       "not json\n",
       "[1,2]\n",
       '{"id":3,"op":"bogus-op"}\n',
+      '{"id":"no-op","sql":"SELECT 1"}\n',
       '{"id":4,"op":"query","sql":"SELECT v FROM t"}', // final unterminated line
     ];
     const out: unknown[] = [];
@@ -195,8 +196,8 @@ test("urban data --serve answers each line in order, echoing ids, and survives b
       },
     );
     assert.equal(code, 0);
-    assert.equal(out.length, 6);
-    const [r1, r2, r3, r4, r5, r6] = out.map((r) => {
+    assert.equal(out.length, 7);
+    const [r1, r2, r3, r4, r5, rNoOp, r6] = out.map((r) => {
       assert.ok(isRecord(r));
       return r;
     });
@@ -212,6 +213,9 @@ test("urban data --serve answers each line in order, echoing ids, and survives b
     assert.equal(r5.id, 3);
     assert.equal(r5.ok, false);
     assert.equal(typeof r5.error, "string");
+    assert.equal(rNoOp.id, "no-op");
+    assert.equal(rNoOp.ok, false);
+    assert.match(String(rNoOp.error), /^bad request: /);
     assert.equal(r6.id, 4);
     assert.equal(r6.ok, true);
     assert.match(JSON.stringify(r6), /"a"/);

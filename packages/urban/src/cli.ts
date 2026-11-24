@@ -375,20 +375,20 @@ async function* splitLines(chunks: AsyncIterable<string | Uint8Array>): AsyncGen
 }
 
 function stdinChunks(): AsyncIterable<string | Uint8Array> {
-  const p = processGlobal();
-  if (p?.stdin && Symbol.asyncIterator in p.stdin) return p.stdin as AsyncIterable<string | Uint8Array>;
-  const d = denoGlobal() as { stdin?: { readable?: AsyncIterable<Uint8Array> } } | undefined;
-  if (d?.stdin?.readable) return d.stdin.readable;
+  const stdin = processGlobal()?.stdin;
+  if (stdin && Symbol.asyncIterator in stdin) return stdin;
+  const readable = denoGlobal()?.stdin?.readable;
+  if (readable) return readable;
   return (async function* () {})();
 }
 
 /** Write one line to stdout, honouring backpressure so large replies are never truncated (#549). */
 async function writeStdoutLine(line: string): Promise<void> {
-  const p = processGlobal() as { stdout?: { write(s: string, cb?: () => void): boolean } } | undefined;
-  if (p?.stdout?.write) {
-    const out = p.stdout;
+  const stdout = processGlobal()?.stdout;
+  const write = stdout?.write?.bind(stdout);
+  if (write) {
     await new Promise<void>((resolve) => {
-      out.write(`${line}\n`, () => resolve());
+      write(`${line}\n`, () => resolve());
     });
     return;
   }
@@ -407,6 +407,12 @@ async function writeStdoutLine(line: string): Promise<void> {
  *   — a bad request never crashes the worker. Blank lines are ignored.
  * - **lifecycle**: the process exits 0 when stdin reaches EOF.
  */
+/** Narrow a parsed request object to a `DataRequest`: `op` must be a string (an unknown op is
+ * reported by the runner as an `{ ok: false }` envelope). */
+function isDataRequest(v: Record<string, unknown>): v is Record<string, unknown> & DataRequest {
+  return typeof v.op === "string";
+}
+
 export async function cmdDataServe(
   f: Flags,
   input: AsyncIterable<string | Uint8Array> = stdinChunks(),
@@ -422,12 +428,16 @@ export async function cmdDataServe(
       await writeLine(JSON.stringify({ id: null, ok: false, error: `bad request: ${errorMessage(err)}` }));
       continue;
     }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    if (!isRecord(parsed) || Array.isArray(parsed)) {
       await writeLine(JSON.stringify({ id: null, ok: false, error: "bad request: expected a JSON object" }));
       continue;
     }
-    const { id = null, ...req } = parsed as Record<string, unknown>;
-    const reply = await run(req as unknown as DataRequest);
+    const { id = null, ...req } = parsed;
+    if (!isDataRequest(req)) {
+      await writeLine(JSON.stringify({ id, ok: false, error: "bad request: \"op\" must be a string" }));
+      continue;
+    }
+    const reply = await run(req);
     await writeLine(JSON.stringify({ id, ...reply }));
   }
   return 0;

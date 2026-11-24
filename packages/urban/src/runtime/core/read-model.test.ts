@@ -332,7 +332,7 @@ test("EXISTS aliases the projection relation distinctly from the base alias so c
     baseAlias: "base",
     resolveProjectionTable: () => "base", // physical projection table collides with the base alias
   });
-  assert.match(sql, /FROM "base" AS "__urban_proj_0" WHERE COALESCE\(\("__urban_proj_0"\."k" = "base"\."k"\), 0\)/);
+  assert.match(sql, /FROM "base" AS "__urban_proj_0" WHERE \("__urban_proj_0"\."k" = "base"\."k"\)\)/);
 
   // If the base alias IS the reserved alias itself, the projection alias is prefixed further so the two
   // stay distinct — the derivation is collision-free for any base alias.
@@ -340,7 +340,7 @@ test("EXISTS aliases the projection relation distinctly from the base alias so c
     baseAlias: "__urban_proj_0",
     resolveProjectionTable: () => "__urban_proj_0",
   });
-  assert.match(collide, /FROM "__urban_proj_0" AS "___urban_proj_0" WHERE COALESCE\(\("___urban_proj_0"\."k" = "__urban_proj_0"\."k"\), 0\)/);
+  assert.match(collide, /FROM "__urban_proj_0" AS "___urban_proj_0" WHERE \("___urban_proj_0"\."k" = "__urban_proj_0"\."k"\)\)/);
 });
 
 test("projection alias avoids a base alias that collides only by case (SQLite idents are case-insensitive)", () => {
@@ -351,7 +351,7 @@ test("projection alias avoids a base alias that collides only by case (SQLite id
     baseAlias: "__URBAN_PROJ_0",
     resolveProjectionTable: () => "p",
   });
-  assert.match(collide, /FROM "p" AS "___urban_proj_0" WHERE COALESCE\(\("___urban_proj_0"\."k" = "__URBAN_PROJ_0"\."k"\), 0\)/);
+  assert.match(collide, /FROM "p" AS "___urban_proj_0" WHERE \("___urban_proj_0"\."k" = "__URBAN_PROJ_0"\."k"\)\)/);
 });
 
 test("a base alias that is not a SQL identifier is rejected at compile time", () => {
@@ -368,7 +368,7 @@ test("nested EXISTS bind each pcol(...) to its own projection via depth-indexed 
   // The outer projection is __urban_proj_0, the nested one __urban_proj_1 — so the inner pcol cannot
   // shadow the outer projection's row.
   assert.match(sql, /FROM "outer" AS "__urban_proj_0" WHERE/);
-  assert.match(sql, /FROM "inner" AS "__urban_proj_1" WHERE COALESCE\(\("__urban_proj_1"\."ik" = "base"\."bk"\), 0\)/);
+  assert.match(sql, /FROM "inner" AS "__urban_proj_1" WHERE \("__urban_proj_1"\."ik" = "base"\."bk"\)\)/);
   assert.match(sql, /"__urban_proj_0"\."ok" = "base"\."bk"/);
 });
 
@@ -1034,4 +1034,58 @@ test("an invalid SQL identifier is rejected at declaration time (injection guard
       }),
     /invalid/,
   );
+});
+
+// #625: a COALESCE-wrapped predicate inside an EXISTS WHERE defeats SQLite index use, so each outer row
+// full-scanned the projection. Guard the defect CLASS: every boolean-filter shape (compare, AND, OR,
+// nested) must let the correlated subquery SEARCH an index, never SCAN the projected table.
+test("EXISTS filter predicates are index-searchable (EXPLAIN QUERY PLAN never SCANs the projection)", async () => {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(`CREATE TABLE base (pr_key TEXT, flag INTEGER);
+      CREATE TABLE merges (pr_key TEXT, outcome TEXT);
+      CREATE INDEX idx_merges_pr ON merges(pr_key);`);
+    const predicates = [
+      eq(pcol("pr_key"), col("pr_key")),
+      and(eq(pcol("pr_key"), col("pr_key")), eq(pcol("outcome"), lit("merged"))),
+      and(eq(pcol("pr_key"), col("pr_key")), or(eq(pcol("outcome"), lit("merged")), eq(pcol("outcome"), lit("closed")))),
+    ];
+    for (const where of predicates) {
+      const derived = caseWhen([when(exists("merges", where), lit(1))], lit(0));
+      const sql = `SELECT ${compileToSqlSelect(derived, { resolveProjectionTable: (n) => n })} AS v FROM base AS "base"`;
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map((r) => String(r.detail));
+      assert.ok(plan.some((d) => /SEARCH __urban_proj_0 USING (COVERING )?INDEX idx_merges_pr/.test(d)), `${sql}\n${plan.join("\n")}`);
+      assert.ok(!plan.some((d) => /SCAN __urban_proj_0/.test(d)), `${sql}\n${plan.join("\n")}`);
+    }
+  } finally {
+    db.close();
+  }
+});
+
+test("filter-context predicates keep NULL parity with the TS backend (NULL filters like false)", async () => {
+  const model = defineReadModel({
+    name: "filter_null_parity_read_model",
+    baseTable: "fnp_rows",
+    derive: {
+      any_match: caseWhen(
+        [when(exists("fnp_proj", and(eq(pcol("k"), col("k")), or(eq(pcol("o"), col("f")), not(eq(pcol("o"), lit("x")))))), lit(1))],
+        lit(0),
+      ),
+      gated: caseWhen([when(and(eq(col("f"), lit("y")), gt(col("n"), lit(0))), lit("yes"))], lit("no")),
+      gated_or: caseWhen([when(or(eq(col("f"), lit("y")), gt(col("n"), lit(0))), lit("yes"))], lit("no")),
+    },
+  });
+  const proj = [{ k: "a", o: null }, { k: "a", o: "x" }, { k: "b", o: "y" }, { k: null, o: "z" }];
+  await withDb((db) => {
+    assert.doesNotThrow(() =>
+      assertReadModelParity(model, db, [
+        { baseRow: { k: null, f: null, n: null }, projections: { fnp_proj: proj } },
+        { baseRow: { k: "a", f: null, n: 1 }, projections: { fnp_proj: proj } },
+        { baseRow: { k: "a", f: "x", n: null }, projections: { fnp_proj: proj } },
+        { baseRow: { k: "b", f: "y", n: 0 }, projections: { fnp_proj: proj } },
+        { baseRow: { k: "c", f: "y", n: 2 }, projections: { fnp_proj: [] } },
+      ]),
+    );
+  });
 });

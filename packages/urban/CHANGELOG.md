@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.100.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.100.0...@nanobpm/urban-0.100.1) (2026-11-24)
+
+
+### Bug Fixes
+
+* **urban:** pass a client-disconnect AbortSignal on the HttpRequest ([#634](https://github.com/nanobpm/nano-ide/issues/634)) ([78f332f](https://github.com/nanobpm/nano-ide/commit/78f332f44dc3ade144cf83914ab2349f9c06e5f7))
+
 ## [0.100.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.99.2...@nanobpm/urban-0.100.0) (2026-11-24)
 
 

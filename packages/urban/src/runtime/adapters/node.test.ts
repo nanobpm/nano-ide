@@ -218,3 +218,89 @@ test("statFile reports a regular file as isFile and a directory as non-regular",
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// Issue #633: a long-poll handler wires `req.signal` into its wait; the node adapter must abort it
+// when the client disconnects mid-request, never after a normal completion, and must not leak.
+test("serveHttp aborts req.signal when the client destroys the socket mid-request", { timeout: 10_000 }, async () => {
+  const host = createNodeHost({ log: () => {} });
+  let entered!: () => void;
+  const handlerEntered = new Promise<void>((r) => (entered = r));
+  let aborted!: () => void;
+  const sawAbort = new Promise<void>((r) => (aborted = r));
+  const server = await host.serveHttp(
+    0,
+    (req) =>
+      new Promise((resolve) => {
+        const signal = req.signal;
+        assert.ok(signal, "request carries an AbortSignal");
+        signal.addEventListener("abort", () => {
+          aborted();
+          resolve({ status: 499 });
+        });
+        entered();
+      }),
+    "127.0.0.1",
+  );
+  try {
+    const clientReq = http.get({ host: "127.0.0.1", port: server.port, path: "/wait" });
+    clientReq.on("error", () => {});
+    await handlerEntered;
+    clientReq.destroy();
+    await sawAbort;
+  } finally {
+    await server.stop();
+  }
+});
+
+test("serveHttp never aborts req.signal for a completed request, and leaks no listeners", { timeout: 20_000 }, async () => {
+  const host = createNodeHost({ log: () => {} });
+  const signals: AbortSignal[] = [];
+  const server = await host.serveHttp(
+    0,
+    (req) => {
+      assert.ok(req.signal, "request carries an AbortSignal");
+      signals.push(req.signal);
+      return { status: 200, body: "ok" };
+    },
+    "127.0.0.1",
+  );
+  const native = server.native;
+  assert.ok(native instanceof http.Server);
+  // Keep-alive agent so many requests share one socket — per-request listeners on the socket
+  // would accumulate there if they were not removed on completion.
+  const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+  const sockets = new Set<import("node:net").Socket>();
+  native.on("connection", (s) => sockets.add(s));
+  // Baseline close-listener count per socket is runtime-specific (Deno's node:http compat
+  // attaches more internal listeners than Node), so assert *no growth* across requests
+  // rather than an absolute number.
+  const closeCounts: number[] = [];
+  try {
+    for (let i = 0; i < 50; i++) {
+      const body = await new Promise<string>((resolve, reject) => {
+        http
+          .get({ host: "127.0.0.1", port: server.port, path: "/", agent }, (res) => {
+            let b = "";
+            res.on("data", (c) => (b += c));
+            res.on("end", () => resolve(b));
+          })
+          .on("error", reject);
+      });
+      assert.equal(body, "ok");
+      for (const s of sockets) closeCounts.push(s.listenerCount("close"));
+    }
+    assert.equal(sockets.size, 1, "requests reused one keep-alive socket");
+    assert.equal(closeCounts.length, 50);
+    assert.ok(
+      closeCounts.every((c) => c === closeCounts[0]),
+      `socket close listeners grew across requests: ${closeCounts[0]} -> ${closeCounts[closeCounts.length - 1]}`,
+    );
+    agent.destroy();
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(signals.length, 50);
+    for (const s of signals) assert.equal(s.aborted, false, "completed request was not aborted");
+  } finally {
+    agent.destroy();
+    await server.stop();
+  }
+});

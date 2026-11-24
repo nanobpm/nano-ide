@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.100.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.99.2...@nanobpm/urban-0.100.0) (2026-11-24)
+
+
+### Features
+
+* **urban:** urban data --serve — long-lived NDJSON data gateway ([#627](https://github.com/nanobpm/nano-ide/issues/627)) ([2bd7acd](https://github.com/nanobpm/nano-ide/commit/2bd7acdaf82989a24b251bf45baab31812661ce7))
+
 ## [0.99.2](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.99.1...@nanobpm/urban-0.99.2) (2026-11-24)
 
 

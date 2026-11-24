@@ -19,6 +19,7 @@ import type {
 import { resolveModulePath } from "../core/module-path.ts";
 import { LOOPBACK_HOST } from "../core/manifest.ts";
 import { formatLogRecord, levelEnabled, parseLogLevel } from "../core/logger.ts";
+import { scopedRequestSignal } from "./request-signal.ts";
 
 type SqliteParam = string | number | bigint | Uint8Array | null;
 
@@ -238,15 +239,23 @@ function startDenoServer(
     } }, async (request: Request): Promise<Response> => {
       const url = new URL(request.url);
       const bodyText = request.body ? await request.text() : "";
+      // Deno's default legacy abort mode also aborts request.signal after a successful
+      // response; scope it to the handler's lifetime so the HttpRequest.signal contract holds.
+      const scoped = scopedRequestSignal(request.signal);
       const req: HttpRequest = {
         method: request.method,
         path: url.pathname,
         query: url.searchParams,
         headers: request.headers,
         text: () => Promise.resolve(bodyText),
-        signal: request.signal,
+        signal: scoped.signal,
       };
-      const res = await handler(req);
+      let res: Awaited<ReturnType<HttpHandler>>;
+      try {
+        res = await handler(req);
+      } finally {
+        scoped.settle();
+      }
       return new Response(res.body ?? "", { status: res.status ?? 200, headers: res.headers });
     });
   });

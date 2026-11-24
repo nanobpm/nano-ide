@@ -395,6 +395,12 @@ async function writeStdoutLine(line: string): Promise<void> {
   console.log(line);
 }
 
+/** Narrow a parsed request object to a `DataRequest`: `op` must be a string (an unknown op is
+ * reported by the runner as an `{ ok: false }` envelope). */
+function isDataRequest(v: Record<string, unknown>): v is Record<string, unknown> & DataRequest {
+  return typeof v.op === "string";
+}
+
 /**
  * `urban data --serve` — the long-lived DB-manager op gateway (nano-bpm#1836). Instead of one
  * process per op, the caller keeps a single worker and streams NDJSON:
@@ -407,12 +413,6 @@ async function writeStdoutLine(line: string): Promise<void> {
  *   — a bad request never crashes the worker. Blank lines are ignored.
  * - **lifecycle**: the process exits 0 when stdin reaches EOF.
  */
-/** Narrow a parsed request object to a `DataRequest`: `op` must be a string (an unknown op is
- * reported by the runner as an `{ ok: false }` envelope). */
-function isDataRequest(v: Record<string, unknown>): v is Record<string, unknown> & DataRequest {
-  return typeof v.op === "string";
-}
-
 export async function cmdDataServe(
   f: Flags,
   input: AsyncIterable<string | Uint8Array> = stdinChunks(),

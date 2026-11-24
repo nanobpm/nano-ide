@@ -26,6 +26,12 @@ export interface HttpRequest {
   headers: Headers;
   /** Read the raw request body as text (empty string when there is none). */
   text(): Promise<string>;
+  /**
+   * Aborts when the client disconnects before the response is sent (issue #633), so a
+   * long-poll handler can stop waiting and release its slot. Never aborts after a normal
+   * completion. Optional: hosts and test doubles that cannot observe disconnects omit it.
+   */
+  signal?: AbortSignal;
 }
 
 /** A minimal HTTP response returned by a handler. */

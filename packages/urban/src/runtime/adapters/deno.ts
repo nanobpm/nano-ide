@@ -244,6 +244,7 @@ function startDenoServer(
         query: url.searchParams,
         headers: request.headers,
         text: () => Promise.resolve(bodyText),
+        signal: request.signal,
       };
       const res = await handler(req);
       return new Response(res.body ?? "", { status: res.status ?? 200, headers: res.headers });

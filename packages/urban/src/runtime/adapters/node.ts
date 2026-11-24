@@ -257,6 +257,14 @@ async function startNodeServer(
   bindHost?: string,
 ): Promise<HttpServer> {
   const server = createServer(async (nreq, nres) => {
+    // Client-disconnect signal (issue #633). `nres` emits `close` once per request — either after
+    // the response finished (writableEnded: a normal completion, never an abort) or when the
+    // underlying socket closed first (the client went away). Listening on the per-request `nres`
+    // rather than the (keep-alive, shared) socket means no listener accumulates across requests.
+    const controller = new AbortController();
+    nres.once("close", () => {
+      if (!nres.writableEnded) controller.abort();
+    });
     const chunks: Buffer[] = [];
     for await (const c of nreq) {
       if (Buffer.isBuffer(c)) chunks.push(c);
@@ -275,9 +283,11 @@ async function startNodeServer(
       query: url.searchParams,
       headers,
       text: () => Promise.resolve(bodyText),
+      signal: controller.signal,
     };
     try {
       const res = await handler(req);
+      if (nres.destroyed) return;
       nres.statusCode = res.status ?? 200;
       for (const [k, v] of Object.entries(res.headers ?? {})) nres.setHeader(k, v);
       nres.end(res.body ?? "");

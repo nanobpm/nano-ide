@@ -120,3 +120,16 @@ test("paginate keeps walking backward from startCursor when the query opened wit
     [{ before: "4", limit: 2 }, { before: "2", limit: 2 }, { before: "0", limit: 2 }],
   );
 });
+
+test("paginate accepts a filter-only query literal (no page) against the engine's query type (#630)", async () => {
+  const seen: Query[] = [];
+  const out: number[] = [];
+  // Compile-checked: Q is inferred from the search function, so a literal omitting `page` typechecks.
+  const search: (q?: Query) => Promise<SearchPage<number>> = (q) => pagedSearch([1, 2, 3], seen)(q ?? {});
+  // Unannotated lambda, as in the documented `(q) => engine.searchAgentInstancesPage(q)` usage.
+  for await (const n of paginate((q) => search(q), { filter: { x: 1 } })) {
+    out.push(n);
+  }
+  assert.deepEqual(out, [1, 2, 3]);
+  assert.deepEqual(seen[0], { filter: { x: 1 } });
+});

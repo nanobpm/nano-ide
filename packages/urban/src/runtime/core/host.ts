@@ -1131,16 +1131,18 @@ export function emptySearchPageInfo(): SearchPageInfo {
  *   filter: { lastUpdatedDate: { $gte: since } },
  * })) { ... }
  */
-export async function* paginate<T, Q extends { readonly page?: SearchPageRequest }>(
-  search: (query: Q) => Promise<SearchPage<T>>,
-  query: Q,
+export async function* paginate<T, Q extends object>(
+  // `Q` is inferred from the query literal alone and intersected with the paging property only at
+  // this boundary, so a filter-only literal (no `page`) typechecks against the engine's query type.
+  search: (query: Q & { readonly page?: SearchPageRequest }) => Promise<SearchPage<T>>,
+  query: Q & { readonly page?: SearchPageRequest },
 ): AsyncGenerator<T, void, undefined> {
   const limit = query.page && "limit" in query.page ? query.page.limit : undefined;
   // A query that opened with `before` is walking BACKWARD: continue from each page's
   // `startCursor` with `before`, never flip to `after`/`endCursor` (which would skip the earlier
   // items and cross the caller's boundary).
   const backward = query.page !== undefined && "before" in query.page && query.page.before !== undefined;
-  let current: Q = query;
+  let current: Q & { readonly page?: SearchPageRequest } = query;
   let previousCursor: string | undefined;
   for (;;) {
     const { items, page } = await search(current);

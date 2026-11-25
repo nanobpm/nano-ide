@@ -11,12 +11,6 @@ Install it as a **devDependency** of your Urban app. Because the kit — not
 `@nanobpm/urban` — owns the WASM engine, the engine never lands in your app's
 production install.
 
-> **Minimum `@nanobpm/urban`:** the WASM adapter value-imports the agent
-> read-model helpers (`agentHistorySearchRequest`, `agentInstanceSearchRequest`,
-> `mapAgentHistoryPage`, `mapAgentInstancePage`) from `@nanobpm/urban/runtime`,
-> which first ship in the `@nanobpm/urban` release after `0.100.1`. Older urban
-> releases fail at import time.
-
 ```sh
 npm i -D @nanobpm/urban-testkit
 ```

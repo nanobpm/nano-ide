@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.8.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.7.3...@nanobpm/urban-testkit-1.8.0) (2026-11-25)
+
+
+### Features
+
+* **urban:** agent searches take the engine's generated filters, sort and paging (part of [#630](https://github.com/nanobpm/nano-ide/issues/630)) ([#637](https://github.com/nanobpm/nano-ide/issues/637)) ([d6a4eac](https://github.com/nanobpm/nano-ide/commit/d6a4eacfda4be7f3c3406ca801600a02d1613b23))
+
+
+### Bug Fixes
+
+* **urban-testkit:** admit @nanobpm/urban ^0.101.0 in the peer range ([#642](https://github.com/nanobpm/nano-ide/issues/642)) ([343464b](https://github.com/nanobpm/nano-ide/commit/343464b62d800769d726c9de7b9073d5a4121251))
+
+
+### Dependencies
+
+* The following workspace dependencies were updated
+  * peerDependencies
+    * @nanobpm/urban bumped from ^0.100.1 || ^0.101.0 to ^0.101.0
+
 ## [1.7.3](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.7.2...@nanobpm/urban-testkit-1.7.3) (2026-11-25)
 
 

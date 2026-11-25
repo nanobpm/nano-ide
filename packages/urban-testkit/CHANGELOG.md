@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.8.0...@nanobpm/urban-testkit-1.8.1) (2026-11-25)
+
+
+### Bug Fixes
+
+* **urban-testkit:** narrow @nanobpm/urban peer to ^0.101.0 ([#643](https://github.com/nanobpm/nano-ide/issues/643)) ([1b890dd](https://github.com/nanobpm/nano-ide/commit/1b890ddd12c20b4ef06c520426a3c4fe8b25196e)), closes [#640](https://github.com/nanobpm/nano-ide/issues/640)
+
 ## [1.8.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.7.3...@nanobpm/urban-testkit-1.8.0) (2026-11-25)
 
 

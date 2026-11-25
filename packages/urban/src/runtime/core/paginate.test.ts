@@ -67,3 +67,20 @@ test("paginate stops on a null endCursor and on a non-advancing cursor", async (
   assert.equal(calls, 2, "a repeated cursor ends the iteration instead of looping forever");
   assert.deepEqual(stuck, [1, 1]);
 });
+
+test("paginate continues past a page whose rows were all dropped by the mapper (cursor still set)", async () => {
+  // A page of only malformed rows maps to `items: []` but still carries a valid endCursor;
+  // stopping on an empty mapped page would silently truncate every later page.
+  const pages: Record<string, SearchPage<number>> = {
+    start: { items: [], page: { ...emptySearchPageInfo(), endCursor: "c1" } },
+    c1: { items: [9], page: { ...emptySearchPageInfo(), endCursor: null } },
+  };
+  const out: number[] = [];
+  for await (const n of paginate(
+    async (q: Query) => pages[q.page && "after" in q.page && q.page.after !== undefined ? q.page.after : "start"],
+    {},
+  )) {
+    out.push(n);
+  }
+  assert.deepEqual(out, [9]);
+});

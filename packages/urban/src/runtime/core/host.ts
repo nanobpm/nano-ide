@@ -1122,8 +1122,9 @@ export function emptySearchPageInfo(): SearchPageInfo {
  * Iterate EVERY item of a paged search, following `page.endCursor` until the engine reports no
  * further page — the canonical way to read past the default page size without truncating by
  * accident (issue #630). `query.page.limit`, when given, is kept as the page size for every
- * request. Stops on an empty page, a missing `endCursor`, or a cursor that does not advance (so a
- * misbehaving engine cannot loop it forever).
+ * request. Stops on a missing `endCursor` or a cursor that does not advance (so a misbehaving
+ * engine cannot loop it forever) — never on an empty *mapped* page, since a page whose rows were
+ * all dropped as malformed still has a cursor and later pages must not be silently truncated.
  *
  * @example
  * for await (const ai of paginate((q) => engine.searchAgentInstancesPage(q), {
@@ -1141,7 +1142,7 @@ export async function* paginate<T, Q extends { readonly page?: SearchPageRequest
     const { items, page } = await search(current);
     yield* items;
     const cursor = page.endCursor ?? undefined;
-    if (items.length === 0 || cursor === undefined || cursor === previousCursor) return;
+    if (cursor === undefined || cursor === previousCursor) return;
     previousCursor = cursor;
     current = { ...query, page: limit === undefined ? { after: cursor } : { after: cursor, limit } };
   }

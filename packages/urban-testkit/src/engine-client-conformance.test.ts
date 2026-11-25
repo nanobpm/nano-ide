@@ -666,8 +666,8 @@ test("EngineClient seam: a failed attempt's transcript is readable with commitSt
 
     const all = [];
     for await (const r of paginate(
-      (q) => engine.searchAgentInstanceHistoryPage(agentInstanceKey, q),
-      { ...everyStatus, page: { limit: 2 } },
+      (page) => engine.searchAgentInstanceHistoryPage(agentInstanceKey, { ...everyStatus, page }),
+      { limit: 2 },
     )) {
       all.push(r);
     }

@@ -1121,28 +1121,30 @@ export function emptySearchPageInfo(): SearchPageInfo {
 /**
  * Iterate EVERY item of a paged search, following `page.endCursor` until the engine reports no
  * further page — the canonical way to read past the default page size without truncating by
- * accident (issue #630). `query.page.limit`, when given, is kept as the page size for every
- * request. A query opened with `page.before` walks backward via `startCursor`. Stops on a missing cursor or a cursor that does not advance (so a misbehaving
- * engine cannot loop it forever) — never on an empty *mapped* page, since a page whose rows were
- * all dropped as malformed still has a cursor and later pages must not be silently truncated.
+ * accident (issue #630). `search` receives only the page request to send; the caller builds the
+ * rest of the query INSIDE the closure, so the literal is contextually typed by the engine
+ * method itself (generated enum literals in filters/sorts keep their literal types — no generic
+ * inference that could widen them). `firstPage.limit`, when given, is kept as the page size for
+ * every request. A walk opened with `firstPage.before` goes backward via `startCursor`. Stops on a
+ * missing cursor or a cursor that does not advance (so a misbehaving engine cannot loop it
+ * forever) — never on an empty *mapped* page, since a page whose rows were all dropped as
+ * malformed still has a cursor and later pages must not be silently truncated.
  *
  * @example
- * for await (const ai of paginate((q) => engine.searchAgentInstancesPage(q), {
- *   filter: { lastUpdatedDate: { $gte: since } },
- * })) { ... }
+ * for await (const ai of paginate((page) =>
+ *   engine.searchAgentInstancesPage({ filter: { lastUpdatedDate: { $gte: since } }, page }),
+ * )) { ... }
  */
-export async function* paginate<T, Q extends object>(
-  // `Q` is inferred from the query literal alone and intersected with the paging property only at
-  // this boundary, so a filter-only literal (no `page`) typechecks against the engine's query type.
-  search: (query: Q & { readonly page?: SearchPageRequest }) => Promise<SearchPage<T>>,
-  query: Q & { readonly page?: SearchPageRequest },
+export async function* paginate<T>(
+  search: (page: SearchPageRequest | undefined) => Promise<SearchPage<T>>,
+  firstPage?: SearchPageRequest,
 ): AsyncGenerator<T, void, undefined> {
-  const limit = query.page && "limit" in query.page ? query.page.limit : undefined;
-  // A query that opened with `before` is walking BACKWARD: continue from each page's
-  // `startCursor` with `before`, never flip to `after`/`endCursor` (which would skip the earlier
-  // items and cross the caller's boundary).
-  const backward = query.page !== undefined && "before" in query.page && query.page.before !== undefined;
-  let current: Q & { readonly page?: SearchPageRequest } = query;
+  const limit = firstPage && "limit" in firstPage ? firstPage.limit : undefined;
+  // A walk that opened with `before` is going BACKWARD: continue from each page's `startCursor`
+  // with `before`, never flip to `after`/`endCursor` (which would skip the earlier items and
+  // cross the caller's boundary).
+  const backward = firstPage !== undefined && "before" in firstPage && firstPage.before !== undefined;
+  let current: SearchPageRequest | undefined = firstPage;
   let previousCursor: string | undefined;
   for (;;) {
     const { items, page } = await search(current);
@@ -1151,6 +1153,6 @@ export async function* paginate<T, Q extends object>(
     if (cursor === undefined || cursor === previousCursor) return;
     previousCursor = cursor;
     const step = backward ? { before: cursor } : { after: cursor };
-    current = { ...query, page: limit === undefined ? step : { ...step, limit } };
+    current = limit === undefined ? step : { ...step, limit };
   }
 }

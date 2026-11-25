@@ -1,6 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { emptySearchPageInfo, paginate, type SearchPage, type SearchPageRequest } from "./host.ts";
+import {
+  type AgentHistorySearchQuery,
+  emptySearchPageInfo,
+  paginate,
+  type SearchPage,
+  type SearchPageRequest,
+} from "./host.ts";
 
 type Query = { readonly filter?: { readonly x?: number }; readonly page?: SearchPageRequest };
 
@@ -28,10 +34,7 @@ function pagedSearch(data: readonly number[], seen: Query[]) {
 test("paginate follows endCursor until exhausted, keeping the filter and limit (#630)", async () => {
   const seen: Query[] = [];
   const out: number[] = [];
-  for await (const n of paginate(pagedSearch([1, 2, 3, 4, 5], seen), {
-    filter: { x: 1 },
-    page: { limit: 2 },
-  })) {
+  for await (const n of paginate((page) => pagedSearch([1, 2, 3, 4, 5], seen)({ filter: { x: 1 }, page }), { limit: 2 })) {
     out.push(n);
   }
   assert.deepEqual(out, [1, 2, 3, 4, 5]);
@@ -47,7 +50,6 @@ test("paginate stops on a null endCursor and on a non-advancing cursor", async (
   const one: number[] = [];
   for await (const n of paginate(
     async () => ({ items: [7], page: emptySearchPageInfo() }),
-    {},
   )) {
     one.push(n);
   }
@@ -60,7 +62,6 @@ test("paginate stops on a null endCursor and on a non-advancing cursor", async (
       calls++;
       return { items: [1], page: { ...emptySearchPageInfo(), endCursor: "same" } };
     },
-    {},
   )) {
     stuck.push(n);
   }
@@ -77,8 +78,7 @@ test("paginate continues past a page whose rows were all dropped by the mapper (
   };
   const out: number[] = [];
   for await (const n of paginate(
-    async (q: Query) => pages[q.page && "after" in q.page && q.page.after !== undefined ? q.page.after : "start"],
-    {},
+    async (page) => pages[page && "after" in page && page.after !== undefined ? page.after : "start"],
   )) {
     out.push(n);
   }
@@ -111,7 +111,7 @@ test("paginate keeps walking backward from startCursor when the query opened wit
   const seen: Query[] = [];
   const out: number[] = [];
   // Items 1–6 at indices 0–5; `before: "4"` (item 5) must yield 3, 4, then 1, 2 — never 5, 6.
-  for await (const n of paginate(backwardSearch([1, 2, 3, 4, 5, 6], seen), { page: { before: "4", limit: 2 } })) {
+  for await (const n of paginate((page) => backwardSearch([1, 2, 3, 4, 5, 6], seen)({ page }), { before: "4", limit: 2 })) {
     out.push(n);
   }
   assert.deepEqual(out, [3, 4, 1, 2]);
@@ -121,15 +121,28 @@ test("paginate keeps walking backward from startCursor when the query opened wit
   );
 });
 
-test("paginate accepts a filter-only query literal (no page) against the engine's query type (#630)", async () => {
-  const seen: Query[] = [];
+test("paginate keeps inline generated enum literals in filters and sorts (#637 review)", async () => {
+  // Compile-checked: the query literal is built inside the closure, so it is contextually typed by
+  // the generated engine query type — `commitStatus: "PENDING"` and the sort `field`/`order` must
+  // not widen to `string` (they would fail typecheck if paginate inferred the query generically).
+  const seen: (AgentHistorySearchQuery | undefined)[] = [];
+  const search = async (q?: AgentHistorySearchQuery): Promise<SearchPage<number>> => {
+    seen.push(q);
+    return { items: [1], page: emptySearchPageInfo() };
+  };
   const out: number[] = [];
-  // Compile-checked: Q is inferred from the search function, so a literal omitting `page` typechecks.
-  const search: (q?: Query) => Promise<SearchPage<number>> = (q) => pagedSearch([1, 2, 3], seen)(q ?? {});
-  // Unannotated lambda, as in the documented `(q) => engine.searchAgentInstancesPage(q)` usage.
-  for await (const n of paginate((q) => search(q), { filter: { x: 1 } })) {
+  for await (const n of paginate((page) =>
+    search({ filter: { commitStatus: "PENDING" }, sort: [{ field: "historyItemKey", order: "ASC" }], page }),
+  )) {
     out.push(n);
   }
-  assert.deepEqual(out, [1, 2, 3]);
-  assert.deepEqual(seen[0], { filter: { x: 1 } });
+  for await (const n of paginate((page) => search({ filter: { commitStatus: { $in: ["PENDING", "COMMITTED"] } }, page }))) {
+    out.push(n);
+  }
+  assert.deepEqual(out, [1, 1]);
+  assert.deepEqual(seen[0], {
+    filter: { commitStatus: "PENDING" },
+    sort: [{ field: "historyItemKey", order: "ASC" }],
+    page: undefined,
+  });
 });

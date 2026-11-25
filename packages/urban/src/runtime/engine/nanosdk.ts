@@ -491,17 +491,30 @@ function isAgentHistoryRole(value: unknown): value is AgentInstanceHistoryRoleEn
   return AGENT_HISTORY_ROLES.some((r) => r === value);
 }
 
+/** The pre-#630 bare-string selectors whose historical contract is "trimmed, and dropped when
+ *  blank" (they mirrored `presentEngineKey`). Only these keep that presence rule; every other
+ *  generated string filter (e.g. `tenantId`) is forwarded verbatim, so a bare string and its
+ *  `{ $eq }` form always mean the same thing — `tenantId: ""` must never widen into "no filter". */
+const LEGACY_TRIMMED_SELECTORS: ReadonlySet<string> = new Set([
+  "processInstanceKey",
+  "rootProcessInstanceKey",
+  "elementInstanceKey",
+  "status",
+  "elementId",
+  "role",
+]);
+
 /** Normalize a generated search filter for the wire, generically over EVERY property (so no
- *  per-field pass-through code can fall behind the engine spec — issue #630): a string value is
- *  trimmed and dropped when blank (the presence rule the key selectors in this seam use); an
- *  `undefined`/`null` value is dropped; numbers, booleans and advanced-operator objects
- *  (`{ $gte, $in, … }`) pass through unchanged. */
+ *  per-field pass-through code can fall behind the engine spec — issue #630): an
+ *  `undefined`/`null` value is dropped; a legacy selector ({@link LEGACY_TRIMMED_SELECTORS}) that
+ *  is a bare string is trimmed and dropped when blank; every other value (strings included,
+ *  numbers, booleans and advanced-operator objects `{ $gte, $in, … }`) passes through unchanged. */
 export function normalizeSearchFilter(filter: object | undefined): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   if (!filter) return out;
   for (const [name, value] of Object.entries(filter)) {
     if (value === undefined || value === null) continue;
-    if (typeof value === "string") {
+    if (typeof value === "string" && LEGACY_TRIMMED_SELECTORS.has(name)) {
       const trimmed = value.trim();
       if (trimmed !== "") out[name] = trimmed;
       continue;

@@ -1712,3 +1712,18 @@ test("deriveWaitStates: a multi-instance elementId is an ambiguous park join and
     { elementInstanceKey: "12", processInstanceKey: "3", elementId: "solo", waitStateType: "JOB", jobType: "work", jobKey: "51" },
   ]);
 });
+
+// `EngineClient.getAgentInstance` reads a failed lookup as absence (the SDK adapter's contract);
+// the WASM double must too, while a use-after-close() stays a loud lifecycle error (#637 review).
+test("wasm: getAgentInstance reads a rejected lookup as null, but still faults after close()", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    engine.searchAgentInstancesPage = async () => {
+      throw new Error("read-model lookup failed");
+    };
+    assert.equal(await engine.getAgentInstance("2251799813685249"), null);
+  } finally {
+    await engine.close();
+  }
+  await assert.rejects(() => engine.getAgentInstance("2251799813685249"), /after close\(\)/);
+});

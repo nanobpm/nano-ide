@@ -1025,8 +1025,16 @@ export class WasmEngineClient implements EngineClient {
   async getAgentInstance(agentInstanceKey: string): Promise<AgentInstanceSummary | null> {
     const key = presentKey(agentInstanceKey);
     if (key === undefined) return null;
-    const { items } = await this.searchAgentInstancesPage({ filter: { agentInstanceKey: key } });
-    return items[0] ?? null;
+    // Lifecycle guard OUTSIDE the catch: a use-after-close() stays a loud error, not a silent null.
+    void this.#liveEngine;
+    try {
+      const { items } = await this.searchAgentInstancesPage({ filter: { agentInstanceKey: key } });
+      return items[0] ?? null;
+    } catch {
+      // A rejected lookup reads as absence — the `EngineClient.getAgentInstance` contract the SDK
+      // adapter also honours.
+      return null;
+    }
   }
 
   /** Testkit-only driver: activate up to `maxJobs` jobs of `jobType` WITH an activation lease —

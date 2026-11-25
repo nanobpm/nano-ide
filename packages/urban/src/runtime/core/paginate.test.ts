@@ -84,3 +84,39 @@ test("paginate continues past a page whose rows were all dropped by the mapper (
   }
   assert.deepEqual(out, [9]);
 });
+
+/** A fake paged search over `data` that honours a `before` cursor (the item index), returning the
+ *  `limit` items just before it. */
+function backwardSearch(data: readonly number[], seen: Query[]) {
+  return async (query: Query): Promise<SearchPage<number>> => {
+    seen.push(query);
+    const page = query.page;
+    const limit = page && "limit" in page && page.limit !== undefined ? page.limit : 2;
+    const end = page && "before" in page && page.before !== undefined ? Number(page.before) : data.length;
+    const start = Math.max(0, end - limit);
+    const items = data.slice(start, end);
+    return {
+      items,
+      page: {
+        totalItems: data.length,
+        hasMoreTotalItems: false,
+        startCursor: items.length ? String(start) : null,
+        endCursor: items.length ? String(end - 1) : null,
+      },
+    };
+  };
+}
+
+test("paginate keeps walking backward from startCursor when the query opened with `before` (#637 review)", async () => {
+  const seen: Query[] = [];
+  const out: number[] = [];
+  // Items 1–6 at indices 0–5; `before: "4"` (item 5) must yield 3, 4, then 1, 2 — never 5, 6.
+  for await (const n of paginate(backwardSearch([1, 2, 3, 4, 5, 6], seen), { page: { before: "4", limit: 2 } })) {
+    out.push(n);
+  }
+  assert.deepEqual(out, [3, 4, 1, 2]);
+  assert.deepEqual(
+    seen.map((q) => q.page),
+    [{ before: "4", limit: 2 }, { before: "2", limit: 2 }, { before: "0", limit: 2 }],
+  );
+});

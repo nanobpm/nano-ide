@@ -1122,7 +1122,7 @@ export function emptySearchPageInfo(): SearchPageInfo {
  * Iterate EVERY item of a paged search, following `page.endCursor` until the engine reports no
  * further page — the canonical way to read past the default page size without truncating by
  * accident (issue #630). `query.page.limit`, when given, is kept as the page size for every
- * request. Stops on a missing `endCursor` or a cursor that does not advance (so a misbehaving
+ * request. A query opened with `page.before` walks backward via `startCursor`. Stops on a missing cursor or a cursor that does not advance (so a misbehaving
  * engine cannot loop it forever) — never on an empty *mapped* page, since a page whose rows were
  * all dropped as malformed still has a cursor and later pages must not be silently truncated.
  *
@@ -1136,14 +1136,19 @@ export async function* paginate<T, Q extends { readonly page?: SearchPageRequest
   query: Q,
 ): AsyncGenerator<T, void, undefined> {
   const limit = query.page && "limit" in query.page ? query.page.limit : undefined;
+  // A query that opened with `before` is walking BACKWARD: continue from each page's
+  // `startCursor` with `before`, never flip to `after`/`endCursor` (which would skip the earlier
+  // items and cross the caller's boundary).
+  const backward = query.page !== undefined && "before" in query.page && query.page.before !== undefined;
   let current: Q = query;
   let previousCursor: string | undefined;
   for (;;) {
     const { items, page } = await search(current);
     yield* items;
-    const cursor = page.endCursor ?? undefined;
+    const cursor = (backward ? page.startCursor : page.endCursor) ?? undefined;
     if (cursor === undefined || cursor === previousCursor) return;
     previousCursor = cursor;
-    current = { ...query, page: limit === undefined ? { after: cursor } : { after: cursor, limit } };
+    const step = backward ? { before: cursor } : { after: cursor };
+    current = { ...query, page: limit === undefined ? step : { ...step, limit } };
   }
 }

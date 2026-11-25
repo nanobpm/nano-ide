@@ -1724,7 +1724,7 @@ test("searchAgentInstancesPage forwards the full generated filter, sort and page
     filter: {
       lastUpdatedDate: { $gte: "2026-11-24T00:00:00Z", $lt: "2026-11-25T00:00:00Z" },
       agentDefinitionKey: { $in: ["1", "2"] },
-      tenantId: "t1",
+      tenantId: " t1 ",
       status: { $neq: "COMPLETED" },
     },
     sort: [{ field: "lastUpdatedDate", order: "ASC" }],
@@ -1847,4 +1847,31 @@ test("spec-coverage guard: searchAgentInstanceHistoryPage forwards every generat
   const filter = Object.fromEntries(props.map((p) => [p, { $exists: true }]));
   await engine.searchAgentInstanceHistoryPage("ai-1", { filter });
   assert.deepEqual(Object.keys(seen ?? {}).sort(), [...props].sort());
+});
+
+test("agent search filters: a generated string filter is forwarded verbatim, so bare and $eq forms agree (#637 review)", async () => {
+  const seen: Record<string, unknown>[] = [];
+  const client = fakeSdkClient({
+    searchAgentInstances: async (input) => {
+      seen.push(input.filter ?? {});
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  for (const tenantId of ["", " t1 ", "t1"]) {
+    await engine.searchAgentInstancesPage({ filter: { tenantId } });
+    await engine.searchAgentInstancesPage({ filter: { tenantId: { $eq: tenantId } } });
+  }
+  assert.deepEqual(seen, [
+    { tenantId: "" },
+    { tenantId: { $eq: "" } },
+    { tenantId: " t1 " },
+    { tenantId: { $eq: " t1 " } },
+    { tenantId: "t1" },
+    { tenantId: { $eq: "t1" } },
+  ]);
+  // The legacy selectors keep their historical trim/drop-blank presence rule.
+  seen.length = 0;
+  await engine.searchAgentInstancesPage({ filter: { processInstanceKey: " 42 ", elementId: "  " } });
+  assert.deepEqual(seen, [{ processInstanceKey: "42" }]);
 });

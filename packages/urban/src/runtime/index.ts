@@ -88,6 +88,11 @@ export type {
   AgentHistoryFilter,
   AgentHistoryRecord,
   AgentInstanceFilter,
+  AgentInstanceSearchQuery,
+  AgentHistorySearchQuery,
+  SearchPage,
+  SearchPageInfo,
+  SearchPageRequest,
   AgentInstanceMetrics,
   AgentInstanceSummary,
   ElementInstanceState,
@@ -166,7 +171,7 @@ export { BpmnError, isBpmnError } from "./core/host.ts";
 // The runtime source of truth for the `EngineClient` method surface (issue #341): a test
 // double / adapter iterates it to prove at runtime that it implements the full interface,
 // catching the "fake lags the SDK" seam-lag class categorically.
-export { ENGINE_CLIENT_METHODS } from "./core/host.ts";
+export { ENGINE_CLIENT_METHODS, emptySearchPageInfo, paginate } from "./core/host.ts";
 // Deployed wait-state floor (issue nanobpm/nano-ide#497): the `waitStateType` values the
 // deployed gateway actually serves, plus the shared guard both EngineClient adapters use so
 // a filter outside the floor fails identically in emulation and against a live engine.
@@ -452,7 +457,14 @@ export type { SchedulerDeps } from "./core/modules/scheduler.ts";
 export { createNodeHost } from "./adapters/node.ts";
 export { createDenoHost } from "./adapters/deno.ts";
 export { isDeno, selectHost } from "./adapters/detect.ts";
-export { createNanoSdkEngineClient, SdkEngineClient } from "./engine/nanosdk.ts";
+export {
+  agentHistorySearchRequest,
+  agentInstanceSearchRequest,
+  createNanoSdkEngineClient,
+  mapAgentHistoryPage,
+  mapAgentInstancePage,
+  SdkEngineClient,
+} from "./engine/nanosdk.ts";
 export type {
   NanoSdkClient,
   NanoSdkEngineOptions,

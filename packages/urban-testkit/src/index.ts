@@ -9,6 +9,7 @@
 
 export {
   createWasmEngineClient,
+  type LeasedJob,
   type ProcessInstanceSnapshot,
   type ProcessInstanceState,
   WasmEngineClient,

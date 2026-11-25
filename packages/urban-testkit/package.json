@@ -1,7 +1,7 @@
 {
   "name": "@nanobpm/urban-testkit",
   "version": "1.7.2",
-  "description": "Generic, in-CI e2e test kit for Urban apps: a WASM-backed EngineClient adapter and a reusable engine contract suite. Install as a devDependency of your Urban app — the WASM engine never lands in production installs of @nanobpm/urban.",
+  "description": "Generic, in-CI e2e test kit for Urban apps: a WASM-backed EngineClient adapter and a reusable engine contract suite. Install as a devDependency of your Urban app — the WASM engine is never loaded at runtime by @nanobpm/urban (it only consumes the engine's generated read-model types).",
   "license": "Apache-2.0",
   "type": "module",
   "keywords": [
@@ -52,7 +52,7 @@
   "dependencies": {
     "@nanobpm/ai-assert": "^0.1.0",
     "@nanobpm/engine-testkit": "^0.1.2",
-    "@nanobpm/engine-wasm": "^0.12.0",
+    "@nanobpm/engine-wasm": "^0.13.0",
     "yaml": "^2.9.0"
   },
   "peerDependencies": {

@@ -57,6 +57,8 @@ function fakeEngine(): { engine: EngineClient; calls: FakeEngineCalls } {
     async getProcessDefinitionXml() { return null; },
     async searchAgentInstances() { return []; },
     async searchAgentInstanceHistory() { return []; },
+    async searchAgentInstancesPage() { return { items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } }; },
+    async searchAgentInstanceHistoryPage() { return { items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } }; },
     async getAgentInstance() { return null; },
     async resolveIncident() {},
     async updateJobRetries() {},

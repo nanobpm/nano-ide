@@ -44,6 +44,8 @@ class MiniEngine implements EngineClient {
   async getProcessDefinitionXml(): Promise<null> { return null; }
   async searchAgentInstances(): Promise<never[]> { return []; }
   async searchAgentInstanceHistory(): Promise<never[]> { return []; }
+  async searchAgentInstancesPage() { return { items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } }; }
+  async searchAgentInstanceHistoryPage() { return { items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } }; }
   async getAgentInstance(): Promise<null> { return null; }
   async resolveIncident(): Promise<void> {}
   async updateJobRetries(): Promise<void> {}

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.101.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.100.1...@nanobpm/urban-0.101.0) (2026-11-25)
+
+
+### Features
+
+* **urban:** agent searches take the engine's generated filters, sort and paging (part of [#630](https://github.com/nanobpm/nano-ide/issues/630)) ([#637](https://github.com/nanobpm/nano-ide/issues/637)) ([d6a4eac](https://github.com/nanobpm/nano-ide/commit/d6a4eacfda4be7f3c3406ca801600a02d1613b23))
+
 ## [0.100.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.100.0...@nanobpm/urban-0.100.1) (2026-11-24)
 
 

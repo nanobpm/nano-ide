@@ -25,12 +25,19 @@ import type {
   VariableSearchQueryResult,
 } from "@nanobpm/engine-wasm/readmodel-types";
 import {
+  agentHistorySearchRequest,
+  agentInstanceSearchRequest,
   applyAmbientLineage,
   assertDeployedWaitStateType,
+  mapAgentHistoryPage,
+  mapAgentInstancePage,
   type AgentHistoryFilter,
   type AgentHistoryRecord,
+  type AgentHistorySearchQuery,
   type AgentInstanceFilter,
+  type AgentInstanceSearchQuery,
   type AgentInstanceSummary,
+  type SearchPage,
   type EngineClient,
   type ElementInstanceSummary,
   type ElementInstanceFilter,
@@ -270,6 +277,15 @@ function bootEngineWasm(): Promise<typeof import("@nanobpm/engine-wasm/readmodel
  * exposes {@link advanceTime}, {@link snapshot}, and {@link now} for the settle
  * loop and assertions (S2).
  */
+/** A job activated WITH a lease by {@link WasmEngineClient.leaseJobs} — the attribution triple the
+ *  engine's agent create/update APIs take, plus the owning process instance. */
+export interface LeasedJob {
+  readonly jobKey: string;
+  readonly elementInstanceKey: string;
+  readonly jobLeaseToken: string;
+  readonly processInstanceKey?: string;
+}
+
 export class WasmEngineClient implements EngineClient {
   readonly #engine: TestEngine;
   readonly #workers = new Map<string, RegisteredWorker>();
@@ -956,34 +972,121 @@ export class WasmEngineClient implements EngineClient {
     return null;
   }
 
-  /** Engine-native agent instances the WASM double records. The bundled μ-nano.wasm read model has
-   *  no AgentInstance/AgentHistory channel (it exposes none of the `/agent-instances/*` endpoints
-   *  the `SdkEngineClient` reads), so this emulates the floor a consumer needs to boot against the
-   *  testkit without a `TypeError`: no agent instance is ever recorded, so the search is empty.
-   *  This keeps the `EngineClient` surface complete (issue #341 conformance) and lets the historical
-   *  transcript consumer (nanobpm/nano-workforce#747) exercise its read path here; the *behavioural*
-   *  agent-history parity is validated against a live engine, which this in-process double omits.
-   *  The read-as-absence shape (empty list / `null`) matches `SdkEngineClient`, so the two adapters
-   *  agree on the "no such instance" answer. */
-  async searchAgentInstances(_filter?: AgentInstanceFilter): Promise<AgentInstanceSummary[]> {
-    return [];
+  /** Engine-native agent instances, read from the bundled **read-model** WASM engine's own
+   *  `searchAgentInstances` (the same spec-derived search pipeline the gateway serves: every filter
+   *  operator, sort and paging — nanobpm/nano-bpm#1883). The request is built and the result mapped
+   *  by the SAME urban functions `SdkEngineClient` uses (`agentInstanceSearchRequest` /
+   *  `mapAgentInstancePage`), so the two adapters cannot drift (issue #630). Drive transcripts with
+   *  {@link createAgentInstance} / {@link updateAgentInstance}. */
+  async searchAgentInstances(filter?: AgentInstanceFilter): Promise<AgentInstanceSummary[]> {
+    return (await this.searchAgentInstancesPage(filter ? { filter } : undefined)).items;
   }
 
-  /** One agent instance's conversation history — see {@link searchAgentInstances} for why the WASM
-   *  double records none. A blank key addresses nothing (parity with `SdkEngineClient`, which
-   *  short-circuits it); every key yields the empty list here. */
+  async searchAgentInstancesPage(
+    query?: AgentInstanceSearchQuery,
+  ): Promise<SearchPage<AgentInstanceSummary>> {
+    const body: unknown = JSON.parse(
+      this.#liveEngine.searchAgentInstances(JSON.stringify(agentInstanceSearchRequest(query))),
+    );
+    return mapAgentInstancePage(body, () => {});
+  }
+
+  /** One agent instance's conversation history, read from the read-model engine's
+   *  `searchAgentInstanceHistory` (COMMITTED-only unless `commitStatus` asks otherwise) — see
+   *  {@link searchAgentInstances}. A blank key addresses nothing (parity with `SdkEngineClient`,
+   *  which short-circuits it). */
   async searchAgentInstanceHistory(
-    _agentInstanceKey: string,
-    _filter?: AgentHistoryFilter,
+    agentInstanceKey: string,
+    filter?: AgentHistoryFilter,
   ): Promise<AgentHistoryRecord[]> {
-    return [];
+    return (
+      await this.searchAgentInstanceHistoryPage(agentInstanceKey, filter ? { filter } : undefined)
+    ).items;
   }
 
-  /** Fetch a single agent instance by key — always `null` here (the WASM double records none; see
-   *  {@link searchAgentInstances}), matching `SdkEngineClient`'s read-as-absence on a 404 and its
-   *  blank-key short-circuit. */
-  async getAgentInstance(_agentInstanceKey: string): Promise<AgentInstanceSummary | null> {
-    return null;
+  async searchAgentInstanceHistoryPage(
+    agentInstanceKey: string,
+    query?: AgentHistorySearchQuery,
+  ): Promise<SearchPage<AgentHistoryRecord>> {
+    const key = presentKey(agentInstanceKey);
+    if (key === undefined) return mapAgentHistoryPage({ items: [] }, () => {});
+    const body: unknown = JSON.parse(
+      this.#liveEngine.searchAgentInstanceHistory(
+        key,
+        JSON.stringify(agentHistorySearchRequest(query)),
+      ),
+    );
+    return mapAgentHistoryPage(body, () => {});
+  }
+
+  /** Fetch a single agent instance by key — `null` for a blank or unknown key, matching
+   *  `SdkEngineClient`'s read-as-absence. The read-model engine has no get-by-key for agents, so
+   *  this is an `agentInstanceKey` search through the same canonical mapping. */
+  async getAgentInstance(agentInstanceKey: string): Promise<AgentInstanceSummary | null> {
+    const key = presentKey(agentInstanceKey);
+    if (key === undefined) return null;
+    // Lifecycle guard OUTSIDE the catch: a use-after-close() stays a loud error, not a silent null.
+    void this.#liveEngine;
+    try {
+      const { items } = await this.searchAgentInstancesPage({ filter: { agentInstanceKey: key } });
+      return items[0] ?? null;
+    } catch {
+      // A rejected lookup reads as absence — the `EngineClient.getAgentInstance` contract the SDK
+      // adapter also honours.
+      return null;
+    }
+  }
+
+  /** Testkit-only driver: activate up to `maxJobs` jobs of `jobType` WITH an activation lease —
+   *  the attribution the engine's agent APIs require (`elementInstanceKey`, `jobKey`,
+   *  `jobLeaseToken`). Use it for an agent job type that has NO registered worker, then settle the
+   *  attempt with {@link completeLeasedJob} / {@link failLeasedJob}. */
+  leaseJobs(jobType: string, maxJobs = 1): LeasedJob[] {
+    return this.#parseArray(
+      this.#liveEngine.activateJobs(jobType, maxJobs, JOB_LOCK_MS, "urban-testkit", true),
+    ).flatMap((raw) => {
+      const jobKey = presentKey(raw.key);
+      const elementInstanceKey = presentKey(raw.elementInstanceKey);
+      const jobLeaseToken = typeof raw.jobLeaseToken === "string" ? raw.jobLeaseToken : undefined;
+      if (!jobKey || !elementInstanceKey || !jobLeaseToken) return [];
+      const processInstanceKey = presentKey(raw.instanceKey);
+      return [{ jobKey, elementInstanceKey, jobLeaseToken, ...(processInstanceKey ? { processInstanceKey } : {}) }];
+    });
+  }
+
+  /** Complete a {@link leaseJobs} attempt (committing its agent history), then drain. */
+  async completeLeasedJob(job: LeasedJob, variables: Record<string, unknown> = {}): Promise<void> {
+    this.#liveEngine.completeJob(job.jobKey, JSON.stringify(variables), job.jobLeaseToken);
+    await this.drain();
+  }
+
+  /** Fail a {@link leaseJobs} attempt with `retries` left (its agent history stays PENDING until a
+   *  later attempt's completion discards it), then drain. */
+  async failLeasedJob(job: LeasedJob, retries: number, message = "failed"): Promise<void> {
+    this.#liveEngine.failJob(job.jobKey, retries, message, job.jobLeaseToken);
+    await this.drain();
+  }
+
+  /** Testkit-only driver: create an agent instance on the read-model engine
+   *  (`{ elementInstanceKey, jobKey, jobLeaseToken, history }`; history must establish its
+   *  CONFIGURATION). Returns the engine's parsed creation result (`agentInstanceKey`,
+   *  `createdHistory`). Lets a test produce transcripts the agent reads above then observe. */
+  createAgentInstance(request: Record<string, unknown>): Record<string, unknown> {
+    const out: unknown = JSON.parse(this.#liveEngine.createAgentInstance(JSON.stringify(request)));
+    return isRecord(out) ? out : {};
+  }
+
+  /** Testkit-only driver: update an agent instance on the read-model engine
+   *  (`{ elementInstanceKey, jobKey, jobLeaseToken, status?, history? }`). The engine owns the
+   *  PENDING/COMMITTED/DISCARDED semantics. Returns the parsed result (`createdHistory`). */
+  updateAgentInstance(
+    agentInstanceKey: string,
+    request: Record<string, unknown>,
+  ): Record<string, unknown> {
+    const out: unknown = JSON.parse(
+      this.#liveEngine.updateAgentInstance(requireKey(agentInstanceKey, "agentInstanceKey"), JSON.stringify(request)),
+    );
+    return isRecord(out) ? out : {};
   }
 
   /** Resolve an open incident by key, returning the parked token to progress (a job incident

@@ -94,6 +94,8 @@ function cancelEngine(opts: {
     getProcessDefinitionXml: notUsed("getProcessDefinitionXml"),
     searchAgentInstances: notUsed("searchAgentInstances"),
     searchAgentInstanceHistory: notUsed("searchAgentInstanceHistory"),
+    searchAgentInstancesPage: notUsed("searchAgentInstancesPage"),
+    searchAgentInstanceHistoryPage: notUsed("searchAgentInstanceHistoryPage"),
     getAgentInstance: notUsed("getAgentInstance"),
     resolveIncident: notUsed("resolveIncident"),
     updateJobRetries: notUsed("updateJobRetries"),

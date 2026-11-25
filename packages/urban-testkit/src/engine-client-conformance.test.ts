@@ -15,7 +15,12 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ENGINE_CLIENT_METHODS, type EngineJob } from "@nanobpm/urban/runtime";
+import {
+  type AgentHistorySearchQuery,
+  ENGINE_CLIENT_METHODS,
+  type EngineJob,
+  paginate,
+} from "@nanobpm/urban/runtime";
 import { createWasmEngineClient } from "./wasm-engine.ts";
 import { TestEngine } from "@nanobpm/engine-wasm/readmodel";
 
@@ -517,23 +522,19 @@ test("EngineClient seam: parent/root linkage correlates a native-child user task
 
 // Behavioural read-as-absence for the engine-native AgentInstance/AgentHistory read seam
 // (nanobpm/nano-ide#563). The surface guard above already fails if the WASM double lags a method;
-// this pins the *contract* the double emulates — the bundled μ-nano.wasm read model has no
-// `/agent-instances/*` channel, so an agent-history read returns the same "nothing here" shape
-// (empty list / null) the `SdkEngineClient` returns for an unknown instance. This lets the
-// historical-transcript consumer (nanobpm/nano-workforce#747) exercise its read path against the
-// testkit boot without a `TypeError`, while the behavioural agent-history parity is validated
-// against a live engine.
-test("EngineClient seam: agent-instance reads are read-as-absence on the WASM double", async () => {
+// this pins read-as-absence when the read-model engine has recorded no agent instance: the same
+// "nothing here" shape (empty list / null) the `SdkEngineClient` returns for an unknown instance.
+test("EngineClient seam: agent-instance reads are read-as-absence when no agent ran", async () => {
   const engine = await createWasmEngineClient();
   try {
     assert.deepEqual(await engine.searchAgentInstances(), [], "no agent instances are recorded");
     assert.deepEqual(
-      await engine.searchAgentInstances({ processInstanceKey: "does-not-exist" }),
+      await engine.searchAgentInstances({ processInstanceKey: "2251799813685249" }),
       [],
       "a filtered agent-instance search is likewise empty",
     );
     assert.deepEqual(
-      await engine.searchAgentInstanceHistory("any-key"),
+      await engine.searchAgentInstanceHistory("2251799813685249"),
       [],
       "an agent's history is empty",
     );
@@ -542,8 +543,158 @@ test("EngineClient seam: agent-instance reads are read-as-absence on the WASM do
       [],
       "a blank agentInstanceKey yields the empty list",
     );
-    assert.equal(await engine.getAgentInstance("any-key"), null, "no such agent instance → null");
+    assert.equal(await engine.getAgentInstance("2251799813685249"), null, "no such agent instance → null");
     assert.equal(await engine.getAgentInstance("   "), null, "a blank key → null");
+    const page = await engine.searchAgentInstanceHistoryPage("   ");
+    assert.deepEqual(page.items, [], "a blank key yields an empty page");
+  } finally {
+    await engine.close();
+  }
+});
+
+// e2e (issue #630): the WASM double's agent reads hit the read-model engine. A failed attempt's
+// transcript stays visible as PENDING→DISCARDED history beside the winning retry's COMMITTED items,
+// and the full generated filter, sort and paging (incl. the `paginate` helper) reach the engine.
+const AGENT_BPMN = `<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+  xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+  xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+  xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+  xmlns:zeebe="http://camunda.org/schema/zeebe/1.0" id="defs_agent" targetNamespace="urn:test">
+  <bpmn:process id="agent_proc" isExecutable="true">
+    <bpmn:startEvent id="start"><bpmn:outgoing>f1</bpmn:outgoing></bpmn:startEvent>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="agent"/>
+    <bpmn:serviceTask id="agent">
+      <bpmn:extensionElements>
+        <zeebe:taskDefinition type="agent-630" retries="3"/>
+        <zeebe:agentDefinition agentType="aiAgentTask"/>
+      </bpmn:extensionElements>
+      <bpmn:incoming>f1</bpmn:incoming><bpmn:outgoing>f2</bpmn:outgoing>
+    </bpmn:serviceTask>
+    <bpmn:sequenceFlow id="f2" sourceRef="agent" targetRef="end"/>
+    <bpmn:endEvent id="end"><bpmn:incoming>f2</bpmn:incoming></bpmn:endEvent>
+  </bpmn:process>
+  <bpmndi:BPMNDiagram id="dia_agent">
+    <bpmndi:BPMNPlane id="plane_agent" bpmnElement="agent_proc">
+      <bpmndi:BPMNShape id="start_di" bpmnElement="start"><dc:Bounds x="100" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="agent_di" bpmnElement="agent"><dc:Bounds x="190" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="end_di" bpmnElement="end"><dc:Bounds x="350" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f1_di" bpmnElement="f1"><di:waypoint x="136" y="118"/><di:waypoint x="190" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="290" y="118"/><di:waypoint x="350" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</bpmn:definitions>`;
+
+function historyItem(id: string, role: string, text: string): Record<string, unknown> {
+  return {
+    historyItemId: id,
+    loopIteration: 1,
+    role,
+    producedAt: "2026-11-24T00:00:00Z",
+    content: [{ contentType: "TEXT", text }],
+    ...(role === "CONFIGURATION"
+      ? { model: "m", provider: "p", systemPrompt: [{ contentType: "TEXT", text: "sys" }] }
+      : {}),
+  };
+}
+
+test("EngineClient seam: a failed attempt's transcript is readable with commitStatus PENDING/DISCARDED (#630)", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    await engine.deployResources([
+      { name: "agent.bpmn", content: AGENT_BPMN, contentType: "application/xml" },
+    ]);
+    await engine.createInstance({ processDefinitionId: "agent_proc" });
+
+    // Attempt 1: create the agent with its configuration + a turn, then fail with retries left.
+    const [first] = engine.leaseJobs("agent-630");
+    assert.ok(first, "the agent job is leasable");
+    const created = engine.createAgentInstance({
+      elementInstanceKey: first.elementInstanceKey,
+      jobKey: first.jobKey,
+      jobLeaseToken: first.jobLeaseToken,
+      history: [historyItem("h1", "CONFIGURATION", "cfg"), historyItem("h2", "USER", "hi")],
+    });
+    const agentInstanceKey = String(created.agentInstanceKey);
+    await engine.failLeasedJob(first, 2, "model timeout");
+
+    const pending = await engine.searchAgentInstanceHistory(agentInstanceKey, {
+      commitStatus: "PENDING",
+    });
+    assert.deepEqual(
+      pending.map((r) => r.historyItemKey).length,
+      2,
+      "the failed attempt's items are visible as PENDING",
+    );
+    assert.deepEqual(
+      await engine.searchAgentInstanceHistory(agentInstanceKey),
+      [],
+      "the default (COMMITTED-only) read hides the failed attempt",
+    );
+
+    // Attempt 2 (the retry) wins.
+    const [second] = engine.leaseJobs("agent-630");
+    assert.ok(second, "the retried agent job is leasable");
+    engine.updateAgentInstance(agentInstanceKey, {
+      elementInstanceKey: second.elementInstanceKey,
+      jobKey: second.jobKey,
+      jobLeaseToken: second.jobLeaseToken,
+      history: [historyItem("h3", "USER", "hi again"), historyItem("h4", "ASSISTANT", "ok")],
+    });
+    await engine.completeLeasedJob(second);
+
+    const committed = await engine.searchAgentInstanceHistory(agentInstanceKey);
+    assert.deepEqual(
+      committed.map((r) => [r.role, r.commitStatus, r.jobLeaseToken]),
+      [
+        ["USER", "COMMITTED", second.jobLeaseToken],
+        ["ASSISTANT", "COMMITTED", second.jobLeaseToken],
+      ],
+      "COMMITTED = the winning attempt only",
+    );
+
+    const everyStatus: AgentHistorySearchQuery = {
+      filter: { commitStatus: { $in: ["PENDING", "DISCARDED", "COMMITTED"] } },
+      sort: [{ field: "historyItemKey", order: "ASC" }],
+    };
+    const firstPage = await engine.searchAgentInstanceHistoryPage(agentInstanceKey, {
+      ...everyStatus,
+      page: { limit: 2 },
+    });
+    assert.equal(firstPage.items.length, 2, "page.limit is honoured");
+    assert.equal(firstPage.page.totalItems, 4);
+
+    const all = [];
+    for await (const r of paginate(
+      (page) => engine.searchAgentInstanceHistoryPage(agentInstanceKey, { ...everyStatus, page }),
+      { limit: 2 },
+    )) {
+      all.push(r);
+    }
+    assert.deepEqual(
+      all.map((r) => [r.role, r.commitStatus]),
+      [
+        ["CONFIGURATION", "DISCARDED"],
+        ["USER", "DISCARDED"],
+        ["USER", "COMMITTED"],
+        ["ASSISTANT", "COMMITTED"],
+      ],
+      "paginate reads every page: the superseded attempt is DISCARDED, the winner COMMITTED",
+    );
+
+    const agent = await engine.getAgentInstance(agentInstanceKey);
+    assert.equal(agent?.agentInstanceKey, agentInstanceKey);
+    assert.equal(agent?.elementId, "agent");
+    const byDefinition = await engine.searchAgentInstancesPage({
+      filter: { processDefinitionKey: { $exists: true }, elementId: "agent" },
+      page: { limit: 10 },
+    });
+    assert.deepEqual(
+      byDefinition.items.map((a) => a.agentInstanceKey),
+      [agentInstanceKey],
+      "the generated AgentInstanceFilter reaches the read-model engine",
+    );
+    assert.equal(byDefinition.page.totalItems, 1);
   } finally {
     await engine.close();
   }

@@ -59,6 +59,12 @@ class NoopEngine implements EngineClient {
   async searchAgentInstanceHistory() {
     return [];
   }
+  async searchAgentInstancesPage() {
+    return { items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } };
+  }
+  async searchAgentInstanceHistoryPage() {
+    return { items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } };
+  }
   async getAgentInstance() {
     return null;
   }

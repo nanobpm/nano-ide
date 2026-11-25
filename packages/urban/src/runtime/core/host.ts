@@ -15,6 +15,11 @@ import type {
   TranscriptTurnMetrics,
   TranscriptTurnRole,
 } from "@nanobpm/agentic/transcript";
+// The agent search *request* surface (filters with every advanced operator, sort, paging) and
+// the page envelope are the engine's own generated DTOs, derived from the same Camunda-parity
+// OpenAPI the engine serves (`@nanobpm/engine-wasm/readmodel-types`, nanobpm/nano-bpm#1883) —
+// never hand-mirrored here (No Drift Surfaces, issue #630). Type-only, so erased at runtime.
+import type * as EngineSearch from "@nanobpm/engine-wasm/readmodel-types";
 
 /** A minimal HTTP request as seen by a mounted surface/trigger handler. */
 export interface HttpRequest {
@@ -740,35 +745,56 @@ export interface AgentHistoryRecord {
   readonly commitStatus: string;
   readonly elementInstanceKey?: string;
   readonly jobKey?: string;
+  /** The activation lease of the attempt that produced the item — with `commitStatus`, this
+   *  tells a winning attempt's items from a failed/expired one's. */
+  readonly jobLeaseToken?: string;
   readonly producedAt?: string;
 }
 
-/** Selectors for {@link EngineClient.searchAgentInstances}. Every field is optional; an
- *  omitted/blank selector is not applied (No Drift Surfaces — the same presence rule the key
- *  selectors elsewhere in this seam use). */
-export interface AgentInstanceFilter {
-  /** Only agent instances owned by this process instance. */
-  readonly processInstanceKey?: string;
-  /** Only agent instances belonging to this *root* process-instance hierarchy. */
-  readonly rootProcessInstanceKey?: string;
-  /** Only agent instances in this lifecycle status (the engine's `AgentInstanceStatusEnum`). */
-  readonly status?: string;
-  /** Only agent instances owned by this BPMN element (the AI-agent task / ad-hoc sub-process). */
-  readonly elementId?: string;
-}
+/** Selectors for {@link EngineClient.searchAgentInstances} — the engine's generated
+ *  `AgentInstanceFilter` (`@nanobpm/engine-wasm/readmodel-types`), so every spec filter property
+ *  (`agentDefinitionKey`, `processDefinitionKey`, `tenantId`, the `creationDate`/`lastUpdatedDate`/
+ *  `completionDate` windows, …) and every advanced operator (`$eq`, `$in`, `$gte`, `$lt`, `$like`,
+ *  `$exists`, …) is reachable. The one widening is `status`, which also admits a bare string for
+ *  back-compat with the pre-#630 hand-written selector. A blank string selector is not applied. */
+export type AgentInstanceFilter = Omit<EngineSearch.AgentInstanceFilter, "status"> & {
+  readonly status?: EngineSearch.AgentInstanceStatusFilterProperty | (string & {});
+};
 
 /** Selectors for {@link EngineClient.searchAgentInstanceHistory} (the `agentInstanceKey` is a
- *  required positional argument, not a filter field). Every field is optional. Note the engine
- *  defaults an unfiltered history search to `COMMITTED` items only. */
-export interface AgentHistoryFilter {
-  /** Only history items with this conversation role. Note that `TranscriptTurnRole` is the wider
-   *  transcript union: only the engine-side subset `"USER" | "ASSISTANT" | "TOOL_RESULT"` is
-   *  applied as a filter — `"CONFIGURATION"`/`"UNSPECIFIED"` are ignored (not forwarded). */
-  readonly role?: TranscriptTurnRole;
-  /** Only history items produced in this agent-loop iteration. */
-  readonly loopIteration?: number;
-  /** Only history items produced under this element instance. */
-  readonly elementInstanceKey?: string;
+ *  required positional argument, not a filter field) — the engine's generated
+ *  `AgentInstanceHistoryFilter`, including `commitStatus` (a single value, or `{ $in: [...] }` to
+ *  read PENDING/DISCARDED attempts too), `jobKey`, `historyItemKey` and the `producedAt` window.
+ *  Note the engine defaults a history search without a `commitStatus` to `COMMITTED` items only.
+ *  `role` also admits the wider transcript {@link TranscriptTurnRole} union for back-compat; a role
+ *  the engine does not define (`UNSPECIFIED`) is dropped rather than forwarded. */
+export type AgentHistoryFilter = Omit<EngineSearch.AgentInstanceHistoryFilter, "role"> & {
+  readonly role?: EngineSearch.AgentInstanceHistoryRoleFilterProperty | TranscriptTurnRole;
+};
+
+/** A paged agent-instance search request: the generated `AgentInstanceSearchQuery` (`page`,
+ *  `sort`) carrying an {@link AgentInstanceFilter}. */
+export type AgentInstanceSearchQuery = Omit<EngineSearch.AgentInstanceSearchQuery, "filter"> & {
+  readonly filter?: AgentInstanceFilter;
+};
+
+/** A paged agent-history search request: the generated `AgentInstanceHistorySearchQuery`
+ *  (`page`, `sort`) carrying an {@link AgentHistoryFilter}. */
+export type AgentHistorySearchQuery = Omit<EngineSearch.AgentInstanceHistorySearchQuery, "filter"> & {
+  readonly filter?: AgentHistoryFilter;
+};
+
+/** The generated page request (`limit`, `from`, `after`/`before` cursors). */
+export type SearchPageRequest = EngineSearch.SearchQueryPageRequest;
+
+/** The generated page envelope (`totalItems`, `hasMoreTotalItems`, `startCursor`, `endCursor`). */
+export type SearchPageInfo = EngineSearch.SearchQueryPageResponse;
+
+/** One page of a search: the mapped `items` plus the engine's {@link SearchPageInfo}. Follow
+ *  `page.endCursor` (or use {@link paginate}) to read past the first page. */
+export interface SearchPage<T> {
+  readonly items: T[];
+  readonly page: SearchPageInfo;
 }
 
 /**
@@ -948,7 +974,8 @@ export interface EngineClient {
   getProcessDefinitionXml(processDefinitionKey: string): Promise<string | null>;
   /**
    * Search engine-native agent instances (`POST /agent-instances/search`), optionally narrowed
-   * by owning `processInstanceKey`/`rootProcessInstanceKey`, lifecycle `status`, or `elementId`.
+   * by any generated {@link AgentInstanceFilter} property (first page only — use
+   * {@link searchAgentInstancesPage}/{@link paginate} to read every page).
    * The read entry point onto the engine's AgentInstance/AgentHistory model: an
    * {@link AgentInstanceSummary} carries the `agentInstanceKey` a caller passes to
    * {@link searchAgentInstanceHistory} to read that instance's conversation. An eventually
@@ -957,10 +984,18 @@ export interface EngineClient {
    */
   searchAgentInstances(filter?: AgentInstanceFilter): Promise<AgentInstanceSummary[]>;
   /**
+   * The paged form of {@link searchAgentInstances}: takes the full generated query (`filter`,
+   * `sort`, `page`) and returns the mapped items with the engine's page info, so a caller can
+   * follow `page.endCursor` past the first page (see {@link paginate}). `searchAgentInstances`
+   * is exactly the `items` of this call's first page.
+   */
+  searchAgentInstancesPage(query?: AgentInstanceSearchQuery): Promise<SearchPage<AgentInstanceSummary>>;
+  /**
    * Search one agent instance's conversation history
    * (`POST /agent-instances/{agentInstanceKey}/history/search`) — the ordered
    * {@link AgentHistoryRecord}s (turns) the engine retains for `agentInstanceKey`, optionally
-   * narrowed by `role`/`loopIteration`/`elementInstanceKey`. This is the production read path
+   * narrowed by any generated {@link AgentHistoryFilter} property (first page only — use
+   * {@link searchAgentInstanceHistoryPage}/{@link paginate} to read every page). This is the production read path
    * onto engine AgentHistory the historical-transcript + metrics consumer builds on
    * (nanobpm/nano-workforce#747). Each record's conversation grammar reuses the
    * `@nanobpm/agentic/transcript` parity shapes (roles, content blocks, per-turn metrics, tool
@@ -973,6 +1008,15 @@ export interface EngineClient {
     agentInstanceKey: string,
     filter?: AgentHistoryFilter,
   ): Promise<AgentHistoryRecord[]>;
+  /**
+   * The paged form of {@link searchAgentInstanceHistory}: the full generated query (`filter`,
+   * `sort`, `page`) in, mapped records plus page info out. A blank `agentInstanceKey` yields an
+   * empty page without a request.
+   */
+  searchAgentInstanceHistoryPage(
+    agentInstanceKey: string,
+    query?: AgentHistorySearchQuery,
+  ): Promise<SearchPage<AgentHistoryRecord>>;
   /**
    * Fetch a single agent instance by its key (`GET /agent-instances/{agentInstanceKey}`), or
    * `null` when it cannot be resolved — the key is blank, no such agent instance exists (a 404),
@@ -1051,6 +1095,8 @@ export const ENGINE_CLIENT_METHODS = [
   "getProcessDefinitionXml",
   "searchAgentInstances",
   "searchAgentInstanceHistory",
+  "searchAgentInstancesPage",
+  "searchAgentInstanceHistoryPage",
   "getAgentInstance",
   "resolveIncident",
   "updateJobRetries",
@@ -1066,3 +1112,47 @@ export const ENGINE_CLIENT_METHODS = [
 // `keyof EngineClient` exactly (No Drift Surfaces).
 type MissingEngineClientMethods = Exclude<keyof EngineClient, (typeof ENGINE_CLIENT_METHODS)[number]>;
 const _engineClientMethodsAreExhaustive: [MissingEngineClientMethods] extends [never] ? true : never = true;
+
+/** An empty {@link SearchPageInfo} — the page envelope of a search that matched nothing. */
+export function emptySearchPageInfo(): SearchPageInfo {
+  return { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null };
+}
+
+/**
+ * Iterate EVERY item of a paged search, following `page.endCursor` until the engine reports no
+ * further page — the canonical way to read past the default page size without truncating by
+ * accident (issue #630). `search` receives only the page request to send; the caller builds the
+ * rest of the query INSIDE the closure, so the literal is contextually typed by the engine
+ * method itself (generated enum literals in filters/sorts keep their literal types — no generic
+ * inference that could widen them). `firstPage.limit`, when given, is kept as the page size for
+ * every request. A walk opened with `firstPage.before` goes backward via `startCursor`. Stops on a
+ * missing cursor or a cursor that does not advance (so a misbehaving engine cannot loop it
+ * forever) — never on an empty *mapped* page, since a page whose rows were all dropped as
+ * malformed still has a cursor and later pages must not be silently truncated.
+ *
+ * @example
+ * for await (const ai of paginate((page) =>
+ *   engine.searchAgentInstancesPage({ filter: { lastUpdatedDate: { $gte: since } }, page }),
+ * )) { ... }
+ */
+export async function* paginate<T>(
+  search: (page: SearchPageRequest | undefined) => Promise<SearchPage<T>>,
+  firstPage?: SearchPageRequest,
+): AsyncGenerator<T, void, undefined> {
+  const limit = firstPage && "limit" in firstPage ? firstPage.limit : undefined;
+  // A walk that opened with `before` is going BACKWARD: continue from each page's `startCursor`
+  // with `before`, never flip to `after`/`endCursor` (which would skip the earlier items and
+  // cross the caller's boundary).
+  const backward = firstPage !== undefined && "before" in firstPage && firstPage.before !== undefined;
+  let current: SearchPageRequest | undefined = firstPage;
+  let previousCursor: string | undefined;
+  for (;;) {
+    const { items, page } = await search(current);
+    yield* items;
+    const cursor = (backward ? page.startCursor : page.endCursor) ?? undefined;
+    if (cursor === undefined || cursor === previousCursor) return;
+    previousCursor = cursor;
+    const step = backward ? { before: cursor } : { after: cursor };
+    current = limit === undefined ? step : { ...step, limit };
+  }
+}

@@ -17,7 +17,11 @@ import type {
   AgentHistoryRecord,
   AgentInstanceFilter,
   AgentInstanceMetrics,
+  AgentInstanceSearchQuery,
+  AgentHistorySearchQuery,
   AgentInstanceSummary,
+  SearchPage,
+  SearchPageInfo,
   ElementInstanceState,
   ElementInstanceSummary,
   ElementInstanceFilter,
@@ -49,7 +53,8 @@ import type {
   TranscriptTurnMetrics,
   TranscriptTurnRole,
 } from "@nanobpm/agentic/transcript";
-import { assertDeployedWaitStateType, isBpmnError } from "../core/host.ts";
+import type { AgentInstanceHistoryRoleEnum } from "@nanobpm/engine-wasm/readmodel-types";
+import { assertDeployedWaitStateType, emptySearchPageInfo, isBpmnError } from "../core/host.ts";
 import {
   pickProcessDefinitionIdentity,
   presentEngineKey,
@@ -470,14 +475,87 @@ export function mapJobRow(
 /** The agent-instance conversation roles the engine's `AgentInstanceHistoryRoleEnum` reports —
  *  a strict subset of the transcript {@link TranscriptTurnRole} union it maps onto, so the two
  *  cannot drift. A row whose role is anything else is normalized to `"UNSPECIFIED"`. */
-const AGENT_HISTORY_ROLES: readonly TranscriptTurnRole[] = ["USER", "ASSISTANT", "TOOL_RESULT"];
+const AGENT_HISTORY_ROLES = [
+  "USER",
+  "ASSISTANT",
+  "TOOL_RESULT",
+  "CONFIGURATION",
+] as const satisfies readonly (AgentInstanceHistoryRoleEnum & TranscriptTurnRole)[];
+// Exhaustiveness: every role the engine's generated `AgentInstanceHistoryRoleEnum` defines must be
+// listed above, so the engine growing a role fails typecheck here instead of silently mapping it
+// to `UNSPECIFIED` / dropping it as a filter (No Drift Surfaces, issue #630).
+type MissingAgentHistoryRoles = Exclude<AgentInstanceHistoryRoleEnum, (typeof AGENT_HISTORY_ROLES)[number]>;
+const _agentHistoryRolesAreExhaustive: [MissingAgentHistoryRoles] extends [never] ? true : never = true;
+
+function isAgentHistoryRole(value: unknown): value is AgentInstanceHistoryRoleEnum {
+  return AGENT_HISTORY_ROLES.some((r) => r === value);
+}
+
+/** The pre-#630 bare-string selectors whose historical contract is "trimmed, and dropped when
+ *  blank" (they mirrored `presentEngineKey`). Only these keep that presence rule; every other
+ *  generated string filter (e.g. `tenantId`) is forwarded verbatim, so a bare string and its
+ *  `{ $eq }` form always mean the same thing — `tenantId: ""` must never widen into "no filter". */
+const LEGACY_TRIMMED_SELECTORS: ReadonlySet<string> = new Set([
+  "processInstanceKey",
+  "rootProcessInstanceKey",
+  "elementInstanceKey",
+  "status",
+  "elementId",
+  "role",
+]);
+
+/** Normalize a generated search filter for the wire, generically over EVERY property (so no
+ *  per-field pass-through code can fall behind the engine spec — issue #630): an
+ *  `undefined`/`null` value is dropped; a legacy selector ({@link LEGACY_TRIMMED_SELECTORS}) that
+ *  is a bare string is trimmed and dropped when blank; every other value (strings included,
+ *  numbers, booleans and advanced-operator objects `{ $gte, $in, … }`) passes through unchanged. */
+export function normalizeSearchFilter(filter: object | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!filter) return out;
+  for (const [name, value] of Object.entries(filter)) {
+    if (value === undefined || value === null) continue;
+    if (typeof value === "string" && LEGACY_TRIMMED_SELECTORS.has(name)) {
+      const trimmed = value.trim();
+      if (trimmed !== "") out[name] = trimmed;
+      continue;
+    }
+    out[name] = value;
+  }
+  return out;
+}
+
+/** Build the wire `{ filter, sort?, page? }` of a generated search query. */
+function searchRequest(
+  query: { readonly filter?: object; readonly sort?: readonly unknown[]; readonly page?: object } | undefined,
+  filter: Record<string, unknown>,
+): { filter: Record<string, unknown>; sort?: unknown[]; page?: Record<string, unknown> } {
+  return {
+    filter,
+    ...(query?.sort && query.sort.length > 0 ? { sort: [...query.sort] } : {}),
+    ...(query?.page ? { page: { ...query.page } } : {}),
+  };
+}
+
+/** Read the engine's `page` envelope off a search response, defaulting each field defensively. */
+export function mapSearchPageInfo(value: unknown, itemCount: number): SearchPageInfo {
+  if (!isRecord(value)) return { ...emptySearchPageInfo(), totalItems: itemCount };
+  const cursor = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+  return {
+    totalItems:
+      typeof value.totalItems === "number" && Number.isFinite(value.totalItems)
+        ? value.totalItems
+        : itemCount,
+    hasMoreTotalItems: value.hasMoreTotalItems === true,
+    startCursor: cursor(value.startCursor),
+    endCursor: cursor(value.endCursor),
+  };
+}
 
 /** Map an engine history-item role onto the transcript {@link TranscriptTurnRole} union, or
  *  `"UNSPECIFIED"` when the engine reports an unknown/absent role — a lossy-but-safe fallback so a
  *  record is surfaced rather than dropped for a role the engine grows later. */
 function normalizeAgentHistoryRole(value: unknown): TranscriptTurnRole {
-  const role = AGENT_HISTORY_ROLES.find((r) => r === value);
-  return role ?? "UNSPECIFIED";
+  return isAgentHistoryRole(value) ? value : "UNSPECIFIED";
 }
 
 /** The content-block type discriminators the engine's `AgentInstanceMessageContentTypeEnum`
@@ -553,6 +631,49 @@ function mapAgentInstanceMetrics(value: unknown): AgentInstanceMetrics | undefin
     modelCalls: num(value.modelCalls),
     toolCalls: num(value.toolCalls),
   };
+}
+
+/** The wire request (`{ filter, sort?, page? }`) for an agent-instance search — the single
+ *  request builder both `EngineClient` adapters use (the SDK adapter sends it over REST, the
+ *  testkit's WASM double hands it to the read-model engine), so the two cannot drift (#630). */
+export function agentInstanceSearchRequest(
+  query: AgentInstanceSearchQuery | undefined,
+): { filter: Record<string, unknown>; sort?: unknown[]; page?: Record<string, unknown> } {
+  return searchRequest(query, normalizeSearchFilter(query?.filter));
+}
+
+/** The wire request for an agent-history search (see {@link agentInstanceSearchRequest}). A bare
+ *  string `role` the engine does not define (the transcript-only `UNSPECIFIED`) is dropped rather
+ *  than forwarded (the engine would 4xx), gated through the same `AGENT_HISTORY_ROLES` set the
+ *  response mapper uses; advanced-operator objects pass through for the engine to validate. */
+export function agentHistorySearchRequest(
+  query: AgentHistorySearchQuery | undefined,
+): { filter: Record<string, unknown>; sort?: unknown[]; page?: Record<string, unknown> } {
+  const filter = normalizeSearchFilter(query?.filter);
+  if (typeof filter.role === "string" && !isAgentHistoryRole(filter.role)) delete filter.role;
+  return searchRequest(query, filter);
+}
+
+/** Map an engine `AgentInstanceSearchQueryResult` body onto a {@link SearchPage} of
+ *  {@link AgentInstanceSummary}s, dropping malformed rows — shared by both adapters. */
+export function mapAgentInstancePage(body: unknown, log: Log): SearchPage<AgentInstanceSummary> {
+  const rows = isRecord(body) && Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+  const items = rows.flatMap((it) => {
+    const mapped = mapAgentInstanceRow(it, log);
+    return mapped ? [mapped] : [];
+  });
+  return { items, page: mapSearchPageInfo(isRecord(body) ? body.page : undefined, items.length) };
+}
+
+/** Map an engine `AgentInstanceHistorySearchQueryResult` body onto a {@link SearchPage} of
+ *  {@link AgentHistoryRecord}s, dropping malformed rows — shared by both adapters. */
+export function mapAgentHistoryPage(body: unknown, log: Log): SearchPage<AgentHistoryRecord> {
+  const rows = isRecord(body) && Array.isArray(body.items) ? body.items.filter(isRecord) : [];
+  const items = rows.flatMap((it) => {
+    const mapped = mapAgentHistoryRow(it, log);
+    return mapped ? [mapped] : [];
+  });
+  return { items, page: mapSearchPageInfo(isRecord(body) ? body.page : undefined, items.length) };
 }
 
 /** Map one engine `AgentInstanceResult` row onto an {@link AgentInstanceSummary}, or `undefined`
@@ -648,6 +769,7 @@ export function mapAgentHistoryRow(
   const elementInstanceKey = presentEngineKey(row.elementInstanceKey);
   const jobKey = presentEngineKey(row.jobKey);
   const producedAt = presentText(row.producedAt);
+  const jobLeaseToken = presentText(row.jobLeaseToken);
   return {
     historyItemKey,
     agentInstanceKey,
@@ -659,6 +781,7 @@ export function mapAgentHistoryRow(
     commitStatus,
     ...(elementInstanceKey ? { elementInstanceKey } : {}),
     ...(jobKey ? { jobKey } : {}),
+    ...(jobLeaseToken ? { jobLeaseToken } : {}),
     ...(producedAt ? { producedAt } : {}),
   };
 }
@@ -782,12 +905,17 @@ export interface NanoSdkClient {
     options?: unknown,
   ): Promise<unknown>;
   searchAgentInstances(
-    input: { filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    input: { filter?: Record<string, unknown>; sort?: unknown[]; page?: Record<string, unknown> },
     consistency?: unknown,
     options?: unknown,
   ): Promise<Record<string, unknown>>;
   searchAgentInstanceHistory(
-    input: { agentInstanceKey: string; filter?: Record<string, unknown>; page?: Record<string, unknown> },
+    input: {
+      agentInstanceKey: string;
+      filter?: Record<string, unknown>;
+      sort?: unknown[];
+      page?: Record<string, unknown>;
+    },
     consistency?: unknown,
     options?: unknown,
   ): Promise<Record<string, unknown>>;
@@ -1244,60 +1372,44 @@ export class SdkEngineClient implements EngineClient {
   }
 
   async searchAgentInstances(filter?: AgentInstanceFilter): Promise<AgentInstanceSummary[]> {
-    // Same shape as `searchIncidents`: build the engine filter from the transport-agnostic
-    // selectors, read at zero-wait consistency (an agent-instance search is eventually
-    // consistent), and map each row through the single `mapAgentInstanceRow` gate, dropping
-    // malformed rows. Normalize the request key selectors the same way the response mapper
-    // normalizes keys so a blank/padded selector cannot reach the engine as a garbage filter.
-    const f: Record<string, unknown> = {};
-    const processInstanceKey = presentEngineKey(filter?.processInstanceKey);
-    if (processInstanceKey) f.processInstanceKey = processInstanceKey;
-    const rootProcessInstanceKey = presentEngineKey(filter?.rootProcessInstanceKey);
-    if (rootProcessInstanceKey) f.rootProcessInstanceKey = rootProcessInstanceKey;
-    const status = filter?.status?.trim();
-    if (status) f.status = status;
-    const elementId = filter?.elementId?.trim();
-    if (elementId) f.elementId = elementId;
-    const body = await this.client.searchAgentInstances(
-      { filter: f },
-      { consistency: { waitUpToMs: 0 } },
-    );
-    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
-    return items.flatMap((it) => {
-      const mapped = mapAgentInstanceRow(it, this.log);
-      return mapped ? [mapped] : [];
+    return (await this.searchAgentInstancesPage(filter ? { filter } : undefined)).items;
+  }
+
+  async searchAgentInstancesPage(
+    query?: AgentInstanceSearchQuery,
+  ): Promise<SearchPage<AgentInstanceSummary>> {
+    // The whole generated query (filter with every operator, sort, page) is forwarded through the
+    // generic `normalizeSearchFilter` — no per-field mapping to drift behind the spec (#630).
+    // Zero-wait consistency (an agent-instance search is eventually consistent); each row goes
+    // through the single `mapAgentInstanceRow` gate, dropping malformed rows.
+    const body = await this.client.searchAgentInstances(agentInstanceSearchRequest(query), {
+      consistency: { waitUpToMs: 0 },
     });
+    return mapAgentInstancePage(body, this.log);
   }
 
   async searchAgentInstanceHistory(
     agentInstanceKey: string,
     filter?: AgentHistoryFilter,
   ): Promise<AgentHistoryRecord[]> {
-    // A blank key can never address an agent instance — short-circuit to the empty list rather
+    return (await this.searchAgentInstanceHistoryPage(agentInstanceKey, filter ? { filter } : undefined))
+      .items;
+  }
+
+  async searchAgentInstanceHistoryPage(
+    agentInstanceKey: string,
+    query?: AgentHistorySearchQuery,
+  ): Promise<SearchPage<AgentHistoryRecord>> {
+    // A blank key can never address an agent instance — short-circuit to an empty page rather
     // than issue a `POST /agent-instances//history/search` with an empty path segment. Normalize a
     // padded-but-valid key so `" 5 "` addresses the same instance, mirroring `getElementInstance`.
     const key = presentEngineKey(agentInstanceKey);
-    if (key === undefined) return [];
-    const f: Record<string, unknown> = {};
-    // `AgentHistoryFilter.role` is typed as the wider transcript `TranscriptTurnRole` union, which
-    // also carries `CONFIGURATION`/`UNSPECIFIED` — roles the engine's history filter does not
-    // accept and would 4xx on. Gate the selector through the same `AGENT_HISTORY_ROLES` subset the
-    // response mapper uses (No Drift Surfaces) so an unsupported role is dropped, not forwarded.
-    if (filter?.role && AGENT_HISTORY_ROLES.includes(filter.role)) f.role = filter.role;
-    if (typeof filter?.loopIteration === "number" && Number.isFinite(filter.loopIteration)) {
-      f.loopIteration = filter.loopIteration;
-    }
-    const elementInstanceKey = presentEngineKey(filter?.elementInstanceKey);
-    if (elementInstanceKey) f.elementInstanceKey = elementInstanceKey;
+    if (key === undefined) return { items: [], page: emptySearchPageInfo() };
     const body = await this.client.searchAgentInstanceHistory(
-      { agentInstanceKey: key, filter: f },
+      { agentInstanceKey: key, ...agentHistorySearchRequest(query) },
       { consistency: { waitUpToMs: 0 } },
     );
-    const items = Array.isArray(body.items) ? body.items.filter(isRecord) : [];
-    return items.flatMap((it) => {
-      const mapped = mapAgentHistoryRow(it, this.log);
-      return mapped ? [mapped] : [];
-    });
+    return mapAgentHistoryPage(body, this.log);
   }
 
   async getAgentInstance(agentInstanceKey: string): Promise<AgentInstanceSummary | null> {

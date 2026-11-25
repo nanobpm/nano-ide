@@ -1608,6 +1608,7 @@ test("searchAgentInstanceHistory keys the path, maps the transcript grammar, and
             commitStatus: "COMMITTED",
             elementInstanceKey: "ei-9",
             jobKey: "job-9",
+            jobLeaseToken: "lease-9",
             producedAt: "2024-01-01T00:00:00Z",
           },
           { agentInstanceKey: "ai-1", role: "USER" }, // no historyItemKey → skipped
@@ -1648,6 +1649,7 @@ test("searchAgentInstanceHistory keys the path, maps the transcript grammar, and
       commitStatus: "COMMITTED",
       elementInstanceKey: "ei-9",
       jobKey: "job-9",
+      jobLeaseToken: "lease-9",
       producedAt: "2024-01-01T00:00:00Z",
     },
   ]);
@@ -1660,9 +1662,10 @@ test("searchAgentInstanceHistory keys the path, maps the transcript grammar, and
 });
 
 test("searchAgentInstanceHistory drops a transcript role the engine filter does not accept", async () => {
-  // `TranscriptTurnRole` is the wider transcript union; only `USER`/`ASSISTANT`/`TOOL_RESULT` are
-  // valid engine history filters. An unsupported role (e.g. `CONFIGURATION`/`UNSPECIFIED`) must not
-  // be forwarded, else the engine 4xxes on the request. Guards the fix against reintroduction.
+  // `TranscriptTurnRole` is the wider transcript union; only the engine's generated
+  // `AgentInstanceHistoryRoleEnum` (`USER`/`ASSISTANT`/`TOOL_RESULT`/`CONFIGURATION`) is a valid
+  // history filter. An unsupported role (`UNSPECIFIED`) must not be forwarded, else the engine 4xxes
+  // on the request. Guards the fix against reintroduction.
   let seenInput: { agentInstanceKey?: string; filter?: Record<string, unknown> } | undefined;
   const client = fakeSdkClient({
     searchAgentInstanceHistory: async (input) => {
@@ -1675,8 +1678,8 @@ test("searchAgentInstanceHistory drops a transcript role the engine filter does 
   await engine.searchAgentInstanceHistory("ai-1", { role: "CONFIGURATION", loopIteration: 2 });
   assert.deepEqual(
     seenInput,
-    { agentInstanceKey: "ai-1", filter: { loopIteration: 2 } },
-    "an unsupported role is not forwarded as an engine filter",
+    { agentInstanceKey: "ai-1", filter: { role: "CONFIGURATION", loopIteration: 2 } },
+    "CONFIGURATION is an engine role (engine-wasm >= 0.13) and is forwarded",
   );
 
   await engine.searchAgentInstanceHistory("ai-1", { role: "UNSPECIFIED" });
@@ -1692,6 +1695,78 @@ test("searchAgentInstanceHistory drops a transcript role the engine filter does 
     { agentInstanceKey: "ai-1", filter: { role: "TOOL_RESULT" } },
     "a supported engine role is forwarded",
   );
+});
+
+test("searchAgentInstancesPage forwards the full generated filter, sort and page, and returns page info (#630)", async () => {
+  let seenInput: Record<string, unknown> | undefined;
+  const client = fakeSdkClient({
+    searchAgentInstances: async (input) => {
+      seenInput = input;
+      return {
+        items: [{ agentInstanceKey: "ai-1", status: "COMPLETED", processInstanceKey: "1" }],
+        page: { totalItems: 7, hasMoreTotalItems: false, startCursor: "s1", endCursor: "e1" },
+      };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchAgentInstancesPage({
+    filter: {
+      lastUpdatedDate: { $gte: "2026-11-24T00:00:00Z", $lt: "2026-11-25T00:00:00Z" },
+      agentDefinitionKey: { $in: ["1", "2"] },
+      tenantId: " t1 ",
+      elementId: "   ",
+      status: { $neq: "COMPLETED" },
+    },
+    sort: [{ field: "lastUpdatedDate", order: "ASC" }],
+    page: { limit: 2, after: "c0" },
+  });
+  assert.deepEqual(seenInput, {
+    filter: {
+      lastUpdatedDate: { $gte: "2026-11-24T00:00:00Z", $lt: "2026-11-25T00:00:00Z" },
+      agentDefinitionKey: { $in: ["1", "2"] },
+      tenantId: " t1 ",
+      status: { $neq: "COMPLETED" },
+    },
+    sort: [{ field: "lastUpdatedDate", order: "ASC" }],
+    page: { limit: 2, after: "c0" },
+  });
+  assert.deepEqual(out.page, {
+    totalItems: 7,
+    hasMoreTotalItems: false,
+    startCursor: "s1",
+    endCursor: "e1",
+  });
+  assert.equal(out.items.length, 1);
+});
+
+test("searchAgentInstanceHistoryPage forwards commitStatus/$in, sort and page; blank key → empty page (#630)", async () => {
+  let seenInput: Record<string, unknown> | undefined;
+  const client = fakeSdkClient({
+    searchAgentInstanceHistory: async (input) => {
+      seenInput = input;
+      return { items: [], page: { totalItems: 0, hasMoreTotalItems: false, endCursor: null } };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  const out = await engine.searchAgentInstanceHistoryPage("ai-1", {
+    filter: { commitStatus: { $in: ["PENDING", "DISCARDED", "COMMITTED"] }, jobKey: "9" },
+    sort: [{ field: "historyItemKey" }],
+    page: { limit: 50 },
+  });
+  assert.deepEqual(seenInput, {
+    agentInstanceKey: "ai-1",
+    filter: { commitStatus: { $in: ["PENDING", "DISCARDED", "COMMITTED"] }, jobKey: "9" },
+    sort: [{ field: "historyItemKey" }],
+    page: { limit: 50 },
+  });
+  assert.deepEqual(out, {
+    items: [],
+    page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null },
+  });
+  seenInput = undefined;
+  const blank = await engine.searchAgentInstanceHistoryPage("  ");
+  assert.equal(seenInput, undefined, "no request for a blank key");
+  assert.equal(blank.items.length, 0);
 });
 
 test("getAgentInstance reads-as-absence on a blank key and on a fetch error", async () => {
@@ -1715,4 +1790,88 @@ test("getAgentInstance reads-as-absence on a blank key and on a fetch error", as
     status: "COMPLETED",
     processInstanceKey: "10",
   });
+});
+
+// ── Spec-coverage guard (issue #630) ────────────────────────────────────────────────────────
+// Enumerate the engine's GENERATED agent search filter types (`types.gen.d.ts`, derived from the
+// engine's OpenAPI spec and shipped by `@nanobpm/engine-wasm/readmodel-types`) and prove the
+// `SdkEngineClient` forwards every one of their properties to the wire. The compile-time half is
+// structural (`AgentInstanceFilter`/`AgentHistoryFilter` ARE the generated types); this runtime
+// half fails the moment the adapter stops forwarding a spec filter property (e.g. a re-introduced
+// hand-picked selector list), so the client surface cannot silently fall behind the engine again.
+async function generatedTypeProperties(typeName: string): Promise<string[]> {
+  const { readFile } = await import("node:fs/promises");
+  const entry = new URL(import.meta.resolve("@nanobpm/engine-wasm/readmodel-types"));
+  const source = await readFile(new URL("./types.gen.d.ts", entry), "utf8");
+  const start = source.indexOf(`export type ${typeName} = {`);
+  assert.notEqual(start, -1, `generated type ${typeName} not found`);
+  const body = source.slice(start, source.indexOf("\n};", start));
+  const props = [...body.matchAll(/^ {4}(\w+)\?:/gm)].map((m) => m[1] ?? "");
+  assert.ok(props.length > 0, `generated type ${typeName} has no properties`);
+  return props;
+}
+
+test("spec-coverage guard: searchAgentInstancesPage forwards every generated AgentInstanceFilter property", async () => {
+  const props = await generatedTypeProperties("AgentInstanceFilter");
+  for (const expected of ["lastUpdatedDate", "creationDate", "agentDefinitionKey", "tenantId"]) {
+    assert.ok(props.includes(expected), `spec filter lists ${expected}`);
+  }
+  let seen: Record<string, unknown> | undefined;
+  const engine = new SdkEngineClient(
+    fakeSdkClient({
+      searchAgentInstances: async (input) => {
+        seen = input.filter;
+        return { items: [] };
+      },
+    }),
+  );
+  const filter = Object.fromEntries(props.map((p) => [p, { $exists: true }]));
+  await engine.searchAgentInstancesPage({ filter });
+  assert.deepEqual(Object.keys(seen ?? {}).sort(), [...props].sort());
+});
+
+test("spec-coverage guard: searchAgentInstanceHistoryPage forwards every generated AgentInstanceHistoryFilter property", async () => {
+  const props = await generatedTypeProperties("AgentInstanceHistoryFilter");
+  for (const expected of ["commitStatus", "jobKey", "historyItemKey", "producedAt"]) {
+    assert.ok(props.includes(expected), `spec filter lists ${expected}`);
+  }
+  let seen: Record<string, unknown> | undefined;
+  const engine = new SdkEngineClient(
+    fakeSdkClient({
+      searchAgentInstanceHistory: async (input) => {
+        seen = input.filter;
+        return { items: [] };
+      },
+    }),
+  );
+  const filter = Object.fromEntries(props.map((p) => [p, { $exists: true }]));
+  await engine.searchAgentInstanceHistoryPage("ai-1", { filter });
+  assert.deepEqual(Object.keys(seen ?? {}).sort(), [...props].sort());
+});
+
+test("agent search filters: a generated string filter is forwarded verbatim, so bare and $eq forms agree (#637 review)", async () => {
+  const seen: Record<string, unknown>[] = [];
+  const client = fakeSdkClient({
+    searchAgentInstances: async (input) => {
+      seen.push(input.filter ?? {});
+      return { items: [] };
+    },
+  });
+  const engine = new SdkEngineClient(client);
+  for (const tenantId of ["", " t1 ", "t1"]) {
+    await engine.searchAgentInstancesPage({ filter: { tenantId } });
+    await engine.searchAgentInstancesPage({ filter: { tenantId: { $eq: tenantId } } });
+  }
+  assert.deepEqual(seen, [
+    { tenantId: "" },
+    { tenantId: { $eq: "" } },
+    { tenantId: " t1 " },
+    { tenantId: { $eq: " t1 " } },
+    { tenantId: "t1" },
+    { tenantId: { $eq: "t1" } },
+  ]);
+  // The legacy selectors keep their historical trim/drop-blank presence rule.
+  seen.length = 0;
+  await engine.searchAgentInstancesPage({ filter: { processInstanceKey: " 42 ", elementId: "  " } });
+  assert.deepEqual(seen, [{ processInstanceKey: "42" }]);
 });

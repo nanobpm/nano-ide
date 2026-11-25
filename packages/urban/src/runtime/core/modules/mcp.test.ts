@@ -95,6 +95,8 @@ function fakeEngine(overrides: Partial<EngineClient> = {}): EngineClient {
     getProcessDefinitionXml: async () => null,
     searchAgentInstances: async () => [],
     searchAgentInstanceHistory: async () => [],
+    searchAgentInstancesPage: async () => ({ items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } }),
+    searchAgentInstanceHistoryPage: async () => ({ items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } }),
     getAgentInstance: async () => null,
     resolveIncident: async () => {},
     updateJobRetries: async () => {},
@@ -676,6 +678,8 @@ test("urban_debug_search_variables / search_jobs / get_process_definition_xml ar
     },
     searchAgentInstances: async () => [],
     searchAgentInstanceHistory: async () => [],
+    searchAgentInstancesPage: async () => ({ items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } }),
+    searchAgentInstanceHistoryPage: async () => ({ items: [], page: { totalItems: 0, hasMoreTotalItems: false, startCursor: null, endCursor: null } }),
     getAgentInstance: async () => null,
   });
   const { router } = buildHarness({ engine });

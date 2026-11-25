@@ -104,6 +104,7 @@
 	"dependencies": {
 		"@modelcontextprotocol/sdk": "^1.30.0",
 		"@nanobpm/agentic": "^0.16.0",
+		"@nanobpm/engine-wasm": "^0.13.0",
 		"@nanobpm/nano-app-schema": "^0.11.0",
 		"@nanobpm/nano-sdk": "^1.2.5",
 		"@nanobpm/workflow": "^0.20.0",

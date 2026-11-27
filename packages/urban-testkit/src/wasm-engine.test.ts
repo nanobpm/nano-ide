@@ -1783,3 +1783,52 @@ test("wasm: openUserTasks works against the strict-spec engine-wasm (>= 0.14) se
     await engine.close();
   }
 });
+
+// nano-ide#650: engine-wasm >= 0.14 applies the spec default page size (100) to `/…/search`
+// bodies. Every "returns everything" search* must page through to exhaustion (one shared helper),
+// so a row past the first page is never silently dropped. Guards the whole class: variables,
+// process instances, and user tasks, each with more than one default page of rows.
+test("wasm: search* reads past engine-wasm's default page limit (>100 rows)", async () => {
+  const engine = await createWasmEngineClient();
+  try {
+    const model = `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="human" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f1" sourceRef="s" targetRef="review"/>
+    <userTask id="review"><extensionElements><zeebe:userTask/></extensionElements></userTask>
+    <sequenceFlow id="f2" sourceRef="review" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+</definitions>`;
+    await engine.deployResources([{ name: "human.bpmn", content: model, contentType: "text/xml" }]);
+    const N = 130;
+    const vars: Record<string, number> = {};
+    for (let i = 0; i < N; i++) vars[`v${i}`] = i;
+    const keys: string[] = [];
+    for (let i = 0; i < N; i++) {
+      const { processInstanceKey } = await engine.createInstance({
+        processDefinitionId: "human",
+        ...(i === 0 ? { variables: vars } : {}),
+      });
+      keys.push(processInstanceKey);
+    }
+    const first = keys[0] ?? "";
+    const last = keys[N - 1] ?? "";
+    const allVars = await engine.searchVariables({ processInstanceKey: first });
+    const names = new Set(allVars.map((v) => v.name));
+    for (let i = 0; i < N; i++) assert.ok(names.has(`v${i}`), `v${i} is returned, not just the first page`);
+    const lastVar = await engine.searchVariables({ processInstanceKey: first, name: `v${N - 1}` });
+    assert.equal(lastVar.length, 1, "a variable past the first page is found");
+    const instances = await engine.searchProcessInstances({});
+    assert.equal(instances.length, N, "every process instance is returned");
+    assert.equal((await engine.searchProcessInstances({ processInstanceKeys: [last] })).length, 1);
+    const tasks = await engine.searchUserTasks({});
+    assert.equal(tasks.length, N, "every user task is returned");
+    assert.equal((await engine.searchUserTasks({ processInstanceKey: last })).length, 1);
+  } finally {
+    await engine.close();
+  }
+});

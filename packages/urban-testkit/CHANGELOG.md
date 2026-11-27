@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.4](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.8.3...@nanobpm/urban-testkit-1.8.4) (2026-11-27)
+
+
+### Bug Fixes
+
+* **urban-testkit:** page WasmEngineClient search* past engine-wasm's default page limit ([#651](https://github.com/nanobpm/nano-ide/issues/651)) ([7d635b4](https://github.com/nanobpm/nano-ide/commit/7d635b492bb4ae5b8b0fc2a4b9455c30eef9d6a0))
+
 ## [1.8.3](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-testkit-1.8.2...@nanobpm/urban-testkit-1.8.3) (2026-11-27)
 
 

@@ -20,8 +20,11 @@ import type { TestEngine } from "@nanobpm/engine-wasm/readmodel";
 // their fields — No Drift Surfaces (AGENTS.md). Type-only, so nothing is pulled at runtime.
 import type {
   FormResult,
+  ProcessInstanceSearchQuery,
   ProcessInstanceSearchQueryResult,
+  UserTaskSearchQuery,
   UserTaskSearchQueryResult,
+  VariableSearchQuery,
   VariableSearchQueryResult,
 } from "@nanobpm/engine-wasm/readmodel-types";
 import {
@@ -507,14 +510,18 @@ export class WasmEngineClient implements EngineClient {
     rootProcessInstanceKey?: string;
   }[]> {
     // Delegate to the engine's real REST read channel (`POST /user-tasks/search`) instead of
-    // scraping the primary-state snapshot. The read model honours the `{ state? }` filter
+    // scraping the primary-state snapshot. The read model honours the `filter.state` selector
     // (e.g. `"CREATED"`) itself, so pass it through rather than re-implementing state matching.
+    // The request body is typed by the engine's DERIVED spec `UserTaskSearchQuery` DTO: engine-wasm
+    // >= 0.14 rejects any property not in the spec (a top-level `state` was a 400 — nano-ide#645).
     // Parse the result through the engine's DERIVED `UserTaskSearchQueryResult` DTO
     // (`@nanobpm/engine-wasm/readmodel-types`) — the single source of truth for the row shape —
     // so `items` is a typed `UserTaskResult[]` rather than a hand-scraped `Record` bag.
     const body: UserTaskSearchQueryResult = JSON.parse(
       this.#liveEngine.searchUserTasks(
-        JSON.stringify(filter?.state ? { state: filter.state } : {}),
+        JSON.stringify(
+          (filter?.state ? { filter: { state: filter.state } } : {}) satisfies UserTaskSearchQuery,
+        ),
       ),
     );
     // `body`/`items` come straight from an untyped `JSON.parse` boundary, so the DTO annotation
@@ -686,7 +693,7 @@ export class WasmEngineClient implements EngineClient {
     // `ProcessInstanceSearchQueryResult` DTO (`@nanobpm/engine-wasm/readmodel-types`) so each
     // row is a typed `ProcessInstanceResult` rather than a hand-scraped `Record` bag.
     const body: ProcessInstanceSearchQueryResult = JSON.parse(
-      this.#liveEngine.searchProcessInstances("{}"),
+      this.#liveEngine.searchProcessInstances(JSON.stringify({} satisfies ProcessInstanceSearchQuery)),
     );
     const out: ProcessInstanceSnapshot[] = [];
     // Normalize the parent/root selectors through the shared presence rule (`presentKey`) so a
@@ -861,7 +868,7 @@ export class WasmEngineClient implements EngineClient {
    *  row carries its serialized JSON `value` and the engine's `isTruncated` flag. */
   async searchVariables(filter?: VariableFilter): Promise<VariableSummary[]> {
     const body: VariableSearchQueryResult = JSON.parse(
-      this.#liveEngine.searchVariables("{}"),
+      this.#liveEngine.searchVariables(JSON.stringify({} satisfies VariableSearchQuery)),
     );
     const wantInstanceKey = presentKey(filter?.processInstanceKey);
     const wantScopeKey = presentKey(filter?.scopeKey);

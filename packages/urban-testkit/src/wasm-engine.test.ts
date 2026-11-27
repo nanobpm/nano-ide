@@ -1727,3 +1727,59 @@ test("wasm: getAgentInstance reads a rejected lookup as null, but still faults a
   }
   await assert.rejects(() => engine.getAgentInstance("2251799813685249"), /after close\(\)/);
 });
+
+// Regression (nanobpm/nano-ide#645): engine-wasm 0.14 validates search bodies strictly against the
+// spec and rejects a top-level `state` on the user-task search (400 "unknown property `state`").
+// The adapter must send the spec `UserTaskSearchQuery` shape `{ filter: { state } }`. The version
+// pin keeps this guard honest: it must run against the strict (>= 0.14) engine, not a lenient one.
+test("wasm: openUserTasks works against the strict-spec engine-wasm (>= 0.14) search validation", async () => {
+  const { createRequire } = await import("node:module");
+  const require = createRequire(import.meta.url);
+  const pkg: unknown = JSON.parse(
+    (await import("node:fs")).readFileSync(new URL("../package.json", (await import("node:url")).pathToFileURL(require.resolve("@nanobpm/engine-wasm"))), "utf8"),
+  );
+  const version = typeof pkg === "object" && pkg !== null && "version" in pkg ? String(pkg.version) : "";
+  const [major, minor] = version.split(".").map(Number);
+  assert.ok(major > 0 || minor >= 14, `expected @nanobpm/engine-wasm >= 0.14, resolved ${version}`);
+
+  const engine = await createWasmEngineClient();
+  try {
+    await engine.deployResources([
+      {
+        name: "strict.bpmn",
+        contentType: "text/xml",
+        content: `<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
+             xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
+             targetNamespace="http://nanobpm/testkit">
+  <process id="strict" isExecutable="true">
+    <startEvent id="s"/>
+    <sequenceFlow id="f1" sourceRef="s" targetRef="review"/>
+    <userTask id="review"><extensionElements><zeebe:userTask/></extensionElements></userTask>
+    <sequenceFlow id="f2" sourceRef="review" targetRef="e"/>
+    <endEvent id="e"/>
+  </process>
+  <bpmndi:BPMNDiagram id="strict_di">
+    <bpmndi:BPMNPlane id="strict_plane" bpmnElement="strict">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="100" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="review_di" bpmnElement="review"><dc:Bounds x="190" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="350" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f1_di" bpmnElement="f1"><di:waypoint x="136" y="118"/><di:waypoint x="190" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="290" y="118"/><di:waypoint x="350" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
+</definitions>`,
+      },
+    ]);
+    const { processInstanceKey } = await engine.createInstance({ processDefinitionId: "strict" });
+    const open = await engine.openUserTasks({ processInstanceKey });
+    assert.equal(open.length, 1);
+    assert.equal(open[0].elementId, "review");
+    assert.equal((await engine.searchUserTasks({ processInstanceKey, state: "COMPLETED" })).length, 0);
+  } finally {
+    await engine.close();
+  }
+});

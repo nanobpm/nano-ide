@@ -1751,6 +1751,9 @@ test("wasm: openUserTasks works against the strict-spec engine-wasm (>= 0.14) se
         content: `<?xml version="1.0" encoding="UTF-8"?>
 <definitions xmlns="http://www.omg.org/spec/BPMN/20100524/MODEL"
              xmlns:zeebe="http://camunda.org/schema/zeebe/1.0"
+             xmlns:bpmndi="http://www.omg.org/spec/BPMN/20100524/DI"
+             xmlns:dc="http://www.omg.org/spec/DD/20100524/DC"
+             xmlns:di="http://www.omg.org/spec/DD/20100524/DI"
              targetNamespace="http://nanobpm/testkit">
   <process id="strict" isExecutable="true">
     <startEvent id="s"/>
@@ -1759,6 +1762,15 @@ test("wasm: openUserTasks works against the strict-spec engine-wasm (>= 0.14) se
     <sequenceFlow id="f2" sourceRef="review" targetRef="e"/>
     <endEvent id="e"/>
   </process>
+  <bpmndi:BPMNDiagram id="strict_di">
+    <bpmndi:BPMNPlane id="strict_plane" bpmnElement="strict">
+      <bpmndi:BPMNShape id="s_di" bpmnElement="s"><dc:Bounds x="100" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="review_di" bpmnElement="review"><dc:Bounds x="190" y="78" width="100" height="80"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNShape id="e_di" bpmnElement="e"><dc:Bounds x="350" y="100" width="36" height="36"/></bpmndi:BPMNShape>
+      <bpmndi:BPMNEdge id="f1_di" bpmnElement="f1"><di:waypoint x="136" y="118"/><di:waypoint x="190" y="118"/></bpmndi:BPMNEdge>
+      <bpmndi:BPMNEdge id="f2_di" bpmnElement="f2"><di:waypoint x="290" y="118"/><di:waypoint x="350" y="118"/></bpmndi:BPMNEdge>
+    </bpmndi:BPMNPlane>
+  </bpmndi:BPMNDiagram>
 </definitions>`,
       },
     ]);

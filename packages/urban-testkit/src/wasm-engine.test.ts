@@ -10,6 +10,7 @@ import {
   presentKey,
   presentString,
   requireKey,
+  searchAll,
   searchRows,
   wasmStateToProcessInstanceState,
 } from "./wasm-engine.ts";
@@ -1831,4 +1832,21 @@ test("wasm: search* reads past engine-wasm's default page limit (>100 rows)", as
   } finally {
     await engine.close();
   }
+});
+
+test("searchAll keeps paging past a page of only malformed rows (nano-ide#651)", () => {
+  const pages: Record<string, unknown> = {
+    first: { items: [null, 1, []], page: { endCursor: "c1" } },
+    c1: { items: [{ id: "a" }], page: { endCursor: "c2" } },
+    c2: { items: [], page: { endCursor: null } },
+  };
+  const calls: string[] = [];
+  const rows = searchAll<{ id: string }>((q) => {
+    const after: unknown = JSON.parse(q).page?.after;
+    const key = typeof after === "string" ? after : "first";
+    calls.push(key);
+    return JSON.stringify(pages[key]);
+  }, {});
+  assert.deepEqual(rows, [{ id: "a" }]);
+  assert.deepEqual(calls, ["first", "c1", "c2"]);
 });

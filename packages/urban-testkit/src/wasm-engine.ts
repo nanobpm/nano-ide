@@ -166,10 +166,12 @@ export function searchAll<T>(call: (query: string) => string, query: PagedQuery)
   for (;;) {
     const page = after === undefined ? query.page : { ...query.page, after };
     const body: PagedResult<T> = JSON.parse(call(JSON.stringify(page ? { ...query, page } : query)));
-    const rows = searchRows(body);
-    out.push(...rows);
+    out.push(...searchRows(body));
+    // Exhaustion is judged on the RAW page, not the defended rows: a page of only malformed
+    // items is still a non-empty page and must not hide valid rows on later pages.
+    const rawCount = isRecord(body) && Array.isArray(body.items) ? body.items.length : 0;
     const cursor = isRecord(body) && isRecord(body.page) ? body.page.endCursor : undefined;
-    if (rows.length === 0 || typeof cursor !== "string" || cursor === "" || seen.has(cursor)) {
+    if (rawCount === 0 || typeof cursor !== "string" || cursor === "" || seen.has(cursor)) {
       return out;
     }
     seen.add(cursor);

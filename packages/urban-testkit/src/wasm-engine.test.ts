@@ -1736,7 +1736,7 @@ test("wasm: openUserTasks works against the strict-spec engine-wasm (>= 0.14) se
   const { createRequire } = await import("node:module");
   const require = createRequire(import.meta.url);
   const pkg: unknown = JSON.parse(
-    (await import("node:fs")).readFileSync(new URL("../package.json", `file://${require.resolve("@nanobpm/engine-wasm")}`), "utf8"),
+    (await import("node:fs")).readFileSync(new URL("../package.json", (await import("node:url")).pathToFileURL(require.resolve("@nanobpm/engine-wasm"))), "utf8"),
   );
   const version = typeof pkg === "object" && pkg !== null && "version" in pkg ? String(pkg.version) : "";
   const [major, minor] = version.split(".").map(Number);

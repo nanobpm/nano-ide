@@ -148,6 +148,37 @@ export function searchRows<T>(body: { items: T[] }): T[] {
   return body.items.filter(isRecord);
 }
 
+/** The paging fields of a spec search request/response this adapter drives. Kept structural so
+ *  every derived `…SearchQuery` / `…SearchQueryResult` DTO satisfies it. */
+type PagedQuery = { page?: { after?: string; limit?: number } };
+type PagedResult<T> = { items: T[]; page?: { endCursor?: string | null } };
+
+/** Exhaust a read-model `/…/search` channel: engine-wasm >= 0.14 applies the spec default page
+ *  size (100) to every search body, so a single call silently truncates (nano-ide#650). Follows
+ *  `page.endCursor` → `page.after` until a page comes back empty or cursorless, and returns every
+ *  row through {@link searchRows}' untyped-JSON defence. The ONE paging path every "returns
+ *  everything" `search*` in {@link WasmEngineClient} reads through, so none can drift back to
+ *  first-page-only. A repeated cursor stops the walk (fail-safe against a non-advancing engine). */
+export function searchAll<T>(call: (query: string) => string, query: PagedQuery): T[] {
+  const out: T[] = [];
+  const seen = new Set<string>();
+  let after: string | undefined;
+  for (;;) {
+    const page = after === undefined ? query.page : { ...query.page, after };
+    const body: PagedResult<T> = JSON.parse(call(JSON.stringify(page ? { ...query, page } : query)));
+    out.push(...searchRows(body));
+    // Exhaustion is judged on the RAW page, not the defended rows: a page of only malformed
+    // items is still a non-empty page and must not hide valid rows on later pages.
+    const rawCount = isRecord(body) && Array.isArray(body.items) ? body.items.length : 0;
+    const cursor = isRecord(body) && isRecord(body.page) ? body.page.endCursor : undefined;
+    if (rawCount === 0 || typeof cursor !== "string" || cursor === "" || seen.has(cursor)) {
+      return out;
+    }
+    seen.add(cursor);
+    after = cursor;
+  }
+}
+
 /** Whether a deploy resource is an executable engine model (BPMN or DMN) the WASM engine can parse.
  *  BPMN/DMN are XML (`text/xml`); forms (`application/json`) and other assets are not engine models.
  *  Falls back to the file extension when a contentType is absent. */
@@ -517,12 +548,10 @@ export class WasmEngineClient implements EngineClient {
     // Parse the result through the engine's DERIVED `UserTaskSearchQueryResult` DTO
     // (`@nanobpm/engine-wasm/readmodel-types`) — the single source of truth for the row shape —
     // so `items` is a typed `UserTaskResult[]` rather than a hand-scraped `Record` bag.
-    const body: UserTaskSearchQueryResult = JSON.parse(
-      this.#liveEngine.searchUserTasks(
-        JSON.stringify(
-          (filter?.state ? { filter: { state: filter.state } } : {}) satisfies UserTaskSearchQuery,
-        ),
-      ),
+    const userTaskQuery: UserTaskSearchQuery = filter?.state ? { filter: { state: filter.state } } : {};
+    const rows = searchAll<UserTaskSearchQueryResult["items"][number]>(
+      (q) => this.#liveEngine.searchUserTasks(q),
+      userTaskQuery,
     );
     // `body`/`items` come straight from an untyped `JSON.parse` boundary, so the DTO annotation
     // is a shape *claim*, not a runtime guarantee. `searchRows` guards the body and drops
@@ -535,7 +564,7 @@ export class WasmEngineClient implements EngineClient {
     const wantProcessInstanceKey = presentKey(filter?.processInstanceKey);
     const wantRootProcessInstanceKey = presentKey(filter?.rootProcessInstanceKey);
     const wantParentProcessInstanceKey = presentKey(filter?.parentProcessInstanceKey);
-    return searchRows(body)
+    return rows
       // The read model does not yet honour the non-lifecycle selectors
       // (`processInstanceKey`/`assignee`/`candidateGroup` — the write/index side is
       // Magikcraft/nano-bpm#815's follow-up), so apply them client-side here. This mirrors the
@@ -692,8 +721,9 @@ export class WasmEngineClient implements EngineClient {
     // honoured server-side; only the filtering site differs. Parse through the engine's DERIVED
     // `ProcessInstanceSearchQueryResult` DTO (`@nanobpm/engine-wasm/readmodel-types`) so each
     // row is a typed `ProcessInstanceResult` rather than a hand-scraped `Record` bag.
-    const body: ProcessInstanceSearchQueryResult = JSON.parse(
-      this.#liveEngine.searchProcessInstances(JSON.stringify({} satisfies ProcessInstanceSearchQuery)),
+    const rows = searchAll<ProcessInstanceSearchQueryResult["items"][number]>(
+      (q) => this.#liveEngine.searchProcessInstances(q),
+      {} satisfies ProcessInstanceSearchQuery,
     );
     const out: ProcessInstanceSnapshot[] = [];
     // Normalize the parent/root selectors through the shared presence rule (`presentKey`) so a
@@ -708,7 +738,7 @@ export class WasmEngineClient implements EngineClient {
     // Same untyped-JSON defence as `searchUserTasks`: `searchRows` guards the body and drops
     // non-object rows so a malformed/changed engine response can't throw while reading
     // `inst.processInstanceKey`.
-    for (const inst of searchRows(body)) {
+    for (const inst of rows) {
       const key = presentKey(inst.processInstanceKey);
       // Skip keyless items so a missing/null key can't leak in as "" (matches
       // the live SDK adapter, which drops instances with no key).
@@ -867,8 +897,9 @@ export class WasmEngineClient implements EngineClient {
    *  `SdkEngineClient`, which gets them honoured server-side; only the filtering site differs. Each
    *  row carries its serialized JSON `value` and the engine's `isTruncated` flag. */
   async searchVariables(filter?: VariableFilter): Promise<VariableSummary[]> {
-    const body: VariableSearchQueryResult = JSON.parse(
-      this.#liveEngine.searchVariables(JSON.stringify({} satisfies VariableSearchQuery)),
+    const rows = searchAll<VariableSearchQueryResult["items"][number]>(
+      (q) => this.#liveEngine.searchVariables(q),
+      {} satisfies VariableSearchQuery,
     );
     const wantInstanceKey = presentKey(filter?.processInstanceKey);
     const wantScopeKey = presentKey(filter?.scopeKey);
@@ -876,7 +907,7 @@ export class WasmEngineClient implements EngineClient {
     const out: VariableSummary[] = [];
     // Same untyped-JSON defence as `searchProcessInstances`: `searchRows` guards the body and
     // drops non-object rows so a malformed/changed engine response can't throw while mapping.
-    for (const row of searchRows(body)) {
+    for (const row of rows) {
       const variableKey = presentKey(row.variableKey);
       const processInstanceKey = presentKey(row.processInstanceKey);
       const name = presentString(row.name);

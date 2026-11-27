@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.101.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.101.0...@nanobpm/urban-0.101.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* **urban-testkit:** spec-conformant user-task search for engine-wasm 0.14 ([#646](https://github.com/nanobpm/nano-ide/issues/646)) ([dba8b51](https://github.com/nanobpm/nano-ide/commit/dba8b510f868f3dd75bf0c58f12e625b48e2d049))
+
 ## [0.101.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/urban-0.100.1...@nanobpm/urban-0.101.0) (2026-11-25)
 
 

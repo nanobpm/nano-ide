@@ -52,7 +52,7 @@
   "dependencies": {
     "@nanobpm/ai-assert": "^0.1.0",
     "@nanobpm/engine-testkit": "^0.1.2",
-    "@nanobpm/engine-wasm": "^0.13.0",
+    "@nanobpm/engine-wasm": "^0.13.0 || ^0.14.0",
     "yaml": "^2.9.0"
   },
   "peerDependencies": {

@@ -19,10 +19,14 @@
 //
 // The SDK version constraint is read from the starter template's Cargo.toml.
 // rustdoc JSON is a nightly-only format; override the toolchain with
-// NANO_RUSTDOC_TOOLCHAIN (default "nightly"). Pre-generated JSON can be supplied
+// NANO_RUSTDOC_TOOLCHAIN (default: the pinned PINNED_NIGHTLY below — rustdoc
+// JSON output drifts between nightlies, so a floating "nightly" is not
+// deterministic; CI installs exactly this toolchain). Pre-generated JSON can be supplied
 // via NANO_RUSTDOC_DIR (dir containing the two *.json files) to skip the build.
 
 import { execFileSync } from "node:child_process";
+
+export const PINNED_NIGHTLY = "nightly-2026-06-26";
 import {
   readFileSync,
   writeFileSync,
@@ -79,7 +83,7 @@ function sdkVersion() {
 // --- rustdoc JSON acquisition ----------------------------------------------
 
 function runRustdoc(crate, targetDir) {
-  const toolchain = process.env.NANO_RUSTDOC_TOOLCHAIN || "nightly";
+  const toolchain = process.env.NANO_RUSTDOC_TOOLCHAIN || PINNED_NIGHTLY;
   execFileSync(
     "cargo",
     [

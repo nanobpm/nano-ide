@@ -167,8 +167,15 @@ jobs:
 
       # Rust — nightly is required for rustdoc JSON (-Z unstable-options). The
       # generator builds --locked against the template's committed Cargo.lock, so
-      # the derived output is deterministic (SDK pinned to 0.2.2).
-      - uses: dtolnay/rust-toolchain@nightly
+      # the derived output is deterministic (SDK pinned to 0.2.2). The nightly is
+      # pinned too: rustdoc JSON changes between nightlies, so a floating
+      # `@nightly` made this check fail on unrelated PRs. Bump deliberately.
+      # The pin's single source of truth is PINNED_NIGHTLY in gen-intellisense.mjs.
+      - name: Install pinned nightly (from gen-intellisense.mjs)
+        run: |
+          tc=$(sed -n 's/^export const PINNED_NIGHTLY = "\(.*\)";$/\1/p' packages/lang-rust/scripts/gen-intellisense.mjs)
+          test -n "$tc"
+          rustup toolchain install "$tc" --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: packages/lang-rust/templates/rust-starter

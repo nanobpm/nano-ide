@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/nanobpm/nano-ide/compare/@nanobpm/nano-ide-lang-rust@1.5.0...@nanobpm/nano-ide-lang-rust-1.5.1) (2026-11-28)
+
+
+### Bug Fixes
+
+* **urban-testkit:** adopt @nanobpm/engine-wasm ^0.15.0 ([#653](https://github.com/nanobpm/nano-ide/issues/653)) ([254d413](https://github.com/nanobpm/nano-ide/commit/254d4137050121229dbefa8bb4553da43077f435))
+
 ## [1.5.0](https://github.com/nanobpm/nano-ide/compare/@nanobpm/nano-ide-lang-rust@1.4.0...@nanobpm/nano-ide-lang-rust-1.5.0) (2026-09-01)
 
 
